@@ -32,28 +32,8 @@ NORMALIZED_CURVATURE_LIMIT = math.cos(math.atan(REAR_AXLE_RATIO * math.tan(STEER
 )
 
 
-def _validate_curvature_inputs(curvature_per_meter, wheelbase_meters):
-    for name, tensor in (
-        ("curvature_per_meter", curvature_per_meter),
-        ("wheelbase_meters", wheelbase_meters),
-    ):
-        if not isinstance(tensor, torch.Tensor):
-            raise TypeError(f"{name} must be a Torch tensor")
-        if tensor.dtype != torch.float32:
-            raise TypeError(f"{name} must be torch.float32")
-        if not torch.isfinite(tensor).all():
-            raise ValueError(f"{name} contains NaN or Inf")
-    if curvature_per_meter.shape != wheelbase_meters.shape:
-        raise ValueError("curvature_per_meter and wheelbase_meters must share a shape")
-    if curvature_per_meter.device != wheelbase_meters.device:
-        raise ValueError("curvature_per_meter and wheelbase_meters must share a device")
-    if torch.any(wheelbase_meters <= 0.0):
-        raise ValueError("wheelbase_meters must be positive")
-
-
 def curvature_from_target_steering(steering_radians, wheelbase_meters):
     """Return the classic model's path curvature in `1/m` for a held wheel angle."""
-    _validate_curvature_inputs(steering_radians, wheelbase_meters)
     tangent_steering = torch.tan(steering_radians)
     slip_angle = torch.atan(REAR_AXLE_RATIO * tangent_steering)
     return torch.cos(slip_angle) * tangent_steering / wheelbase_meters
@@ -65,7 +45,6 @@ def target_steering_from_curvature(curvature_per_meter, wheelbase_meters):
     Returns the wheel angle in radians and the mask of entries whose requested
     curvature exceeded what the wheel can produce for that wheelbase.
     """
-    _validate_curvature_inputs(curvature_per_meter, wheelbase_meters)
     achievable_curvature = NORMALIZED_CURVATURE_LIMIT / wheelbase_meters
     saturated = curvature_per_meter.abs() > achievable_curvature
     clamped = torch.clamp(curvature_per_meter, -achievable_curvature, achievable_curvature)

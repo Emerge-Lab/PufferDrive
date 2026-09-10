@@ -32,15 +32,12 @@ def test_every_differentiable_stage_agrees_between_cpu_and_gpu(synthetic_scenari
     )
 
     states = _states([0.0, 7.0, 14.0], dtype=torch.float32)
-    valid = torch.ones((1, 3, 3), dtype=torch.bool)
+    valid = torch.ones((3, 3), dtype=torch.bool)
     length, width = _dimensions(3, dtype=torch.float32)
-    ego_mask = torch.tensor([[True, False, False]])
-    candidate_mask = torch.tensor([[False, True, False]])
-    background_mask = torch.tensor([[False, True, True]])
+    ego_mask = torch.tensor([True, False, False])
+    candidate_mask = torch.tensor([False, True, False])
     raster = _constant_raster(0.25, dtype=torch.float32)
-    cpu = combined_regents_cost(
-        states, valid, length, width, ego_mask, candidate_mask, background_mask, candidate_mask, (raster,)
-    )
+    cpu = combined_regents_cost(states, valid, length, width, ego_mask, candidate_mask, raster)
     gpu = combined_regents_cost(
         states.cuda(),
         valid.cuda(),
@@ -48,9 +45,7 @@ def test_every_differentiable_stage_agrees_between_cpu_and_gpu(synthetic_scenari
         width.cuda(),
         ego_mask.cuda(),
         candidate_mask.cuda(),
-        background_mask.cuda(),
-        candidate_mask.cuda(),
-        (raster.to(device="cuda"),),
+        raster.to(device="cuda"),
     )
     for cpu_value, gpu_value in zip(
         (cpu.ego_collision, cpu.background_collision, cpu.drivable_area, cpu.total),

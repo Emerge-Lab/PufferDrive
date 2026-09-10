@@ -71,14 +71,14 @@ class ReGentSCosts:
     background_collision_truncated: torch.Tensor
 
 
-def prepare_out_of_bounds_rasters(
-    drivable_area_rasters,
+def prepare_out_of_bounds_raster(
+    drivable_area_raster,
     config=None,
     *,
     device=None,
     dtype=torch.float32,
 ):
-    """Precompute all map-static Gaussian potentials before optimization.
+    """Precompute the map-static Gaussian potential before optimization.
 
     The kernel carries unit mass, so a fully out-of-bounds corner costs exactly one
     whatever the raster resolution. The released amplitude has neither discrete mass
@@ -90,55 +90,21 @@ def prepare_out_of_bounds_rasters(
         config = ReGentSCostConfig()
     if not isinstance(config, ReGentSCostConfig):
         raise TypeError("config must be a ReGentSCostConfig")
-    if not isinstance(drivable_area_rasters, (tuple, list)) or not drivable_area_rasters:
-        raise ValueError("drivable_area_rasters must be a non-empty sequence")
-    if not all(isinstance(raster, DrivableAreaRaster) for raster in drivable_area_rasters):
-        raise TypeError("Every drivable-area raster must be a DrivableAreaRaster")
-    return tuple(
-        build_smoothed_out_of_bounds_raster(
-            raster,
-            config.gaussian_sigma_meters,
-            config.gaussian_truncate_sigma,
-            device=device,
-            dtype=dtype,
-            normalize_kernel=True,
-        )
-        for raster in drivable_area_rasters
+    if not isinstance(drivable_area_raster, DrivableAreaRaster):
+        raise TypeError("drivable_area_raster must be a DrivableAreaRaster")
+    return build_smoothed_out_of_bounds_raster(
+        drivable_area_raster,
+        config.gaussian_sigma_meters,
+        config.gaussian_truncate_sigma,
+        device=device,
+        dtype=dtype,
+        normalize_kernel=True,
     )
-
-
-def _validate_common_inputs(states, state_valid, length_meters, width_meters):
-    if not isinstance(states, torch.Tensor) or not states.is_floating_point():
-        raise TypeError("states must be a floating Torch tensor")
-    if states.ndim != 4 or states.shape[-1] < 3:
-        raise ValueError("states must have shape [batch, agent, time, feature>=3]")
-    expected_state_shape = states.shape[:-1]
-    if not isinstance(state_valid, torch.Tensor) or state_valid.dtype != torch.bool:
-        raise TypeError("state_valid must be a bool Torch tensor")
-    if tuple(state_valid.shape) != expected_state_shape or state_valid.device != states.device:
-        raise ValueError("state_valid must match [batch, agent, time] on the states device")
-    expected_agent_shape = states.shape[:2]
-    for name, dimensions in (("length_meters", length_meters), ("width_meters", width_meters)):
-        if not isinstance(dimensions, torch.Tensor) or dimensions.dtype != states.dtype:
-            raise TypeError(f"{name} must share the states floating dtype")
-        if dimensions.device != states.device or tuple(dimensions.shape) != expected_agent_shape:
-            raise ValueError(f"{name} must have shape [batch, agent] on the states device")
-    if not torch.isfinite(states).all():
-        raise ValueError("states must be finite, including masked storage")
-
-
-def _validate_agent_mask(mask, states, name):
-    if not isinstance(mask, torch.Tensor) or mask.dtype != torch.bool:
-        raise TypeError(f"{name} must be a bool Torch tensor")
-    if tuple(mask.shape) != states.shape[:2] or mask.device != states.device:
-        raise ValueError(f"{name} must have shape [batch, agent] on the states device")
 
 
 def _masked_boxes(states, state_valid, length_meters, width_meters):
     expanded_length = length_meters[..., None].expand(states.shape[:-1])
     expanded_width = width_meters[..., None].expand(states.shape[:-1])
-    if torch.any(expanded_length[state_valid] <= 0) or torch.any(expanded_width[state_valid] <= 0):
-        raise ValueError("Valid states require positive agent length and width")
     boxes = torch.stack(
         (
             states[..., STATE_X],
@@ -164,38 +130,25 @@ def ego_background_collision_cost(
 ):
     """Return the paper's minimum candidate mean signed box distance.
 
-    ``boxes`` lets `combined_regents_cost` share one already-validated box tensor
-    across the three terms instead of rebuilding and revalidating it per term.
+    ``boxes`` lets `combined_regents_cost` share one already-built box tensor
+    across the three terms instead of rebuilding it per term.
     """
     if boxes is None:
-        _validate_common_inputs(states, state_valid, length_meters, width_meters)
-        _validate_agent_mask(ego_mask, states, "ego_mask")
-        _validate_agent_mask(candidate_adversary_mask, states, "candidate_adversary_mask")
-        if not torch.all(ego_mask.sum(dim=-1) == 1):
-            raise ValueError("Each scenario must contain exactly one ego agent")
-        if torch.any(ego_mask & candidate_adversary_mask):
-            raise ValueError("The ego agent cannot be a candidate adversary")
         boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
-    scenario_costs = []
-    for scenario_idx in range(states.shape[0]):
-        ego_idx = int(torch.argmax(ego_mask[scenario_idx].to(torch.int64)).item())
-        candidate_indices = torch.where(candidate_adversary_mask[scenario_idx])[0]
-        if candidate_indices.numel() == 0:
-            raise ValueError("Every scenario needs a candidate with at least one jointly valid ego timestep")
-        joint_valid = state_valid[scenario_idx, candidate_indices] & state_valid[scenario_idx, ego_idx, None]
-        valid_counts = joint_valid.sum(dim=-1)
-        distances = signed_box_distance(
-            boxes[scenario_idx, candidate_indices],
-            boxes[scenario_idx, ego_idx, None],
-        )
-        summed_distances = torch.where(joint_valid, distances, torch.zeros_like(distances)).sum(dim=-1)
-        averaged_distances = summed_distances / valid_counts.clamp_min(1)
-        averaged_distances = averaged_distances.masked_fill(valid_counts == 0, torch.inf)
-        minimum = averaged_distances.min()
-        if not bool(torch.isfinite(minimum)):
-            raise ValueError("Every scenario needs a candidate with at least one jointly valid ego timestep")
-        scenario_costs.append(minimum)
-    return torch.stack(scenario_costs)
+    ego_idx = int(torch.argmax(ego_mask.to(torch.int64)).item())
+    candidate_indices = torch.where(candidate_adversary_mask)[0]
+    if candidate_indices.numel() == 0:
+        raise ValueError("The scenario needs a candidate with at least one jointly valid ego timestep")
+    joint_valid = state_valid[candidate_indices] & state_valid[ego_idx, None]
+    valid_counts = joint_valid.sum(dim=-1)
+    distances = signed_box_distance(boxes[candidate_indices], boxes[ego_idx, None])
+    summed_distances = torch.where(joint_valid, distances, torch.zeros_like(distances)).sum(dim=-1)
+    averaged_distances = summed_distances / valid_counts.clamp_min(1)
+    averaged_distances = averaged_distances.masked_fill(valid_counts == 0, torch.inf)
+    minimum = averaged_distances.min()
+    if not bool(torch.isfinite(minimum)):
+        raise ValueError("The scenario needs a candidate with at least one jointly valid ego timestep")
+    return minimum
 
 
 def _truncated_signed_box_distances(boxes_a, boxes_b, valid, truncation_meters):
@@ -219,8 +172,7 @@ def _background_collision_avoidance_cost_and_diagnostics(
     state_valid,
     length_meters,
     width_meters,
-    background_vehicle_mask,
-    optimized_vehicle_mask,
+    candidate_adversary_mask,
     truncation_meters=DEFAULT_BACKGROUND_DISTANCE_TRUNCATION_METERS,
     boxes=None,
 ):
@@ -230,104 +182,79 @@ def _background_collision_avoidance_cost_and_diagnostics(
     if truncation_meters <= 0:
         raise ValueError("truncation_meters must be a finite positive scalar")
     if boxes is None:
-        _validate_common_inputs(states, state_valid, length_meters, width_meters)
-        _validate_agent_mask(background_vehicle_mask, states, "background_vehicle_mask")
-        _validate_agent_mask(optimized_vehicle_mask, states, "optimized_vehicle_mask")
-        if torch.any(optimized_vehicle_mask & ~background_vehicle_mask):
-            raise ValueError("optimized_vehicle_mask must be a subset of background_vehicle_mask")
         boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
-    scenario_costs = []
-    first_agent_indices = []
-    second_agent_indices = []
-    timestep_indices = []
-    signed_distances_meters = []
-    truncation_states = []
-    for scenario_idx in range(states.shape[0]):
-        background_indices = torch.where(background_vehicle_mask[scenario_idx])[0]
-        if background_indices.numel() < 2:
-            scenario_costs.append(states.new_zeros(()))
-            first_agent_indices.append(torch.tensor(-1, dtype=torch.int64, device=states.device))
-            second_agent_indices.append(torch.tensor(-1, dtype=torch.int64, device=states.device))
-            timestep_indices.append(torch.tensor(-1, dtype=torch.int64, device=states.device))
-            signed_distances_meters.append(states.new_zeros(()))
-            truncation_states.append(torch.tensor(False, dtype=torch.bool, device=states.device))
-            continue
-        local_pairs = torch.triu_indices(
-            background_indices.numel(),
-            background_indices.numel(),
-            offset=1,
-            device=states.device,
-        )
-        pair_indices = background_indices[local_pairs]
-        # Released ReGentS builds this term over the adversary trajectories alone, so a
-        # pair counts only when both endpoints are optimized. Admitting pairs with one
-        # untouched background vehicle would penalize distances the method never shapes.
-        optimized_pair = optimized_vehicle_mask[scenario_idx, pair_indices[0]]
-        optimized_pair &= optimized_vehicle_mask[scenario_idx, pair_indices[1]]
-        pair_valid = state_valid[scenario_idx, pair_indices[0]] & state_valid[scenario_idx, pair_indices[1]]
-        eligible_pair = optimized_pair & torch.any(pair_valid, dim=-1)
-        pair_indices = pair_indices[:, eligible_pair]
-        pair_valid = pair_valid[eligible_pair]
-        if pair_indices.shape[1] == 0:
-            scenario_costs.append(states.new_zeros(()))
-            first_agent_indices.append(torch.tensor(-1, dtype=torch.int64, device=states.device))
-            second_agent_indices.append(torch.tensor(-1, dtype=torch.int64, device=states.device))
-            timestep_indices.append(torch.tensor(-1, dtype=torch.int64, device=states.device))
-            signed_distances_meters.append(states.new_zeros(()))
-            truncation_states.append(torch.tensor(False, dtype=torch.bool, device=states.device))
-            continue
+    timestep_count = states.shape[1]
+    no_pair = (
+        states.new_zeros(()),
+        torch.tensor(-1, dtype=torch.int64, device=states.device),
+        torch.tensor(-1, dtype=torch.int64, device=states.device),
+        torch.tensor(-1, dtype=torch.int64, device=states.device),
+        states.new_zeros(()),
+        torch.tensor(False, dtype=torch.bool, device=states.device),
+    )
+    # Released ReGentS builds this term over the adversary trajectories alone, so both
+    # endpoints of a pair are candidates. Admitting a pair with one untouched
+    # background vehicle would penalize distances the method never shapes.
+    candidate_indices = torch.where(candidate_adversary_mask)[0]
+    local_pairs = torch.triu_indices(
+        candidate_indices.numel(),
+        candidate_indices.numel(),
+        offset=1,
+        device=states.device,
+    )
+    pair_indices = candidate_indices[local_pairs]
+    pair_valid = state_valid[pair_indices[0]] & state_valid[pair_indices[1]]
+    eligible_pair = torch.any(pair_valid, dim=-1)
+    pair_indices = pair_indices[:, eligible_pair]
+    pair_valid = pair_valid[eligible_pair]
+    if pair_indices.shape[1] == 0:
+        return no_pair
 
-        chunk_minima = []
-        chunk_raw_minima = []
-        chunk_first_agent_indices = []
-        chunk_second_agent_indices = []
-        chunk_timestep_indices = []
-        for chunk_start in range(0, pair_indices.shape[1], PAIRWISE_DISTANCE_CHUNK_SIZE):
-            chunk_pairs = pair_indices[:, chunk_start : chunk_start + PAIRWISE_DISTANCE_CHUNK_SIZE]
-            first_indices, second_indices = chunk_pairs
-            chunk_valid = pair_valid[chunk_start : chunk_start + chunk_pairs.shape[1]]
-            first_boxes = boxes[scenario_idx, first_indices]
-            second_boxes = boxes[scenario_idx, second_indices]
-            truncated_distances = _truncated_signed_box_distances(
-                first_boxes,
-                second_boxes,
-                chunk_valid,
-                float(truncation_meters),
-            )
-            chunk_minima.append(truncated_distances.min())
-            flat_winner_idx = torch.argmin(truncated_distances.reshape(-1))
-            pair_winner_idx = torch.div(flat_winner_idx, states.shape[2], rounding_mode="floor")
-            timestep_idx = flat_winner_idx % states.shape[2]
-            chunk_raw_minima.append(
-                signed_box_distance(
-                    first_boxes[pair_winner_idx, timestep_idx],
-                    second_boxes[pair_winner_idx, timestep_idx],
-                ).detach()
-            )
-            chunk_first_agent_indices.append(first_indices[pair_winner_idx])
-            chunk_second_agent_indices.append(second_indices[pair_winner_idx])
-            chunk_timestep_indices.append(timestep_idx)
-        minimum = torch.stack(chunk_minima).min()
-        scenario_costs.append(-minimum)
-        winning_chunk_idx = int(torch.argmin(torch.stack(chunk_raw_minima)).item())
-        winning_distance = chunk_raw_minima[winning_chunk_idx]
-        first_agent_indices.append(chunk_first_agent_indices[winning_chunk_idx])
-        second_agent_indices.append(chunk_second_agent_indices[winning_chunk_idx])
-        timestep_indices.append(chunk_timestep_indices[winning_chunk_idx])
-        signed_distances_meters.append(
+    chunk_minima = []
+    chunk_raw_minima = []
+    chunk_first_agent_indices = []
+    chunk_second_agent_indices = []
+    chunk_timestep_indices = []
+    for chunk_start in range(0, pair_indices.shape[1], PAIRWISE_DISTANCE_CHUNK_SIZE):
+        chunk_pairs = pair_indices[:, chunk_start : chunk_start + PAIRWISE_DISTANCE_CHUNK_SIZE]
+        first_indices, second_indices = chunk_pairs
+        chunk_valid = pair_valid[chunk_start : chunk_start + chunk_pairs.shape[1]]
+        first_boxes = boxes[first_indices]
+        second_boxes = boxes[second_indices]
+        truncated_distances = _truncated_signed_box_distances(
+            first_boxes,
+            second_boxes,
+            chunk_valid,
+            float(truncation_meters),
+        )
+        chunk_minima.append(truncated_distances.min())
+        flat_winner_idx = torch.argmin(truncated_distances.reshape(-1))
+        pair_winner_idx = torch.div(flat_winner_idx, timestep_count, rounding_mode="floor")
+        timestep_idx = flat_winner_idx % timestep_count
+        chunk_raw_minima.append(
             signed_box_distance(
-                boxes[scenario_idx, first_agent_indices[-1], timestep_indices[-1]],
-                boxes[scenario_idx, second_agent_indices[-1], timestep_indices[-1]],
+                first_boxes[pair_winner_idx, timestep_idx],
+                second_boxes[pair_winner_idx, timestep_idx],
             ).detach()
         )
-        truncation_states.append(winning_distance >= float(truncation_meters))
+        chunk_first_agent_indices.append(first_indices[pair_winner_idx])
+        chunk_second_agent_indices.append(second_indices[pair_winner_idx])
+        chunk_timestep_indices.append(timestep_idx)
+    winning_chunk_idx = int(torch.argmin(torch.stack(chunk_raw_minima)).item())
+    winning_distance = chunk_raw_minima[winning_chunk_idx]
+    first_agent_idx = chunk_first_agent_indices[winning_chunk_idx]
+    second_agent_idx = chunk_second_agent_indices[winning_chunk_idx]
+    timestep_idx = chunk_timestep_indices[winning_chunk_idx]
     return (
-        torch.stack(scenario_costs),
-        torch.stack(first_agent_indices),
-        torch.stack(second_agent_indices),
-        torch.stack(timestep_indices),
-        torch.stack(signed_distances_meters),
-        torch.stack(truncation_states),
+        -torch.stack(chunk_minima).min(),
+        first_agent_idx,
+        second_agent_idx,
+        timestep_idx,
+        signed_box_distance(
+            boxes[first_agent_idx, timestep_idx],
+            boxes[second_agent_idx, timestep_idx],
+        ).detach(),
+        winning_distance >= float(truncation_meters),
     )
 
 
@@ -336,36 +263,27 @@ def drivable_area_deviation_cost(
     state_valid,
     length_meters,
     width_meters,
-    optimized_vehicle_mask,
-    out_of_bounds_rasters,
+    candidate_adversary_mask,
+    out_of_bounds_raster,
     boxes=None,
 ):
     """Mean over time of summed valid-vehicle corner potential, as in the paper."""
     if boxes is None:
-        _validate_common_inputs(states, state_valid, length_meters, width_meters)
-        _validate_agent_mask(optimized_vehicle_mask, states, "optimized_vehicle_mask")
         boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
-    if len(out_of_bounds_rasters) != states.shape[0]:
-        raise ValueError("out_of_bounds_rasters must contain one raster per scenario")
+    if not isinstance(out_of_bounds_raster, SmoothedOutOfBoundsRaster):
+        raise TypeError("The out-of-bounds raster must be precomputed and smoothed")
+    potential = out_of_bounds_raster.potential
+    if potential.device != states.device or potential.dtype != states.dtype:
+        raise ValueError("The out-of-bounds raster and states must share device and dtype")
     corners = oriented_box_corners(boxes)
-    timestep_count = states.shape[2]
-
-    scenario_costs = []
-    for scenario_idx, raster in enumerate(out_of_bounds_rasters):
-        if not isinstance(raster, SmoothedOutOfBoundsRaster):
-            raise TypeError("Every out-of-bounds raster must be precomputed and smoothed")
-        potential = raster.potential
-        if potential.device != states.device or potential.dtype != states.dtype:
-            raise ValueError("Out-of-bounds rasters and states must share device and dtype")
-        corner_potential = sample_out_of_bounds_potential(corners[scenario_idx], raster)
-        valid = state_valid[scenario_idx] & optimized_vehicle_mask[scenario_idx, :, None]
-        potential_sum = torch.where(
-            valid[..., None],
-            corner_potential,
-            torch.zeros_like(corner_potential),
-        ).sum(dim=(-1, -2))
-        scenario_costs.append(potential_sum.sum() / timestep_count)
-    return torch.stack(scenario_costs)
+    corner_potential = sample_out_of_bounds_potential(corners, out_of_bounds_raster)
+    valid = state_valid & candidate_adversary_mask[:, None]
+    potential_sum = torch.where(
+        valid[..., None],
+        corner_potential,
+        torch.zeros_like(corner_potential),
+    ).sum(dim=(-1, -2))
+    return potential_sum.sum() / states.shape[1]
 
 
 def combined_regents_cost(
@@ -375,9 +293,7 @@ def combined_regents_cost(
     width_meters,
     ego_mask,
     candidate_adversary_mask,
-    background_vehicle_mask,
-    optimized_vehicle_mask,
-    out_of_bounds_rasters,
+    out_of_bounds_raster,
     config=None,
 ):
     """Combine paper box-distance collision costs and the grid-approximated road cost."""
@@ -385,32 +301,17 @@ def combined_regents_cost(
         config = ReGentSCostConfig()
     if not isinstance(config, ReGentSCostConfig):
         raise TypeError("config must be a ReGentSCostConfig")
-    _validate_common_inputs(states, state_valid, length_meters, width_meters)
-    for name, mask in (
-        ("ego_mask", ego_mask),
-        ("candidate_adversary_mask", candidate_adversary_mask),
-        ("background_vehicle_mask", background_vehicle_mask),
-        ("optimized_vehicle_mask", optimized_vehicle_mask),
-    ):
-        _validate_agent_mask(mask, states, name)
-    if not isinstance(out_of_bounds_rasters, (tuple, list)):
-        raise TypeError("out_of_bounds_rasters must be a sequence")
-    for raster in out_of_bounds_rasters:
-        if not isinstance(raster, SmoothedOutOfBoundsRaster):
-            raise TypeError("Every out-of-bounds raster must be precomputed and smoothed")
-        if not math.isclose(raster.gaussian_sigma_meters, config.gaussian_sigma_meters):
-            raise ValueError("Out-of-bounds raster Gaussian sigma does not match the cost config")
-        if not math.isclose(raster.gaussian_truncate_sigma, config.gaussian_truncate_sigma):
-            raise ValueError("Out-of-bounds raster Gaussian truncation does not match the cost config")
-    if torch.any(ego_mask & background_vehicle_mask):
-        raise ValueError("The ego agent cannot be included in background_vehicle_mask")
-    if torch.any(optimized_vehicle_mask & ~background_vehicle_mask):
-        raise ValueError("optimized_vehicle_mask must be a subset of background_vehicle_mask")
-    if not torch.all(ego_mask.sum(dim=-1) == 1):
-        raise ValueError("Each scenario must contain exactly one ego agent")
+    if not isinstance(out_of_bounds_raster, SmoothedOutOfBoundsRaster):
+        raise TypeError("The out-of-bounds raster must be precomputed and smoothed")
+    if not math.isclose(out_of_bounds_raster.gaussian_sigma_meters, config.gaussian_sigma_meters):
+        raise ValueError("Out-of-bounds raster Gaussian sigma does not match the cost config")
+    if not math.isclose(out_of_bounds_raster.gaussian_truncate_sigma, config.gaussian_truncate_sigma):
+        raise ValueError("Out-of-bounds raster Gaussian truncation does not match the cost config")
+    if int(ego_mask.sum()) != 1:
+        raise ValueError("The scenario must contain exactly one ego agent")
     if torch.any(ego_mask & candidate_adversary_mask):
         raise ValueError("The ego agent cannot be a candidate adversary")
-    # One box tensor serves all three terms; each would otherwise rebuild and revalidate it.
+    # One box tensor serves all three terms; each would otherwise rebuild it.
     boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
     ego_collision = ego_background_collision_cost(
         states,
@@ -433,8 +334,7 @@ def combined_regents_cost(
         state_valid,
         length_meters,
         width_meters,
-        background_vehicle_mask,
-        optimized_vehicle_mask,
+        candidate_adversary_mask,
         config.background_distance_truncation_meters,
         boxes,
     )
@@ -443,8 +343,8 @@ def combined_regents_cost(
         state_valid,
         length_meters,
         width_meters,
-        optimized_vehicle_mask,
-        out_of_bounds_rasters,
+        candidate_adversary_mask,
+        out_of_bounds_raster,
         boxes,
     )
     total = (

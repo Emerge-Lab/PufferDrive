@@ -8,12 +8,10 @@ different forward model: signed speed, updated-speed Euler integration, slip
 angle, wheelbase, and rate-limited target wheel angle.
 """
 
-import math
 from dataclasses import dataclass
 
 import torch
 
-from pufferlib.ocean.regents.adapter import TIMESTEP_TOLERANCE_SECONDS
 from pufferlib.ocean.regents.dynamics import (
     ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
     MAX_BACKWARD_SPEED_MPS,
@@ -31,7 +29,7 @@ from pufferlib.ocean.regents.state import (
     STATE_STEERING,
     STATE_X,
     STATE_Y,
-    ScenarioBatch,
+    wrapped_angle_difference,
 )
 
 
@@ -62,77 +60,6 @@ class InverseDynamicsResult:
     heading_residual_valid: torch.Tensor
     model_consistent: torch.Tensor
 
-    def __post_init__(self):
-        transition_shape = self.action_valid.shape
-        state_shape = self.state_with_estimated_steering.shape
-        if self.actions.shape != (*transition_shape, 2):
-            raise ValueError("actions must have shape [batch, agent, time - 1, 2]")
-        if state_shape[-1] != STATE_FEATURE_COUNT or state_shape[:-2] != transition_shape[:-1]:
-            raise ValueError("state_with_estimated_steering has an incompatible shape")
-        if state_shape[-2] != transition_shape[-1] + 1:
-            raise ValueError("state and transition time dimensions are inconsistent")
-        if self.state_feature_valid.shape != state_shape:
-            raise ValueError("state_feature_valid must match state_with_estimated_steering")
-        if self.predicted_next_state.shape != (*transition_shape, STATE_FEATURE_COUNT):
-            raise ValueError("predicted_next_state has an incompatible shape")
-        for name in (
-            "position_error_meters",
-            "heading_error_radians",
-            "speed_error_mps",
-            "residual_meters",
-            "low_speed_mask",
-            "heading_residual_valid",
-            "model_consistent",
-        ):
-            if getattr(self, name).shape != transition_shape:
-                raise ValueError(f"{name} must match action_valid")
-
-
-def _wrapped_angle_difference(first, second):
-    difference = first - second
-    return torch.atan2(torch.sin(difference), torch.cos(difference))
-
-
-def _validate_scenario(scenario, low_speed_threshold_mps):
-    if not isinstance(scenario, ScenarioBatch):
-        raise TypeError("scenario must be a ScenarioBatch")
-    if not math.isfinite(low_speed_threshold_mps) or low_speed_threshold_mps < 0:
-        raise ValueError("low_speed_threshold_mps must be finite and non-negative")
-    if not math.isfinite(scenario.dt_seconds) or scenario.dt_seconds <= 0:
-        raise ValueError("scenario dt_seconds must be finite and positive")
-    if scenario.max_time_count < 2:
-        raise ValueError("inverse dynamics requires at least two logged timesteps")
-    if not torch.isfinite(scenario.log_dt_seconds).all():
-        raise ValueError("scenario log_dt_seconds contains NaN or Inf")
-    expected_log_dt = torch.full_like(scenario.log_dt_seconds, scenario.dt_seconds)
-    if not torch.allclose(
-        scenario.log_dt_seconds,
-        expected_log_dt,
-        rtol=0.0,
-        atol=TIMESTEP_TOLERANCE_SECONDS,
-    ):
-        raise ValueError("scenario log_dt_seconds must match dt_seconds")
-
-    valid_state = scenario.state_valid[..., None].expand_as(scenario.logged_state)
-    if not torch.isfinite(scenario.logged_state[valid_state]).all():
-        raise ValueError("valid logged states contain NaN or Inf")
-    valid_vehicle = scenario.vehicle_mask & scenario.agent_metadata_valid
-    missing_metadata = scenario.vehicle_mask[..., None] & scenario.transition_valid
-    missing_metadata &= ~scenario.agent_metadata_valid[..., None]
-    if missing_metadata.any():
-        raise ValueError("a valid vehicle transition is missing agent metadata")
-    if torch.any(scenario.wheelbase_meters[valid_vehicle] <= 0):
-        raise ValueError("valid vehicle wheelbases must be positive")
-    if torch.any(scenario.maximum_speed_mps[valid_vehicle] <= 0):
-        raise ValueError("valid vehicle maximum speeds must be positive")
-    if not torch.isfinite(scenario.wheelbase_meters[valid_vehicle]).all():
-        raise ValueError("valid vehicle wheelbases contain NaN or Inf")
-    if not torch.isfinite(scenario.maximum_speed_mps[valid_vehicle]).all():
-        raise ValueError("valid vehicle maximum speeds contain NaN or Inf")
-    observed_steering = scenario.state_feature_valid[..., STATE_STEERING] & scenario.state_valid
-    if torch.any(scenario.logged_state[..., STATE_STEERING][observed_steering].abs() > STEERING_LIMIT_RADIANS):
-        raise ValueError("observed steering exceeds the classic dynamics steering limit")
-
 
 def _closest_reachable_acceleration_action(current_speed, target_speed, maximum_speed, dt_seconds):
     maximum_speed_delta = ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED * dt_seconds
@@ -155,7 +82,7 @@ def _closest_reachable_acceleration_action(current_speed, target_speed, maximum_
 
 
 def _heading_inverse_steering(current_state, target_state, reconstructed_speed, wheelbase_meters, dt_seconds):
-    heading_delta = _wrapped_angle_difference(
+    heading_delta = wrapped_angle_difference(
         target_state[..., STATE_HEADING],
         current_state[..., STATE_HEADING],
     )
@@ -177,14 +104,14 @@ def _position_inverse_steering(current_state, target_state, reconstructed_speed)
     displacement_y = target_state[..., STATE_Y] - current_state[..., STATE_Y]
     travel_sign = torch.where(reconstructed_speed < 0, -1.0, 1.0)
     motion_heading = torch.atan2(displacement_y * travel_sign, displacement_x * travel_sign)
-    beta = _wrapped_angle_difference(motion_heading, current_state[..., STATE_HEADING])
+    beta = wrapped_angle_difference(motion_heading, current_state[..., STATE_HEADING])
     return torch.atan(torch.tan(beta) / REAR_AXLE_RATIO)
 
 
 def _steering_objective(predicted_state, target_state, wheelbase_meters, heading_residual_valid):
     position_error_squared = (predicted_state[..., STATE_X] - target_state[..., STATE_X]) ** 2
     position_error_squared += (predicted_state[..., STATE_Y] - target_state[..., STATE_Y]) ** 2
-    heading_error = _wrapped_angle_difference(
+    heading_error = wrapped_angle_difference(
         predicted_state[..., STATE_HEADING],
         target_state[..., STATE_HEADING],
     )
@@ -321,7 +248,6 @@ def estimate_expert_actions(
     solve starts from the preceding predicted state, as Waymax's expert actor
     does; only a new contiguous validity run is seeded from the log.
     """
-    _validate_scenario(scenario, low_speed_threshold_mps)
     maximum_transition_count = scenario.max_time_count - 1
     if horizon_transition_count is None:
         horizon_transition_count = maximum_transition_count
@@ -330,26 +256,21 @@ def estimate_expert_actions(
     if horizon_transition_count < 1 or horizon_transition_count > maximum_transition_count:
         raise ValueError(f"horizon_transition_count must be in [1, {maximum_transition_count}]")
 
-    logged_state = scenario.logged_state[:, :, : horizon_transition_count + 1]
-    batch_count, agent_count, time_count, _ = logged_state.shape
+    logged_state = scenario.logged_state[:, : horizon_transition_count + 1]
+    track_count, time_count, _ = logged_state.shape
     transition_count = time_count - 1
-    track_count = batch_count * agent_count
-    action_valid = scenario.transition_valid[:, :, :transition_count] & scenario.vehicle_mask[..., None]
+    action_valid = scenario.transition_valid[:, :transition_count] & scenario.vehicle_mask[:, None]
 
-    flat_logged_state = logged_state.reshape(track_count, time_count, STATE_FEATURE_COUNT)
-    flat_feature_valid = scenario.state_feature_valid[:, :, :time_count].reshape(
-        track_count,
-        time_count,
-        STATE_FEATURE_COUNT,
-    )
-    flat_action_valid = action_valid.reshape(track_count, transition_count)
-    wheelbase_by_transition = injection_wheelbase_by_transition(
-        scenario.logged_length_meters[:, :, :transition_count],
+    # One scenario, so an agent row is already a track row: no flatten is needed.
+    flat_logged_state = logged_state
+    flat_feature_valid = scenario.state_feature_valid[:, :time_count]
+    flat_action_valid = action_valid
+    flat_wheelbase = injection_wheelbase_by_transition(
+        scenario.logged_length_meters[:, :transition_count],
         scenario.wheelbase_meters,
         action_valid,
     )
-    flat_wheelbase = wheelbase_by_transition.reshape(track_count, transition_count)
-    flat_maximum_speed = scenario.maximum_speed_mps.reshape(track_count)
+    flat_maximum_speed = scenario.maximum_speed_mps
 
     actions = torch.zeros((track_count, transition_count, 2), dtype=torch.float32, device=logged_state.device)
     estimated_state = flat_logged_state.clone()
@@ -430,7 +351,7 @@ def estimate_expert_actions(
             predicted_state[:, STATE_X : STATE_Y + 1] - target_state[:, STATE_X : STATE_Y + 1],
             dim=-1,
         )
-        transition_heading_error = _wrapped_angle_difference(
+        transition_heading_error = wrapped_angle_difference(
             predicted_state[:, STATE_HEADING],
             target_state[:, STATE_HEADING],
         ).abs()
@@ -465,18 +386,17 @@ def estimate_expert_actions(
         estimated_feature_valid[active_track_idx, timestep + 1, STATE_STEERING] = True
         reconstructed_state[active_track_idx] = predicted_state
 
-    output_prefix = (batch_count, agent_count)
     return InverseDynamicsResult(
-        actions=actions.reshape(*output_prefix, transition_count, 2),
+        actions=actions,
         action_valid=action_valid,
-        state_with_estimated_steering=estimated_state.reshape(*output_prefix, time_count, STATE_FEATURE_COUNT),
-        state_feature_valid=estimated_feature_valid.reshape(*output_prefix, time_count, STATE_FEATURE_COUNT),
-        predicted_next_state=predicted_next_state.reshape(*output_prefix, transition_count, STATE_FEATURE_COUNT),
-        position_error_meters=position_error.reshape(*output_prefix, transition_count),
-        heading_error_radians=heading_error.reshape(*output_prefix, transition_count),
-        speed_error_mps=speed_error.reshape(*output_prefix, transition_count),
-        residual_meters=residual.reshape(*output_prefix, transition_count),
-        low_speed_mask=low_speed_mask.reshape(*output_prefix, transition_count),
-        heading_residual_valid=heading_residual_valid.reshape(*output_prefix, transition_count),
-        model_consistent=model_consistent.reshape(*output_prefix, transition_count),
+        state_with_estimated_steering=estimated_state,
+        state_feature_valid=estimated_feature_valid,
+        predicted_next_state=predicted_next_state,
+        position_error_meters=position_error,
+        heading_error_radians=heading_error,
+        speed_error_mps=speed_error,
+        residual_meters=residual,
+        low_speed_mask=low_speed_mask,
+        heading_residual_valid=heading_residual_valid,
+        model_consistent=model_consistent,
     )

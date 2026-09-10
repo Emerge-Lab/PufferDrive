@@ -9,9 +9,7 @@ Activate venv before `python`/`puffer`: `source .venv/bin/activate`
 - `config/`: monolithic Hydra YAML — `puffer_drive.yaml` (PufferDrive)
 
 ## Current Goal: ReGentS
-- The current branch goal is to integrate ReGentS safety-critical scenario generation into PufferDrive. The local method reference is `2409.07830v1.pdf`.
-- Update the plan whenever a ReGentS decision, assumption, interface, milestone, threshold, or scope changes. Do not let implementation and the plan silently diverge; the user's latest direction wins and must be reflected in the plan.
-- ReGentS is initially an offline generation/evaluation workflow. Instantiate Drive in evaluation mode; do not route the POC through PPO or `puffer train`. Adam optimizes temporary adversary actions, not policy parameters.
+- This branch aims to implement ReGentS safety-critical scenario generation in PufferDrive. The local method reference is `2409.07830v1.pdf`.
 
 ## Commands
 - **Rebuild C (mandatory after .c/.h change):** `python setup.py build_ext --inplace --force`

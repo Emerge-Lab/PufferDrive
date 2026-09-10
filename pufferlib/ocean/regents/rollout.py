@@ -26,7 +26,8 @@ from pufferlib.ocean.regents.state import (
     STATE_STEERING,
     STATE_X,
     STATE_Y,
-    ScenarioBatch,
+    single_scenario_payload,
+    Scenario,
     signed_speed_from_c_velocity,
 )
 
@@ -70,7 +71,7 @@ class CReplayResult:
 
 @dataclass(frozen=True)
 class ReactiveGenerationResult:
-    scenario: ScenarioBatch
+    scenario: Scenario
     optimization: ReGentSOptimizationResult
     replay: CReplayResult
     ego_refresh_count: int
@@ -89,16 +90,8 @@ class _CRollout:
     html_frames: dict | None
 
 
-def _single_payload(payload):
-    if isinstance(payload, dict):
-        return payload
-    if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict):
-        return payload[0]
-    raise ValueError("Stage 6 C replay requires exactly one Drive scenario")
-
-
 def _current_states(payload, expected_agent_count):
-    scenario = _single_payload(payload)
+    scenario = single_scenario_payload(payload)
     agents = scenario.get("agents")
     if not isinstance(agents, list) or len(agents) != expected_agent_count:
         raise RuntimeError("C replay agent count changed")
@@ -212,14 +205,14 @@ def _capture_c_rollout(
         offroad |= np.asarray(events["offroad"], dtype=np.bool_)
     # The buffer getter carries no scenario identity, so the horizon is bracketed by a
     # dict read at each end rather than one per step.
-    if _single_payload(drive.get_state()).get("scenario_id") != expected_scenario_id:
+    if single_scenario_payload(drive.get_state()).get("scenario_id") != expected_scenario_id:
         raise RuntimeError("Drive changed scenario during C replay")
-    stacked_states = torch.from_numpy(np.ascontiguousarray(np.stack(states)[None, ...])).transpose(1, 2).contiguous()
-    stacked_valid = torch.from_numpy(np.ascontiguousarray(np.stack(validity)[None, ...])).transpose(1, 2).contiguous()
+    stacked_states = torch.from_numpy(np.ascontiguousarray(np.stack(states))).transpose(0, 1).contiguous()
+    stacked_valid = torch.from_numpy(np.ascontiguousarray(np.stack(validity))).transpose(0, 1).contiguous()
     if ego_actions:
-        stacked_ego_actions = torch.from_numpy(np.ascontiguousarray(np.stack(ego_actions)[None, ...]))
+        stacked_ego_actions = torch.from_numpy(np.ascontiguousarray(np.stack(ego_actions)))
     else:
-        stacked_ego_actions = torch.empty((1, 0, 2), dtype=torch.float32)
+        stacked_ego_actions = torch.empty((0, 2), dtype=torch.float32)
     return _CRollout(
         states=stacked_states,
         state_valid=stacked_valid,
@@ -296,10 +289,7 @@ def baseline_relative_events(baseline, adversarial, selected_adversary_idx, inje
 
 
 def _validate_replay_inputs(drive, scenario, optimization, tolerance):
-    if not isinstance(scenario, ScenarioBatch) or scenario.batch_size != 1:
-        raise ValueError("Stage 6 C replay supports one ScenarioBatch item")
-    if not isinstance(optimization, ReGentSOptimizationResult):
-        raise TypeError("optimization must be a ReGentSOptimizationResult")
+    """Check the Drive instance is configured for the replay; its flags come from config."""
     if drive.num_envs != 1 or drive.simulation_mode != binding.SIMULATION_MODE_REPLAY:
         raise ValueError("Stage 6 requires one Drive environment in replay mode")
     if drive._action_type_flag != binding.ACTION_TYPE_CONTINUOUS:
@@ -309,13 +299,6 @@ def _validate_replay_inputs(drive, scenario, optimization, tolerance):
         raise ValueError("Stage 6 requires dynamics_model='classic' or 'jerk'")
     if not math.isfinite(tolerance) or tolerance <= 0.0:
         raise ValueError("tolerance must be finite and positive")
-    expected_action_shape = (1, scenario.max_agent_count, optimization.optimized_states.shape[2] - 1, 2)
-    if tuple(optimization.optimized_actions.shape) != expected_action_shape:
-        raise ValueError("Optimized actions do not match the scenario and rollout horizon")
-    if tuple(optimization.initial_actions.shape) != expected_action_shape:
-        raise ValueError("Initial actions do not match the scenario and rollout horizon")
-    if optimization.optimized_action_mask.shape != optimization.optimized_actions.shape[:-1]:
-        raise ValueError("Optimized action mask shape does not match actions")
 
 
 def replay_optimized_scenario_in_c(
@@ -333,15 +316,15 @@ def replay_optimized_scenario_in_c(
     _validate_replay_inputs(drive, scenario, optimization, tolerance)
     if not isinstance(capture_html_frames, bool):
         raise TypeError("capture_html_frames must be a boolean")
-    transition_count = optimization.optimized_actions.shape[2]
+    transition_count = optimization.optimized_actions.shape[1]
     if drive.resample_frequency > 0 and transition_count >= drive.resample_frequency:
         raise ValueError("C replay horizon must end before Drive resamples")
 
-    scenario_id = scenario.scenario_ids[0]
+    scenario_id = scenario.scenario_id
     agent_count = scenario.max_agent_count
-    action_mask = np.ascontiguousarray(optimization.optimized_action_mask[0].detach().cpu().numpy(), dtype=np.bool_)
-    baseline_plan = np.ascontiguousarray(optimization.initial_actions[0].detach().cpu().numpy(), dtype=np.float32)
-    optimized_plan = np.ascontiguousarray(optimization.optimized_actions[0].detach().cpu().numpy(), dtype=np.float32)
+    action_mask = np.ascontiguousarray(optimization.optimized_action_mask.detach().cpu().numpy(), dtype=np.bool_)
+    baseline_plan = np.ascontiguousarray(optimization.initial_actions.detach().cpu().numpy(), dtype=np.float32)
+    optimized_plan = np.ascontiguousarray(optimization.optimized_actions.detach().cpu().numpy(), dtype=np.float32)
 
     # The baseline drives the same actors from their reconstructed logged actions,
     # so only events the optimization introduced are attributed to the adversary.
@@ -372,34 +355,34 @@ def replay_optimized_scenario_in_c(
         binding.regents_set_action_plan(drive.c_envs, baseline_plan, np.zeros_like(action_mask))
 
     torch_states = optimization.optimized_states.detach().cpu()
-    injected_agent_mask = optimization.optimized_action_mask.any(dim=2).detach().cpu()
+    injected_agent_mask = optimization.optimized_action_mask.any(dim=1).detach().cpu()
     ego_mask = scenario.ego_mask.detach().cpu()
     joint_valid = optimization.state_valid.detach().cpu() & adversarial.state_valid
     initial_difference = torch.abs(
-        adversarial.states[:, :, 0, : STATE_HEADING + 1] - torch_states[:, :, 0, : STATE_HEADING + 1]
+        adversarial.states[:, 0, : STATE_HEADING + 1] - torch_states[:, 0, : STATE_HEADING + 1]
     )
-    initial_difference = initial_difference[joint_valid[:, :, 0]]
+    initial_difference = initial_difference[joint_valid[:, 0]]
     if initial_difference.numel() and float(initial_difference.max().item()) > INITIAL_STATE_TOLERANCE:
         raise RuntimeError("C reset to a different initial pose than the Torch scenario")
 
     # A state carries C speed and wheel steering only once injection has integrated it.
     injected_state_mask = torch.zeros_like(joint_valid)
-    injected_state_mask[:, :, 1:] = optimization.optimized_action_mask.detach().cpu()
+    injected_state_mask[:, 1:] = optimization.optimized_action_mask.detach().cpu()
     feature_mask = joint_valid[..., None].expand_as(torch_states).clone()
     feature_mask[..., STATE_SPEED] &= injected_state_mask
     feature_mask[..., STATE_STEERING] &= injected_state_mask
     # The initial state is a shared input, and C stores adversary speed only once injection starts.
-    timestep_index = torch.arange(torch_states.shape[2])[None, None, :, None]
+    timestep_index = torch.arange(torch_states.shape[1])[None, :, None]
     feature_mask &= timestep_index > 0
     first_any_collision_timestep = adversarial.collision_pairs[0][0] if adversarial.collision_pairs else None
     if first_any_collision_timestep is not None:
         feature_mask &= timestep_index <= first_any_collision_timestep
     differences = torch.abs(adversarial.states - torch_states)
-    ego_feature_mask = feature_mask & ego_mask[..., None, None]
+    ego_feature_mask = feature_mask & ego_mask[:, None, None]
     maximum_ego_reference_error = float(differences[ego_feature_mask].max().item()) if ego_feature_mask.any() else 0.0
     # A reactive ego answers the new adversary, so it is reported instead of gated.
     if drive.sdc_controller != binding.CONTROLLER_REPLAY:
-        feature_mask &= ~ego_mask[..., None, None]
+        feature_mask &= ~ego_mask[:, None, None]
     maximum_error = float(differences[feature_mask].max().item()) if feature_mask.any() else 0.0
     compared_state_count = int(feature_mask.sum().item())
 
@@ -407,7 +390,7 @@ def replay_optimized_scenario_in_c(
         baseline,
         adversarial,
         optimization.selected_adversary_idx,
-        injected_agent_mask[0].numpy(),
+        injected_agent_mask.numpy(),
     )
     (
         ego_collision,
@@ -463,14 +446,14 @@ def make_c_ego_rollout(drive, scenario, horizon_transition_count, seed, ego_acti
     rollout with the plan installed. The plan is cleared afterwards so the verification
     replay starts from the same clean env the optimizer's caller handed over.
     """
-    scenario_id = scenario.scenario_ids[0]
+    scenario_id = scenario.scenario_id
     agent_count = scenario.max_agent_count
     ego_idx = int(torch.where(scenario.ego_mask[0])[0].item())
     source = ego_trajectory_source(drive.sdc_controller)
 
     def ego_rollout(drive_actions, action_mask):
-        plan = np.ascontiguousarray(drive_actions[0].detach().cpu().numpy(), dtype=np.float32)
-        mask = np.ascontiguousarray(action_mask[0].detach().cpu().numpy(), dtype=np.bool_)
+        plan = np.ascontiguousarray(drive_actions.detach().cpu().numpy(), dtype=np.float32)
+        mask = np.ascontiguousarray(action_mask.detach().cpu().numpy(), dtype=np.bool_)
         try:
             binding.regents_set_action_plan(drive.c_envs, plan, mask)
             rollout = _capture_c_rollout(
@@ -484,9 +467,9 @@ def make_c_ego_rollout(drive, scenario, horizon_transition_count, seed, ego_acti
         finally:
             binding.regents_set_action_plan(drive.c_envs, plan, np.zeros_like(mask))
         return FrozenEgoTrajectory(
-            state=rollout.states[:, ego_idx].detach().clone(),
-            valid=rollout.state_valid[:, ego_idx].detach().clone(),
-            scenario_ids=scenario.scenario_ids,
+            state=rollout.states[ego_idx].detach().clone(),
+            valid=rollout.state_valid[ego_idx].detach().clone(),
+            scenario_id=scenario.scenario_id,
             source=source,
         )
 

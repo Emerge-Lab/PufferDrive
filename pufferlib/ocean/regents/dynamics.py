@@ -43,31 +43,6 @@ def injection_wheelbase_by_transition(logged_length_meters, fallback_wheelbase_m
     return torch.stack(wheelbase_by_transition, dim=-1)
 
 
-def _validate_step_inputs(state, action, wheelbase_meters, maximum_speed_mps, dt_seconds):
-    if not isinstance(state, torch.Tensor) or not isinstance(action, torch.Tensor):
-        raise TypeError("state and action must be Torch tensors")
-    if state.dtype != torch.float32 or action.dtype != torch.float32:
-        raise TypeError("classic dynamics currently require torch.float32 state and action tensors")
-    if state.ndim < 1 or state.shape[-1] != STATE_FEATURE_COUNT:
-        raise ValueError("state must have shape [..., 5]")
-    if action.shape != (*state.shape[:-1], ACTION_FEATURE_COUNT):
-        raise ValueError("action must have shape [..., 2] matching the state prefix")
-    for name, metadata in (
-        ("wheelbase_meters", wheelbase_meters),
-        ("maximum_speed_mps", maximum_speed_mps),
-    ):
-        if not isinstance(metadata, torch.Tensor):
-            raise TypeError(f"{name} must be a Torch tensor")
-        if metadata.dtype != torch.float32 or metadata.shape != state.shape[:-1]:
-            raise ValueError(f"{name} must be float32 with shape {state.shape[:-1]}")
-        if metadata.device != state.device:
-            raise ValueError(f"{name} must be on the state device")
-    if action.device != state.device:
-        raise ValueError("action must be on the state device")
-    if not isinstance(dt_seconds, (float, int)) or not math.isfinite(dt_seconds) or dt_seconds <= 0:
-        raise ValueError("dt_seconds must be a finite positive scalar")
-
-
 def _wrap_heading_like_c(heading):
     two_pi = heading.new_tensor(2.0 * math.pi)
     wrapped = torch.fmod(heading, two_pi)
@@ -122,7 +97,6 @@ def _classic_step(state, action, wheelbase_meters, maximum_speed_mps, dt_seconds
 
 def classic_step(state, action, wheelbase_meters, maximum_speed_mps, dt_seconds):
     """Advance one classic-dynamics step without mutating any input."""
-    _validate_step_inputs(state, action, wheelbase_meters, maximum_speed_mps, dt_seconds)
     return _classic_step(state, action, wheelbase_meters, maximum_speed_mps, dt_seconds)
 
 
@@ -145,13 +119,6 @@ def classic_rollout(initial_state, actions, transition_valid, wheelbase_meters, 
         raise ValueError(f"transition_valid must have shape {expected_transition_shape}")
     if transition_valid.dtype != torch.bool or transition_valid.device != initial_state.device:
         raise ValueError("transition_valid must be bool on the state device")
-    _validate_step_inputs(
-        initial_state,
-        actions[..., 0, :],
-        wheelbase_meters,
-        maximum_speed_mps,
-        dt_seconds,
-    )
 
     current_state = initial_state
     rollout_states = [current_state]

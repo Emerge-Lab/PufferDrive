@@ -29,7 +29,7 @@ from pufferlib.ocean.regents.optimizer import (
 from pufferlib.ocean.regents.state import (
     DrivableAreaRaster,
     RasterTransform,
-    ScenarioBatch,
+    Scenario,
 )
 
 
@@ -39,12 +39,12 @@ NUPLAN_MAP_DIR = REPO_ROOT / "pufferlib/resources/drive/binaries/nuplan"
 
 
 def _scenario(states, drivable_mask=None, resolution_meters=1.0, origin_xy=(-50.0, -50.0)):
-    states = states[None].to(torch.float32)
-    _, agent_count, time_count, _ = states.shape
-    valid = torch.ones((1, agent_count, time_count), dtype=torch.bool)
-    present = torch.ones((1, agent_count), dtype=torch.bool)
+    states = states.to(torch.float32)
+    agent_count, time_count, _ = states.shape
+    valid = torch.ones((agent_count, time_count), dtype=torch.bool)
+    present = torch.ones((agent_count,), dtype=torch.bool)
     ego_mask = torch.zeros_like(present)
-    ego_mask[0, 0] = True
+    ego_mask[0] = True
     if drivable_mask is None:
         drivable_mask = torch.ones((101, 101), dtype=torch.bool)
     raster = DrivableAreaRaster(
@@ -57,38 +57,38 @@ def _scenario(states, drivable_mask=None, resolution_meters=1.0, origin_xy=(-50.
             drivable_mask.shape[1],
         ),
     )
-    length = torch.full((1, agent_count), 4.0, dtype=torch.float32)
-    width = torch.full((1, agent_count), 2.0, dtype=torch.float32)
-    return ScenarioBatch(
+    length = torch.full((agent_count,), 4.0, dtype=torch.float32)
+    width = torch.full((agent_count,), 2.0, dtype=torch.float32)
+    return Scenario(
         logged_state=states,
         state_valid=valid,
         state_feature_valid=valid[..., None].expand_as(states).clone(),
-        transition_valid=valid[:, :, :-1] & valid[:, :, 1:],
-        current_state=states[:, :, 0].clone(),
-        current_valid=valid[:, :, 0].clone(),
+        transition_valid=valid[:, :-1] & valid[:, 1:],
+        current_state=states[:, 0].clone(),
+        current_valid=valid[:, 0].clone(),
         agent_present=present,
         agent_metadata_valid=present.clone(),
         active_agent_mask=present.clone(),
-        agent_id=torch.arange(agent_count, dtype=torch.int64)[None],
-        agent_type=torch.full((1, agent_count), binding.AGENT_TYPE_VEHICLE, dtype=torch.int64),
-        controller=torch.full((1, agent_count), binding.CONTROLLER_REPLAY, dtype=torch.int64),
-        trajectory_length=torch.full((1, agent_count), time_count, dtype=torch.int64),
+        agent_id=torch.arange(agent_count, dtype=torch.int64),
+        agent_type=torch.full((agent_count,), binding.AGENT_TYPE_VEHICLE, dtype=torch.int64),
+        controller=torch.full((agent_count,), binding.CONTROLLER_REPLAY, dtype=torch.int64),
+        trajectory_length=torch.full((agent_count,), time_count, dtype=torch.int64),
         ego_mask=ego_mask,
         vehicle_mask=present.clone(),
         candidate_adversary_mask=present & ~ego_mask,
-        logged_length_meters=length[..., None].expand(1, agent_count, time_count).clone(),
-        logged_width_meters=width[..., None].expand(1, agent_count, time_count).clone(),
+        logged_length_meters=length[:, None].expand(agent_count, time_count).clone(),
+        logged_width_meters=width[:, None].expand(agent_count, time_count).clone(),
         length_meters=length,
         width_meters=width,
         wheelbase_meters=binding.WHEELBASE_LENGTH_RATIO * length,
-        maximum_speed_mps=torch.full((1, agent_count), 20.0, dtype=torch.float32),
-        scenario_ids=("synthetic",),
-        dataset_names=("test",),
-        log_dt_seconds=torch.tensor([0.2], dtype=torch.float32),
+        maximum_speed_mps=torch.full((agent_count,), 20.0, dtype=torch.float32),
+        scenario_id="synthetic",
+        dataset_name="test",
+        log_dt_seconds=0.2,
         dt_seconds=0.2,
         init_step=0,
         scenario_length=time_count,
-        drivable_area_rasters=(raster,),
+        drivable_area_raster=raster,
     )
 
 
@@ -125,8 +125,8 @@ def test_optimizer_configuration_and_gradient_masking_contracts(real_scenarios):
     # Curvature conversion round trips a real action array inside the per-agent box.
     scenario = real_scenarios(8)
     inverse = estimate_expert_actions(scenario)
-    drive_actions = inverse.actions[:, :, :16].detach().clone()
-    optimized_action_mask = inverse.action_valid[:, :, :16] & scenario.vehicle_mask[..., None]
+    drive_actions = inverse.actions[:, :16].detach().clone()
+    optimized_action_mask = inverse.action_valid[:, :16] & scenario.vehicle_mask[:, None]
     wheelbase_over_time, achievable_curvature = steering_conversion_metadata(
         scenario, optimized_action_mask, drive_actions.device
     )
@@ -178,12 +178,12 @@ def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions(monk
         show_progress=False,
     )
     assert not drift_filtered.selection.candidate_mask.any()
-    assert "reconstruction_fidelity" in drift_filtered.selection.reasons_for(0, 1)
+    assert "reconstruction_fidelity" in drift_filtered.selection.reasons_for(1)
     assert drift_filtered.failure_reason == "scene_filtered:no_candidate"
-    assert drift_filtered.selection.reconstruction_drift_meters[0, 1] > 0.0
+    assert drift_filtered.selection.reconstruction_drift_meters[1] > 0.0
     # The default threshold is infinite, so the same scene keeps its candidate.
-    assert "reconstruction_fidelity" not in first.selection.reasons_for(0, 1)
-    assert first.selection.candidate_mask[0, 1]
+    assert "reconstruction_fidelity" not in first.selection.reasons_for(1)
+    assert first.selection.candidate_mask[1]
 
     merging_states = torch.stack((_straight_track(0.0, 0.0, 4.0, 16), _straight_track(8.0, 4.0, 3.0, 16)))
     merging = _scenario(merging_states)
@@ -284,16 +284,16 @@ def test_current_iterate_is_returned_with_baseline_relative_infraction_diagnosti
         deterministic_seed=28,
         show_progress=False,
     )
-    assert mixed_control.selection.candidate_mask.tolist() == [[False, True, False, True]]
+    assert mixed_control.selection.candidate_mask.tolist() == [False, True, False, True]
     assert mixed_control.initial_costs.background_collision_first_agent_idx == 1
     assert mixed_control.initial_costs.background_collision_second_agent_idx == 3
     assert mixed_control.initial_costs.background_collision_timestep_idx == 7
     assert math.isclose(mixed_control.initial_costs.background_collision, -0.6, abs_tol=2e-6)
     assert mixed_control.final_costs.background_collision == -1.25
     assert mixed_control.final_costs.background_collision_truncated
-    assert not torch.equal(mixed_control.optimized_actions[0, 1], mixed_control.initial_actions[0, 1])
-    assert torch.equal(mixed_control.optimized_actions[0, 2], mixed_control.initial_actions[0, 2])
-    assert not torch.equal(mixed_control.optimized_actions[0, 3], mixed_control.initial_actions[0, 3])
+    assert not torch.equal(mixed_control.optimized_actions[1], mixed_control.initial_actions[1])
+    assert torch.equal(mixed_control.optimized_actions[2], mixed_control.initial_actions[2])
+    assert not torch.equal(mixed_control.optimized_actions[3], mixed_control.initial_actions[3])
     assert not mixed_control.background_collision
     assert mixed_control.iteration_count == 20
     assert mixed_control.best_iteration == 20
@@ -411,10 +411,10 @@ def test_real_scenario_optimization_is_deterministic_in_curvature_space(real_sce
         first_drive.close()
         second_drive.close()
     assert first.source == "c_idm"
-    assert first.state.shape == (1, 5, 5)
-    assert first.scenario_ids == first_scenario.scenario_ids
-    assert first_scenario.drivable_area_rasters[0].transform.resolution_meters_per_pixel == 2.0
-    assert second.scenario_ids == second_scenario.scenario_ids
+    assert first.state.shape == (5, 5)
+    assert first.scenario_id == first_scenario.scenario_id
+    assert first_scenario.drivable_area_raster.transform.resolution_meters_per_pixel == 2.0
+    assert second.scenario_id == second_scenario.scenario_id
     assert torch.equal(first.state, second.state)
     assert torch.equal(first.valid, second.valid)
     captured = optimize_frozen_ego_scenario(
@@ -450,9 +450,9 @@ def test_background_collision_gate_matches_an_all_exact_scan(real_scenarios):
     """The prefiltered gate is an optimization, so it must agree pair for pair."""
     scenario = real_scenarios(1)
     horizon_transition_count = 40
-    state_valid = scenario.state_valid[:, :, : horizon_transition_count + 1]
+    state_valid = scenario.state_valid[:, : horizon_transition_count + 1]
     boxes = _masked_boxes(
-        scenario.logged_state[:, :, : horizon_transition_count + 1],
+        scenario.logged_state[:, : horizon_transition_count + 1],
         state_valid,
         scenario.length_meters,
         scenario.width_meters,
@@ -462,8 +462,8 @@ def test_background_collision_gate_matches_an_all_exact_scan(real_scenarios):
     assert pair_indices.shape[1] > 0
 
     left_indices, right_indices = pair_indices
-    jointly_valid = state_valid[0, left_indices] & state_valid[0, right_indices]
-    exact_distances = signed_box_distance(boxes[0, left_indices], boxes[0, right_indices])
+    jointly_valid = state_valid[left_indices] & state_valid[right_indices]
+    exact_distances = signed_box_distance(boxes[left_indices], boxes[right_indices])
     # A real log rarely touches, so widened tolerances are what actually exercise a hit.
     for tolerance_meters in (0.0, 2.0, 5.0):
         expected = torch.any(jointly_valid & (exact_distances <= tolerance_meters), dim=-1)
@@ -479,17 +479,15 @@ def test_compacted_rollout_matches_a_full_width_reference(real_scenarios):
     scenario = real_scenarios(1)
     horizon_transition_count = 30
     frozen_ego = FrozenEgoTrajectory(
-        state=scenario.logged_state[:, 0, : horizon_transition_count + 1].clone(),
-        valid=scenario.state_valid[:, 0, : horizon_transition_count + 1].clone(),
-        scenario_ids=scenario.scenario_ids,
+        state=scenario.logged_state[0, : horizon_transition_count + 1].clone(),
+        valid=scenario.state_valid[0, : horizon_transition_count + 1].clone(),
+        scenario_id=scenario.scenario_id,
         source="logged_fixture",
     )
     inverse = estimate_expert_actions(scenario, horizon_transition_count=horizon_transition_count)
     selection = select_adversary_candidates(scenario, ReGentSFilterConfig())
     generator = torch.Generator().manual_seed(1234)
-    actions = torch.rand(
-        (scenario.batch_size, scenario.max_agent_count, horizon_transition_count, 2), generator=generator
-    )
+    actions = torch.rand((scenario.max_agent_count, horizon_transition_count, 2), generator=generator)
     actions = (actions * 2 - 1).requires_grad_(True)
 
     states, state_valid = _compose_rollout(
@@ -498,8 +496,8 @@ def test_compacted_rollout_matches_a_full_width_reference(real_scenarios):
     states.square().sum().backward()
 
     # Non-candidate agents are never integrated, so they must equal the reference exactly.
-    reference = inverse.state_with_estimated_steering[:, :, : horizon_transition_count + 1].clone()
-    reference[:, 0] = frozen_ego.state
+    reference = inverse.state_with_estimated_steering[:, : horizon_transition_count + 1].clone()
+    reference[0] = frozen_ego.state
     untouched = ~selection.candidate_mask
     assert torch.equal(states.detach()[untouched], reference[untouched])
     # Gradients reach candidate actions and nothing else.
@@ -512,9 +510,9 @@ def test_compacted_rollout_matches_a_full_width_reference(real_scenarios):
 
     gap_scenario = _scenario(torch.stack((_straight_track(0.0, 0.0, 2.0, 5), _straight_track(5.0, 2.0, 3.0, 5))))
     gap_valid = gap_scenario.state_valid.clone()
-    gap_valid[0, 1, 2] = False
+    gap_valid[1, 2] = False
     logged_length_meters = gap_scenario.logged_length_meters.clone()
-    logged_length_meters[0, 1, 3] = 6.0
+    logged_length_meters[1, 3] = 6.0
     gap_scenario = dataclasses.replace(
         gap_scenario,
         state_valid=gap_valid,
@@ -523,14 +521,14 @@ def test_compacted_rollout_matches_a_full_width_reference(real_scenarios):
         logged_length_meters=logged_length_meters,
     )
     gap_inverse = estimate_expert_actions(gap_scenario)
-    gap_candidate_mask = torch.tensor([[False, True]])
+    gap_candidate_mask = torch.tensor([False, True])
     gap_action_mask = gap_inverse.action_valid & gap_candidate_mask[..., None]
-    gap_actions = torch.zeros((1, 2, 4, 2), dtype=torch.float32)
-    gap_actions[0, 1, :, 1] = 0.5
+    gap_actions = torch.zeros((2, 4, 2), dtype=torch.float32)
+    gap_actions[1, :, 1] = 0.5
     gap_frozen_ego = FrozenEgoTrajectory(
-        state=gap_scenario.logged_state[:, 0].clone(),
-        valid=gap_scenario.state_valid[:, 0].clone(),
-        scenario_ids=gap_scenario.scenario_ids,
+        state=gap_scenario.logged_state[0].clone(),
+        valid=gap_scenario.state_valid[0].clone(),
+        scenario_id=gap_scenario.scenario_id,
         source="logged_fixture",
     )
     gap_states, _ = _compose_rollout(
@@ -543,32 +541,32 @@ def test_compacted_rollout_matches_a_full_width_reference(real_scenarios):
     )
     reference = gap_inverse.state_with_estimated_steering
     expected_initial_run = classic_step(
-        reference[0, 1, 0:1],
-        gap_actions[0, 1, 0:1],
+        reference[1, 0:1],
+        gap_actions[1, 0:1],
         torch.tensor([2.4]),
         torch.tensor([20.0]),
         gap_scenario.dt_seconds,
     )[0]
     expected_resumed_run = classic_step(
-        reference[0, 1, 3:4],
-        gap_actions[0, 1, 3:4],
+        reference[1, 3:4],
+        gap_actions[1, 3:4],
         torch.tensor([3.6]),
         torch.tensor([20.0]),
         gap_scenario.dt_seconds,
     )[0]
-    torch.testing.assert_close(gap_states[0, 1, 1], expected_initial_run)
-    torch.testing.assert_close(gap_states[0, 1, 3], reference[0, 1, 3])
-    torch.testing.assert_close(gap_states[0, 1, 4], expected_resumed_run)
+    torch.testing.assert_close(gap_states[1, 1], expected_initial_run)
+    torch.testing.assert_close(gap_states[1, 3], reference[1, 3])
+    torch.testing.assert_close(gap_states[1, 4], expected_resumed_run)
 
     gap_wheelbase, _ = steering_conversion_metadata(gap_scenario, gap_action_mask, gap_actions.device)
-    torch.testing.assert_close(gap_wheelbase[0, 1], torch.tensor([2.4, 2.4, 2.4, 3.6]))
+    torch.testing.assert_close(gap_wheelbase[1], torch.tensor([2.4, 2.4, 2.4, 3.6]))
 
 
 def _frozen_ego_from_log(scenario, horizon_transition_count):
     return FrozenEgoTrajectory(
-        state=scenario.logged_state[:, 0, : horizon_transition_count + 1].clone(),
-        valid=scenario.state_valid[:, 0, : horizon_transition_count + 1].clone(),
-        scenario_ids=scenario.scenario_ids,
+        state=scenario.logged_state[0, : horizon_transition_count + 1].clone(),
+        valid=scenario.state_valid[0, : horizon_transition_count + 1].clone(),
+        scenario_id=scenario.scenario_id,
         source="logged_fixture",
     )
 
@@ -604,19 +602,19 @@ def test_ego_refresh_interleaves_reactive_rollouts_with_gradient_steps():
     assert frozen_result.ego_refresh_count == 0
     assert refreshed_result.ego_refresh_count == 4
     assert len(refresh_calls) == 4
-    assert refresh_calls[0][1].shape == (1, 2, horizon)
+    assert refresh_calls[0][1].shape == (2, horizon)
     assert torch.equal(refreshed_result.optimized_actions, frozen_result.optimized_actions)
     assert refreshed_result.iteration_count == frozen_result.iteration_count
 
     # An ego that leaves the scene cannot be hit, so no iterate may be reported as a
     # success even though the frozen-ego run collides.
     def dodging_rollout(drive_actions, action_mask):
-        dodged = braking.logged_state[:, 0, : horizon + 1].clone()
+        dodged = braking.logged_state[0, : horizon + 1].clone()
         dodged[..., 1] += 500.0
         return FrozenEgoTrajectory(
             state=dodged,
-            valid=braking.state_valid[:, 0, : horizon + 1].clone(),
-            scenario_ids=braking.scenario_ids,
+            valid=braking.state_valid[0, : horizon + 1].clone(),
+            scenario_id=braking.scenario_id,
             source="logged_fixture",
         )
 

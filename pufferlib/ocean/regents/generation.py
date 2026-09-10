@@ -254,11 +254,11 @@ def _replay_bundle(env_config, frames, ego_actions):
     frames = dict(frames)
     observations = frames.pop("obs", None)
     frame_count = frames["agent_f32"].shape[0]
-    expected_ego_action_shape = (1, frame_count - 1, 2)
+    expected_ego_action_shape = (frame_count - 1, 2)
     if tuple(ego_actions.shape) != expected_ego_action_shape:
         raise ValueError(f"Captured ReGentS ego actions must have shape {expected_ego_action_shape}")
     actions = np.zeros((frame_count, REGENTS_ACTIVE_AGENT_COUNT, 2), dtype=np.float32)
-    actions[1:, 0] = ego_actions[0].detach().cpu().numpy()
+    actions[1:, 0] = ego_actions.detach().cpu().numpy()
     bundle = {"env": env_config, **frames, "raw_action": actions, "clipped_action": actions}
     if observations is not None:
         if observations.ndim != 3 or observations.shape[:2] != (frame_count, REGENTS_ACTIVE_AGENT_COUNT):
@@ -295,12 +295,12 @@ def save_loss_history_csv(destination, scenario_idx, result):
         )
         for idx, snap in enumerate(optimization.cost_history):
             first_agent_id = (
-                int(result.scenario.agent_id[0, snap.background_collision_first_agent_idx].item())
+                int(result.scenario.agent_id[snap.background_collision_first_agent_idx].item())
                 if snap.background_collision_first_agent_idx >= 0
                 else -1
             )
             second_agent_id = (
-                int(result.scenario.agent_id[0, snap.background_collision_second_agent_idx].item())
+                int(result.scenario.agent_id[snap.background_collision_second_agent_idx].item())
                 if snap.background_collision_second_agent_idx >= 0
                 else -1
             )
@@ -333,12 +333,12 @@ def _truncated_at_ego_collision(frames, ego_actions, first_ego_collision_timeste
     frame_count = first_ego_collision_timestep + 1
     if frame_count >= next(iter(frames.values())).shape[0]:
         return frames, ego_actions
-    return {key: array[:frame_count] for key, array in frames.items()}, ego_actions[:, : frame_count - 1]
+    return {key: array[:frame_count] for key, array in frames.items()}, ego_actions[: frame_count - 1]
 
 
 def candidate_plan(actions, candidate_rows, transition_count):
     """Return the candidate rows of an action plan, cut to the rendered transitions."""
-    return actions[0][candidate_rows][:, :transition_count].detach().cpu().numpy()
+    return actions[candidate_rows][:, :transition_count].detach().cpu().numpy()
 
 
 def render_scenario_replays(destination, scenario_idx, result, env_config):
@@ -354,8 +354,8 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
     replays_dir.mkdir(parents=True, exist_ok=True)
     rendered = {}
     sources = (("logged", replay.baseline_frames), ("adversarial", replay.adversarial_frames))
-    candidate_rows = result.optimization.selection.candidate_mask[0]
-    candidate_adversary_ids = result.scenario.agent_id[0][candidate_rows].tolist()
+    candidate_rows = result.optimization.selection.candidate_mask
+    candidate_adversary_ids = result.scenario.agent_id[candidate_rows].tolist()
     for label, frames in sources:
         stem = f"scenario_{scenario_idx:05d}.{label}"
         # Both replays are cut to the same length so the logged and adversarial pages
@@ -431,11 +431,11 @@ def _metric_row(scenario_idx, map_idx, seed, result, elapsed_seconds, artifact_p
     metrics = result.replay.metrics
     return {
         "scenario_index": scenario_idx,
-        "scenario_id": result.scenario.scenario_ids[0],
+        "scenario_id": result.scenario.scenario_id,
         "ego_controller": ego_controller,
         "map_index": map_idx,
         "seed": seed,
-        "candidate_count": int(result.optimization.selection.candidate_mask[0].sum().item()),
+        "candidate_count": int(result.optimization.selection.candidate_mask.sum().item()),
         "torch_collision": int(result.optimization.success),
         "generation_success": int(result.replay.success),
         "ego_collision": int(metrics.ego_collision),

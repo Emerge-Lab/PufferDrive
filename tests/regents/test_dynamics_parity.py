@@ -175,8 +175,8 @@ def test_actions_derived_from_a_real_trajectory_match_the_c_rollout():
 
     selected_agent_idx = None
     selected_start = None
-    for agent_idx in torch.where(scenario.vehicle_mask[0])[0].tolist():
-        run_start, run_length = _longest_valid_transition_run(scenario.transition_valid[0, agent_idx])
+    for agent_idx in torch.where(scenario.vehicle_mask)[0].tolist():
+        run_start, run_length = _longest_valid_transition_run(scenario.transition_valid[agent_idx])
         if run_length >= 32:
             selected_agent_idx = agent_idx
             selected_start = run_start
@@ -184,7 +184,7 @@ def test_actions_derived_from_a_real_trajectory_match_the_c_rollout():
     assert selected_agent_idx is not None
 
     transition_count = 32
-    logged = scenario.logged_state[0, selected_agent_idx, selected_start : selected_start + transition_count + 1]
+    logged = scenario.logged_state[selected_agent_idx, selected_start : selected_start + transition_count + 1]
     wrapped_heading_delta = torch.atan2(
         torch.sin(logged[1:, STATE_HEADING] - logged[:-1, STATE_HEADING]),
         torch.cos(logged[1:, STATE_HEADING] - logged[:-1, STATE_HEADING]),
@@ -194,14 +194,14 @@ def test_actions_derived_from_a_real_trajectory_match_the_c_rollout():
     next_speed = logged[1:, STATE_SPEED]
     safe_speed = torch.where(next_speed.abs() > 0.5, next_speed, torch.full_like(next_speed, 0.5))
     yaw_rate = wrapped_heading_delta / scenario.dt_seconds
-    target_steering = torch.atan(yaw_rate * scenario.wheelbase_meters[0, selected_agent_idx] / safe_speed)
+    target_steering = torch.atan(yaw_rate * scenario.wheelbase_meters[selected_agent_idx] / safe_speed)
     actions = torch.stack((acceleration_action, target_steering / float(binding.STEERING_VALUES[-1])), dim=-1).clamp(
         -1.0, 1.0
     )
     initial_state = logged[0].clone()
     initial_state[STATE_STEERING] = 0.0
-    wheelbase = scenario.wheelbase_meters[0, selected_agent_idx].reshape(1)
-    maximum_speed = scenario.maximum_speed_mps[0, selected_agent_idx].reshape(1)
+    wheelbase = scenario.wheelbase_meters[selected_agent_idx].reshape(1)
+    maximum_speed = scenario.maximum_speed_mps[selected_agent_idx].reshape(1)
 
     expected = _c_rollout(
         initial_state.numpy().reshape(1, 5),

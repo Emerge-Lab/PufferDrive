@@ -106,19 +106,3 @@ def test_converted_wheel_angle_realizes_the_requested_curvature_in_the_simulator
         STEERING_RATE_LIMIT_RADIANS_PER_SECOND * DT_SECONDS, abs=1e-6
     )
     assert stepped[0, STATE_STEERING].item() < target.item()
-
-
-def test_conversion_rejects_out_of_contract_input():
-    """Shape, dtype, finiteness, and an unusable wheelbase."""
-    unit_wheelbase = _wheelbase((2,))
-    out_of_contract = (
-        (torch.zeros(3, dtype=torch.float32), "share a shape"),
-        (torch.zeros(2, dtype=torch.float64), "float32"),
-        (torch.full((2,), float("nan"), dtype=torch.float32), "NaN"),
-        (torch.zeros((2,)).tolist(), "Torch tensor"),
-    )
-    for curvature, message in out_of_contract:
-        with pytest.raises((TypeError, ValueError), match=message):
-            target_steering_from_curvature(curvature, unit_wheelbase)
-    with pytest.raises(ValueError, match="positive"):
-        target_steering_from_curvature(torch.zeros(2, dtype=torch.float32), torch.zeros(2, dtype=torch.float32))

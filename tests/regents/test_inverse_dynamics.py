@@ -38,21 +38,21 @@ def _c_rollout(initial_state, actions, wheelbase_meters, maximum_speed_mps, dt_s
             dt_seconds,
         )
         states.append(current_state.copy())
-    return torch.from_numpy(np.stack(states, axis=-2)).reshape(1, 1, -1, STATE_FEATURE_COUNT)
+    return torch.from_numpy(np.stack(states, axis=-2)).reshape(1, -1, STATE_FEATURE_COUNT)
 
 
-def _real_replay_drive():
+def _real_replay_drive(scenario_idx):
     map_paths, map_indices, _ = resolve_nuplan_scenarios()
     return Drive(
         map_dir=str(NUPLAN_MAP_DIR),
         num_maps=len(map_paths),
-        num_agents=AUDIT_SCENARIO_COUNT,
+        num_agents=1,
         min_agents_per_env=1,
         max_agents_per_env=1,
-        num_eval_scenarios=AUDIT_SCENARIO_COUNT,
-        max_scenarios_per_batch=AUDIT_SCENARIO_COUNT,
-        eval_map_indices=map_indices,
-        eval_scenario_seeds=[42 + scenario_idx for scenario_idx in range(AUDIT_SCENARIO_COUNT)],
+        num_eval_scenarios=1,
+        max_scenarios_per_batch=1,
+        eval_map_indices=[map_indices[scenario_idx]],
+        eval_scenario_seeds=[42 + scenario_idx],
         seed=42,
         simulation_mode="replay",
         eval_mode=True,
@@ -75,7 +75,7 @@ def _real_replay_drive():
 
 def test_inverse_exactly_reconstructs_torch_c_limit_and_reverse_trajectories(synthetic_scenario_batch):
     """Exact reconstruction through a heading wrap, at the C limits in reverse, and on a prefix."""
-    initial_state = torch.tensor([[[2.0, -3.0, 3.13, 7.0, 0.0]]], dtype=torch.float32)
+    initial_state = torch.tensor([[2.0, -3.0, 3.13, 7.0, 0.0]], dtype=torch.float32)
     steering_targets = torch.tensor([0.02, 0.04, 0.06, 0.08, 0.06, 0.04], dtype=torch.float32)
     actions = torch.stack(
         (
@@ -83,13 +83,13 @@ def test_inverse_exactly_reconstructs_torch_c_limit_and_reverse_trajectories(syn
             steering_targets / float(binding.STEERING_LIMIT_RADIANS),
         ),
         dim=-1,
-    ).reshape(1, 1, -1, 2)
+    ).reshape(1, -1, 2)
     states = classic_rollout(
         initial_state,
         actions,
         torch.ones(actions.shape[:-1], dtype=torch.bool),
-        torch.tensor([[2.7]], dtype=torch.float32),
-        torch.tensor([[20.0]], dtype=torch.float32),
+        torch.tensor([2.7], dtype=torch.float32),
+        torch.tensor([20.0], dtype=torch.float32),
         0.1,
     )
     scenario = synthetic_scenario_batch(states, steering_observed=False)
@@ -103,15 +103,15 @@ def test_inverse_exactly_reconstructs_torch_c_limit_and_reverse_trajectories(syn
 
     # A bounded horizon must be the exact prefix of the full reconstruction.
     prefix = estimate_expert_actions(scenario, horizon_transition_count=2)
-    assert prefix.actions.shape == (1, 1, 2, 2)
-    assert prefix.state_with_estimated_steering.shape == (1, 1, 3, STATE_FEATURE_COUNT)
-    torch.testing.assert_close(prefix.actions, result.actions[:, :, :2])
-    torch.testing.assert_close(prefix.state_with_estimated_steering, result.state_with_estimated_steering[:, :, :3])
-    torch.testing.assert_close(prefix.residual_meters, result.residual_meters[:, :, :2])
+    assert prefix.actions.shape == (1, 2, 2)
+    assert prefix.state_with_estimated_steering.shape == (1, 3, STATE_FEATURE_COUNT)
+    torch.testing.assert_close(prefix.actions, result.actions[:, :2])
+    torch.testing.assert_close(prefix.state_with_estimated_steering, result.state_with_estimated_steering[:, :3])
+    torch.testing.assert_close(prefix.residual_meters, result.residual_meters[:, :2])
 
     # Saturated actions and reverse motion are only expressible against the C model.
     c_states = _c_rollout(
-        np.asarray([[[[0.0, 0.0, -3.0, -1.7, 0.62]]]], dtype=np.float32).reshape(1, 1, 5),
+        np.asarray([[[0.0, 0.0, -3.0, -1.7, 0.62]]], dtype=np.float32).reshape(1, 5),
         np.asarray([[[[-1.0, 1.0], [-1.0, 1.0], [1.0, -1.0], [1.0, -1.0], [1.0, -1.0]]]], dtype=np.float32),
         2.7,
         1.0,
@@ -157,14 +157,14 @@ def test_inverse_handles_gaps_low_speed_and_inconsistency(synthetic_scenario_bat
         gapped_states, torch.tensor([[[True, True, False, True, True]]]), steering_observed=False
     )
     logged_length_meters = gapped_scenario.logged_length_meters.clone()
-    logged_length_meters[0, 0, 3] = resumed_wheelbase.item() / float(binding.WHEELBASE_LENGTH_RATIO)
+    logged_length_meters[0, 3] = resumed_wheelbase.item() / float(binding.WHEELBASE_LENGTH_RATIO)
     gapped_scenario = replace(gapped_scenario, logged_length_meters=logged_length_meters)
     gapped = estimate_expert_actions(gapped_scenario)
-    assert torch.equal(gapped.action_valid, torch.tensor([[[True, False, False, True]]]))
+    assert torch.equal(gapped.action_valid, torch.tensor([[True, False, False, True]]))
     assert torch.equal(gapped.actions[~gapped.action_valid], torch.zeros((2, 2)))
-    assert gapped.state_with_estimated_steering[0, 0, 0, STATE_STEERING] == 0
-    assert gapped.state_with_estimated_steering[0, 0, 3, STATE_STEERING] == 0
-    torch.testing.assert_close(gapped.actions[0, 0, 3], resumed_action[0], rtol=0.0, atol=2e-5)
+    assert gapped.state_with_estimated_steering[0, 0, STATE_STEERING] == 0
+    assert gapped.state_with_estimated_steering[0, 3, STATE_STEERING] == 0
+    torch.testing.assert_close(gapped.actions[0, 3], resumed_action[0], rtol=0.0, atol=2e-5)
 
     stationary = estimate_expert_actions(
         synthetic_scenario_batch(
@@ -176,7 +176,7 @@ def test_inverse_handles_gaps_low_speed_and_inconsistency(synthetic_scenario_bat
     assert not stationary.heading_residual_valid.item()
     assert stationary.heading_error_radians.item() == pytest.approx(1.0)
     assert stationary.residual_meters.item() == pytest.approx(0.0)
-    assert stationary.actions[0, 0, 0, 1] == pytest.approx(0.2 / float(binding.STEERING_LIMIT_RADIANS))
+    assert stationary.actions[0, 0, 1] == pytest.approx(0.2 / float(binding.STEERING_LIMIT_RADIANS))
     assert stationary.model_consistent.item()
     assert DEFAULT_LOW_SPEED_THRESHOLD_MPS == pytest.approx(0.6)
 
@@ -202,7 +202,7 @@ def test_inverse_handles_gaps_low_speed_and_inconsistency(synthetic_scenario_bat
 def test_inverse_uses_reconstructed_state_for_the_next_action(synthetic_scenario_batch):
     """An unreachable speed target remains visible to the following expert solve."""
     logged_states = torch.tensor(
-        [[[[0.0, 0.0, 0.0, 5.0, 0.0], [0.9, 0.0, 0.0, 9.0, 0.0], [1.8, 0.0, 0.0, 9.0, 0.0]]]],
+        [[[0.0, 0.0, 0.0, 5.0, 0.0], [0.9, 0.0, 0.0, 9.0, 0.0], [1.8, 0.0, 0.0, 9.0, 0.0]]],
         dtype=torch.float32,
     )
     scenario = synthetic_scenario_batch(logged_states, steering_observed=False)
@@ -211,54 +211,79 @@ def test_inverse_uses_reconstructed_state_for_the_next_action(synthetic_scenario
 
     # Solving logged[1] -> logged[2] independently would request zero acceleration.
     # Sequential feedback instead sees the first step's reachable 5.4 m/s state.
-    torch.testing.assert_close(result.actions[0, 0, :, 0], torch.ones(2))
+    torch.testing.assert_close(result.actions[0, :, 0], torch.ones(2))
     sequential_second_state = classic_step(
-        result.predicted_next_state[0, 0, 0:1],
-        result.actions[0, 0, 1:2],
+        result.predicted_next_state[0, 0:1],
+        result.actions[0, 1:2],
         torch.tensor([2.7]),
         torch.tensor([20.0]),
         scenario.dt_seconds,
     )[0]
-    torch.testing.assert_close(result.predicted_next_state[0, 0, 1], sequential_second_state)
+    torch.testing.assert_close(result.predicted_next_state[0, 1], sequential_second_state)
     reconstructed = classic_rollout(
         result.state_with_estimated_steering[..., 0, :],
         result.actions,
         result.action_valid,
-        torch.tensor([[2.7]]),
-        torch.tensor([[20.0]]),
+        torch.tensor([2.7]),
+        torch.tensor([20.0]),
         scenario.dt_seconds,
     )
     torch.testing.assert_close(result.predicted_next_state, reconstructed[..., 1:, :])
     expected_position_error = torch.linalg.vector_norm(reconstructed[..., 1:, :2] - logged_states[..., 1:, :2], dim=-1)
     torch.testing.assert_close(result.position_error_meters, expected_position_error)
-    assert result.speed_error_mps[0, 0, 0] == pytest.approx(3.6)
-    assert result.speed_error_mps[0, 0, 1] == pytest.approx(3.2)
+    assert result.speed_error_mps[0, 0] == pytest.approx(3.6)
+    assert result.speed_error_mps[0, 1] == pytest.approx(3.2)
+
+
+def _padded_stack(per_scenario, agent_count, time_count):
+    """Stack per-scenario `[agent, transition]` metrics, zero-padding both axes.
+
+    Padding is zero, which is False for the validity masks, so padded slots are
+    masked out of every gate below rather than contributing to it.
+    """
+    padded = [
+        torch.nn.functional.pad(tensor, (0, time_count - tensor.shape[-1], 0, agent_count - tensor.shape[-2]))
+        for tensor in per_scenario
+    ]
+    return torch.stack(padded)
 
 
 def test_real_replay_reconstruction_metrics_are_finite_and_meet_the_p95_gates():
-    drive = _real_replay_drive()
-    try:
-        drive.reset()
-        scenario = export_drive_scenarios(drive, raster_resolution_meters=5.0)
-    finally:
-        drive.close()
+    """The Stage 3 gates over the whole audit cohort, one single-scenario export each."""
+    results = []
+    for scenario_idx in range(AUDIT_SCENARIO_COUNT):
+        drive = _real_replay_drive(scenario_idx)
+        try:
+            drive.reset()
+            scenario = export_drive_scenarios(drive, raster_resolution_meters=5.0)
+        finally:
+            drive.close()
+        assert scenario.scenario_id == REGENTS_AUDIT_SCENARIO_IDS[scenario_idx]
+        results.append(estimate_expert_actions(scenario))
 
-    assert scenario.scenario_ids == REGENTS_AUDIT_SCENARIO_IDS
-    result = estimate_expert_actions(scenario)
-    valid = result.action_valid
-    normal_speed = valid & result.heading_residual_valid
-    low_speed = valid & result.low_speed_mask
+    agent_count = max(item.action_valid.shape[-2] for item in results)
+    time_count = max(item.action_valid.shape[-1] for item in results)
+
+    def stacked(name):
+        return _padded_stack([getattr(item, name) for item in results], agent_count, time_count)
+
+    valid = stacked("action_valid")
+    normal_speed = valid & stacked("heading_residual_valid")
+    low_speed = valid & stacked("low_speed_mask")
+    position_error_meters = stacked("position_error_meters")
+    heading_error_radians = stacked("heading_error_radians")
+    speed_error_mps = stacked("speed_error_mps")
 
     assert valid.any() and normal_speed.any() and low_speed.any()
-    assert torch.isfinite(result.position_error_meters[valid]).all()
-    assert torch.isfinite(result.heading_error_radians[normal_speed]).all()
-    assert torch.isfinite(result.speed_error_mps[valid]).all()
+    assert torch.isfinite(position_error_meters[valid]).all()
+    assert torch.isfinite(heading_error_radians[normal_speed]).all()
+    assert torch.isfinite(speed_error_mps[valid]).all()
     assert valid.sum() == 67_111
-    assert torch.quantile(result.position_error_meters[normal_speed], 0.95) <= NORMAL_SPEED_POSITION_P95_LIMIT_METERS
-    assert torch.quantile(result.position_error_meters[low_speed], 0.95) <= LOW_SPEED_POSITION_P95_LIMIT_METERS
-    assert torch.quantile(result.heading_error_radians[normal_speed], 0.95) <= NORMAL_SPEED_HEADING_P95_LIMIT_RADIANS
-    assert torch.quantile(result.speed_error_mps[normal_speed], 0.95) <= SPEED_P95_LIMIT_MPS
-    assert torch.quantile(result.speed_error_mps[low_speed], 0.95) <= SPEED_P95_LIMIT_MPS
+    assert torch.quantile(position_error_meters[normal_speed], 0.95) <= NORMAL_SPEED_POSITION_P95_LIMIT_METERS
+    assert torch.quantile(position_error_meters[low_speed], 0.95) <= LOW_SPEED_POSITION_P95_LIMIT_METERS
+    assert torch.quantile(heading_error_radians[normal_speed], 0.95) <= NORMAL_SPEED_HEADING_P95_LIMIT_RADIANS
+    assert torch.quantile(speed_error_mps[normal_speed], 0.95) <= SPEED_P95_LIMIT_MPS
+    assert torch.quantile(speed_error_mps[low_speed], 0.95) <= SPEED_P95_LIMIT_MPS
 
     timestep_mean_position = []
     timestep_mean_heading = []
@@ -267,11 +292,11 @@ def test_real_replay_reconstruction_metrics_are_finite_and_meet_the_p95_gates():
         timestep_valid = valid[..., timestep]
         if not timestep_valid.any():
             continue
-        timestep_mean_position.append(result.position_error_meters[..., timestep][timestep_valid].mean())
-        timestep_mean_speed.append(result.speed_error_mps[..., timestep][timestep_valid].mean())
+        timestep_mean_position.append(position_error_meters[..., timestep][timestep_valid].mean())
+        timestep_mean_speed.append(speed_error_mps[..., timestep][timestep_valid].mean())
         timestep_heading_valid = normal_speed[..., timestep]
         if timestep_heading_valid.any():
-            timestep_mean_heading.append(result.heading_error_radians[..., timestep][timestep_heading_valid].mean())
+            timestep_mean_heading.append(heading_error_radians[..., timestep][timestep_heading_valid].mean())
     assert torch.stack(timestep_mean_position).max() <= TIMESTEP_MEAN_POSITION_LIMIT_METERS
     assert torch.stack(timestep_mean_heading).max() <= TIMESTEP_MEAN_HEADING_LIMIT_RADIANS
     assert torch.stack(timestep_mean_speed).max() <= TIMESTEP_MEAN_SPEED_LIMIT_MPS

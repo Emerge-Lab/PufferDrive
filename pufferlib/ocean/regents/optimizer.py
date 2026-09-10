@@ -31,18 +31,18 @@ from pufferlib.ocean.regents.geometry import (
     oriented_box_corners,
     signed_box_distance,
 )
-from pufferlib.ocean.regents.inverse_dynamics import InverseDynamicsResult, estimate_expert_actions
+from pufferlib.ocean.regents.inverse_dynamics import estimate_expert_actions
 from pufferlib.ocean.regents.losses import (
     ReGentSCostConfig,
     _masked_boxes,
     combined_regents_cost,
-    prepare_out_of_bounds_rasters,
+    prepare_out_of_bounds_raster,
 )
 from pufferlib.ocean.regents.state import (
     STATE_FEATURE_COUNT,
     STATE_X,
     STATE_Y,
-    ScenarioBatch,
+    single_scenario_payload,
     signed_speed_from_c_velocity,
 )
 from pufferlib.ocean.regents.waymax_actions import (
@@ -71,7 +71,6 @@ REGENTS_EGO_ACTION_FEATURE_COUNT = 2
 # Steering is optimized in the reference's path-curvature space, converted to the
 # simulator's normalized target wheel angle at the boundary. This is what keeps Adam
 # exploring the same manifold ReGentS does; see `waymax_actions`.
-STEERING_PARAMETERIZATION_CURVATURE = "curvature"
 DEFAULT_STEERING_UPDATE_SCALE = 0.5
 
 # A curvature sitting exactly at full lock round trips, in float32, to a wheel angle one
@@ -123,26 +122,8 @@ class FrozenEgoTrajectory:
 
     state: torch.Tensor
     valid: torch.Tensor
-    scenario_ids: tuple[str, ...]
+    scenario_id: str
     source: str
-
-    def __post_init__(self):
-        if self.state.dtype != torch.float32:
-            raise TypeError("Frozen ego state must use torch.float32")
-        if self.state.ndim != 3 or self.state.shape[-1] != STATE_FEATURE_COUNT:
-            raise ValueError("Frozen ego state must have shape [batch, time, 5]")
-        if self.valid.dtype != torch.bool or self.valid.shape != self.state.shape[:-1]:
-            raise ValueError("Frozen ego validity must be bool [batch, time]")
-        if self.valid.device != self.state.device:
-            raise ValueError("Frozen ego state and validity must share a device")
-        if not isinstance(self.scenario_ids, tuple) or len(self.scenario_ids) != self.state.shape[0]:
-            raise ValueError("Frozen ego scenario_ids must be one string per batch row")
-        if not all(isinstance(item, str) and item for item in self.scenario_ids):
-            raise ValueError("Frozen ego scenario_ids must be non-empty strings")
-        if self.source not in EGO_TRAJECTORY_SOURCES:
-            raise ValueError(f"Frozen ego source must be one of {EGO_TRAJECTORY_SOURCES}")
-        if not torch.isfinite(self.state[self.valid]).all():
-            raise ValueError("Frozen valid ego states contain NaN or Inf")
 
 
 @dataclass(frozen=True)
@@ -253,16 +234,8 @@ class ReGentSOptimizationResult:
     cost_history: tuple[CostSnapshot, ...] = ()
 
 
-def _single_scenario_payload(payload):
-    if isinstance(payload, dict):
-        return payload
-    if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict):
-        return payload[0]
-    raise ValueError("Frozen IDM capture requires exactly one Drive scenario")
-
-
 def _ego_state_from_payload(payload, expected_controller):
-    scenario = _single_scenario_payload(payload)
+    scenario = single_scenario_payload(payload)
     agents = scenario.get("agents")
     if not isinstance(agents, list) or not agents:
         raise ValueError("Drive state contains no ego agent")
@@ -336,7 +309,7 @@ def capture_frozen_idm_trajectory(
     states.append(state)
     validity.append(valid)
     neutral_actions = np.zeros_like(drive.actions)
-    agent_count = int(_single_scenario_payload(initial_payload)["num_total_agents"])
+    agent_count = int(single_scenario_payload(initial_payload)["num_total_agents"])
     state_scratch = np.empty((agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
     valid_scratch = np.empty(agent_count, dtype=np.bool_)
     ego_action_scratch = np.empty(REGENTS_EGO_ACTION_FEATURE_COUNT, dtype=np.float32)
@@ -351,14 +324,13 @@ def capture_frozen_idm_trajectory(
     # The buffer getter carries no scenario identity, so the horizon is bracketed by a
     # dict read at each end rather than one per step.
     scenario_ids.append(_ego_state_from_payload(drive.get_state(), drive.sdc_controller)[0])
-    if any(item != scenario.scenario_ids[0] for item in scenario_ids):
+    if any(item != scenario.scenario_id for item in scenario_ids):
         raise RuntimeError("Drive changed scenario during frozen IDM capture")
-    source = ego_trajectory_source(drive.sdc_controller)
     frozen_ego = FrozenEgoTrajectory(
-        state=torch.from_numpy(np.ascontiguousarray(np.stack(states)[None, ...])),
-        valid=torch.from_numpy(np.ascontiguousarray(np.asarray(validity, dtype=np.bool_)[None, ...])),
-        scenario_ids=scenario.scenario_ids,
-        source=source,
+        state=torch.from_numpy(np.ascontiguousarray(np.stack(states))),
+        valid=torch.from_numpy(np.ascontiguousarray(np.asarray(validity, dtype=np.bool_))),
+        scenario_id=scenario.scenario_id,
+        source=ego_trajectory_source(drive.sdc_controller),
     )
     return scenario, frozen_ego
 
@@ -410,45 +382,32 @@ def _project_parameter(action_parameter, steering_parameter_limit):
     )
 
 
-def _validate_optimization_inputs(scenario, frozen_ego, config, deterministic_seed, horizon_transition_count):
-    if not isinstance(scenario, ScenarioBatch):
-        raise TypeError("scenario must be a ScenarioBatch")
-    if scenario.batch_size < 1:
-        raise ValueError("scenario must contain at least one scenario")
-    if not isinstance(config, ReGentSOptimizationConfig):
-        raise TypeError("config must be a ReGentSOptimizationConfig")
-    if not isinstance(deterministic_seed, int) or deterministic_seed < 0 or deterministic_seed >= 2**63:
-        raise ValueError("deterministic_seed must be an integer in [0, 2**63)")
+def _resolve_optimization_horizon(scenario, frozen_ego, horizon_transition_count):
+    """Derive the horizon and check the one contract the optimizer cannot assume.
+
+    The frozen ego is captured from C independently of the scenario export, so its
+    shape and identity are the only cross-object facts not established by construction.
+    """
     maximum_transition_count = scenario.max_time_count - 1
     if horizon_transition_count is None:
-        horizon_transition_count = frozen_ego.state.shape[1] - 1 if frozen_ego is not None else maximum_transition_count
-    if not isinstance(horizon_transition_count, int):
-        raise TypeError("horizon_transition_count must be an integer")
+        horizon_transition_count = frozen_ego.state.shape[0] - 1 if frozen_ego is not None else maximum_transition_count
     if horizon_transition_count < 1 or horizon_transition_count > maximum_transition_count:
         raise ValueError(f"horizon_transition_count must be in [1, {maximum_transition_count}]")
     if frozen_ego is not None:
-        if not isinstance(frozen_ego, FrozenEgoTrajectory):
-            raise TypeError("frozen_ego must be a FrozenEgoTrajectory")
-        expected_frozen_shape = (scenario.batch_size, horizon_transition_count + 1, STATE_FEATURE_COUNT)
-        if frozen_ego.state.shape != expected_frozen_shape:
-            raise ValueError("Frozen ego state does not match the optimization batch and horizon")
-        if frozen_ego.scenario_ids != scenario.scenario_ids:
-            raise ValueError("Frozen ego scenario_ids do not match the ScenarioBatch")
-        if frozen_ego.state.device != scenario.logged_state.device:
-            raise ValueError("Frozen ego and scenario tensors must share a device")
+        if frozen_ego.state.shape != (horizon_transition_count + 1, STATE_FEATURE_COUNT):
+            raise ValueError("Frozen ego state does not match the optimization horizon")
+        if frozen_ego.scenario_id != scenario.scenario_id:
+            raise ValueError("Frozen ego scenario_id does not match the Scenario")
     return horizon_transition_count
 
 
 def _frozen_ego_fixture(scenario, inverse, horizon_transition_count):
-    if not torch.all(scenario.ego_mask.sum(dim=-1) == 1):
-        raise ValueError("Logged frozen ego fixture requires exactly one ego per scenario")
-    ego_indices = _ego_indices(scenario.ego_mask)
-    batch_indices = torch.arange(scenario.batch_size, device=scenario.ego_mask.device)
+    ego_idx = _ego_index(scenario.ego_mask)
     horizon_slice = slice(None, horizon_transition_count + 1)
     return FrozenEgoTrajectory(
-        state=inverse.state_with_estimated_steering[batch_indices, ego_indices, horizon_slice].detach().clone(),
-        valid=scenario.state_valid[batch_indices, ego_indices, horizon_slice].detach().clone(),
-        scenario_ids=scenario.scenario_ids,
+        state=inverse.state_with_estimated_steering[ego_idx, horizon_slice].detach().clone(),
+        valid=scenario.state_valid[ego_idx, horizon_slice].detach().clone(),
+        scenario_id=scenario.scenario_id,
         source="logged_fixture",
     )
 
@@ -461,32 +420,28 @@ def _compose_rollout(
     horizon_transition_count,
     optimized_agent_mask=None,
 ):
-    reference_state = inverse.state_with_estimated_steering[:, :, : horizon_transition_count + 1].to(actions.device)
-    transition_valid = inverse.action_valid[:, :, :horizon_transition_count].to(actions.device)
+    reference_state = inverse.state_with_estimated_steering[:, : horizon_transition_count + 1].to(actions.device)
+    transition_valid = inverse.action_valid[:, :horizon_transition_count].to(actions.device)
     if optimized_agent_mask is None:
         optimized_agent_mask = scenario.candidate_adversary_mask.to(actions.device)
-    if optimized_agent_mask.dtype != torch.bool or optimized_agent_mask.shape != scenario.ego_mask.shape:
-        raise ValueError("optimized_agent_mask must be bool [batch, agent]")
     optimized_transition_valid = transition_valid & optimized_agent_mask[..., None]
-    ego_indices = _ego_indices(scenario.ego_mask).to(actions.device)
-    batch_indices = torch.arange(scenario.batch_size, device=actions.device)
+    ego_idx = _ego_index(scenario.ego_mask)
     reference_state = reference_state.clone()
-    reference_state[batch_indices, ego_indices] = frozen_ego.state
-    state_valid = scenario.state_valid[:, :, : horizon_transition_count + 1].to(actions.device).clone()
-    state_valid[batch_indices, ego_indices] = frozen_ego.valid
+    reference_state[ego_idx] = frozen_ego.state
+    state_valid = scenario.state_valid[:, : horizon_transition_count + 1].to(actions.device).clone()
+    state_valid[ego_idx] = frozen_ego.valid
 
     # Only candidate rows are ever integrated, so the sequential loop carries those rows
     # alone instead of every agent in the scenario. Every other agent keeps its
     # reference verbatim.
-    candidate_batch_rows, candidate_agent_rows = torch.where(optimized_agent_mask)
-    if candidate_batch_rows.numel() == 0:
+    candidate_rows = torch.where(optimized_agent_mask)[0]
+    if candidate_rows.numel() == 0:
         return reference_state, state_valid
-    candidate_rows = (candidate_batch_rows, candidate_agent_rows)
     candidate_active = optimized_transition_valid[candidate_rows]
     candidate_reference = reference_state[candidate_rows]
     candidate_actions = actions[candidate_rows]
     candidate_wheelbase = injection_wheelbase_by_transition(
-        scenario.logged_length_meters[:, :, :horizon_transition_count].to(actions.device)[candidate_rows],
+        scenario.logged_length_meters[:, :horizon_transition_count].to(actions.device)[candidate_rows],
         scenario.wheelbase_meters.to(actions.device)[candidate_rows],
         candidate_active,
     )
@@ -533,17 +488,17 @@ def _reconstruction_drift_meters(scenario, inverse, baseline_actions, frozen_ego
         horizon_transition_count,
         scenario.candidate_adversary_mask.to(baseline_actions.device),
     )
-    logged_position = scenario.logged_state[:, :, : horizon_transition_count + 1, STATE_X : STATE_Y + 1]
-    valid = scenario.state_valid[:, :, : horizon_transition_count + 1]
+    logged_position = scenario.logged_state[:, : horizon_transition_count + 1, STATE_X : STATE_Y + 1]
+    valid = scenario.state_valid[:, : horizon_transition_count + 1]
     offset = reconstruction[..., STATE_X : STATE_Y + 1] - logged_position.to(reconstruction.device)
     return (
         torch.linalg.vector_norm(offset, dim=-1).masked_fill(~valid.to(reconstruction.device), 0.0).max(dim=-1).values
     )
 
 
-def _ego_indices(ego_mask):
-    """Per-scenario ego column; ScenarioBatch guarantees exactly one ego per row."""
-    return torch.argmax(ego_mask.to(torch.int64), dim=-1)
+def _ego_index(ego_mask):
+    """The scenario's ego column; the export guarantees exactly one."""
+    return int(torch.argmax(ego_mask.to(torch.int64)).item())
 
 
 def _box_contact_mask(boxes_a, boxes_b, jointly_valid, tolerance_meters):
@@ -564,14 +519,13 @@ def _box_contact_mask(boxes_a, boxes_b, jointly_valid, tolerance_meters):
 
 
 def _first_ego_collision(boxes, state_valid, ego_idx, candidate_mask, tolerance_meters):
-    candidate_indices = torch.where(candidate_mask[0])[0]
+    candidate_indices = torch.where(candidate_mask)[0]
     if candidate_indices.numel() == 0:
         return None, -1
-    scenario_boxes = boxes[0]
-    jointly_valid = state_valid[0, candidate_indices] & state_valid[0, ego_idx][None]
+    jointly_valid = state_valid[candidate_indices] & state_valid[ego_idx][None]
     overlapping = _box_contact_mask(
-        scenario_boxes[candidate_indices],
-        scenario_boxes[ego_idx][None],
+        boxes[candidate_indices],
+        boxes[ego_idx][None],
         jointly_valid,
         tolerance_meters,
     )
@@ -593,15 +547,15 @@ def _candidate_background_pair_indices(scenario, state_valid, candidate_mask):
     The layout is fixed for a run, which lets a signature be compared elementwise
     against its baseline.
     """
-    background_idx = torch.where(scenario.vehicle_mask[0] & ~scenario.ego_mask[0])[0]
+    background_idx = torch.where(scenario.vehicle_mask & ~scenario.ego_mask)[0]
     if background_idx.numel() < 2:
         return torch.empty((2, 0), dtype=torch.int64, device=scenario.logged_state.device)
     local_pairs = torch.triu_indices(
         background_idx.numel(), background_idx.numel(), offset=1, device=scenario.logged_state.device
     )
     pair_indices = background_idx[local_pairs]
-    candidate_involved = candidate_mask[0, pair_indices[0]] | candidate_mask[0, pair_indices[1]]
-    jointly_valid = state_valid[0, pair_indices[0]] & state_valid[0, pair_indices[1]]
+    candidate_involved = candidate_mask[pair_indices[0]] | candidate_mask[pair_indices[1]]
+    jointly_valid = state_valid[pair_indices[0]] & state_valid[pair_indices[1]]
     return pair_indices[:, candidate_involved & torch.any(jointly_valid, dim=-1)]
 
 
@@ -617,44 +571,41 @@ def _background_collision_signature(boxes, state_valid, tolerance_meters, pair_i
     for chunk_start in range(0, pair_count, BACKGROUND_COLLISION_PAIR_CHUNK_SIZE):
         chunk_pairs = pair_indices[:, chunk_start : chunk_start + BACKGROUND_COLLISION_PAIR_CHUNK_SIZE]
         left_indices, right_indices = chunk_pairs
-        jointly_valid = state_valid[0, left_indices] & state_valid[0, right_indices]
-        contact = _box_contact_mask(boxes[0, left_indices], boxes[0, right_indices], jointly_valid, tolerance_meters)
+        jointly_valid = state_valid[left_indices] & state_valid[right_indices]
+        contact = _box_contact_mask(boxes[left_indices], boxes[right_indices], jointly_valid, tolerance_meters)
         signature[chunk_start : chunk_start + chunk_pairs.shape[1]] = torch.any(contact, dim=-1)
     return signature
 
 
-def _candidate_offroad_signature(boxes, state_valid, drivable_area_rasters, candidate_mask):
-    signature = torch.zeros((*boxes.shape[:3], 4), dtype=torch.bool, device=boxes.device)
-    for scenario_idx, raster in enumerate(drivable_area_rasters):
-        candidate_indices = torch.where(candidate_mask[scenario_idx])[0]
-        if candidate_indices.numel() == 0:
-            continue
-        raster_mask = raster.mask.to(boxes.device)
-        corners = oriented_box_corners(boxes[scenario_idx, candidate_indices])
-        grid = raster.transform.world_to_grid(corners)
-        column = torch.round(grid[..., 0]).to(torch.int64)
-        row = torch.round(grid[..., 1]).to(torch.int64)
-        outside = (column < 0) | (column >= raster.transform.width)
-        outside |= (row < 0) | (row >= raster.transform.height)
-        safe_column = column.clamp(0, raster.transform.width - 1)
-        safe_row = row.clamp(0, raster.transform.height - 1)
-        outside |= ~raster_mask[safe_row, safe_column]
-        # Invalid timesteps carry a placeholder box, so they never enter the signature.
-        signature[scenario_idx, candidate_indices] = outside & state_valid[scenario_idx, candidate_indices][..., None]
+def _candidate_offroad_signature(boxes, state_valid, drivable_area_raster, candidate_mask):
+    signature = torch.zeros((*boxes.shape[:2], 4), dtype=torch.bool, device=boxes.device)
+    candidate_indices = torch.where(candidate_mask)[0]
+    if candidate_indices.numel() == 0:
+        return signature
+    raster_mask = drivable_area_raster.mask.to(boxes.device)
+    transform = drivable_area_raster.transform
+    grid = transform.world_to_grid(oriented_box_corners(boxes[candidate_indices]))
+    column = torch.round(grid[..., 0]).to(torch.int64)
+    row = torch.round(grid[..., 1]).to(torch.int64)
+    outside = (column < 0) | (column >= transform.width)
+    outside |= (row < 0) | (row >= transform.height)
+    outside |= ~raster_mask[row.clamp(0, transform.height - 1), column.clamp(0, transform.width - 1)]
+    # Invalid timesteps carry a placeholder box, so they never enter the signature.
+    signature[candidate_indices] = outside & state_valid[candidate_indices][..., None]
     return signature
 
 
 def _cost_snapshot(costs):
     return CostSnapshot(
-        ego_collision=float(costs.ego_collision[0].detach().item()),
-        background_collision=float(costs.background_collision[0].detach().item()),
-        drivable_area=float(costs.drivable_area[0].detach().item()),
-        total=float(costs.total[0].detach().item()),
-        background_collision_first_agent_idx=int(costs.background_collision_first_agent_idx[0].item()),
-        background_collision_second_agent_idx=int(costs.background_collision_second_agent_idx[0].item()),
-        background_collision_timestep_idx=int(costs.background_collision_timestep_idx[0].item()),
-        background_collision_signed_distance_meters=float(costs.background_collision_signed_distance_meters[0].item()),
-        background_collision_truncated=bool(costs.background_collision_truncated[0].item()),
+        ego_collision=float(costs.ego_collision.detach().item()),
+        background_collision=float(costs.background_collision.detach().item()),
+        drivable_area=float(costs.drivable_area.detach().item()),
+        total=float(costs.total.detach().item()),
+        background_collision_first_agent_idx=int(costs.background_collision_first_agent_idx.item()),
+        background_collision_second_agent_idx=int(costs.background_collision_second_agent_idx.item()),
+        background_collision_timestep_idx=int(costs.background_collision_timestep_idx.item()),
+        background_collision_signed_distance_meters=float(costs.background_collision_signed_distance_meters.item()),
+        background_collision_truncated=bool(costs.background_collision_truncated.item()),
     )
 
 
@@ -667,11 +618,11 @@ def _finite_cost(costs):
 
 
 def _selected_adversary(boxes, state_valid, ego_idx, candidate_mask):
-    candidate_indices = torch.where(candidate_mask[0])[0]
+    candidate_indices = torch.where(candidate_mask)[0]
     if candidate_indices.numel() == 0:
         return -1
-    distances = signed_box_distance(boxes[0, candidate_indices], boxes[0, ego_idx, None])
-    jointly_valid = state_valid[0, candidate_indices] & state_valid[0, ego_idx, None]
+    distances = signed_box_distance(boxes[candidate_indices], boxes[ego_idx, None])
+    jointly_valid = state_valid[candidate_indices] & state_valid[ego_idx, None]
     jointly_valid_counts = jointly_valid.sum(dim=-1)
     summed_distances = torch.where(jointly_valid, distances, torch.zeros_like(distances)).sum(dim=-1)
     mean_distances = (summed_distances / jointly_valid_counts.clamp_min(1)).detach()
@@ -679,24 +630,6 @@ def _selected_adversary(boxes, state_valid, ego_idx, candidate_mask):
     if not torch.isfinite(mean_distances).any():
         return -1
     return int(candidate_indices[int(torch.argmin(mean_distances).item())].item())
-
-
-def _refreshed_frozen_ego(ego_rollout_fn, drive_actions, optimized_action_mask, previous_frozen_ego):
-    """Re-roll the reactive ego against the current adversary plan.
-
-    The callback owns the simulator; this holds it to the contract the optimization
-    horizon needs, because a wrong-shaped or foreign ego would silently mis-align the loss.
-    """
-    refreshed = ego_rollout_fn(drive_actions.detach(), optimized_action_mask)
-    if not isinstance(refreshed, FrozenEgoTrajectory):
-        raise TypeError("ego_rollout_fn must return a FrozenEgoTrajectory")
-    if refreshed.state.shape != previous_frozen_ego.state.shape:
-        raise ValueError("ego_rollout_fn returned a trajectory of the wrong shape")
-    if refreshed.scenario_ids != previous_frozen_ego.scenario_ids:
-        raise ValueError("ego_rollout_fn returned a different scenario")
-    if refreshed.state.device != previous_frozen_ego.state.device:
-        raise ValueError("ego_rollout_fn returned a trajectory on a different device")
-    return refreshed
 
 
 def optimize_frozen_ego_scenario(
@@ -720,27 +653,17 @@ def optimize_frozen_ego_scenario(
     generated ego collision confirmed against a fresh ego, on a non-finite loss or
     gradient, or at the iteration limit, and returns the iterate it stopped on.
     """
-    if scenario.batch_size != 1:
-        raise ValueError("optimize_frozen_ego_scenario takes a single-scenario batch")
     if config is None:
         config = ReGentSOptimizationConfig()
     if config.ego_refresh_interval > 0 and ego_rollout_fn is None:
         raise ValueError("ego_refresh_interval requires an ego_rollout_fn")
-    horizon_transition_count = _validate_optimization_inputs(
-        scenario, frozen_ego, config, deterministic_seed, horizon_transition_count
-    )
+    horizon_transition_count = _resolve_optimization_horizon(scenario, frozen_ego, horizon_transition_count)
     if inverse_dynamics is None:
         inverse = estimate_expert_actions(scenario, horizon_transition_count=horizon_transition_count)
     else:
-        if not isinstance(inverse_dynamics, InverseDynamicsResult):
-            raise TypeError("inverse_dynamics must be an InverseDynamicsResult")
-        expected_prefix = (scenario.batch_size, scenario.max_agent_count)
-        if inverse_dynamics.action_valid.shape[:2] != expected_prefix:
-            raise ValueError("inverse_dynamics does not match the scenario batch and agent dimensions")
+        # A reused estimate may have been computed for a shorter horizon than this run.
         if inverse_dynamics.action_valid.shape[-1] < horizon_transition_count:
             raise ValueError("inverse_dynamics does not cover the optimization horizon")
-        if inverse_dynamics.actions.device != scenario.logged_state.device:
-            raise ValueError("inverse_dynamics and scenario tensors must share a device")
         inverse = inverse_dynamics
     if frozen_ego is None:
         frozen_ego = _frozen_ego_fixture(scenario, inverse, horizon_transition_count)
@@ -760,10 +683,10 @@ def optimize_frozen_ego_scenario(
     reference_states, state_valid = _compose_rollout(
         scenario, inverse, baseline_actions, frozen_ego, horizon_transition_count, candidate_mask
     )
-    ego_idx = int(_ego_indices(scenario.ego_mask)[0].item())
+    ego_idx = _ego_index(scenario.ego_mask)
     reference_boxes = _masked_boxes(reference_states, state_valid, scenario.length_meters, scenario.width_meters)
     baseline_offroad_signature = _candidate_offroad_signature(
-        reference_boxes, state_valid, scenario.drivable_area_rasters, candidate_mask
+        reference_boxes, state_valid, scenario.drivable_area_raster, candidate_mask
     )
     background_pair_indices = _candidate_background_pair_indices(scenario, state_valid, candidate_mask)
     baseline_background_pairs = _background_collision_signature(
@@ -771,8 +694,8 @@ def optimize_frozen_ego_scenario(
     )
     baseline_background_collision_pair_count = int(baseline_background_pairs.sum().item())
 
-    out_of_bounds_rasters = prepare_out_of_bounds_rasters(
-        scenario.drivable_area_rasters,
+    out_of_bounds_raster = prepare_out_of_bounds_raster(
+        scenario.drivable_area_raster,
         config.costs,
         device=scenario.logged_state.device,
         dtype=scenario.logged_state.dtype,
@@ -800,11 +723,11 @@ def optimize_frozen_ego_scenario(
 
     # A filtered scene never enters the loop; it keeps its baseline actions verbatim.
     failure_reason = None
-    if not bool(selection.scene_eligible[0]):
-        failure_reason = "scene_filtered:" + ",".join(selection.scene_reasons_for(0))
+    if not bool(selection.scene_eligible):
+        failure_reason = "scene_filtered:" + ",".join(selection.scene_reasons())
     else:
-        jointly_valid = state_valid & state_valid[:, ego_idx][:, None]
-        if not bool((jointly_valid & candidate_mask[..., None]).any()):
+        jointly_valid = state_valid & state_valid[ego_idx][None]
+        if not bool((jointly_valid & candidate_mask[:, None]).any()):
             failure_reason = "no_candidate_in_optimization_horizon"
 
     current_actions = baseline_actions.clone()
@@ -843,9 +766,11 @@ def optimize_frozen_ego_scenario(
             baseline_actions,
         )
         if ego_refresh_due:
-            frozen_ego = _refreshed_frozen_ego(
-                ego_rollout_fn, drive_actions, selection.optimized_action_mask, frozen_ego
-            )
+            refreshed = ego_rollout_fn(drive_actions.detach(), selection.optimized_action_mask)
+            # A wrong-shaped ego would silently mis-align the loss against the horizon.
+            if refreshed.state.shape != frozen_ego.state.shape:
+                raise ValueError("ego_rollout_fn returned a trajectory of the wrong shape")
+            frozen_ego = refreshed
             ego_refresh_count += 1
             updates_since_ego_refresh = 0
             ego_refresh_due = False
@@ -865,9 +790,7 @@ def optimize_frozen_ego_scenario(
             scenario.width_meters,
             scenario.ego_mask,
             candidate_mask,
-            candidate_mask,
-            candidate_mask,
-            out_of_bounds_rasters,
+            out_of_bounds_raster,
             config.costs,
         )
         if not _finite_cost(costs):
@@ -882,7 +805,7 @@ def optimize_frozen_ego_scenario(
             & ~baseline_background_pairs
         )
         offroad_signature = _candidate_offroad_signature(
-            detached_boxes, state_valid, scenario.drivable_area_rasters, candidate_mask
+            detached_boxes, state_valid, scenario.drivable_area_raster, candidate_mask
         )
         background_collision_rejection_count += int(bool(new_background_pairs.any()))
         offroad_rejection_count += int(bool((offroad_signature & ~baseline_offroad_signature).any()))
@@ -980,14 +903,14 @@ def optimize_frozen_ego_scenario(
 
     final_boxes = _masked_boxes(current_states, state_valid, scenario.length_meters, scenario.width_meters)
     loss_adversary_idx = _selected_adversary(final_boxes, state_valid, ego_idx, candidate_mask)
-    loss_adversary_id = int(scenario.agent_id[0, loss_adversary_idx].item()) if loss_adversary_idx >= 0 else -1
+    loss_adversary_id = int(scenario.agent_id[loss_adversary_idx].item()) if loss_adversary_idx >= 0 else -1
     selected_idx = collision_agent_idx if success else loss_adversary_idx
-    selected_id = int(scenario.agent_id[0, selected_idx].item()) if selected_idx >= 0 else -1
+    selected_id = int(scenario.agent_id[selected_idx].item()) if selected_idx >= 0 else -1
     final_background_pairs = _background_collision_signature(
         final_boxes, state_valid, config.collision_distance_tolerance_meters, background_pair_indices
     )
     final_offroad_signature = _candidate_offroad_signature(
-        final_boxes, state_valid, scenario.drivable_area_rasters, candidate_mask
+        final_boxes, state_valid, scenario.drivable_area_raster, candidate_mask
     )
     return ReGentSOptimizationResult(
         initial_actions=baseline_actions.clone(),

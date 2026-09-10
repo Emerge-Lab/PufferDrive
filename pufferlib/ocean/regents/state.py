@@ -30,6 +30,21 @@ def moved_to_device(instance, device):
     return replace(instance, **moved)
 
 
+def wrapped_angle_difference(first, second):
+    """Return ``first - second`` wrapped to ``[-pi, pi]``."""
+    difference = first - second
+    return torch.atan2(torch.sin(difference), torch.cos(difference))
+
+
+def single_scenario_payload(payload):
+    """Unwrap the one-scenario Drive state payload, which arrives dict or list-of-one."""
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict):
+        return payload[0]
+    raise ValueError("ReGentS requires exactly one Drive scenario")
+
+
 def signed_speed_from_c_velocity(velocity_x, velocity_y, wrapped_heading):
     """Recover the C simulator's ``sim_speed_signed``: magnitude signed by heading."""
     magnitude = np.hypot(velocity_x, velocity_y)
@@ -89,11 +104,11 @@ class DrivableAreaRaster:
 
 
 @dataclass(frozen=True)
-class ScenarioBatch:
-    """Validated single scenario exported from one vectorized Drive instance.
+class Scenario:
+    """One scenario exported from a single-env Drive instance.
 
-    Every tensor keeps a leading batch dimension of one so the cost and filter
-    functions stay batch-shaped.
+    Tensor axes are ``[agent, time, feature]``; there is no batch axis, because
+    ReGentS optimizes one scenario at a time.
 
     ``logged_state`` has five features. The logged files do not contain
     steering, so that channel is zero and ``state_feature_valid[..., 4]`` is
@@ -123,99 +138,28 @@ class ScenarioBatch:
     width_meters: torch.Tensor
     wheelbase_meters: torch.Tensor
     maximum_speed_mps: torch.Tensor
-    scenario_ids: tuple[str, ...]
-    dataset_names: tuple[str, ...]
-    log_dt_seconds: torch.Tensor
+    scenario_id: str
+    dataset_name: str
+    log_dt_seconds: float
     dt_seconds: float
     init_step: int
     scenario_length: int
-    drivable_area_rasters: tuple[DrivableAreaRaster, ...]
+    drivable_area_raster: DrivableAreaRaster
     coordinate_frame: str = "scenario_centered_cartesian"
 
-    def __post_init__(self):
-        if self.logged_state.dtype != torch.float32:
-            raise TypeError("logged_state must use torch.float32")
-        if self.logged_state.ndim != 4 or self.logged_state.shape[-1] != STATE_FEATURE_COUNT:
-            raise ValueError("logged_state must have shape [batch, agent, time, 5]")
-        batch_count, agent_count, time_count, _ = self.logged_state.shape
-        state_shape = (batch_count, agent_count, time_count)
-        agent_shape = (batch_count, agent_count)
-        if tuple(self.state_valid.shape) != state_shape or self.state_valid.dtype != torch.bool:
-            raise ValueError("state_valid must be bool [batch, agent, time]")
-        if tuple(self.state_feature_valid.shape) != (*state_shape, STATE_FEATURE_COUNT):
-            raise ValueError("state_feature_valid must have shape [batch, agent, time, 5]")
-        if self.state_feature_valid.dtype != torch.bool:
-            raise TypeError("state_feature_valid must use torch.bool")
-        if tuple(self.transition_valid.shape) != (batch_count, agent_count, max(time_count - 1, 0)):
-            raise ValueError("transition_valid must be bool [batch, agent, time - 1]")
-        if self.transition_valid.dtype != torch.bool:
-            raise TypeError("transition_valid must use torch.bool")
-        for name in ("logged_length_meters", "logged_width_meters"):
-            tensor = getattr(self, name)
-            if tuple(tensor.shape) != state_shape:
-                raise ValueError(f"{name} must have shape [batch, agent, time]")
-            if tensor.dtype != torch.float32:
-                raise TypeError(f"{name} must use torch.float32")
-        if tuple(self.current_state.shape) != (*agent_shape, STATE_FEATURE_COUNT):
-            raise ValueError("current_state must have shape [batch, agent, 5]")
-        if self.current_state.dtype != torch.float32:
-            raise TypeError("current_state must use torch.float32")
-        for name in (
-            "current_valid",
-            "agent_present",
-            "agent_metadata_valid",
-            "active_agent_mask",
-            "ego_mask",
-            "vehicle_mask",
-            "candidate_adversary_mask",
-        ):
-            tensor = getattr(self, name)
-            if tuple(tensor.shape) != agent_shape or tensor.dtype != torch.bool:
-                raise ValueError(f"{name} must be bool [batch, agent]")
-        for name in (
-            "agent_id",
-            "agent_type",
-            "controller",
-            "trajectory_length",
-        ):
-            tensor = getattr(self, name)
-            if tuple(tensor.shape) != agent_shape or tensor.dtype != torch.int64:
-                raise ValueError(f"{name} must be int64 [batch, agent]")
-        for name in (
-            "length_meters",
-            "width_meters",
-            "wheelbase_meters",
-            "maximum_speed_mps",
-        ):
-            tensor = getattr(self, name)
-            if tuple(tensor.shape) != agent_shape or tensor.dtype != torch.float32:
-                raise ValueError(f"{name} must be float32 [batch, agent]")
-        if len(self.scenario_ids) != batch_count or len(self.dataset_names) != batch_count:
-            raise ValueError("Scenario metadata must have one entry per batch item")
-        if tuple(self.log_dt_seconds.shape) != (batch_count,):
-            raise ValueError("log_dt_seconds must have shape [batch]")
-        if self.log_dt_seconds.dtype != torch.float32:
-            raise TypeError("log_dt_seconds must use torch.float32")
-        if len(self.drivable_area_rasters) != batch_count:
-            raise ValueError("drivable_area_rasters must have one entry per batch item")
-
     def to(self, device):
-        """Return this batch with every tensor and raster on ``device``."""
+        """Return this scenario with every tensor and its raster on ``device``."""
         moved = moved_to_device(self, device)
-        return replace(moved, drivable_area_rasters=tuple(r.to(device) for r in self.drivable_area_rasters))
+        return replace(moved, drivable_area_raster=self.drivable_area_raster.to(device))
 
     @property
     def device(self):
         return self.logged_state.device
 
     @property
-    def batch_size(self):
+    def max_agent_count(self):
         return self.logged_state.shape[0]
 
     @property
-    def max_agent_count(self):
-        return self.logged_state.shape[1]
-
-    @property
     def max_time_count(self):
-        return self.logged_state.shape[2]
+        return self.logged_state.shape[1]

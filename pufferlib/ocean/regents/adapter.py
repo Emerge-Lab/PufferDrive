@@ -15,7 +15,7 @@ from pufferlib.ocean.regents.state import (
     STATE_Y,
     DrivableAreaRaster,
     RasterTransform,
-    ScenarioBatch,
+    Scenario,
 )
 
 
@@ -369,181 +369,165 @@ def export_drive_scenarios(drive, payload=None, raster_resolution_meters=DEFAULT
     """
     _validate_drive_contract(drive)
     scenarios = _as_scenario_list(drive.get_state() if payload is None else payload)
-    batch_count = len(scenarios)
-    agent_counts = []
-    time_counts = []
-    for scenario_idx, scenario in enumerate(scenarios):
-        agents = scenario.get("agents")
-        if not isinstance(agents, list) or not agents:
-            raise ValueError(f"Scenario {scenario_idx} must contain a non-empty agents list")
-        agent_count = int(scenario.get("num_total_agents", -1))
-        if agent_count != len(agents):
-            raise ValueError(f"Scenario {scenario_idx} num_total_agents does not match agents")
-        if agent_count > MAX_SCENARIO_AGENT_COUNT:
-            raise ValueError(f"Scenario {scenario_idx} exceeds the {MAX_SCENARIO_AGENT_COUNT} agent limit")
-        log_length = int(scenario.get("length", 0))
-        if log_length <= 0 or log_length > MAX_TRAJECTORY_TIMESTEP_COUNT:
-            raise ValueError(f"Scenario {scenario_idx} has invalid length={log_length}")
-        agent_counts.append(agent_count)
-        scenario_time_counts = [int(agent.get("trajectory_size", 0)) for agent in agents]
-        if max(scenario_time_counts) > log_length:
-            raise ValueError(f"Scenario {scenario_idx} agent trajectory exceeds scenario length={log_length}")
-        time_counts.extend(scenario_time_counts)
-    if not time_counts or min(time_counts) <= 0:
+    if len(scenarios) != 1:
+        raise ValueError("ReGentS exports exactly one Drive scenario at a time")
+    scenario = scenarios[0]
+    agents = scenario.get("agents")
+    if not isinstance(agents, list) or not agents:
+        raise ValueError("Scenario must contain a non-empty agents list")
+    max_agent_count = int(scenario.get("num_total_agents", -1))
+    if max_agent_count != len(agents):
+        raise ValueError("Scenario num_total_agents does not match agents")
+    if max_agent_count > MAX_SCENARIO_AGENT_COUNT:
+        raise ValueError(f"Scenario exceeds the {MAX_SCENARIO_AGENT_COUNT} agent limit")
+    log_length = int(scenario.get("length", 0))
+    if log_length <= 0 or log_length > MAX_TRAJECTORY_TIMESTEP_COUNT:
+        raise ValueError(f"Scenario has invalid length={log_length}")
+    time_counts = [int(agent.get("trajectory_size", 0)) for agent in agents]
+    if max(time_counts) > log_length:
+        raise ValueError(f"Scenario agent trajectory exceeds scenario length={log_length}")
+    if min(time_counts) <= 0:
         raise ValueError("Every serialized agent must have a positive trajectory_size")
-
-    max_agent_count = max(agent_counts)
     max_time_count = max(time_counts)
-    if batch_count * max_agent_count * max_time_count > MAX_BATCH_STATE_COUNT:
-        raise ValueError(f"Padded batch exceeds the {MAX_BATCH_STATE_COUNT} state limit")
-    logged_state = np.zeros((batch_count, max_agent_count, max_time_count, STATE_FEATURE_COUNT), dtype=np.float32)
-    state_valid = np.zeros((batch_count, max_agent_count, max_time_count), dtype=np.bool_)
+    if max_agent_count * max_time_count > MAX_BATCH_STATE_COUNT:
+        raise ValueError(f"Padded scenario exceeds the {MAX_BATCH_STATE_COUNT} state limit")
+    logged_state = np.zeros((max_agent_count, max_time_count, STATE_FEATURE_COUNT), dtype=np.float32)
+    state_valid = np.zeros((max_agent_count, max_time_count), dtype=np.bool_)
     state_feature_valid = np.zeros_like(logged_state, dtype=np.bool_)
-    logged_length_meters = np.zeros((batch_count, max_agent_count, max_time_count), dtype=np.float32)
-    logged_width_meters = np.zeros((batch_count, max_agent_count, max_time_count), dtype=np.float32)
-    current_state = np.zeros((batch_count, max_agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
-    current_valid = np.zeros((batch_count, max_agent_count), dtype=np.bool_)
-    agent_present = np.zeros((batch_count, max_agent_count), dtype=np.bool_)
-    agent_metadata_valid = np.zeros((batch_count, max_agent_count), dtype=np.bool_)
-    active_agent_mask = np.zeros((batch_count, max_agent_count), dtype=np.bool_)
-    agent_id = np.full((batch_count, max_agent_count), INVALID_AGENT_ID, dtype=np.int64)
-    agent_type = np.zeros((batch_count, max_agent_count), dtype=np.int64)
-    controller = np.zeros((batch_count, max_agent_count), dtype=np.int64)
-    trajectory_length = np.zeros((batch_count, max_agent_count), dtype=np.int64)
-    length_meters = np.zeros((batch_count, max_agent_count), dtype=np.float32)
-    width_meters = np.zeros((batch_count, max_agent_count), dtype=np.float32)
-    wheelbase_meters = np.zeros((batch_count, max_agent_count), dtype=np.float32)
-    maximum_speed_mps = np.zeros((batch_count, max_agent_count), dtype=np.float32)
-    scenario_ids = []
-    dataset_names = []
-    log_dt_seconds = np.empty(batch_count, dtype=np.float32)
-    drivable_area_rasters = []
+    logged_length_meters = np.zeros((max_agent_count, max_time_count), dtype=np.float32)
+    logged_width_meters = np.zeros((max_agent_count, max_time_count), dtype=np.float32)
+    current_state = np.zeros((max_agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
+    current_valid = np.zeros((max_agent_count,), dtype=np.bool_)
+    agent_present = np.zeros((max_agent_count,), dtype=np.bool_)
+    agent_metadata_valid = np.zeros((max_agent_count,), dtype=np.bool_)
+    active_agent_mask = np.zeros((max_agent_count,), dtype=np.bool_)
+    agent_id = np.full((max_agent_count,), INVALID_AGENT_ID, dtype=np.int64)
+    agent_type = np.zeros((max_agent_count,), dtype=np.int64)
+    controller = np.zeros((max_agent_count,), dtype=np.int64)
+    trajectory_length = np.zeros((max_agent_count,), dtype=np.int64)
+    length_meters = np.zeros((max_agent_count,), dtype=np.float32)
+    width_meters = np.zeros((max_agent_count,), dtype=np.float32)
+    wheelbase_meters = np.zeros((max_agent_count,), dtype=np.float32)
+    maximum_speed_mps = np.zeros((max_agent_count,), dtype=np.float32)
+    log_dt = float(scenario.get("log_dt", math.nan))
+    if not math.isfinite(log_dt) or log_dt <= 0:
+        raise ValueError("Scenario log_dt must be finite and positive")
+    if not math.isclose(log_dt, drive.dt, rel_tol=0.0, abs_tol=TIMESTEP_TOLERANCE_SECONDS):
+        raise ValueError(f"Scenario log_dt={log_dt} does not match simulation dt={drive.dt}")
+    if int(scenario.get("dynamics_model", -1)) not in (
+        binding.DYNAMICS_MODEL_CLASSIC,
+        binding.DYNAMICS_MODEL_JERK,
+    ):
+        raise ValueError("Scenario was exported with an unsupported dynamics model")
+    scenario_id = scenario.get("scenario_id")
+    dataset_name = scenario.get("dataset_name")
+    if not isinstance(scenario_id, str) or not scenario_id:
+        raise ValueError("Scenario has no stable scenario_id")
+    if not isinstance(dataset_name, str) or not dataset_name:
+        raise ValueError("Scenario has no dataset_name")
+    drivable_area_raster = _rasterize_drivable_area(scenario, raster_resolution_meters)
 
-    for scenario_idx, scenario in enumerate(scenarios):
-        log_dt = float(scenario.get("log_dt", math.nan))
-        if not math.isfinite(log_dt) or log_dt <= 0:
-            raise ValueError(f"Scenario {scenario_idx} log_dt must be finite and positive")
-        if not math.isclose(log_dt, drive.dt, rel_tol=0.0, abs_tol=TIMESTEP_TOLERANCE_SECONDS):
-            raise ValueError(f"Scenario {scenario_idx} log_dt={log_dt} does not match simulation dt={drive.dt}")
-        if int(scenario.get("dynamics_model", -1)) not in (
-            binding.DYNAMICS_MODEL_CLASSIC,
-            binding.DYNAMICS_MODEL_JERK,
+    active_indices = scenario.get("active_agent_indices") or []
+    active_index_set = set(map(int, active_indices))
+    if len(active_index_set) != len(active_indices):
+        raise ValueError("Scenario active_agent_indices contains duplicates")
+    if any(agent_idx < 0 or agent_idx >= len(scenario["agents"]) for agent_idx in active_index_set):
+        raise ValueError("Scenario active_agent_indices contains an out-of-range index")
+    if int(scenario["active_agent_count"]) != len(active_indices):
+        raise ValueError("Scenario active_agent_count does not match active_agent_indices")
+    for stable_agent_idx, agent in enumerate(scenario["agents"]):
+        if int(agent.get("id", INVALID_AGENT_ID)) != stable_agent_idx:
+            raise ValueError(f"Agent id must equal stable C array index {stable_agent_idx}")
+        time_count = int(agent["trajectory_size"])
+        valid = _valid_array(agent.get("log_valid"), time_count)
+        x = _float_array(agent.get("log_trajectory_x"), time_count, "log_trajectory_x")
+        y = _float_array(agent.get("log_trajectory_y"), time_count, "log_trajectory_y")
+        heading = _float_array(agent.get("log_heading"), time_count, "log_heading")
+        velocity_x = _float_array(agent.get("log_velocity_x"), time_count, "log_velocity_x")
+        velocity_y = _float_array(agent.get("log_velocity_y"), time_count, "log_velocity_y")
+        logged_length = _float_array(agent.get("log_length"), time_count, "log_length")
+        logged_width = _float_array(agent.get("log_width"), time_count, "log_width")
+        all_float_values = np.stack((x, y, heading, velocity_x, velocity_y, logged_length, logged_width), axis=-1)
+        if not np.isfinite(all_float_values).all():
+            raise ValueError(f"Agent {stable_agent_idx} has non-finite logged data")
+        if np.any(logged_length[valid] <= 0) or np.any(logged_width[valid] <= 0):
+            raise ValueError(f"Agent {stable_agent_idx} has non-positive valid dimensions")
+
+        wrapped_heading = np.arctan2(np.sin(heading), np.cos(heading)).astype(np.float32)
+        signed_speed = velocity_x * np.cos(wrapped_heading) + velocity_y * np.sin(wrapped_heading)
+        logged_state[stable_agent_idx, :time_count, STATE_X] = x
+        logged_state[stable_agent_idx, :time_count, STATE_Y] = y
+        logged_state[stable_agent_idx, :time_count, STATE_HEADING] = wrapped_heading
+        logged_state[stable_agent_idx, :time_count, STATE_SPEED] = signed_speed
+        state_valid[stable_agent_idx, :time_count] = valid
+        state_feature_valid[stable_agent_idx, :time_count, :STATE_STEERING] = valid[:, None]
+        logged_length_meters[stable_agent_idx, :time_count] = logged_length
+        logged_width_meters[stable_agent_idx, :time_count] = logged_width
+
+        sim_values = np.asarray(
+            [
+                agent["sim_x"],
+                agent["sim_y"],
+                agent["sim_heading"],
+                agent["sim_vx"],
+                agent["sim_vy"],
+                agent["sim_steering"],
+            ],
+            dtype=np.float32,
+        )
+        if not np.isfinite(sim_values).all():
+            raise ValueError(f"Agent {stable_agent_idx} has non-finite current state")
+        sim_heading = np.float32(math.atan2(math.sin(float(sim_values[2])), math.cos(float(sim_values[2]))))
+        current_state[stable_agent_idx, STATE_X] = sim_values[0]
+        current_state[stable_agent_idx, STATE_Y] = sim_values[1]
+        current_state[stable_agent_idx, STATE_HEADING] = sim_heading
+        current_state[stable_agent_idx, STATE_SPEED] = sim_values[3] * math.cos(float(sim_heading)) + sim_values[
+            4
+        ] * math.sin(float(sim_heading))
+        current_state[stable_agent_idx, STATE_STEERING] = sim_values[5]
+        serialized_current_valid = int(agent["sim_valid"])
+        if serialized_current_valid not in (0, 1):
+            raise ValueError(f"Agent {stable_agent_idx} has invalid sim_valid")
+        current_valid[stable_agent_idx] = bool(serialized_current_valid)
+        agent_present[stable_agent_idx] = True
+        active_agent_mask[stable_agent_idx] = stable_agent_idx in active_index_set
+        agent_id[stable_agent_idx] = stable_agent_idx
+        serialized_agent_type = int(agent["type"])
+        if serialized_agent_type not in (
+            binding.AGENT_TYPE_UNKNOWN,
+            binding.AGENT_TYPE_VEHICLE,
+            binding.AGENT_TYPE_PEDESTRIAN,
+            binding.AGENT_TYPE_CYCLIST,
         ):
-            raise ValueError(f"Scenario {scenario_idx} was exported with an unsupported dynamics model")
-        scenario_id = scenario.get("scenario_id")
-        dataset_name = scenario.get("dataset_name")
-        if not isinstance(scenario_id, str) or not scenario_id:
-            raise ValueError(f"Scenario {scenario_idx} has no stable scenario_id")
-        if not isinstance(dataset_name, str) or not dataset_name:
-            raise ValueError(f"Scenario {scenario_idx} has no dataset_name")
-        scenario_ids.append(scenario_id)
-        dataset_names.append(dataset_name)
-        log_dt_seconds[scenario_idx] = log_dt
-        drivable_area_rasters.append(_rasterize_drivable_area(scenario, raster_resolution_meters))
+            raise ValueError(f"Agent {stable_agent_idx} has invalid type")
+        serialized_controller = int(agent["controller"])
+        if serialized_controller not in (
+            binding.CONTROLLER_STATIC,
+            binding.CONTROLLER_POLICY,
+            binding.CONTROLLER_REPLAY,
+            binding.CONTROLLER_IDM,
+            binding.CONTROLLER_CORRIDOR_IDM,
+            binding.CONTROLLER_PDM,
+        ):
+            raise ValueError(f"Agent {stable_agent_idx} has invalid controller")
+        agent_type[stable_agent_idx] = serialized_agent_type
+        controller[stable_agent_idx] = serialized_controller
+        trajectory_length[stable_agent_idx] = time_count
+        if valid.any():
+            reference_timestep = int(np.flatnonzero(valid)[0])
+            agent_metadata_valid[stable_agent_idx] = True
+            length_meters[stable_agent_idx] = logged_length[reference_timestep]
+            width_meters[stable_agent_idx] = logged_width[reference_timestep]
+            wheelbase_meters[stable_agent_idx] = binding.WHEELBASE_LENGTH_RATIO * logged_length[reference_timestep]
+        maximum_speed_mps[stable_agent_idx] = drive.base_max_speed_mps
 
-        active_indices = scenario.get("active_agent_indices") or []
-        active_index_set = set(map(int, active_indices))
-        if len(active_index_set) != len(active_indices):
-            raise ValueError(f"Scenario {scenario_idx} active_agent_indices contains duplicates")
-        if any(agent_idx < 0 or agent_idx >= len(scenario["agents"]) for agent_idx in active_index_set):
-            raise ValueError(f"Scenario {scenario_idx} active_agent_indices contains an out-of-range index")
-        if int(scenario["active_agent_count"]) != len(active_indices):
-            raise ValueError(f"Scenario {scenario_idx} active_agent_count does not match active_agent_indices")
-        for stable_agent_idx, agent in enumerate(scenario["agents"]):
-            if int(agent.get("id", INVALID_AGENT_ID)) != stable_agent_idx:
-                raise ValueError(f"Scenario {scenario_idx} agent id must equal stable C array index {stable_agent_idx}")
-            time_count = int(agent["trajectory_size"])
-            valid = _valid_array(agent.get("log_valid"), time_count)
-            x = _float_array(agent.get("log_trajectory_x"), time_count, "log_trajectory_x")
-            y = _float_array(agent.get("log_trajectory_y"), time_count, "log_trajectory_y")
-            heading = _float_array(agent.get("log_heading"), time_count, "log_heading")
-            velocity_x = _float_array(agent.get("log_velocity_x"), time_count, "log_velocity_x")
-            velocity_y = _float_array(agent.get("log_velocity_y"), time_count, "log_velocity_y")
-            logged_length = _float_array(agent.get("log_length"), time_count, "log_length")
-            logged_width = _float_array(agent.get("log_width"), time_count, "log_width")
-            all_float_values = np.stack((x, y, heading, velocity_x, velocity_y, logged_length, logged_width), axis=-1)
-            if not np.isfinite(all_float_values).all():
-                raise ValueError(f"Scenario {scenario_idx} agent {stable_agent_idx} has non-finite logged data")
-            if np.any(logged_length[valid] <= 0) or np.any(logged_width[valid] <= 0):
-                raise ValueError(f"Scenario {scenario_idx} agent {stable_agent_idx} has non-positive valid dimensions")
-
-            wrapped_heading = np.arctan2(np.sin(heading), np.cos(heading)).astype(np.float32)
-            signed_speed = velocity_x * np.cos(wrapped_heading) + velocity_y * np.sin(wrapped_heading)
-            logged_state[scenario_idx, stable_agent_idx, :time_count, STATE_X] = x
-            logged_state[scenario_idx, stable_agent_idx, :time_count, STATE_Y] = y
-            logged_state[scenario_idx, stable_agent_idx, :time_count, STATE_HEADING] = wrapped_heading
-            logged_state[scenario_idx, stable_agent_idx, :time_count, STATE_SPEED] = signed_speed
-            state_valid[scenario_idx, stable_agent_idx, :time_count] = valid
-            state_feature_valid[scenario_idx, stable_agent_idx, :time_count, :STATE_STEERING] = valid[:, None]
-            logged_length_meters[scenario_idx, stable_agent_idx, :time_count] = logged_length
-            logged_width_meters[scenario_idx, stable_agent_idx, :time_count] = logged_width
-
-            sim_values = np.asarray(
-                [
-                    agent["sim_x"],
-                    agent["sim_y"],
-                    agent["sim_heading"],
-                    agent["sim_vx"],
-                    agent["sim_vy"],
-                    agent["sim_steering"],
-                ],
-                dtype=np.float32,
-            )
-            if not np.isfinite(sim_values).all():
-                raise ValueError(f"Scenario {scenario_idx} agent {stable_agent_idx} has non-finite current state")
-            sim_heading = np.float32(math.atan2(math.sin(float(sim_values[2])), math.cos(float(sim_values[2]))))
-            current_state[scenario_idx, stable_agent_idx, STATE_X] = sim_values[0]
-            current_state[scenario_idx, stable_agent_idx, STATE_Y] = sim_values[1]
-            current_state[scenario_idx, stable_agent_idx, STATE_HEADING] = sim_heading
-            current_state[scenario_idx, stable_agent_idx, STATE_SPEED] = sim_values[3] * math.cos(
-                float(sim_heading)
-            ) + sim_values[4] * math.sin(float(sim_heading))
-            current_state[scenario_idx, stable_agent_idx, STATE_STEERING] = sim_values[5]
-            serialized_current_valid = int(agent["sim_valid"])
-            if serialized_current_valid not in (0, 1):
-                raise ValueError(f"Scenario {scenario_idx} agent {stable_agent_idx} has invalid sim_valid")
-            current_valid[scenario_idx, stable_agent_idx] = bool(serialized_current_valid)
-            agent_present[scenario_idx, stable_agent_idx] = True
-            active_agent_mask[scenario_idx, stable_agent_idx] = stable_agent_idx in active_index_set
-            agent_id[scenario_idx, stable_agent_idx] = stable_agent_idx
-            serialized_agent_type = int(agent["type"])
-            if serialized_agent_type not in (
-                binding.AGENT_TYPE_UNKNOWN,
-                binding.AGENT_TYPE_VEHICLE,
-                binding.AGENT_TYPE_PEDESTRIAN,
-                binding.AGENT_TYPE_CYCLIST,
-            ):
-                raise ValueError(f"Scenario {scenario_idx} agent {stable_agent_idx} has invalid type")
-            serialized_controller = int(agent["controller"])
-            if serialized_controller not in (
-                binding.CONTROLLER_STATIC,
-                binding.CONTROLLER_POLICY,
-                binding.CONTROLLER_REPLAY,
-                binding.CONTROLLER_IDM,
-                binding.CONTROLLER_CORRIDOR_IDM,
-                binding.CONTROLLER_PDM,
-            ):
-                raise ValueError(f"Scenario {scenario_idx} agent {stable_agent_idx} has invalid controller")
-            agent_type[scenario_idx, stable_agent_idx] = serialized_agent_type
-            controller[scenario_idx, stable_agent_idx] = serialized_controller
-            trajectory_length[scenario_idx, stable_agent_idx] = time_count
-            if valid.any():
-                reference_timestep = int(np.flatnonzero(valid)[0])
-                agent_metadata_valid[scenario_idx, stable_agent_idx] = True
-                length_meters[scenario_idx, stable_agent_idx] = logged_length[reference_timestep]
-                width_meters[scenario_idx, stable_agent_idx] = logged_width[reference_timestep]
-                wheelbase_meters[scenario_idx, stable_agent_idx] = (
-                    binding.WHEELBASE_LENGTH_RATIO * logged_length[reference_timestep]
-                )
-            maximum_speed_mps[scenario_idx, stable_agent_idx] = drive.base_max_speed_mps
-
-    transition_valid = np.ascontiguousarray(state_valid[:, :, :-1] & state_valid[:, :, 1:])
+    transition_valid = np.ascontiguousarray(state_valid[:, :-1] & state_valid[:, 1:])
     ego_mask = np.zeros_like(agent_present)
-    ego_mask[:, 0] = agent_present[:, 0]
+    ego_mask[0] = agent_present[0]
     vehicle_mask = np.ascontiguousarray(agent_present & (agent_type == binding.AGENT_TYPE_VEHICLE))
     candidate_adversary_mask = np.ascontiguousarray(vehicle_mask & agent_metadata_valid & ~ego_mask)
 
-    return ScenarioBatch(
+    return Scenario(
         logged_state=_torch_from_contiguous(np.ascontiguousarray(logged_state)),
         state_valid=_torch_from_contiguous(np.ascontiguousarray(state_valid)),
         state_feature_valid=_torch_from_contiguous(np.ascontiguousarray(state_feature_valid)),
@@ -566,11 +550,11 @@ def export_drive_scenarios(drive, payload=None, raster_resolution_meters=DEFAULT
         width_meters=_torch_from_contiguous(np.ascontiguousarray(width_meters)),
         wheelbase_meters=_torch_from_contiguous(np.ascontiguousarray(wheelbase_meters)),
         maximum_speed_mps=_torch_from_contiguous(np.ascontiguousarray(maximum_speed_mps)),
-        scenario_ids=tuple(scenario_ids),
-        dataset_names=tuple(dataset_names),
-        log_dt_seconds=_torch_from_contiguous(np.ascontiguousarray(log_dt_seconds)),
+        scenario_id=scenario_id,
+        dataset_name=dataset_name,
+        log_dt_seconds=log_dt,
         dt_seconds=float(drive.dt),
         init_step=drive.init_step,
         scenario_length=drive.scenario_length,
-        drivable_area_rasters=tuple(drivable_area_rasters),
+        drivable_area_raster=drivable_area_raster,
     )

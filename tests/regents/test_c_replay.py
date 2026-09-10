@@ -33,11 +33,15 @@ from pufferlib.ocean.regents.optimizer import ReGentSOptimizationConfig, optimiz
 from pufferlib.ocean.regents.rollout import (
     C_REPLAY_TOLERANCE,
     _current_states,
-    _single_payload,
     replay_optimized_scenario_in_c,
     run_reactive_generation,
 )
-from pufferlib.ocean.regents.state import STATE_FEATURE_COUNT, STATE_HEADING, STATE_X
+from pufferlib.ocean.regents.state import (
+    STATE_FEATURE_COUNT,
+    STATE_HEADING,
+    STATE_X,
+    single_scenario_payload,
+)
 from tests.regents.real_fixtures import NUPLAN_MAP_DIR, REGENTS_AUDIT_SCENARIO_IDS, resolve_nuplan_scenarios
 
 
@@ -145,19 +149,19 @@ def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay)
     assert replay.metrics.compared_state_count > 0
     assert replay.states.shape == optimization.optimized_states.shape
     assert replay.baseline_states.shape == replay.states.shape
-    assert replay.ego_actions.shape == (1, OPEN_LOOP_HORIZON_TRANSITION_COUNT, 2)
+    assert replay.ego_actions.shape == (OPEN_LOOP_HORIZON_TRANSITION_COUNT, 2)
     assert torch.isfinite(replay.states[replay.state_valid]).all()
-    assert scenario.scenario_ids == (REGENTS_AUDIT_SCENARIO_IDS[map_idx],)
+    assert scenario.scenario_id == REGENTS_AUDIT_SCENARIO_IDS[map_idx]
 
     pose = slice(STATE_X, STATE_HEADING + 1)
     joint_valid = optimization.state_valid & replay.state_valid
-    initial_difference = torch.abs(replay.states[:, :, 0, pose] - optimization.optimized_states[:, :, 0, pose])
-    assert float(initial_difference[joint_valid[:, :, 0]].max()) <= C_REPLAY_TOLERANCE
+    initial_difference = torch.abs(replay.states[:, 0, pose] - optimization.optimized_states[:, 0, pose])
+    assert float(initial_difference[joint_valid[:, 0]].max()) <= C_REPLAY_TOLERANCE
 
     # Actors without an injected plan must still follow their logged trajectory.
-    injected = optimization.optimized_action_mask.any(dim=2)
+    injected = optimization.optimized_action_mask.any(dim=1)
     assert int(injected.sum()) > 0
-    logged = scenario.logged_state[:, :, : replay.states.shape[2]]
+    logged = scenario.logged_state[:, : replay.states.shape[1]]
     logged_difference = torch.abs(replay.states[..., pose] - logged[..., pose])
     assert float(logged_difference[joint_valid & ~injected[..., None]].max()) <= C_REPLAY_TOLERANCE
 
@@ -227,8 +231,8 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
     assert result.optimization.ego_collision_loss_adversary_idx == -1
     assert result.optimization.ego_collision_loss_adversary_id == -1
     assert result.optimization.selection.candidate_mask.sum() == 1
-    assert result.optimization.selection.reasons_for(0, 20) == ("static",)
-    assert result.optimization.selection.reasons_for(0, 22) == ("static",)
+    assert result.optimization.selection.reasons_for(20) == ("static",)
+    assert result.optimization.selection.reasons_for(22) == ("static",)
     assert torch.equal(result.optimization.initial_actions, result.optimization.optimized_actions)
     assert result.replay.metrics.maximum_trajectory_error <= C_REPLAY_TOLERANCE
     assert result.ego_refresh_count == 0
@@ -255,7 +259,7 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
     saved = save_generation_artifact(artifact_path, result, {"fixture": "test"}, str(map_path))
     metadata, arrays = load_generation_artifact(artifact_path)
     assert metadata == saved
-    assert metadata["scenario_id"] == result.scenario.scenario_ids[0]
+    assert metadata["scenario_id"] == result.scenario.scenario_id
     assert metadata["c_replay"]["baseline_ego_collision"] == result.replay.metrics.baseline_ego_collision
     assert metadata["deterministic_seed"] == 50
     assert len(metadata["source_configuration_hash"]) == 64
@@ -272,7 +276,7 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
     assert metadata["optimization"]["background_collision_rejection_count"] >= 0
     assert np.array_equal(arrays["optimized_actions"], result.optimization.optimized_actions.detach().numpy())
     assert np.array_equal(arrays["c_states"], result.replay.states.numpy())
-    assert arrays["original_states"].shape[1] == result.scenario.max_agent_count
+    assert arrays["original_states"].shape[0] == result.scenario.max_agent_count
 
     frames = result.replay.adversarial_frames
     assert frames is not None
@@ -280,7 +284,7 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
     assert "obs" not in frames
     assert "obs" not in result.replay.baseline_frames
     assert result.replay.baseline_frames["agent_f32"].shape == frames["agent_f32"].shape
-    assert result.replay.scenario_payload["scenario_id"] == result.scenario.scenario_ids[0]
+    assert result.replay.scenario_payload["scenario_id"] == result.scenario.scenario_id
 
     # No candidate ever entered the window, so there is no cost history to write.
     assert result.optimization.cost_history == ()
@@ -317,8 +321,8 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
         replay_payload = zlib.decompress(replay_path.read_bytes())
         header_length = struct.unpack_from("<I", replay_payload)[0]
         header = json.loads(replay_payload[4 : 4 + header_length])
-        candidate_indices = torch.where(result.optimization.selection.candidate_mask[0])[0]
-        expected_candidate_ids = result.scenario.agent_id[0, candidate_indices].tolist()
+        candidate_indices = torch.where(result.optimization.selection.candidate_mask)[0]
+        expected_candidate_ids = result.scenario.agent_id[candidate_indices].tolist()
         assert header["candidate_adversary_ids"] == expected_candidate_ids
         assert header["active_count"] == 1
         assert header["obs_dim"] == 0
@@ -515,7 +519,7 @@ def test_buffer_state_getter_reproduces_the_dict_getter_exactly():
     drive = _drive(1, 43, "replay")
     try:
         drive.reset(seed=43)
-        agent_count = int(_single_payload(drive.get_state())["num_total_agents"])
+        agent_count = int(single_scenario_payload(drive.get_state())["num_total_agents"])
         states = np.empty((agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
         valid = np.empty(agent_count, dtype=np.bool_)
         ego_action = np.empty(2, dtype=np.float32)
@@ -536,7 +540,7 @@ def test_buffer_state_getter_rejects_malformed_output_buffers():
     drive = _drive(1, 43, "replay")
     try:
         drive.reset(seed=43)
-        agent_count = int(_single_payload(drive.get_state())["num_total_agents"])
+        agent_count = int(single_scenario_payload(drive.get_state())["num_total_agents"])
         states = np.empty((agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
         valid = np.empty(agent_count, dtype=np.bool_)
         ego_action = np.empty(2, dtype=np.float32)

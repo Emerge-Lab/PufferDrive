@@ -86,11 +86,9 @@ def _tensor_bytes(batch):
         "width_meters",
         "wheelbase_meters",
         "maximum_speed_mps",
-        "log_dt_seconds",
     )
     tensor_payload = tuple(getattr(batch, name).numpy().tobytes() for name in tensor_names)
-    raster_payload = tuple(raster.mask.numpy().tobytes() for raster in batch.drivable_area_rasters)
-    return tensor_payload + raster_payload
+    return tensor_payload + (batch.drivable_area_raster.mask.numpy().tobytes(), repr(batch.log_dt_seconds))
 
 
 def test_real_export_schema_identity_coordinates_and_determinism(drive_and_payload):
@@ -98,47 +96,47 @@ def test_real_export_schema_identity_coordinates_and_determinism(drive_and_paylo
     drive, payload = drive_and_payload
     batch = export_drive_scenarios(drive, payload=payload, raster_resolution_meters=1.0)
 
-    assert batch.logged_state.shape == (1, payload["num_total_agents"], payload["length"], 5)
+    assert batch.logged_state.shape == (payload["num_total_agents"], payload["length"], 5)
     assert batch.logged_state.dtype == torch.float32
     assert batch.state_valid.dtype == torch.bool
-    assert torch.equal(batch.agent_id[0], torch.arange(payload["num_total_agents"]))
-    assert batch.ego_mask[0, 0]
+    assert torch.equal(batch.agent_id, torch.arange(payload["num_total_agents"]))
+    assert batch.ego_mask[0]
     assert batch.ego_mask.sum() == 1
-    assert batch.vehicle_mask[0, 0]
-    assert not batch.candidate_adversary_mask[0, 0]
+    assert batch.vehicle_mask[0]
+    assert not batch.candidate_adversary_mask[0]
     assert batch.logged_length_meters.shape == batch.state_valid.shape
     assert batch.logged_width_meters.shape == batch.state_valid.shape
-    assert batch.logged_length_meters[0, 0, 0] == pytest.approx(payload["agents"][0]["log_length"][0])
+    assert batch.logged_length_meters[0, 0] == pytest.approx(payload["agents"][0]["log_length"][0])
     assert batch.coordinate_frame == "scenario_centered_cartesian"
-    assert abs(batch.logged_state[0, 0, 0, STATE_X]) < 1e-3
-    assert abs(batch.logged_state[0, 0, 0, STATE_Y]) < 1e-3
+    assert abs(batch.logged_state[0, 0, STATE_X]) < 1e-3
+    assert abs(batch.logged_state[0, 0, STATE_Y]) < 1e-3
     assert torch.all(batch.logged_state[..., STATE_HEADING].abs() <= torch.pi)
     assert not batch.state_feature_valid[..., STATE_STEERING].any()
-    assert torch.equal(batch.transition_valid, batch.state_valid[:, :, :-1] & batch.state_valid[:, :, 1:])
+    assert torch.equal(batch.transition_valid, batch.state_valid[:, :-1] & batch.state_valid[:, 1:])
 
     # Speed is longitudinal velocity projected onto heading, logged and current alike.
     first_agent = payload["agents"][0]
     expected_logged_speed = first_agent["log_velocity_x"][0] * np.cos(first_agent["log_heading"][0])
     expected_logged_speed += first_agent["log_velocity_y"][0] * np.sin(first_agent["log_heading"][0])
-    assert batch.logged_state[0, 0, 0, STATE_SPEED] == pytest.approx(expected_logged_speed)
+    assert batch.logged_state[0, 0, STATE_SPEED] == pytest.approx(expected_logged_speed)
     expected_current_speed = first_agent["sim_vx"] * np.cos(first_agent["sim_heading"])
     expected_current_speed += first_agent["sim_vy"] * np.sin(first_agent["sim_heading"])
-    assert batch.current_state[0, 0, STATE_SPEED] == pytest.approx(expected_current_speed)
-    assert batch.current_state[0, 0, STATE_STEERING] == pytest.approx(first_agent["sim_steering"])
+    assert batch.current_state[0, STATE_SPEED] == pytest.approx(expected_current_speed)
+    assert batch.current_state[0, STATE_STEERING] == pytest.approx(first_agent["sim_steering"])
 
     # Fully invalid tracks keep their slot but never become candidates.
-    invalid_track_indices = torch.where(~batch.state_valid[0].any(dim=-1))[0]
+    invalid_track_indices = torch.where(~batch.state_valid.any(dim=-1))[0]
     assert invalid_track_indices.numel() > 0
-    assert batch.agent_present[0, invalid_track_indices].all()
-    assert not batch.agent_metadata_valid[0, invalid_track_indices].any()
-    assert not batch.candidate_adversary_mask[0, invalid_track_indices].any()
-    assert torch.equal(batch.agent_id[0, invalid_track_indices], invalid_track_indices)
+    assert batch.agent_present[invalid_track_indices].all()
+    assert not batch.agent_metadata_valid[invalid_track_indices].any()
+    assert not batch.candidate_adversary_mask[invalid_track_indices].any()
+    assert torch.equal(batch.agent_id[invalid_track_indices], invalid_track_indices)
 
     # A non-off-road ego must land on drivable raster cells.
     fine_batch = export_drive_scenarios(drive, payload=payload, raster_resolution_meters=0.5)
-    raster = fine_batch.drivable_area_rasters[0]
+    raster = fine_batch.drivable_area_raster
     column, row = (
-        raster.transform.world_to_grid(fine_batch.current_state[0, 0, [STATE_X, STATE_Y]]).round().to(torch.int64)
+        raster.transform.world_to_grid(fine_batch.current_state[0, [STATE_X, STATE_Y]]).round().to(torch.int64)
     )
     assert payload["agents"][0]["metrics_array"][1] == 0.0
     assert raster.mask[row, column]
@@ -151,26 +149,19 @@ def test_real_export_schema_identity_coordinates_and_determinism(drive_and_paylo
             exports.append(export_drive_scenarios(repeat_drive, raster_resolution_meters=2.0))
         finally:
             repeat_drive.close()
-    assert exports[0].scenario_ids == exports[1].scenario_ids
+    assert exports[0].scenario_id == exports[1].scenario_id
     assert _tensor_bytes(exports[0]) == _tensor_bytes(exports[1])
 
 
-def test_export_pads_batches_rasterizes_lanes_and_rejects_unsupported_modes(drive_and_payload):
-    """Batch and agent padding, the raster transform convention, and every mode guard."""
+def test_export_rasterizes_lanes_and_rejects_unsupported_modes(drive_and_payload):
+    """One scenario per export, the raster transform convention, and every mode guard."""
     drive, payload = drive_and_payload
+    # ReGentS optimizes one scenario at a time, so a multi-scenario payload is refused
+    # rather than padded into a batch.
     second = copy.deepcopy(payload)
     second["scenario_id"] = f"{payload['scenario_id']}-copy"
-    second["agents"] = second["agents"][:-1]
-    second["num_total_agents"] -= 1
-    second["active_agent_indices"] = [idx for idx in second["active_agent_indices"] if idx < len(second["agents"])]
-    second["active_agent_count"] = len(second["active_agent_indices"])
-    padded = export_drive_scenarios(drive, payload=[payload, second], raster_resolution_meters=2.0)
-    assert padded.batch_size == 2
-    assert padded.max_agent_count == payload["num_total_agents"]
-    assert padded.scenario_ids == (payload["scenario_id"], second["scenario_id"])
-    assert not padded.agent_present[1, -1]
-    assert padded.agent_id[1, -1] == -1
-    assert not padded.state_valid[1, -1].any()
+    with pytest.raises(ValueError, match="exactly one Drive scenario"):
+        export_drive_scenarios(drive, payload=[payload, second], raster_resolution_meters=2.0)
 
     # One lane between two road edges. The edges are wound in opposite directions, as
     # exported maps are, so the drivable side is found by orienting them on the lane.
@@ -225,7 +216,7 @@ def test_export_pads_batches_rasterizes_lanes_and_rejects_unsupported_modes(driv
     wod_rounded_timestep = copy.deepcopy(payload)
     wod_rounded_timestep["log_dt"] = 0.099
     rounded = export_drive_scenarios(drive, payload=wod_rounded_timestep, raster_resolution_meters=2.0)
-    assert rounded.log_dt_seconds.item() == pytest.approx(0.099)
+    assert rounded.log_dt_seconds == pytest.approx(0.099)
     assert TIMESTEP_TOLERANCE_SECONDS == pytest.approx(1.01e-3)
 
     unsupported_modes = (
@@ -252,26 +243,6 @@ def test_export_pads_batches_rasterizes_lanes_and_rejects_unsupported_modes(driv
     jerk_payload["dynamics_model"] = binding.DYNAMICS_MODEL_JERK
     try:
         jerk_scenario = export_drive_scenarios(drive, payload=jerk_payload, raster_resolution_meters=2.0)
-        assert jerk_scenario.batch_size == 1
+        assert jerk_scenario.max_agent_count == payload["num_total_agents"]
     finally:
         drive.dynamics_model_flag = original_dynamics
-
-        # Two real scenarios exported together keep both slots and both rasters.
-        drive_kwargs = _drive_kwargs()
-        drive_kwargs.update(
-            num_agents=2,
-            num_eval_scenarios=2,
-            max_scenarios_per_batch=2,
-            eval_map_indices=[0, 0],
-            eval_scenario_seeds=[42, 43],
-        )
-        drive = Drive(**drive_kwargs)
-        try:
-            drive.reset()
-            batch = export_drive_scenarios(drive, raster_resolution_meters=2.0)
-        finally:
-            drive.close()
-
-        assert batch.batch_size == 2
-        assert batch.agent_present.all()
-        assert len(batch.drivable_area_rasters) == 2

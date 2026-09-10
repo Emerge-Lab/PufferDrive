@@ -48,20 +48,8 @@ class SmoothedOutOfBoundsRaster:
         )
 
 
-def _validate_boxes(boxes, name):
-    if not isinstance(boxes, torch.Tensor) or not boxes.is_floating_point():
-        raise TypeError(f"{name} must be a floating Torch tensor")
-    if boxes.ndim < 1 or boxes.shape[-1] != BOX_FEATURE_COUNT:
-        raise ValueError(f"{name} must have shape [..., 5]")
-    if not torch.isfinite(boxes).all():
-        raise ValueError(f"{name} must be finite")
-    if torch.any(boxes[..., 2:4] <= 0):
-        raise ValueError(f"{name} length and width must be positive")
-
-
 def oriented_box_corners(boxes):
     """Return counter-clockwise corners for ``[..., x, y, length, width, heading]``."""
-    _validate_boxes(boxes, "boxes")
     return wosac_geometry.get_2d_box_corners(boxes)
 
 
@@ -72,8 +60,6 @@ def signed_box_distance(boxes_a, boxes_b):
     values denote penetration. The magnitude inside overlap is the minimum
     translation needed to separate the rectangles.
     """
-    _validate_boxes(boxes_a, "boxes_a")
-    _validate_boxes(boxes_b, "boxes_b")
     if boxes_a.device != boxes_b.device or boxes_a.dtype != boxes_b.dtype:
         raise ValueError("boxes_a and boxes_b must share device and dtype")
     try:

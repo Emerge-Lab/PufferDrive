@@ -7,7 +7,6 @@ from pathlib import Path
 
 import numpy as np
 
-from pufferlib.ocean.regents.optimizer import STEERING_PARAMETERIZATION_CURVATURE
 from pufferlib.ocean.regents.rollout import ReactiveGenerationResult
 
 
@@ -35,7 +34,7 @@ def _cost_dict(costs, scenario):
         index_key = f"background_collision_{endpoint}_agent_idx"
         agent_idx = values[index_key]
         values[f"background_collision_{endpoint}_agent_id"] = (
-            int(scenario.agent_id[0, agent_idx].item()) if agent_idx >= 0 else -1
+            int(scenario.agent_id[agent_idx].item()) if agent_idx >= 0 else -1
         )
     return values
 
@@ -51,8 +50,8 @@ def save_generation_artifact(path, result, source_configuration, map_path):
     replay = result.replay
     metadata = {
         "schema": ARTIFACT_SCHEMA,
-        "scenario_id": scenario.scenario_ids[0],
-        "dataset_name": scenario.dataset_names[0],
+        "scenario_id": scenario.scenario_id,
+        "dataset_name": scenario.dataset_name,
         "source_map": str(Path(map_path)),
         "source_configuration_hash": source_configuration_hash(source_configuration, map_path),
         "source_configuration": source_configuration,
@@ -68,7 +67,7 @@ def save_generation_artifact(path, result, source_configuration, map_path):
             "road_loss_reduction": "mean_timesteps_sum_valid_agents_and_corners",
             "road_loss_kernel": "unit_mass_truncated_grid_convolution",
             "road_loss_baseline_subtracted": False,
-            "steering_parameterization": STEERING_PARAMETERIZATION_CURVATURE,
+            "steering_parameterization": "curvature",
             "divergence_update_policy": "post_adam_cancel_preserve_moments",
             "infractions_are_acceptance_gates": False,
             "background_collision_loss_scope": BACKGROUND_COLLISION_LOSS_SCOPE,
@@ -89,7 +88,7 @@ def save_generation_artifact(path, result, source_configuration, map_path):
             "background_collision_rejection_count": optimization.background_collision_rejection_count,
             "offroad_rejection_count": optimization.offroad_rejection_count,
             "failure_reasons_by_agent": [
-                optimization.selection.reasons_for(0, agent_idx) for agent_idx in range(scenario.max_agent_count)
+                optimization.selection.reasons_for(agent_idx) for agent_idx in range(scenario.max_agent_count)
             ],
         },
         "c_replay": {**asdict(replay.metrics), "success": replay.success, "failure_reason": replay.failure_reason},
