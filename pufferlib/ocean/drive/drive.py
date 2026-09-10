@@ -793,7 +793,19 @@ class Drive(pufferlib.PufferEnv):
             "scenario": scenario,
             "agent_capacity": len(scenario["agents"] or []),
             "traffic_capacity": len(scenario["traffic_elements"] or []),
-            "frames": {key: [] for key in ("agent_f32", "agent_i32", "metrics_f32", "puffer_f32", "traffic_i16")},
+            "frames": {
+                key: []
+                for key in (
+                    "agent_f32",
+                    "agent_i32",
+                    "metrics_f32",
+                    "puffer_f32",
+                    "traffic_i16",
+                    "goals_f32",
+                    "rewards_f32",
+                    "coefs_f32",
+                )
+            },
         }
 
     def _initialize_replay_captures(self):
@@ -830,6 +842,18 @@ class Drive(pufferlib.PufferEnv):
                 (env_count, traffic_capacity, binding.TRAFFIC_I16_FIELDS),
                 dtype=np.int16,
             ),
+            "goals_f32": np.empty(
+                (env_count, agent_capacity, self.num_goals * binding.GOAL_XY_FIELDS),
+                dtype=np.float32,
+            ),
+            "rewards_f32": np.empty(
+                (env_count, agent_capacity, binding.REWARD_F32_FIELDS),
+                dtype=np.float32,
+            ),
+            "coefs_f32": np.empty(
+                (env_count, agent_capacity, binding.NUM_REWARD_COEFS),
+                dtype=np.float32,
+            ),
         }
 
     def _capture_replay_step(self):
@@ -839,11 +863,22 @@ class Drive(pufferlib.PufferEnv):
             self._replay_frame_arrays["metrics_f32"],
             self._replay_frame_arrays["puffer_f32"],
             self._replay_frame_arrays["traffic_i16"],
+            self._replay_frame_arrays["goals_f32"],
+            self._replay_frame_arrays["rewards_f32"],
+            self._replay_frame_arrays["coefs_f32"],
         )
         for env_idx, capture in enumerate(self._replay_captures):
             agent_capacity = capture["agent_capacity"]
             traffic_capacity = max(capture["traffic_capacity"], 1)
-            for key in ("agent_f32", "agent_i32", "metrics_f32", "puffer_f32"):
+            for key in (
+                "agent_f32",
+                "agent_i32",
+                "metrics_f32",
+                "puffer_f32",
+                "goals_f32",
+                "rewards_f32",
+                "coefs_f32",
+            ):
                 capture["frames"][key].append(self._replay_frame_arrays[key][env_idx, :agent_capacity].copy())
             capture["frames"]["traffic_i16"].append(
                 self._replay_frame_arrays["traffic_i16"][env_idx, :traffic_capacity].copy()
@@ -890,7 +925,17 @@ class Drive(pufferlib.PufferEnv):
         except Exception:
             return binding.env_get(self.c_envs)
 
-    def get_obs_html_frame(self, agent_f32, agent_i32, metrics_f32, puffer_f32, traffic_i16):
+    def get_obs_html_frame(
+        self,
+        agent_f32,
+        agent_i32,
+        metrics_f32,
+        puffer_f32,
+        traffic_i16,
+        goals_f32,
+        rewards_f32,
+        coefs_f32,
+    ):
         binding.vec_get_obs_html_frame(
             self.c_envs,
             agent_f32,
@@ -898,6 +943,9 @@ class Drive(pufferlib.PufferEnv):
             metrics_f32,
             puffer_f32,
             traffic_i16,
+            goals_f32,
+            rewards_f32,
+            coefs_f32,
         )
 
 

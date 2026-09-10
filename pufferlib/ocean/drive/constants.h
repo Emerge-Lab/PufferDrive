@@ -309,12 +309,29 @@ static const int ROAD_OFFSETS[25][2]
 // =====================================================================================
 
 // obs_html_frame array field counts
+#define AGENT_F32_GOAL_RADIUS_IDX 12
 #define AGENT_F32_FIELDS                                                                                               \
-    12 // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat, jerk_long, jerk_lat
+    13 // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat, jerk_long, jerk_lat, goal_radius
 #define AGENT_I32_FIELDS                                                                                               \
     10 // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx, blindness_active, braking_active
+#define GOAL_XY_FIELDS 2               // goal x, y per goal slot; reached slots stay zeroed
 #define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
 #define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
 #define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
+#define REWARD_F32_EPISODE_RETURN_IDX 0
+#define REWARD_F32_COLLISION_IDX 1
+#define REWARD_F32_OFFROAD_IDX 2
+#define REWARD_F32_RED_LIGHT_IDX 3
+#define REWARD_F32_STOP_SIGN_IDX 4
+#define REWARD_F32_GOAL_IDX 5
+#define REWARD_F32_LANE_ALIGN_IDX 6
+#define REWARD_F32_LANE_CENTER_IDX 7
+#define REWARD_F32_COMFORT_IDX 8
+#define REWARD_F32_VELOCITY_IDX 9
+#define REWARD_F32_TIMESTEP_IDX 10
+#define REWARD_F32_REVERSE_IDX 11
+#define REWARD_F32_OVERSPEED_IDX 12
+#define REWARD_F32_ADE_IDX 13
+#define REWARD_F32_FIELDS 14
 
 #endif

@@ -801,8 +801,8 @@ static PyObject *vec_get(PyObject *self, PyObject *args) {
 }
 
 static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 6) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_obs_html_frame requires 6 arguments");
+    if (PyTuple_Size(args) != 9) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_obs_html_frame requires 9 arguments");
         return NULL;
     }
 
@@ -816,9 +816,13 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     PyArrayObject *metrics_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 3);
     PyArrayObject *puffer_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 4);
     PyArrayObject *traffic_i16_array = (PyArrayObject *) PyTuple_GetItem(args, 5);
+    PyArrayObject *goals_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 6);
+    PyArrayObject *rewards_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 7);
+    PyArrayObject *coefs_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 8);
 
     if (!PyArray_Check(agent_f32_array) || !PyArray_Check(agent_i32_array) || !PyArray_Check(metrics_f32_array)
-        || !PyArray_Check(puffer_f32_array) || !PyArray_Check(traffic_i16_array)) {
+        || !PyArray_Check(puffer_f32_array) || !PyArray_Check(traffic_i16_array) || !PyArray_Check(goals_f32_array)
+        || !PyArray_Check(rewards_f32_array) || !PyArray_Check(coefs_f32_array)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -828,12 +832,18 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     memset(PyArray_DATA(metrics_f32_array), 0, PyArray_NBYTES(metrics_f32_array));
     memset(PyArray_DATA(puffer_f32_array), 0, PyArray_NBYTES(puffer_f32_array));
     memset(PyArray_DATA(traffic_i16_array), 0, PyArray_NBYTES(traffic_i16_array));
+    memset(PyArray_DATA(goals_f32_array), 0, PyArray_NBYTES(goals_f32_array));
+    memset(PyArray_DATA(rewards_f32_array), 0, PyArray_NBYTES(rewards_f32_array));
+    memset(PyArray_DATA(coefs_f32_array), 0, PyArray_NBYTES(coefs_f32_array));
 
     float *agent_f32 = (float *) PyArray_DATA(agent_f32_array);
     int *agent_i32 = (int *) PyArray_DATA(agent_i32_array);
     float *metrics_f32 = (float *) PyArray_DATA(metrics_f32_array);
     float *puffer_f32 = (float *) PyArray_DATA(puffer_f32_array);
     short *traffic_i16 = (short *) PyArray_DATA(traffic_i16_array);
+    float *goals_f32 = (float *) PyArray_DATA(goals_f32_array);
+    float *rewards_f32 = (float *) PyArray_DATA(rewards_f32_array);
+    float *coefs_f32 = (float *) PyArray_DATA(coefs_f32_array);
 
     int env_cap = (int) PyArray_DIM(agent_f32_array, 0);
     int env_count = vec->num_envs < env_cap ? vec->num_envs : env_cap;
@@ -844,6 +854,15 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     int puffer_fields = (int) PyArray_DIM(puffer_f32_array, 2);
     int traffic_cap = (int) PyArray_DIM(traffic_i16_array, 1);
     int traffic_fields = (int) PyArray_DIM(traffic_i16_array, 2);
+    int goal_fields = (int) PyArray_DIM(goals_f32_array, 2);
+    int goal_slots = goal_fields / GOAL_XY_FIELDS;
+    int reward_fields = (int) PyArray_DIM(rewards_f32_array, 2);
+    int coef_fields = (int) PyArray_DIM(coefs_f32_array, 2);
+
+    if (coef_fields != NUM_REWARD_COEFS) {
+        PyErr_SetString(PyExc_ValueError, "coefs_f32 must have NUM_REWARD_COEFS fields");
+        return NULL;
+    }
 
     for (int e = 0; e < env_count; e++) {
         Drive *drive = (Drive *) vec->envs[e];
@@ -868,6 +887,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_f32[f32_base + 9] = a->accel_lat;
             agent_f32[f32_base + 10] = a->jerk_long;
             agent_f32[f32_base + 11] = a->jerk_lat;
+            agent_f32[f32_base + AGENT_F32_GOAL_RADIUS_IDX] = a->reward_coefs[REWARD_COEF_GOAL_RADIUS];
 
             agent_i32[i32_base + 0] = i;
             agent_i32[i32_base + 1] = a->type;
@@ -881,6 +901,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_i32[i32_base + 9] = a->phantom_braking_counter > 0;
 
             memcpy(&metrics_f32[metrics_base], a->metrics_array, sizeof(float) * NUM_METRICS);
+            memcpy(&coefs_f32[(e * agent_cap + i) * coef_fields], a->reward_coefs, sizeof(float) * NUM_REWARD_COEFS);
         }
 
         if (drive->active_agent_indices) {
@@ -891,7 +912,16 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
                 }
                 int i32_base = (e * agent_cap + agent_idx) * agent_i32_fields;
                 int puffer_base = (e * agent_cap + agent_idx) * puffer_fields;
+                int reward_base = (e * agent_cap + agent_idx) * reward_fields;
                 agent_i32[i32_base + 7] = j;
+
+                Agent *active = &drive->agents[agent_idx];
+                int goal_count = active->goal_count < goal_slots ? active->goal_count : goal_slots;
+                int goal_base = (e * agent_cap + agent_idx) * goal_fields;
+                for (int goal_idx = active->current_goal_idx; goal_idx < goal_count; goal_idx++) {
+                    goals_f32[goal_base + goal_idx * GOAL_XY_FIELDS] = active->list_goal_x[goal_idx];
+                    goals_f32[goal_base + goal_idx * GOAL_XY_FIELDS + 1] = active->list_goal_y[goal_idx];
+                }
 
                 if (!drive->compute_eval_metrics || !drive->logs || j >= drive->logs_capacity) {
                     continue;
@@ -912,6 +942,21 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
                 puffer_f32[puffer_base + 12] = log->speed_violation_sum;
                 puffer_f32[puffer_base + 13] = log->multiplier;
                 puffer_f32[puffer_base + 14] = log->weighted_average;
+
+                rewards_f32[reward_base + REWARD_F32_EPISODE_RETURN_IDX] = log->episode_return;
+                rewards_f32[reward_base + REWARD_F32_COLLISION_IDX] = log->reward_collision;
+                rewards_f32[reward_base + REWARD_F32_OFFROAD_IDX] = log->reward_offroad;
+                rewards_f32[reward_base + REWARD_F32_RED_LIGHT_IDX] = log->reward_red_light;
+                rewards_f32[reward_base + REWARD_F32_STOP_SIGN_IDX] = log->reward_stop_sign;
+                rewards_f32[reward_base + REWARD_F32_GOAL_IDX] = log->reward_goal;
+                rewards_f32[reward_base + REWARD_F32_LANE_ALIGN_IDX] = log->reward_lane_align;
+                rewards_f32[reward_base + REWARD_F32_LANE_CENTER_IDX] = log->reward_lane_center;
+                rewards_f32[reward_base + REWARD_F32_COMFORT_IDX] = log->reward_comfort;
+                rewards_f32[reward_base + REWARD_F32_VELOCITY_IDX] = log->reward_velocity;
+                rewards_f32[reward_base + REWARD_F32_TIMESTEP_IDX] = log->reward_timestep;
+                rewards_f32[reward_base + REWARD_F32_REVERSE_IDX] = log->reward_reverse;
+                rewards_f32[reward_base + REWARD_F32_OVERSPEED_IDX] = log->reward_overspeed;
+                rewards_f32[reward_base + REWARD_F32_ADE_IDX] = log->reward_ade;
             }
         }
 
@@ -1393,10 +1438,13 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "GOAL_FEATURES", GOAL_FEATURES);
     PyModule_AddIntConstant(m, "MAX_GOALS", MAX_GOALS);
     PyModule_AddIntConstant(m, "AGENT_F32_FIELDS", AGENT_F32_FIELDS);
+    PyModule_AddIntConstant(m, "AGENT_F32_GOAL_RADIUS_IDX", AGENT_F32_GOAL_RADIUS_IDX);
     PyModule_AddIntConstant(m, "AGENT_I32_FIELDS", AGENT_I32_FIELDS);
+    PyModule_AddIntConstant(m, "GOAL_XY_FIELDS", GOAL_XY_FIELDS);
     PyModule_AddIntConstant(m, "METRICS_F32_FIELDS", METRICS_F32_FIELDS);
     PyModule_AddIntConstant(m, "SCORE_F32_FIELDS", SCORE_F32_FIELDS);
     PyModule_AddIntConstant(m, "TRAFFIC_I16_FIELDS", TRAFFIC_I16_FIELDS);
+    PyModule_AddIntConstant(m, "REWARD_F32_FIELDS", REWARD_F32_FIELDS);
     PyModule_AddIntConstant(m, "NUM_REWARD_COEFS", NUM_REWARD_COEFS);
     PyModule_AddIntConstant(m, "GOAL_REGEN_FINITE", GOAL_REGEN_FINITE);
     PyModule_AddIntConstant(m, "GOAL_REGEN_ROLLING", GOAL_REGEN_ROLLING);
