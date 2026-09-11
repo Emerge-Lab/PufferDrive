@@ -43,8 +43,8 @@ from pufferlib.ocean.regents.state import (
     STATE_FEATURE_COUNT,
     STATE_X,
     STATE_Y,
+    agent_state_rows,
     single_scenario_payload,
-    signed_speed_from_c_velocity,
 )
 from pufferlib.ocean.regents.waymax_actions import (
     NORMALIZED_CURVATURE_LIMIT,
@@ -235,36 +235,6 @@ class ReGentSOptimizationResult:
     cost_history: tuple[CostSnapshot, ...] = ()
 
 
-def _ego_state_from_payload(payload, expected_controller):
-    scenario = single_scenario_payload(payload)
-    agents = scenario.get("agents")
-    if not isinstance(agents, list) or not agents:
-        raise ValueError("Drive state contains no ego agent")
-    ego = agents[0]
-    if int(ego.get("id", -1)) != 0 or int(ego.get("controller", -1)) != expected_controller:
-        raise ValueError(f"Stable agent zero must be controlled by {expected_controller}")
-    values = np.asarray(
-        (
-            ego["sim_x"],
-            ego["sim_y"],
-            ego["sim_heading"],
-            ego["sim_vx"],
-            ego["sim_vy"],
-            ego["sim_steering"],
-        ),
-        dtype=np.float32,
-    )
-    if not np.isfinite(values).all():
-        raise ValueError("C SDC emitted a non-finite ego state")
-    heading = np.float32(math.atan2(math.sin(float(values[2])), math.cos(float(values[2]))))
-    signed_speed = np.float32(signed_speed_from_c_velocity(values[3], values[4], heading))
-    state = np.asarray((values[0], values[1], heading, signed_speed, values[5]), dtype=np.float32)
-    validity = int(ego["sim_valid"])
-    if validity not in (0, 1):
-        raise ValueError("C SDC emitted invalid ego validity")
-    return scenario["scenario_id"], state, bool(validity)
-
-
 def capture_frozen_idm_trajectory(
     drive,
     transition_count,
@@ -302,15 +272,14 @@ def capture_frozen_idm_trajectory(
     )
     if transition_count > scenario.max_time_count - 1:
         raise ValueError("transition_count exceeds the exported scenario horizon")
-    scenario_ids = []
-    states = []
-    validity = []
-    scenario_id, state, valid = _ego_state_from_payload(initial_payload, drive.sdc_controller)
-    scenario_ids.append(scenario_id)
-    states.append(state)
-    validity.append(valid)
-    neutral_actions = np.zeros_like(drive.actions)
     agent_count = int(single_scenario_payload(initial_payload)["num_total_agents"])
+    initial_scenario, initial_states, initial_valid, _ = agent_state_rows(initial_payload, agent_count)
+    ego = initial_scenario["agents"][STABLE_EGO_AGENT_IDX]
+    if int(ego.get("controller", -1)) != drive.sdc_controller:
+        raise ValueError(f"Stable agent zero must be controlled by {drive.sdc_controller}")
+    states = [initial_states[STABLE_EGO_AGENT_IDX].copy()]
+    validity = [bool(initial_valid[STABLE_EGO_AGENT_IDX])]
+    neutral_actions = np.zeros_like(drive.actions)
     state_scratch = np.empty((agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
     valid_scratch = np.empty(agent_count, dtype=np.bool_)
     ego_action_scratch = np.empty(REGENTS_EGO_ACTION_FEATURE_COUNT, dtype=np.float32)
@@ -324,8 +293,9 @@ def capture_frozen_idm_trajectory(
         validity.append(bool(valid_scratch[STABLE_EGO_AGENT_IDX]))
     # The buffer getter carries no scenario identity, so the horizon is bracketed by a
     # dict read at each end rather than one per step.
-    scenario_ids.append(_ego_state_from_payload(drive.get_state(), drive.sdc_controller)[0])
-    if any(item != scenario.scenario_id for item in scenario_ids):
+    final_scenario_id = single_scenario_payload(drive.get_state()).get("scenario_id")
+    bracketing_ids = (initial_scenario.get("scenario_id"), final_scenario_id)
+    if any(observed_id != scenario.scenario_id for observed_id in bracketing_ids):
         raise RuntimeError("Drive changed scenario during frozen IDM capture")
     frozen_ego = FrozenEgoTrajectory(
         state=torch.from_numpy(np.ascontiguousarray(np.stack(states))),
@@ -581,14 +551,7 @@ def _candidate_offroad_signature(boxes, state_valid, drivable_area_raster, candi
     candidate_indices = torch.where(candidate_mask)[0]
     if candidate_indices.numel() == 0:
         return signature
-    raster_mask = drivable_area_raster.mask.to(boxes.device)
-    transform = drivable_area_raster.transform
-    grid = transform.world_to_grid(oriented_box_corners(boxes[candidate_indices]))
-    column = torch.round(grid[..., 0]).to(torch.int64)
-    row = torch.round(grid[..., 1]).to(torch.int64)
-    outside = (column < 0) | (column >= transform.width)
-    outside |= (row < 0) | (row >= transform.height)
-    outside |= ~raster_mask[row.clamp(0, transform.height - 1), column.clamp(0, transform.width - 1)]
+    outside = drivable_area_raster.points_off_road(oriented_box_corners(boxes[candidate_indices]))
     # Invalid timesteps carry a placeholder box, so they never enter the signature.
     signature[candidate_indices] = outside & state_valid[candidate_indices][..., None]
     return signature
