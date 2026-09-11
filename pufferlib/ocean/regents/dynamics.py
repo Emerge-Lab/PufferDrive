@@ -52,7 +52,8 @@ def _wrap_heading_like_c(heading):
     return torch.where(below_negative_pi, wrapped + two_pi, wrapped)
 
 
-def _classic_step(state, action, wheelbase_meters, maximum_speed_mps, dt_seconds):
+def classic_step(state, action, wheelbase_meters, maximum_speed_mps, dt_seconds):
+    """Advance one classic-dynamics step without mutating any input."""
     acceleration = action[..., ACTION_ACCELERATION] * ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED
     target_steering = action[..., ACTION_TARGET_STEERING] * TARGET_STEERING_SCALE_RADIANS
 
@@ -95,11 +96,6 @@ def _classic_step(state, action, wheelbase_meters, maximum_speed_mps, dt_seconds
     return torch.stack((x_meters, y_meters, heading, signed_speed, steering), dim=-1)
 
 
-def classic_step(state, action, wheelbase_meters, maximum_speed_mps, dt_seconds):
-    """Advance one classic-dynamics step without mutating any input."""
-    return _classic_step(state, action, wheelbase_meters, maximum_speed_mps, dt_seconds)
-
-
 def classic_rollout(initial_state, actions, transition_valid, wheelbase_meters, maximum_speed_mps, dt_seconds):
     """Roll out masked actions and return ``[..., time, 5]`` states.
 
@@ -123,7 +119,7 @@ def classic_rollout(initial_state, actions, transition_valid, wheelbase_meters, 
     current_state = initial_state
     rollout_states = [current_state]
     for timestep in range(actions.shape[-2]):
-        proposed_state = _classic_step(
+        proposed_state = classic_step(
             current_state,
             actions[..., timestep, :],
             wheelbase_meters,

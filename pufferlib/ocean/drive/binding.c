@@ -14,16 +14,8 @@ static PyObject *regents_get_events_py(PyObject *self, PyObject *args);
 static PyObject *regents_get_states_py(PyObject *self, PyObject *args);
 static PyObject *regents_episode_log_py(PyObject *self, PyObject *args);
 
-enum {
-    DIAGNOSTIC_STATE_X = 0,
-    DIAGNOSTIC_STATE_Y = 1,
-    DIAGNOSTIC_STATE_HEADING = 2,
-    DIAGNOSTIC_STATE_SPEED = 3,
-    DIAGNOSTIC_STATE_STEERING = 4,
-    DIAGNOSTIC_STATE_FEATURE_COUNT = 5,
-};
-
-// Mirrors pufferlib.ocean.regents.state STATE_* ordering.
+// Mirrors pufferlib.ocean.regents.state STATE_* ordering. The dynamics diagnostic and
+// the bulk state getter both exchange rows in this layout.
 enum {
     REGENTS_STATE_X = 0,
     REGENTS_STATE_Y = 1,
@@ -371,7 +363,7 @@ static PyObject *classic_step_diagnostic_py(PyObject *self __attribute__((unused
         PyErr_SetString(PyExc_ValueError, "Diagnostic inputs must be C-contiguous");
         return NULL;
     }
-    if (PyArray_NDIM(state_array) != 2 || PyArray_DIM(state_array, 1) != DIAGNOSTIC_STATE_FEATURE_COUNT
+    if (PyArray_NDIM(state_array) != 2 || PyArray_DIM(state_array, 1) != REGENTS_STATE_FEATURE_COUNT
         || PyArray_NDIM(action_array) != 2 || PyArray_DIM(action_array, 1) != 2 || PyArray_NDIM(wheelbase_array) != 1
         || PyArray_NDIM(maximum_speed_array) != 1) {
         PyErr_SetString(
@@ -390,21 +382,20 @@ static PyObject *classic_step_diagnostic_py(PyObject *self __attribute__((unused
         return NULL;
     }
 
-    npy_intp output_dimensions[2] = {sample_count, DIAGNOSTIC_STATE_FEATURE_COUNT};
+    npy_intp output_dimensions[2] = {sample_count, REGENTS_STATE_FEATURE_COUNT};
     PyObject *output_object = PyArray_SimpleNew(2, output_dimensions, NPY_FLOAT32);
     if (output_object == NULL) {
         return NULL;
     }
-    float (*states)[DIAGNOSTIC_STATE_FEATURE_COUNT]
-        = (float (*)[DIAGNOSTIC_STATE_FEATURE_COUNT]) PyArray_DATA(state_array);
+    float (*states)[REGENTS_STATE_FEATURE_COUNT] = (float (*)[REGENTS_STATE_FEATURE_COUNT]) PyArray_DATA(state_array);
     float (*actions)[2] = (float (*)[2]) PyArray_DATA(action_array);
     float *wheelbases = (float *) PyArray_DATA(wheelbase_array);
     float *maximum_speeds = (float *) PyArray_DATA(maximum_speed_array);
-    float (*outputs)[DIAGNOSTIC_STATE_FEATURE_COUNT]
-        = (float (*)[DIAGNOSTIC_STATE_FEATURE_COUNT]) PyArray_DATA((PyArrayObject *) output_object);
+    float (*outputs)[REGENTS_STATE_FEATURE_COUNT]
+        = (float (*)[REGENTS_STATE_FEATURE_COUNT]) PyArray_DATA((PyArrayObject *) output_object);
 
     for (npy_intp sample_idx = 0; sample_idx < sample_count; sample_idx++) {
-        for (int feature_idx = 0; feature_idx < DIAGNOSTIC_STATE_FEATURE_COUNT; feature_idx++) {
+        for (int feature_idx = 0; feature_idx < REGENTS_STATE_FEATURE_COUNT; feature_idx++) {
             if (!isfinite(states[sample_idx][feature_idx])) {
                 PyErr_SetString(PyExc_ValueError, "Diagnostic state contains NaN or Inf");
                 Py_DECREF(output_object);
@@ -427,14 +418,14 @@ static PyObject *classic_step_diagnostic_py(PyObject *self __attribute__((unused
         float diagnostic_action[1][2] = {{actions[sample_idx][0], actions[sample_idx][1]}};
         Agent agent = {0};
         agent.type = VEHICLE;
-        agent.sim_x = states[sample_idx][DIAGNOSTIC_STATE_X];
-        agent.sim_y = states[sample_idx][DIAGNOSTIC_STATE_Y];
-        agent.sim_heading = states[sample_idx][DIAGNOSTIC_STATE_HEADING];
+        agent.sim_x = states[sample_idx][REGENTS_STATE_X];
+        agent.sim_y = states[sample_idx][REGENTS_STATE_Y];
+        agent.sim_heading = states[sample_idx][REGENTS_STATE_HEADING];
         agent.cos_heading = cosf(agent.sim_heading);
         agent.sin_heading = sinf(agent.sim_heading);
-        agent.sim_speed = fabsf(states[sample_idx][DIAGNOSTIC_STATE_SPEED]);
-        agent.sim_speed_signed = states[sample_idx][DIAGNOSTIC_STATE_SPEED];
-        agent.steering_angle = states[sample_idx][DIAGNOSTIC_STATE_STEERING];
+        agent.sim_speed = fabsf(states[sample_idx][REGENTS_STATE_SPEED]);
+        agent.sim_speed_signed = states[sample_idx][REGENTS_STATE_SPEED];
+        agent.steering_angle = states[sample_idx][REGENTS_STATE_STEERING];
         agent.wheelbase = wheelbases[sample_idx];
         agent.sim_valid = 1;
         agent.reward_coefs[REWARD_COEF_SPEED] = 1.0f;
@@ -451,11 +442,11 @@ static PyObject *classic_step_diagnostic_py(PyObject *self __attribute__((unused
         env.base_max_speed_mps = maximum_speeds[sample_idx];
         move_dynamics(&env, 0, 0, false);
 
-        outputs[sample_idx][DIAGNOSTIC_STATE_X] = agent.sim_x;
-        outputs[sample_idx][DIAGNOSTIC_STATE_Y] = agent.sim_y;
-        outputs[sample_idx][DIAGNOSTIC_STATE_HEADING] = agent.sim_heading;
-        outputs[sample_idx][DIAGNOSTIC_STATE_SPEED] = agent.sim_speed_signed;
-        outputs[sample_idx][DIAGNOSTIC_STATE_STEERING] = agent.steering_angle;
+        outputs[sample_idx][REGENTS_STATE_X] = agent.sim_x;
+        outputs[sample_idx][REGENTS_STATE_Y] = agent.sim_y;
+        outputs[sample_idx][REGENTS_STATE_HEADING] = agent.sim_heading;
+        outputs[sample_idx][REGENTS_STATE_SPEED] = agent.sim_speed_signed;
+        outputs[sample_idx][REGENTS_STATE_STEERING] = agent.steering_angle;
     }
     return output_object;
 }

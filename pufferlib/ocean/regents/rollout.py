@@ -84,6 +84,19 @@ class ReactiveGenerationResult:
 
 
 @dataclass(frozen=True)
+class BaselineRelativeEvents:
+    ego_collision: bool
+    actionable_collision: bool
+    background_collision: bool
+    offroad: bool
+    first_collision_timestep: int | None
+    first_collision_pair: tuple[int, int] | None
+    first_ego_collision_timestep: int | None
+    baseline_ego_collision: bool
+    baseline_collision_pairs: frozenset
+
+
+@dataclass(frozen=True)
 class _CRollout:
     states: torch.Tensor
     state_valid: torch.Tensor
@@ -285,21 +298,20 @@ def baseline_relative_events(baseline, adversarial, selected_adversary_idx, inje
             other_idx = right_idx if left_idx == 0 else left_idx
             actionable_collision |= other_idx == selected_adversary_idx
     introduced_offroad = adversarial.offroad & ~baseline.offroad
-    offroad = bool(introduced_offroad[injected_agent_mask].any())
-    return (
-        ego_collision,
-        actionable_collision,
-        background_collision,
-        offroad,
-        first_collision_timestep,
-        first_collision_pair,
-        first_ego_collision_timestep,
-        baseline_ego_collision,
-        baseline_pairs,
+    return BaselineRelativeEvents(
+        ego_collision=ego_collision,
+        actionable_collision=actionable_collision,
+        background_collision=background_collision,
+        offroad=bool(introduced_offroad[injected_agent_mask].any()),
+        first_collision_timestep=first_collision_timestep,
+        first_collision_pair=first_collision_pair,
+        first_ego_collision_timestep=first_ego_collision_timestep,
+        baseline_ego_collision=baseline_ego_collision,
+        baseline_collision_pairs=frozenset(baseline_pairs),
     )
 
 
-def _validate_replay_inputs(drive, scenario, optimization, tolerance):
+def _validate_replay_inputs(drive, tolerance):
     """Check the Drive instance is configured for the replay; its flags come from config."""
     if drive.num_envs != 1 or drive.simulation_mode != binding.SIMULATION_MODE_REPLAY:
         raise ValueError("Stage 6 requires one Drive environment in replay mode")
@@ -324,7 +336,7 @@ def replay_optimized_scenario_in_c(
     capture_observations=False,
 ):
     """Replay optimized background controls in C and use C as the success oracle."""
-    _validate_replay_inputs(drive, scenario, optimization, tolerance)
+    _validate_replay_inputs(drive, tolerance)
     if not isinstance(capture_html_frames, bool):
         raise TypeError("capture_html_frames must be a boolean")
     transition_count = optimization.optimized_actions.shape[1]
@@ -403,37 +415,26 @@ def replay_optimized_scenario_in_c(
         optimization.selected_adversary_idx,
         injected_agent_mask.numpy(),
     )
-    (
-        ego_collision,
-        actionable_collision,
-        background_collision,
-        offroad,
-        first_collision_timestep,
-        first_collision_pair,
-        first_ego_collision_timestep,
-        baseline_ego_collision,
-        baseline_pairs,
-    ) = events
 
     failure_reason = None
     if maximum_error > tolerance:
         failure_reason = "c_torch_trajectory_mismatch"
     elif not optimization.success:
         failure_reason = optimization.failure_reason or "torch_optimization_failed"
-    elif not actionable_collision:
-        failure_reason = _unconfirmed_collision_reason(ego_collision, baseline_ego_collision)
+    elif not events.actionable_collision:
+        failure_reason = _unconfirmed_collision_reason(events.ego_collision, events.baseline_ego_collision)
     metrics = CReplayMetrics(
         maximum_trajectory_error=maximum_error,
         maximum_ego_reference_error=maximum_ego_reference_error,
-        first_collision_timestep=first_collision_timestep,
-        first_collision_pair=first_collision_pair,
-        first_ego_collision_timestep=first_ego_collision_timestep,
-        ego_collision=ego_collision,
-        actionable_collision=actionable_collision,
-        background_collision=background_collision,
-        offroad=offroad,
-        baseline_ego_collision=baseline_ego_collision,
-        baseline_collision_pair_count=len(baseline_pairs),
+        first_collision_timestep=events.first_collision_timestep,
+        first_collision_pair=events.first_collision_pair,
+        first_ego_collision_timestep=events.first_ego_collision_timestep,
+        ego_collision=events.ego_collision,
+        actionable_collision=events.actionable_collision,
+        background_collision=events.background_collision,
+        offroad=events.offroad,
+        baseline_ego_collision=events.baseline_ego_collision,
+        baseline_collision_pair_count=len(events.baseline_collision_pairs),
         compared_state_count=compared_state_count,
     )
     return CReplayResult(

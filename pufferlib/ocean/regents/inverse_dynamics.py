@@ -261,20 +261,17 @@ def estimate_expert_actions(
     transition_count = time_count - 1
     action_valid = scenario.transition_valid[:, :transition_count] & scenario.vehicle_mask[:, None]
 
-    # One scenario, so an agent row is already a track row: no flatten is needed.
-    flat_logged_state = logged_state
-    flat_feature_valid = scenario.state_feature_valid[:, :time_count]
-    flat_action_valid = action_valid
-    flat_wheelbase = injection_wheelbase_by_transition(
+    # One scenario, so an agent row is already a track row: nothing is flattened here.
+    feature_valid = scenario.state_feature_valid[:, :time_count]
+    wheelbase_by_transition = injection_wheelbase_by_transition(
         scenario.logged_length_meters[:, :transition_count],
         scenario.wheelbase_meters,
         action_valid,
     )
-    flat_maximum_speed = scenario.maximum_speed_mps
 
     actions = torch.zeros((track_count, transition_count, 2), dtype=torch.float32, device=logged_state.device)
-    estimated_state = flat_logged_state.clone()
-    estimated_feature_valid = flat_feature_valid.clone()
+    estimated_state = logged_state.clone()
+    estimated_feature_valid = feature_valid.clone()
     predicted_next_state = torch.zeros(
         (track_count, transition_count, STATE_FEATURE_COUNT), dtype=torch.float32, device=logged_state.device
     )
@@ -282,23 +279,23 @@ def estimate_expert_actions(
     heading_error = torch.zeros_like(position_error)
     speed_error = torch.zeros_like(position_error)
     residual = torch.zeros_like(position_error)
-    low_speed_mask = torch.zeros_like(flat_action_valid)
-    heading_residual_valid = torch.zeros_like(flat_action_valid)
-    model_consistent = torch.zeros_like(flat_action_valid)
+    low_speed_mask = torch.zeros_like(action_valid)
+    heading_residual_valid = torch.zeros_like(action_valid)
+    model_consistent = torch.zeros_like(action_valid)
     reconstructed_state = torch.zeros(
         (track_count, STATE_FEATURE_COUNT), dtype=torch.float32, device=logged_state.device
     )
 
     for timestep in range(transition_count):
-        active_track_idx = torch.where(flat_action_valid[:, timestep])[0]
+        active_track_idx = torch.where(action_valid[:, timestep])[0]
         if active_track_idx.numel() == 0:
             continue
         if timestep == 0:
             run_start = torch.ones_like(active_track_idx, dtype=torch.bool)
         else:
-            run_start = ~flat_action_valid[active_track_idx, timestep - 1]
-        logged_current_state = flat_logged_state[active_track_idx, timestep].clone()
-        current_steering_observed = flat_feature_valid[active_track_idx, timestep, STATE_STEERING]
+            run_start = ~action_valid[active_track_idx, timestep - 1]
+        logged_current_state = logged_state[active_track_idx, timestep].clone()
+        current_steering_observed = feature_valid[active_track_idx, timestep, STATE_STEERING]
         logged_current_state[:, STATE_STEERING] = torch.where(
             current_steering_observed,
             logged_current_state[:, STATE_STEERING],
@@ -309,9 +306,9 @@ def estimate_expert_actions(
             logged_current_state,
             reconstructed_state[active_track_idx],
         )
-        target_state = flat_logged_state[active_track_idx, timestep + 1]
-        wheelbase = flat_wheelbase[active_track_idx, timestep]
-        maximum_speed = flat_maximum_speed[active_track_idx]
+        target_state = logged_state[active_track_idx, timestep + 1]
+        wheelbase = wheelbase_by_transition[active_track_idx, timestep]
+        maximum_speed = scenario.maximum_speed_mps[active_track_idx]
         acceleration_action = _closest_reachable_acceleration_action(
             current_state[:, STATE_SPEED],
             target_state[:, STATE_SPEED],
@@ -328,8 +325,8 @@ def estimate_expert_actions(
             wheelbase,
             maximum_speed,
             transition_heading_valid,
-            flat_logged_state[active_track_idx, timestep + 1, STATE_STEERING],
-            flat_feature_valid[active_track_idx, timestep + 1, STATE_STEERING],
+            logged_state[active_track_idx, timestep + 1, STATE_STEERING],
+            feature_valid[active_track_idx, timestep + 1, STATE_STEERING],
             scenario.dt_seconds,
         )
         selected_action = torch.stack(

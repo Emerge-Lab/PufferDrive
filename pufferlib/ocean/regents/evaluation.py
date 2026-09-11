@@ -113,17 +113,7 @@ def _evaluate_one_artifact(artifact_path, scenario_idx, ego_controller, ego_poli
 
     selected_adversary_idx = metadata["optimization"]["selected_adversary_idx"]
     injected_agent_mask = action_mask.any(axis=1)
-    (
-        ego_collision,
-        actionable_collision,
-        background_collision,
-        offroad,
-        first_collision_timestep,
-        _,
-        first_ego_collision_timestep,
-        baseline_ego_collision,
-        _,
-    ) = baseline_relative_events(baseline, adversarial, selected_adversary_idx, injected_agent_mask)
+    events = baseline_relative_events(baseline, adversarial, selected_adversary_idx, injected_agent_mask)
 
     recorded_collision_timestep = metadata["c_replay"]["first_collision_timestep"]
     return {
@@ -134,15 +124,15 @@ def _evaluate_one_artifact(artifact_path, scenario_idx, ego_controller, ego_poli
         "seed": seed,
         "candidate_count": int(arrays["candidate_mask"][0].sum()),
         "selected_adversary_idx": selected_adversary_idx,
-        "ego_collision": int(ego_collision),
-        "actionable_collision": int(actionable_collision),
-        "background_collision": int(background_collision),
-        "baseline_ego_collision": int(baseline_ego_collision),
-        "offroad": int(offroad),
-        "collision_timestep": first_collision_timestep,
-        "ego_collision_timestep": first_ego_collision_timestep,
+        "ego_collision": int(events.ego_collision),
+        "actionable_collision": int(events.actionable_collision),
+        "background_collision": int(events.background_collision),
+        "baseline_ego_collision": int(events.baseline_ego_collision),
+        "offroad": int(events.offroad),
+        "collision_timestep": events.first_collision_timestep,
+        "ego_collision_timestep": events.first_ego_collision_timestep,
         "recorded_collision_timestep": recorded_collision_timestep,
-        "reproduces_recorded_collision": int(first_collision_timestep == recorded_collision_timestep),
+        "reproduces_recorded_collision": int(events.first_collision_timestep == recorded_collision_timestep),
     }
 
 

@@ -13,7 +13,7 @@ from pufferlib.ocean.regents.dynamics import (
     ACTION_ACCELERATION,
     ACTION_TARGET_STEERING,
     TARGET_STEERING_SCALE_RADIANS,
-    _classic_step,
+    classic_step,
     injection_wheelbase_by_transition,
 )
 from pufferlib.ocean.regents.filters import (
@@ -36,6 +36,7 @@ from pufferlib.ocean.regents.losses import (
     ReGentSCostConfig,
     _masked_boxes,
     combined_regents_cost,
+    mean_candidate_ego_distances,
     prepare_out_of_bounds_raster,
 )
 from pufferlib.ocean.regents.state import (
@@ -460,7 +461,7 @@ def _compose_rollout(
         # They take a finite reference state, because a non-finite input would send NaN
         # back through their masked-out gradient and into the active rows' actions.
         step_state = torch.where(active, current_state, candidate_reference[:, timestep])
-        proposed_state = _classic_step(
+        proposed_state = classic_step(
             step_state,
             candidate_actions[:, timestep],
             candidate_wheelbase[:, timestep],
@@ -529,16 +530,14 @@ def _first_ego_collision(boxes, state_valid, ego_idx, candidate_mask, tolerance_
         jointly_valid,
         tolerance_meters,
     )
-    # Timestep-major keys rank the earliest overlap first, ties going to the lowest
-    # agent index because candidate_indices is ascending.
-    candidate_count, timestep_count = overlapping.shape
-    timestep_keys = torch.arange(timestep_count, device=overlapping.device) * candidate_count
-    ranking_keys = timestep_keys[None] + torch.arange(candidate_count, device=overlapping.device)[:, None]
-    no_overlap_key = candidate_count * timestep_count
-    best_key = int(torch.where(overlapping, ranking_keys, no_overlap_key).min().item())
-    if best_key == no_overlap_key:
+    # The earliest overlapping timestep, then its lowest candidate row: argmax on a bool
+    # returns the first True, and candidate_indices is ascending.
+    overlapping_timestep = overlapping.any(dim=0)
+    if not bool(overlapping_timestep.any()):
         return None, -1
-    return best_key // candidate_count, int(candidate_indices[best_key % candidate_count].item())
+    timestep = int(torch.argmax(overlapping_timestep.to(torch.uint8)).item())
+    candidate_row = int(torch.argmax(overlapping[:, timestep].to(torch.uint8)).item())
+    return timestep, int(candidate_indices[candidate_row].item())
 
 
 def _candidate_background_pair_indices(scenario, state_valid, candidate_mask):
@@ -618,15 +617,11 @@ def _finite_cost(costs):
 
 
 def _selected_adversary(boxes, state_valid, ego_idx, candidate_mask):
+    """The candidate the ego-collision cost is shaped against: nearest on time average."""
     candidate_indices = torch.where(candidate_mask)[0]
     if candidate_indices.numel() == 0:
         return -1
-    distances = signed_box_distance(boxes[candidate_indices], boxes[ego_idx, None])
-    jointly_valid = state_valid[candidate_indices] & state_valid[ego_idx, None]
-    jointly_valid_counts = jointly_valid.sum(dim=-1)
-    summed_distances = torch.where(jointly_valid, distances, torch.zeros_like(distances)).sum(dim=-1)
-    mean_distances = (summed_distances / jointly_valid_counts.clamp_min(1)).detach()
-    mean_distances = mean_distances.masked_fill(jointly_valid_counts == 0, math.inf)
+    mean_distances = mean_candidate_ego_distances(boxes, state_valid, ego_idx, candidate_indices).detach()
     if not torch.isfinite(mean_distances).any():
         return -1
     return int(candidate_indices[int(torch.argmin(mean_distances).item())].item())

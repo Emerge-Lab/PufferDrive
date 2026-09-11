@@ -119,6 +119,20 @@ def _masked_boxes(states, state_valid, length_meters, width_meters):
     return torch.where(state_valid[..., None], boxes, safe_box)
 
 
+def mean_candidate_ego_distances(boxes, state_valid, ego_idx, candidate_indices):
+    """Each candidate's signed box distance to the ego, averaged over jointly valid time.
+
+    A candidate sharing no valid timestep with the ego averages to infinity, so it loses
+    both the minimum this cost takes and the argmin adversary selection takes.
+    """
+    joint_valid = state_valid[candidate_indices] & state_valid[ego_idx, None]
+    valid_counts = joint_valid.sum(dim=-1)
+    distances = signed_box_distance(boxes[candidate_indices], boxes[ego_idx, None])
+    summed_distances = torch.where(joint_valid, distances, torch.zeros_like(distances)).sum(dim=-1)
+    averaged_distances = summed_distances / valid_counts.clamp_min(1)
+    return averaged_distances.masked_fill(valid_counts == 0, torch.inf)
+
+
 def ego_background_collision_cost(
     states,
     state_valid,
@@ -139,13 +153,7 @@ def ego_background_collision_cost(
     candidate_indices = torch.where(candidate_adversary_mask)[0]
     if candidate_indices.numel() == 0:
         raise ValueError("The scenario needs a candidate with at least one jointly valid ego timestep")
-    joint_valid = state_valid[candidate_indices] & state_valid[ego_idx, None]
-    valid_counts = joint_valid.sum(dim=-1)
-    distances = signed_box_distance(boxes[candidate_indices], boxes[ego_idx, None])
-    summed_distances = torch.where(joint_valid, distances, torch.zeros_like(distances)).sum(dim=-1)
-    averaged_distances = summed_distances / valid_counts.clamp_min(1)
-    averaged_distances = averaged_distances.masked_fill(valid_counts == 0, torch.inf)
-    minimum = averaged_distances.min()
+    minimum = mean_candidate_ego_distances(boxes, state_valid, ego_idx, candidate_indices).min()
     if not bool(torch.isfinite(minimum)):
         raise ValueError("The scenario needs a candidate with at least one jointly valid ego timestep")
     return minimum
@@ -241,19 +249,15 @@ def _background_collision_avoidance_cost_and_diagnostics(
         chunk_second_agent_indices.append(second_indices[pair_winner_idx])
         chunk_timestep_indices.append(timestep_idx)
     winning_chunk_idx = int(torch.argmin(torch.stack(chunk_raw_minima)).item())
+    # The chunk already evaluated the exact clearance at its winning entry, and the
+    # winner indexes the same two boxes, so that value is the reported distance.
     winning_distance = chunk_raw_minima[winning_chunk_idx]
-    first_agent_idx = chunk_first_agent_indices[winning_chunk_idx]
-    second_agent_idx = chunk_second_agent_indices[winning_chunk_idx]
-    timestep_idx = chunk_timestep_indices[winning_chunk_idx]
     return (
         -torch.stack(chunk_minima).min(),
-        first_agent_idx,
-        second_agent_idx,
-        timestep_idx,
-        signed_box_distance(
-            boxes[first_agent_idx, timestep_idx],
-            boxes[second_agent_idx, timestep_idx],
-        ).detach(),
+        chunk_first_agent_indices[winning_chunk_idx],
+        chunk_second_agent_indices[winning_chunk_idx],
+        chunk_timestep_indices[winning_chunk_idx],
+        winning_distance,
         winning_distance >= float(truncation_meters),
     )
 
