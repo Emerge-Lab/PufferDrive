@@ -1695,21 +1695,28 @@ self.onmessage = async event => {
         function sampleAgentRail(points, distanceMeters) {
             if (!points.length) return null;
             let traveledMeters = 0;
+            let segmentStartHeading = points[0].h;
             for (let pointIdx=0; pointIdx<points.length-1; pointIdx++) {
                 const deltaX = points[pointIdx+1].x - points[pointIdx].x;
                 const deltaY = points[pointIdx+1].y - points[pointIdx].y;
                 const segmentMeters = Math.hypot(deltaX, deltaY);
-                if (traveledMeters + segmentMeters < distanceMeters) { traveledMeters += segmentMeters; continue; }
+                if (traveledMeters + segmentMeters < distanceMeters) {
+                    traveledMeters += segmentMeters;
+                    if (segmentMeters > 1e-6) segmentStartHeading = points[pointIdx+1].h;
+                    continue;
+                }
                 const fraction = segmentMeters > 1e-6 ? Math.max(0, Math.min(1, (distanceMeters-traveledMeters)/segmentMeters)) : 0;
-                return {x:points[pointIdx].x+fraction*deltaX, y:points[pointIdx].y+fraction*deltaY, h:segmentMeters>1e-6 ? Math.atan2(deltaY,deltaX) : points[pointIdx].h};
+                const segmentEndHeading = segmentMeters > 1e-6 ? points[pointIdx+1].h : segmentStartHeading;
+                const headingDelta = Math.atan2(Math.sin(segmentEndHeading-segmentStartHeading),Math.cos(segmentEndHeading-segmentStartHeading));
+                return {x:points[pointIdx].x+fraction*deltaX, y:points[pointIdx].y+fraction*deltaY, h:segmentStartHeading+fraction*headingDelta};
             }
             if (points.length === 1) return {x:points[0].x+distanceMeters*Math.cos(points[0].h), y:points[0].y+distanceMeters*Math.sin(points[0].h), h:points[0].h};
             const lastIdx = points.length-1;
             const deltaX = points[lastIdx].x-points[lastIdx-1].x;
             const deltaY = points[lastIdx].y-points[lastIdx-1].y;
-            const heading = Math.hypot(deltaX,deltaY)>1e-6 ? Math.atan2(deltaY,deltaX) : points[lastIdx].h;
+            const pathHeading = Math.hypot(deltaX,deltaY)>1e-6 ? Math.atan2(deltaY,deltaX) : points[lastIdx].h;
             const overshootMeters = Math.max(0, distanceMeters-traveledMeters);
-            return {x:points[lastIdx].x+overshootMeters*Math.cos(heading), y:points[lastIdx].y+overshootMeters*Math.sin(heading), h:heading};
+            return {x:points[lastIdx].x+overshootMeters*Math.cos(pathHeading), y:points[lastIdx].y+overshootMeters*Math.sin(pathHeading), h:segmentStartHeading};
         }
         function counterfactualAgent(base, point, speedMps, color, braking) {
             return {...base, x:point.x, y:point.y, h:point.h, s:Math.abs(speedMps), vx:speedMps*Math.cos(point.h), vy:speedMps*Math.sin(point.h), stopped:Math.abs(speedMps)<=1e-6, al:braking ? -Number(avoidability.constants.braking_deceleration) : 0, c:color, diagnostic:true, braking};
@@ -1734,9 +1741,7 @@ self.onmessage = async event => {
             const targetStopStep = Math.ceil(targetStopTime/dt-1e-6);
             const adversaryBase = agentFromAvoidabilitySnapshot(collision.adversary, '#22d3ee');
             const signedAdversarySpeed = adversaryBase.vx*Math.cos(adversaryBase.h)+adversaryBase.vy*Math.sin(adversaryBase.h);
-            const adversaryStopTime = Math.abs(signedAdversarySpeed)/deceleration;
-            const adversaryStopStep = Math.min(Number(constants.max_extension_steps || 81)-1, Math.ceil(adversaryStopTime/dt-1e-6));
-            const fullEndStep = Math.min(Number(constants.max_rollout_steps || 171)-1, Math.max(targetStopStep, stepsBack+adversaryStopStep));
+            const fullEndStep = Math.min(Number(constants.max_rollout_steps || 171)-1, Math.max(targetStopStep, stepsBack));
             const blockingStep = Number(candidate.blocking_rollout_step);
             const endStep = blockingStep >= 0 ? Math.min(blockingStep, fullEndStep) : fullEndStep;
             const targetSamples = [], adversarySamples = [];
@@ -1752,14 +1757,11 @@ self.onmessage = async event => {
                     adversarySamples.push(recorded ? {...recorded,c:'#22d3ee',diagnostic:true} : adversaryBase);
                     continue;
                 }
-                const extensionSeconds = Math.min((rolloutIdx-stepsBack)*dt,adversaryStopTime);
-                const direction = signedAdversarySpeed < 0 ? -1 : 1;
-                const extensionDistance = signedAdversarySpeed*extensionSeconds-direction*.5*deceleration*extensionSeconds*extensionSeconds;
-                const extensionSpeed = direction*Math.max(0,Math.abs(signedAdversarySpeed)-deceleration*extensionSeconds);
-                const point = {x:adversaryBase.x+extensionDistance*Math.cos(adversaryBase.h),y:adversaryBase.y+extensionDistance*Math.sin(adversaryBase.h),h:adversaryBase.h};
-                adversarySamples.push(counterfactualAgent(adversaryBase,point,extensionSpeed,'#22d3ee',Math.abs(extensionSpeed)>1e-6));
+                const extensionSeconds = (rolloutIdx-stepsBack)*dt;
+                const point = {x:adversaryBase.x+adversaryBase.vx*extensionSeconds,y:adversaryBase.y+adversaryBase.vy*extensionSeconds,h:adversaryBase.h};
+                adversarySamples.push({...counterfactualAgent(adversaryBase,point,signedAdversarySpeed,'#22d3ee',false),vx:adversaryBase.vx,vy:adversaryBase.vy});
             }
-            return {candidate,dt,stepsBack,startTimestep,targetSamples,adversarySamples,targetStopStep,adversaryStopStep:stepsBack+adversaryStopStep,fullEndStep,endStep};
+            return {candidate,dt,stepsBack,startTimestep,targetSamples,adversarySamples,targetStopStep,fullEndStep,endStep};
         }
         function brakingDiagnosticView() {
             const rollout = selectedBrakingRollout();
@@ -1806,13 +1808,20 @@ self.onmessage = async event => {
         function updateBrakingReadout() {
             const candidateResult = document.getElementById('avoid-candidate-result');
             const rolloutResult = document.getElementById('avoid-rollout-result');
+            const classification = avoidability.classification || {};
+            const cutoffSeconds = Number(classification.envelope_cutoff_seconds_before_collision);
+            const cutoffSpeed = Number(classification.envelope_cutoff_target_speed_mps);
+            const cutoffDuration = Number(classification.envelope_cutoff_duration_seconds);
+            const envelopeText = cutoffSeconds >= 0
+                ? 'Search cutoff at '+cutoffSeconds.toFixed(2)+'s · envelope '+cutoffDuration.toFixed(2)+'s at '+cutoffSpeed.toFixed(2)+'m/s'
+                : classification.envelope_history_limited ? 'History ended before envelope boundary' : '';
             const rollout = selectedBrakingRollout();
             if (!rollout) {
                 candidateSlider.disabled = true;
                 rolloutSlider.disabled = true;
                 document.getElementById('avoid-rollout-play').disabled = true;
                 document.getElementById('avoid-candidate-label').textContent = 'n/a';
-                candidateResult.innerHTML = '<strong>No braking candidate</strong>';
+                candidateResult.innerHTML = '<strong>No braking candidate</strong>'+envelopeText;
                 rolloutResult.textContent = '';
                 return;
             }
@@ -1828,10 +1837,12 @@ self.onmessage = async event => {
             let outcome = candidate.avoided ? 'AVOIDED' : 'REJECTED';
             if (candidate.collision_with_original_adversary) outcome += ' · original hitter';
             if (candidate.at_fault_collision_with_other_adversary) outcome += ' · secondary blocker';
+            const futureCollisionSeconds = Number(candidate.future_straight_collision_seconds);
+            const futureCollisionText = futureCollisionSeconds >= 0 ? ' · straight collision after '+futureCollisionSeconds.toFixed(2)+'s' : '';
             candidateResult.className = 'avoid-readout'+(candidate.avoided?'':' danger');
-            candidateResult.innerHTML = '<strong>'+outcome+' · candidate '+(candidateSelection+1)+'/'+avoidanceCandidates.length+'</strong>Brake '+leadSeconds.toFixed(2)+'s before collision · C horizon '+rollout.fullEndStep+' steps'+(Number(candidate.blocking_rollout_step)>=0?' · blocked at step '+candidate.blocking_rollout_step:' · joint stop reached');
+            candidateResult.innerHTML = '<strong>'+outcome+' · candidate '+(candidateSelection+1)+'/'+avoidanceCandidates.length+'</strong>Brake '+leadSeconds.toFixed(2)+'s before collision · C horizon '+rollout.fullEndStep+' steps'+(Number(candidate.blocking_rollout_step)>=0?' · blocked at step '+candidate.blocking_rollout_step:' · target stopped and straight path clear')+futureCollisionText+(envelopeText?' · '+envelopeText:'');
             document.getElementById('avoid-rollout-label').textContent = 't='+(rolloutStep*rollout.dt).toFixed(1)+'s';
-            rolloutResult.innerHTML = '<strong>Counterfactual step '+rolloutStep+' / '+rollout.endStep+'</strong>Target stop step '+rollout.targetStopStep+' · hitter stop step '+rollout.adversaryStopStep+(candidate.ignored_overlap_agent_index>=0?' · ignored non-fault overlap with agent '+candidate.ignored_overlap_agent_index+' at step '+candidate.ignored_overlap_rollout_step:'');
+            rolloutResult.innerHTML = '<strong>Counterfactual step '+rolloutStep+' / '+rollout.endStep+'</strong>Target stop step '+rollout.targetStopStep+' · hitter continues straight at constant velocity'+(candidate.ignored_overlap_agent_index>=0?' · ignored non-fault overlap with agent '+candidate.ignored_overlap_agent_index+' at step '+candidate.ignored_overlap_rollout_step:'');
         }
         function updateAvoidabilityReadout() {
             if (avoidabilityPhase === 'detection') updateDetectionReadout();

@@ -2631,15 +2631,13 @@ static PyObject *avoidability_debug_to_dict(AvoidabilityDebug *debug) {
     Py_XDECREF(target_snapshot);
     Py_XDECREF(adversary_snapshot);
     PyObject *constants = Py_BuildValue(
-        "{s:f,s:f,s:f,s:i,s:i,s:f,s:i,s:f,s:f,s:f,s:f}",
+        "{s:f,s:f,s:f,s:i,s:f,s:i,s:f,s:f,s:f,s:f}",
         "dt",
         debug->dt,
         "braking_deceleration",
         debug->braking_deceleration,
         "reaction_time_seconds",
         debug->reaction_time_seconds,
-        "max_extension_steps",
-        debug->max_extension_steps,
         "max_rollout_steps",
         debug->max_rollout_steps,
         "ttc_margin_seconds",
@@ -2660,9 +2658,17 @@ static PyObject *avoidability_debug_to_dict(AvoidabilityDebug *debug) {
         Py_CLEAR(constants);
     }
     PyObject *classification = Py_BuildValue(
-        "{s:f,s:i,s:i,s:i}",
+        "{s:f,s:f,s:f,s:f,s:i,s:i,s:i,s:i}",
         "t_brake",
         debug->last_avoidable_braking_seconds_before_collision,
+        "envelope_cutoff_seconds_before_collision",
+        debug->envelope_cutoff_seconds_before_collision,
+        "envelope_cutoff_target_speed_mps",
+        debug->envelope_cutoff_target_speed_mps,
+        "envelope_cutoff_duration_seconds",
+        debug->envelope_cutoff_duration_seconds,
+        "envelope_history_limited",
+        debug->envelope_history_limited,
         "genuine_target_failure",
         debug->genuine_target_failure,
         "adversary_forced",
@@ -2685,7 +2691,7 @@ static PyObject *avoidability_debug_to_dict(AvoidabilityDebug *debug) {
         PyObject *blocking_agent = avoidability_snapshot_to_dict(&candidate->blocking_agent);
         PyObject *ignored_agent = avoidability_snapshot_to_dict(&candidate->ignored_overlap_agent);
         PyObject *candidate_dict = Py_BuildValue(
-            "{s:i,s:i,s:i,s:i,s:i,s:i,s:O,s:i,s:i,s:O}",
+            "{s:i,s:i,s:i,s:i,s:f,s:i,s:i,s:O,s:i,s:i,s:O}",
             "steps_back",
             candidate->steps_back,
             "avoided",
@@ -2694,6 +2700,8 @@ static PyObject *avoidability_debug_to_dict(AvoidabilityDebug *debug) {
             candidate->collision_with_original_adversary,
             "at_fault_collision_with_other_adversary",
             candidate->at_fault_collision_with_other_adversary,
+            "future_straight_collision_seconds",
+            candidate->future_straight_collision_seconds,
             "blocking_agent_index",
             candidate->blocking_agent_index,
             "blocking_rollout_step",

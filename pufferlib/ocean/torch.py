@@ -519,9 +519,32 @@ class TargetDrive(Drive):
         target_env.partner_features -= 1
         super().__init__(target_env, **kwargs)
 
+        self.ego_features = env.ego_features
+        self.goal_dim = env.goal_dim
+        self.live_num_reward_coefs = env.live_num_reward_coefs
+        self.target_num_reward_coefs = env.num_reward_coefs
         self.partner_start = env.ego_features + env.num_reward_coefs + env.goal_dim
         self.obs_slots_partners_n = env.obs_slots_partners_n
         self.partner_features = env.partner_features
+        self.register_buffer(
+            "fixed_reward_conditioning",
+            torch.tensor(env.fixed_reward_conditioning, dtype=torch.float32),
+            persistent=False,
+        )
+
+    def _insert_target_conditioning(self, observations):
+        if self.live_num_reward_coefs == self.target_num_reward_coefs:
+            return observations
+
+        live_context_end = self.ego_features + self.live_num_reward_coefs
+        return torch.cat(
+            (
+                observations[:, : self.ego_features],
+                self.fixed_reward_conditioning.to(observations.dtype).expand(observations.shape[0], -1),
+                observations[:, live_context_end:],
+            ),
+            dim=1,
+        )
 
     def _strip_target_marker(self, observations):
         partner_end = self.partner_start + self.obs_slots_partners_n * self.partner_features
@@ -540,11 +563,15 @@ class TargetDrive(Drive):
             dim=1,
         )
 
+    def _prepare_target_observation(self, observations):
+        observations = self._insert_target_conditioning(observations)
+        return self._strip_target_marker(observations)
+
     def forward(self, observations, state=None):
-        return super().forward(self._strip_target_marker(observations), state)
+        return super().forward(self._prepare_target_observation(observations), state)
 
     def encode_observations(self, observations, state=None):
-        return super().encode_observations(self._strip_target_marker(observations), state)
+        return super().encode_observations(self._prepare_target_observation(observations), state)
 
     def pool_slot_counts(self, observations, state=None):
-        return super().pool_slot_counts(self._strip_target_marker(observations), state)
+        return super().pool_slot_counts(self._prepare_target_observation(observations), state)
