@@ -6,10 +6,13 @@ The feature order is x, y, wrapped heading, signed longitudinal speed, and
 actual steering angle.
 """
 
+import math
 from dataclasses import dataclass, fields, replace
 
 import numpy as np
 import torch
+
+from pufferlib.ocean.drive import binding
 
 
 STATE_X = 0
@@ -50,6 +53,60 @@ def signed_speed_from_c_velocity(velocity_x, velocity_y, wrapped_heading):
     magnitude = np.hypot(velocity_x, velocity_y)
     heading_projection = velocity_x * np.cos(wrapped_heading) + velocity_y * np.sin(wrapped_heading)
     return np.copysign(magnitude, heading_projection)
+
+
+REGENTS_EGO_ACTION_FEATURE_COUNT = 2
+
+
+def agent_state_rows(payload, expected_agent_count):
+    """Parse one ``Drive.get_state()`` payload into stable-indexed state rows.
+
+    Agents are serialized in the simulator's own array order, so a row index is a
+    stable agent index. Returns the scenario dict, the state rows, per-agent validity,
+    and the ego's last normalized action.
+    """
+    scenario = single_scenario_payload(payload)
+    agents = scenario.get("agents")
+    if not isinstance(agents, list) or len(agents) != expected_agent_count:
+        raise ValueError("Drive state does not carry the expected agent count")
+    states = np.zeros((expected_agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
+    valid = np.zeros(expected_agent_count, dtype=np.bool_)
+    for stable_agent_idx, agent in enumerate(agents):
+        if int(agent.get("id", -1)) != stable_agent_idx:
+            raise ValueError("Drive state changed stable agent identity")
+        values = np.asarray(
+            (
+                agent["sim_x"],
+                agent["sim_y"],
+                agent["sim_heading"],
+                agent["sim_vx"],
+                agent["sim_vy"],
+                agent["sim_steering"],
+            ),
+            dtype=np.float32,
+        )
+        serialized_valid = int(agent["sim_valid"])
+        if serialized_valid not in (0, 1):
+            raise ValueError("Drive state emitted invalid sim_valid")
+        if serialized_valid and not np.isfinite(values).all():
+            raise ValueError("Drive state emitted NaN or Inf")
+        heading = np.float32(math.atan2(math.sin(float(values[2])), math.cos(float(values[2]))))
+        states[stable_agent_idx] = (
+            values[0],
+            values[1],
+            heading,
+            signed_speed_from_c_velocity(values[3], values[4], heading),
+            values[5],
+        )
+        valid[stable_agent_idx] = bool(serialized_valid)
+    ego_action = np.asarray(
+        (
+            agents[0]["accel_long"] / float(binding.ACCELERATION_VALUES[6]),
+            agents[0]["sim_steering"] / float(binding.STEERING_VALUES[8]),
+        ),
+        dtype=np.float32,
+    )
+    return scenario, states, valid, ego_action
 
 
 @dataclass(frozen=True)
@@ -101,6 +158,22 @@ class DrivableAreaRaster:
 
     def to(self, device):
         return moved_to_device(self, device)
+
+    def points_off_road(self, xy_meters):
+        """Flag world points lying outside the drivable surface, sampled at the nearest pixel.
+
+        A point beyond the raster is off road: the raster covers the scenario's own map
+        extent, so there is no drivable surface to fall back on outside it.
+        """
+        grid = self.transform.world_to_grid(xy_meters)
+        column = torch.round(grid[..., 0]).to(torch.int64)
+        row = torch.round(grid[..., 1]).to(torch.int64)
+        outside = (column < 0) | (column >= self.transform.width)
+        outside |= (row < 0) | (row >= self.transform.height)
+        nearest_drivable = self.mask.to(xy_meters.device)[
+            row.clamp(0, self.transform.height - 1), column.clamp(0, self.transform.width - 1)
+        ]
+        return outside | ~nearest_drivable
 
 
 @dataclass(frozen=True)

@@ -202,18 +202,9 @@ def _start_off_road_flags(scenario):
         start_state, has_valid_state[..., None], scenario.length_meters, scenario.width_meters
     ).squeeze(1)
     sample_points = torch.cat((oriented_box_corners(start_boxes), start_boxes[..., None, :2]), dim=-2)
-    raster = scenario.drivable_area_raster
-    raster_mask = raster.mask.to(state.device)
-    grid = raster.transform.world_to_grid(sample_points)
-    column = torch.round(grid[..., 0]).to(torch.int64)
-    row = torch.round(grid[..., 1]).to(torch.int64)
-    inside_raster = (column >= 0) & (column < raster.transform.width)
-    inside_raster &= (row >= 0) & (row < raster.transform.height)
-    safe_column = column.clamp(0, raster.transform.width - 1)
-    safe_row = row.clamp(0, raster.transform.height - 1)
-    on_road = inside_raster & raster_mask[safe_row, safe_column]
+    off_road = scenario.drivable_area_raster.points_off_road(sample_points)
     # An agent with no valid state has no logged start to place on the map.
-    return ~on_road.any(dim=-1) & has_valid_state
+    return off_road.all(dim=-1) & has_valid_state
 
 
 def _rear_sector_statistics(scenario, logged_time_count, half_angle_radians):
@@ -228,37 +219,19 @@ def _rear_sector_statistics(scenario, logged_time_count, half_angle_radians):
 
 
 def _ego_overlap_timesteps(scenario, state, valid):
-    """Return the first ego-overlap timestep per agent, mirroring the paper's overlap_with_ego."""
-    agent_count = state.shape[0]
-    first_timestep = torch.full((agent_count,), -1, dtype=torch.int64, device=state.device)
+    """Return the first ego-overlap timestep per agent, mirroring the paper's overlap_with_ego.
+
+    The ego, absent agents, and timesteps either party does not occupy never overlap.
+    """
+    timestep_count = state.shape[1]
     ego_idx = int(torch.where(scenario.ego_mask)[0].item())
-    present = scenario.agent_present & scenario.agent_metadata_valid
-    for agent_idx in range(agent_count):
-        if agent_idx == ego_idx or not bool(present[agent_idx]):
-            continue
-        jointly_valid = valid[ego_idx] & valid[agent_idx]
-        if not jointly_valid.any():
-            continue
-        timestep_idx = torch.where(jointly_valid)[0]
-        boxes = []
-        for index in (ego_idx, agent_idx):
-            agent_state = state[index, timestep_idx]
-            boxes.append(
-                torch.stack(
-                    (
-                        agent_state[:, STATE_X],
-                        agent_state[:, STATE_Y],
-                        torch.full_like(agent_state[:, STATE_X], scenario.length_meters[index]),
-                        torch.full_like(agent_state[:, STATE_X], scenario.width_meters[index]),
-                        agent_state[:, STATE_HEADING],
-                    ),
-                    dim=-1,
-                )
-            )
-        overlap_idx = torch.where(signed_box_distance(boxes[0], boxes[1]) <= 0.0)[0]
-        if overlap_idx.numel():
-            first_timestep[agent_idx] = int(timestep_idx[overlap_idx[0]].item())
-    return first_timestep
+    comparable = valid & valid[ego_idx, None]
+    comparable &= (scenario.agent_present & scenario.agent_metadata_valid & ~scenario.ego_mask)[:, None]
+    boxes = _masked_boxes(state, valid, scenario.length_meters, scenario.width_meters)
+    overlapping = comparable & (signed_box_distance(boxes, boxes[ego_idx, None]) <= 0.0)
+    timestep_idx = torch.arange(timestep_count, device=state.device).expand_as(overlapping)
+    first_timestep = timestep_idx.masked_fill(~overlapping, timestep_count).min(dim=-1).values
+    return first_timestep.masked_fill(first_timestep == timestep_count, -1)
 
 
 def _original_collision_labels(scenario, horizon_transition_count):
