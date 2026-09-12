@@ -157,6 +157,10 @@ def load_checkpoint_architecture(args):
     checkpoint_env = _require_mapping(checkpoint_config.get("env"), "checkpoint config env")
     accepted_env_keys = puffer_drive_constructor_keys()
     merged["env"].update({key: value for key, value in checkpoint_env.items() if key in accepted_env_keys})
+    checkpoint_train = _require_mapping(checkpoint_config.get("train"), "checkpoint config train")
+    if "target_policy" not in checkpoint_train:
+        raise pufferlib.APIUsageError("Checkpoint config is missing train.target_policy")
+    merged["train"]["target_policy"] = checkpoint_train["target_policy"]
     for key in ("policy_name", "rnn_name"):
         if key not in checkpoint_config:
             raise pufferlib.APIUsageError(f"Checkpoint config is missing {key}")
