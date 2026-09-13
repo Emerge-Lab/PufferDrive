@@ -42,6 +42,7 @@ class Drive(pufferlib.PufferEnv):
         adversarial_target_genuine_failure_reward=10.0,
         adversarial_target_adversary_forced_reward=1.0,
         adversarial_target_unavoidable_reward=-0.1,
+        adversarial_target_at_fault_reward=0.0,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
         num_goals=3,
@@ -194,6 +195,7 @@ class Drive(pufferlib.PufferEnv):
         self.adversarial_target_genuine_failure_reward = adversarial_target_genuine_failure_reward
         self.adversarial_target_adversary_forced_reward = adversarial_target_adversary_forced_reward
         self.adversarial_target_unavoidable_reward = adversarial_target_unavoidable_reward
+        self.adversarial_target_at_fault_reward = adversarial_target_at_fault_reward
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
@@ -503,6 +505,7 @@ class Drive(pufferlib.PufferEnv):
             "adversarial_target_genuine_failure_reward": self.adversarial_target_genuine_failure_reward,
             "adversarial_target_adversary_forced_reward": self.adversarial_target_adversary_forced_reward,
             "adversarial_target_unavoidable_reward": self.adversarial_target_unavoidable_reward,
+            "adversarial_target_at_fault_reward": self.adversarial_target_at_fault_reward,
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,

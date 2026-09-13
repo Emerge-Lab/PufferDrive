@@ -350,6 +350,7 @@ class DriveEnvConfig:
     adversarial_target_genuine_failure_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     adversarial_target_adversary_forced_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     adversarial_target_unavoidable_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    adversarial_target_at_fault_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)

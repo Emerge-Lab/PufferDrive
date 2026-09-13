@@ -2044,6 +2044,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->adversarial_target_adversary_forced_reward
         = (float) unpack(kwargs, "adversarial_target_adversary_forced_reward");
     env->adversarial_target_unavoidable_reward = (float) unpack(kwargs, "adversarial_target_unavoidable_reward");
+    env->adversarial_target_at_fault_reward = (float) unpack(kwargs, "adversarial_target_at_fault_reward");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->capture_avoidability_debug = (bool) unpack(kwargs, "capture_avoidability_debug");
@@ -2419,6 +2420,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         dict,
         "traffic_reward_components/target_unavoidable",
         log->reward_target_unavoidable * traffic_scale);
+    assign_to_dict(dict, "traffic_reward_components/target_at_fault", log->reward_target_at_fault * traffic_scale);
     float target_collision_count = log->sdc_target_collision_count;
     float target_collision_scale = target_collision_count > 0.0f ? 1.0f / target_collision_count : 0.0f;
     float avoidable_collision_count = log->sdc_target_avoidable_collision_count;

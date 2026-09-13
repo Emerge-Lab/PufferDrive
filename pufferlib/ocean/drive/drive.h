@@ -125,6 +125,7 @@ struct Log {
     float reward_target_genuine_failure;
     float reward_target_adversary_forced;
     float reward_target_unavoidable;
+    float reward_target_at_fault;
     float traffic_collision_rate;
     float traffic_sdc_collision_rate;
     float traffic_traffic_collision_rate;
@@ -406,6 +407,7 @@ struct Drive {
     float adversarial_target_genuine_failure_reward;
     float adversarial_target_adversary_forced_reward;
     float adversarial_target_unavoidable_reward;
+    float adversarial_target_at_fault_reward;
     int target_hit_this_step;
     int target_hit_hitter_idx_this_step;
     float target_hit_responsibility_this_step;
@@ -3075,6 +3077,7 @@ static void add_log(Drive *env) {
         episode_log.reward_target_genuine_failure += env->logs[i].reward_target_genuine_failure;
         episode_log.reward_target_adversary_forced += env->logs[i].reward_target_adversary_forced;
         episode_log.reward_target_unavoidable += env->logs[i].reward_target_unavoidable;
+        episode_log.reward_target_at_fault += env->logs[i].reward_target_at_fault;
         // Comfort and velocity metrics (normalized per timestep)
         episode_log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         episode_log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -4864,7 +4867,9 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
             && env->target_infraction_behavior != TARGET_INFRACTION_BEHAVIOR_NORMAL;
         if (!ignore_target_collision_for_agent) {
             agent->metrics_array[COLLISION_IDX] = 1.0f;
-            if (env->compute_eval_metrics && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
+            if ((env->compute_eval_metrics
+                 || (agent_idx == target_agent_idx && env->adversarial_target_at_fault_reward != 0.0f))
+                && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
                 agent_log->at_fault_collision_rate = 1.0f;
                 agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;
             }
@@ -6057,6 +6062,7 @@ void c_step(Drive *env) {
 
     // -> 2. Compute metrics and rewards
     bool target_collided_this_step = false;
+    bool target_at_fault_collision_this_step = false;
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         if (env->agents[agent_idx].stopped || env->agents[agent_idx].removed) {
@@ -6065,6 +6071,7 @@ void c_step(Drive *env) {
         compute_metrics(env, agent_idx, i);
         if (i == EGO_IDX && env->agents[agent_idx].metrics_array[COLLISION_IDX] > 0.0f) {
             target_collided_this_step = true;
+            target_at_fault_collision_this_step = env->agents[agent_idx].metrics_array[AT_FAULT_COLLISION_IDX] > 0.0f;
         }
         compute_rewards(env, i);
     }
@@ -6074,12 +6081,14 @@ void c_step(Drive *env) {
             = (int) ceilf(env->target_collision_continuation_seconds / env->dt);
     }
 
+    bool target_collision_unavoidable_this_step = env->target_hit_this_step
+        && env->target_last_avoidable_braking_seconds_before_collision == NO_AVOIDABLE_BRAKING_TIME_SECONDS;
     if (env->target_hit_this_step) {
         float target_collision_reward;
         float genuine_failure_reward = 0.0f;
         float adversary_forced_reward = 0.0f;
         float unavoidable_reward = 0.0f;
-        if (env->target_last_avoidable_braking_seconds_before_collision == NO_AVOIDABLE_BRAKING_TIME_SECONDS) {
+        if (target_collision_unavoidable_this_step) {
             target_collision_reward = env->adversarial_target_unavoidable_reward;
             unavoidable_reward = target_collision_reward;
         } else if (env->target_reaction_window_danger_episode) {
@@ -6095,6 +6104,14 @@ void c_step(Drive *env) {
             env->logs[i].reward_target_genuine_failure += genuine_failure_reward;
             env->logs[i].reward_target_adversary_forced += adversary_forced_reward;
             env->logs[i].reward_target_unavoidable += unavoidable_reward;
+        }
+    }
+
+    if (target_at_fault_collision_this_step && !target_collision_unavoidable_this_step) {
+        for (int i = EGO_IDX + 1; i < env->active_agent_count; i++) {
+            env->rewards[i] += env->adversarial_target_at_fault_reward;
+            env->logs[i].episode_return += env->adversarial_target_at_fault_reward;
+            env->logs[i].reward_target_at_fault += env->adversarial_target_at_fault_reward;
         }
     }
 
