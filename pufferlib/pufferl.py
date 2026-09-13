@@ -217,12 +217,6 @@ class PuffeRL:
         self.ep_lengths = torch.zeros(total_agents, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, dtype=torch.int32)
         self.free_idx = total_agents
-        self.render = config["render"]
-        self.render_interval = config["render_interval"]
-
-        if self.render:
-            ensure_drive_binary()
-
         # LSTM
         if config["use_rnn"]:
             n = vecenv.agents_per_batch
@@ -523,34 +517,6 @@ class PuffeRL:
         if self.epoch % config["checkpoint_interval"] == 0 or done_training:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
-
-            if self.render and self.epoch % self.render_interval == 0:
-                model_dir = self.config["data_dir"]
-                model_files = glob.glob(os.path.join(model_dir, "models", "model_*.pt"))
-
-                if model_files:
-                    # Take the latest checkpoint
-                    latest_cpt = max(model_files, key=os.path.getctime)
-                    bin_path = f"{model_dir}.bin"
-
-                    # Export to .bin for rendering with raylib
-                    try:
-                        export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
-
-                        export(
-                            args=export_args,
-                            env_name=self.config["env"],
-                            vecenv=self.vecenv,
-                            policy=self.uncompiled_policy,
-                            path=bin_path,
-                            silent=True,
-                        )
-                        pufferlib.utils.render_videos(
-                            self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
-                        )
-
-                    except Exception as e:
-                        print(f"Failed to export model weights: {e}")
 
         return logs
 
@@ -2035,7 +2001,6 @@ def profile(env_name):
     args["neptune"] = False
     args["tb"] = False
     args["load_id"] = None
-    args["render"] = False
     args["env"]["compute_eval_metrics"] = False
     args["env"]["eval_training_render"] = False
     args["env"]["num_agents"] = 256
@@ -2043,7 +2008,6 @@ def profile(env_name):
     args["vec"]["num_envs"] = 1
     args["vec"]["num_workers"] = 1
     args["vec"]["batch_size"] = 1
-    args["train"]["render"] = False
     args["train"]["minibatch_size"] = args["env"]["num_agents"] * args["train"]["bptt_horizon"] // 16
     args["train"]["checkpoint_interval"] = profile_config["warmup_cycles"] + profile_config["trace_cycles"] + 1
     validation_context = "simulation profiling" if profile_mode == "sim" else "profiling"
@@ -2145,56 +2109,6 @@ def profile(env_name):
         torch_ops_file.write(prof.key_averages().table(sort_by=sort_by, row_limit=-1))
         torch_ops_file.write("\n")
     prof.export_chrome_trace(os.path.join(output_dir, "torch_trace.json"))
-
-
-def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent=False):
-    args = args or load_config(env_name)
-    args = normalize_puffer_drive_config(args, "export")
-    validate_puffer_drive_config(args, "export")
-    if vecenv is None:
-        validate_puffer_drive_resources(args, "export")
-    vecenv = vecenv or load_env(env_name, args)
-    policy = policy or load_policy(args, vecenv)
-
-    weights = []
-    for name, param in policy.named_parameters():
-        weights.append(param.data.cpu().numpy().flatten())
-        if not silent:
-            print(name, param.shape, param.data.cpu().numpy().ravel()[0])
-
-    weights = np.concatenate(weights)
-    if path is None:
-        path = f"pufferlib/resources/drive/{args['env_name']}_weights.bin"
-
-    weights.tofile(path)
-
-    if not silent:
-        print(f"Saved {len(weights)} weights to {path}")
-
-
-def ensure_drive_binary():
-    """Delete existing visualize binary and rebuild it. This ensures the
-    binary is always up-to-date with the latest code changes.
-    """
-    if os.path.exists("./visualize"):
-        print("Removing existing visualize binary...")
-        os.remove("./visualize")
-
-    print("Building visualize binary...")
-    try:
-        result = subprocess.run(
-            ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
-        )
-
-        if result.returncode == 0:
-            print("Successfully built visualize binary")
-        else:
-            print(f"Build failed: {result.stderr}")
-            raise RuntimeError("Failed to build visualize binary for rendering")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("Build timed out")
-    except Exception as e:
-        raise RuntimeError(f"Build error: {e}")
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):
@@ -2611,7 +2525,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -2632,8 +2546,6 @@ def main():
         autotune(env_name=env_name)
     elif mode == "profile":
         profile(env_name=env_name)
-    elif mode == "export":
-        export(env_name=env_name)
     else:
         raise pufferlib.APIUsageError(err)
 

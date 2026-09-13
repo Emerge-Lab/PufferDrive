@@ -117,10 +117,6 @@
 #define ACTION_TYPE_DISCRETE 0
 #define ACTION_TYPE_CONTINUOUS 1
 
-// Render target (selected by drive.py's render_mode kwarg, plumbed via binding.c)
-#define RENDER_WINDOW 0
-#define RENDER_HEADLESS 1
-
 // =====================================================================================
 // 3. DYNAMICS
 // =====================================================================================

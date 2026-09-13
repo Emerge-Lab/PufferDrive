@@ -575,7 +575,6 @@ def _training_args(tmp_path, benchmark_config_path, evaluation_enabled):
             "evaluation_interval_epochs": TRAIN_EVAL_INTERVAL if evaluation_enabled else None,
             "evaluation_benchmarks": "training_eval",
             "data_dir": str(tmp_path),
-            "render": False,
         }
     )
     args["eval"].update(

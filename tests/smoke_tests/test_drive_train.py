@@ -188,7 +188,6 @@ def _finalize_train_config(args, total_agents):
             "max_minibatch_size": minibatch_size,
             "total_timesteps": 10_000_000,  # large -> never "done" during 5 epochs
             "checkpoint_interval": 10_000_000,
-            "render": False,
         },
     )
     return dict(**args["train"], env="puffer_drive", eval=args.get("eval", {}))
