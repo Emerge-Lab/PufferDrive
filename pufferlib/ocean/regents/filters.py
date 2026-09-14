@@ -225,14 +225,6 @@ def _ego_overlap_timesteps(scenario, state, valid):
     return first_timestep.masked_fill(first_timestep == timestep_count, -1)
 
 
-def _original_collision_labels(scenario, horizon_transition_count):
-    """Label per agent whether its logged trajectory already overlaps the ego."""
-    state = scenario.logged_state[:, : horizon_transition_count + 1]
-    valid = scenario.state_valid[:, : horizon_transition_count + 1]
-    collision_timestep = _ego_overlap_timesteps(scenario, state, valid)
-    return collision_timestep >= 0, collision_timestep
-
-
 def select_adversary_candidates(
     scenario,
     config=None,
@@ -269,7 +261,12 @@ def select_adversary_candidates(
     )
     if reconstruction_drift_meters is None:
         reconstruction_drift_meters = torch.zeros_like(maximum_reconstruction_residual)
-    original_collision, original_collision_timestep = _original_collision_labels(scenario, horizon_transition_count)
+    original_collision_timestep = _ego_overlap_timesteps(
+        scenario,
+        scenario.logged_state[:, : horizon_transition_count + 1],
+        scenario.state_valid[:, : horizon_transition_count + 1],
+    )
+    original_collision = original_collision_timestep >= 0
 
     start_off_road = _start_off_road_flags(scenario)
     static = displacement < config.static_displacement_threshold_meters

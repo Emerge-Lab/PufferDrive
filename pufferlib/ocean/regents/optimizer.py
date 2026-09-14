@@ -256,17 +256,6 @@ def _resolve_optimization_horizon(scenario, frozen_ego, horizon_transition_count
     return horizon_transition_count
 
 
-def _frozen_ego_fixture(scenario, inverse, horizon_transition_count):
-    ego_idx = _ego_index(scenario.ego_mask)
-    horizon_slice = slice(None, horizon_transition_count + 1)
-    return FrozenEgoTrajectory(
-        state=inverse.state_with_estimated_steering[ego_idx, horizon_slice].detach().clone(),
-        valid=scenario.state_valid[ego_idx, horizon_slice].detach().clone(),
-        scenario_id=scenario.scenario_id,
-        source="logged_fixture",
-    )
-
-
 def _compose_rollout(
     scenario,
     inverse,
@@ -454,19 +443,6 @@ def _infraction_signatures(boxes, state_valid, scenario, config, candidate_mask,
     return background_pairs, offroad
 
 
-def _cost_snapshot(costs):
-    """Detach the loss terms; the tensor dtypes already carry the snapshot's field types."""
-    return CostSnapshot(**{field.name: getattr(costs, field.name).detach().item() for field in fields(CostSnapshot)})
-
-
-def _finite_cost(costs):
-    """Reject an iterate whose loss or any component has gone non-finite."""
-    return all(
-        bool(torch.isfinite(value).all())
-        for value in (costs.total, costs.ego_collision, costs.background_collision, costs.drivable_area)
-    )
-
-
 def _selected_adversary(boxes, state_valid, ego_idx, candidate_mask):
     """The candidate the ego-collision cost is shaped against: nearest on time average."""
     candidate_indices = torch.where(candidate_mask)[0]
@@ -512,7 +488,14 @@ def optimize_frozen_ego_scenario(
             raise ValueError("inverse_dynamics does not cover the optimization horizon")
         inverse = inverse_dynamics
     if frozen_ego is None:
-        frozen_ego = _frozen_ego_fixture(scenario, inverse, horizon_transition_count)
+        ego_idx = _ego_index(scenario.ego_mask)
+        horizon_slice = slice(None, horizon_transition_count + 1)
+        frozen_ego = FrozenEgoTrajectory(
+            state=inverse.state_with_estimated_steering[ego_idx, horizon_slice].detach().clone(),
+            valid=scenario.state_valid[ego_idx, horizon_slice].detach().clone(),
+            scenario_id=scenario.scenario_id,
+            source="logged_fixture",
+        )
 
     baseline_actions = inverse.actions[:, :, :horizon_transition_count].detach().clone()
     reconstruction_drift = _reconstruction_drift_meters(
@@ -636,7 +619,10 @@ def optimize_frozen_ego_scenario(
             out_of_bounds_raster,
             config.costs,
         )
-        if not _finite_cost(costs):
+        if not all(
+            bool(torch.isfinite(value).all())
+            for value in (costs.total, costs.ego_collision, costs.background_collision, costs.drivable_area)
+        ):
             failure_reason = "nonfinite_loss"
             break
 
@@ -647,7 +633,9 @@ def optimize_frozen_ego_scenario(
         background_collision_rejection_count += int(bool((background_pairs & ~baseline_background_pairs).any()))
         offroad_rejection_count += int(bool((offroad_signature & ~baseline_offroad_signature).any()))
 
-        snapshot = _cost_snapshot(costs)
+        snapshot = CostSnapshot(
+            **{field.name: getattr(costs, field.name).detach().item() for field in fields(CostSnapshot)}
+        )
         cost_history.append(snapshot)
         if initial_costs is None:
             initial_costs = snapshot
