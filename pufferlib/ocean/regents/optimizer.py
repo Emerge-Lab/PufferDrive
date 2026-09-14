@@ -1,14 +1,11 @@
 """Frozen-ego ReGentS optimization for one offline scenario."""
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
-import numpy as np
 import torch
 from tqdm import tqdm
 
-from pufferlib.ocean.drive import binding
-from pufferlib.ocean.regents.adapter import DEFAULT_RASTER_RESOLUTION_METERS, export_drive_scenarios
 from pufferlib.ocean.regents.dynamics import (
     ACTION_ACCELERATION,
     ACTION_TARGET_STEERING,
@@ -39,13 +36,7 @@ from pufferlib.ocean.regents.losses import (
     mean_candidate_ego_distances,
     prepare_out_of_bounds_raster,
 )
-from pufferlib.ocean.regents.state import (
-    STATE_FEATURE_COUNT,
-    STATE_X,
-    STATE_Y,
-    agent_state_rows,
-    single_scenario_payload,
-)
+from pufferlib.ocean.regents.state import STATE_FEATURE_COUNT, STATE_X, STATE_Y
 from pufferlib.ocean.regents.waymax_actions import (
     NORMALIZED_CURVATURE_LIMIT,
     WAYMAX_MAXIMUM_CURVATURE_PER_METER,
@@ -65,9 +56,6 @@ DEFAULT_COLLISION_DISTANCE_TOLERANCE_METERS = 0.0
 DEFAULT_EGO_REFRESH_INTERVAL = 0
 MAXIMUM_STEERING_UPDATE_SCALE = 10.0
 BACKGROUND_COLLISION_PAIR_CHUNK_SIZE = 4096
-# Drive pins the ego to stable agent row zero, and `regents_get_states` preserves that order.
-STABLE_EGO_AGENT_IDX = 0
-REGENTS_EGO_ACTION_FEATURE_COUNT = 2
 
 # Steering is optimized in the reference's path-curvature space, converted to the
 # simulator's normalized target wheel angle at the boundary. This is what keeps Adam
@@ -82,39 +70,6 @@ CURVATURE_PARAMETER_LIMIT_MARGIN = 1.0 - 1e-6
 # wheel angle caps a long vehicle below that, and a parameter past what the wheel can reach
 # converts to a saturated angle with no gradient, so the box is the tighter of the two.
 STEERING_PARAMETER_LIMIT_PER_METER = WAYMAX_MAXIMUM_CURVATURE_PER_METER
-
-
-# Every ego controller ReGentS can freeze. C owns the ego whatever the controller is;
-# 'logged_fixture' is the pinned-trajectory test source.
-EGO_TRAJECTORY_SOURCES = ("c_idm", "c_corridor_idm", "c_pdm", "c_replay", "c_policy", "logged_fixture")
-
-# The ego controllers ReGentS can freeze and refresh. Backgrounds must stay replay.
-SUPPORTED_SDC_CONTROLLERS = (
-    binding.CONTROLLER_IDM,
-    binding.CONTROLLER_CORRIDOR_IDM,
-    binding.CONTROLLER_PDM,
-    binding.CONTROLLER_REPLAY,
-    binding.CONTROLLER_POLICY,
-)
-
-# Maps a C controller constant onto the EGO_TRAJECTORY_SOURCES name recorded on an artifact.
-EGO_TRAJECTORY_SOURCE_BY_CONTROLLER = {
-    binding.CONTROLLER_IDM: "c_idm",
-    binding.CONTROLLER_CORRIDOR_IDM: "c_corridor_idm",
-    binding.CONTROLLER_PDM: "c_pdm",
-    binding.CONTROLLER_REPLAY: "c_replay",
-    binding.CONTROLLER_POLICY: "c_policy",
-}
-
-SUPPORTED_SDC_CONTROLLER_NAMES = "'idm', 'corridor_idm', 'pdm', 'replay', or 'policy'"
-
-
-def ego_trajectory_source(sdc_controller):
-    """Name the C ego controller a captured trajectory came from."""
-    source = EGO_TRAJECTORY_SOURCE_BY_CONTROLLER.get(sdc_controller)
-    if source is None:
-        raise ValueError(f"ReGentS requires sdc_controller={SUPPORTED_SDC_CONTROLLER_NAMES}")
-    return source
 
 
 @dataclass(frozen=True)
@@ -233,77 +188,6 @@ class ReGentSOptimizationResult:
     frozen_ego_source: str
     ego_refresh_count: int = 0
     cost_history: tuple[CostSnapshot, ...] = ()
-
-
-def capture_frozen_idm_trajectory(
-    drive,
-    transition_count,
-    *,
-    seed=None,
-    raster_resolution_meters=DEFAULT_RASTER_RESOLUTION_METERS,
-    ego_action_fn=None,
-):
-    """Reset one Drive scenario and capture its C ego rollout under any ego controller.
-
-    Backgrounds remain under the Drive configuration's replay controller. The
-    caller owns the Drive instance and remains responsible for closing it.
-    """
-    if not isinstance(transition_count, int) or transition_count < 1:
-        raise ValueError("transition_count must be a positive integer")
-    if drive.sdc_controller not in SUPPORTED_SDC_CONTROLLERS:
-        raise ValueError(f"Frozen ego capture requires sdc_controller={SUPPORTED_SDC_CONTROLLER_NAMES}")
-    if (drive.sdc_controller == binding.CONTROLLER_POLICY) != (ego_action_fn is not None):
-        raise ValueError("A policy ego requires an ego action provider, and no other controller accepts one")
-    if drive.non_sdc_controller != binding.CONTROLLER_REPLAY:
-        raise ValueError("Frozen ego capture requires non_sdc_controller='replay'")
-    if drive.simulation_mode != binding.SIMULATION_MODE_REPLAY:
-        raise ValueError("Frozen ego capture requires simulation_mode='replay'")
-    if drive.num_envs != 1:
-        raise ValueError("Stage 5 frozen ego capture supports exactly one scenario")
-    if drive.resample_frequency > 0 and transition_count >= drive.resample_frequency:
-        raise ValueError("transition_count must end before Drive resamples the scenario")
-
-    observations, _ = drive.reset(seed=seed)
-    initial_payload = drive.get_state()
-    scenario = export_drive_scenarios(
-        drive,
-        payload=initial_payload,
-        raster_resolution_meters=raster_resolution_meters,
-    )
-    if transition_count > scenario.max_time_count - 1:
-        raise ValueError("transition_count exceeds the exported scenario horizon")
-    agent_count = int(single_scenario_payload(initial_payload)["num_total_agents"])
-    initial_scenario, initial_states, initial_valid, _ = agent_state_rows(initial_payload, agent_count)
-    ego = initial_scenario["agents"][STABLE_EGO_AGENT_IDX]
-    if int(ego.get("controller", -1)) != drive.sdc_controller:
-        raise ValueError(f"Stable agent zero must be controlled by {drive.sdc_controller}")
-    states = [initial_states[STABLE_EGO_AGENT_IDX].copy()]
-    validity = [bool(initial_valid[STABLE_EGO_AGENT_IDX])]
-    neutral_actions = np.zeros_like(drive.actions)
-    state_scratch = np.empty((agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
-    valid_scratch = np.empty(agent_count, dtype=np.bool_)
-    ego_action_scratch = np.empty(REGENTS_EGO_ACTION_FEATURE_COUNT, dtype=np.float32)
-    for _ in range(transition_count):
-        step_actions = neutral_actions if ego_action_fn is None else ego_action_fn(observations)
-        observations = drive.step(step_actions)[0]
-        binding.regents_get_states(drive.c_envs, state_scratch, valid_scratch, ego_action_scratch)
-        if not np.isfinite(state_scratch[STABLE_EGO_AGENT_IDX]).all():
-            raise ValueError("C SDC emitted a non-finite ego state")
-        states.append(state_scratch[STABLE_EGO_AGENT_IDX].copy())
-        validity.append(bool(valid_scratch[STABLE_EGO_AGENT_IDX]))
-    # The buffer getter carries no scenario identity, so the horizon is bracketed by a
-    # dict read at each end rather than one per step.
-    final_scenario_id = single_scenario_payload(drive.get_state()).get("scenario_id")
-    bracketing_ids = (initial_scenario.get("scenario_id"), final_scenario_id)
-    if any(observed_id != scenario.scenario_id for observed_id in bracketing_ids):
-        raise RuntimeError("Drive changed scenario during frozen IDM capture")
-    frozen_ego = FrozenEgoTrajectory(
-        state=torch.from_numpy(np.ascontiguousarray(np.stack(states))),
-        valid=torch.from_numpy(np.ascontiguousarray(np.asarray(validity, dtype=np.bool_))),
-        scenario_id=scenario.scenario_id,
-        source=ego_trajectory_source(drive.sdc_controller),
-    )
-    return scenario, frozen_ego
 
 
 def steering_conversion_metadata(scenario, optimized_action_mask, device):
@@ -557,18 +441,22 @@ def _candidate_offroad_signature(boxes, state_valid, drivable_area_raster, candi
     return signature
 
 
-def _cost_snapshot(costs):
-    return CostSnapshot(
-        ego_collision=float(costs.ego_collision.detach().item()),
-        background_collision=float(costs.background_collision.detach().item()),
-        drivable_area=float(costs.drivable_area.detach().item()),
-        total=float(costs.total.detach().item()),
-        background_collision_first_agent_idx=int(costs.background_collision_first_agent_idx.item()),
-        background_collision_second_agent_idx=int(costs.background_collision_second_agent_idx.item()),
-        background_collision_timestep_idx=int(costs.background_collision_timestep_idx.item()),
-        background_collision_signed_distance_meters=float(costs.background_collision_signed_distance_meters.item()),
-        background_collision_truncated=bool(costs.background_collision_truncated.item()),
+def _infraction_signatures(boxes, state_valid, scenario, config, candidate_mask, background_pair_indices):
+    """Flag the background contacts and off-road corners one set of boxes carries.
+
+    The baseline, every iterate, and the returned iterate are all measured this way, so
+    subtracting the baseline's signature from another's isolates what Adam introduced.
+    """
+    background_pairs = _background_collision_signature(
+        boxes, state_valid, config.collision_distance_tolerance_meters, background_pair_indices
     )
+    offroad = _candidate_offroad_signature(boxes, state_valid, scenario.drivable_area_raster, candidate_mask)
+    return background_pairs, offroad
+
+
+def _cost_snapshot(costs):
+    """Detach the loss terms; the tensor dtypes already carry the snapshot's field types."""
+    return CostSnapshot(**{field.name: getattr(costs, field.name).detach().item() for field in fields(CostSnapshot)})
 
 
 def _finite_cost(costs):
@@ -643,12 +531,9 @@ def optimize_frozen_ego_scenario(
     )
     ego_idx = _ego_index(scenario.ego_mask)
     reference_boxes = _masked_boxes(reference_states, state_valid, scenario.length_meters, scenario.width_meters)
-    baseline_offroad_signature = _candidate_offroad_signature(
-        reference_boxes, state_valid, scenario.drivable_area_raster, candidate_mask
-    )
     background_pair_indices = _candidate_background_pair_indices(scenario, state_valid, candidate_mask)
-    baseline_background_pairs = _background_collision_signature(
-        reference_boxes, state_valid, config.collision_distance_tolerance_meters, background_pair_indices
+    baseline_background_pairs, baseline_offroad_signature = _infraction_signatures(
+        reference_boxes, state_valid, scenario, config, candidate_mask, background_pair_indices
     )
     baseline_background_collision_pair_count = int(baseline_background_pairs.sum().item())
 
@@ -756,16 +641,10 @@ def optimize_frozen_ego_scenario(
             break
 
         detached_boxes = _masked_boxes(states.detach(), state_valid, scenario.length_meters, scenario.width_meters)
-        new_background_pairs = (
-            _background_collision_signature(
-                detached_boxes, state_valid, config.collision_distance_tolerance_meters, background_pair_indices
-            )
-            & ~baseline_background_pairs
+        background_pairs, offroad_signature = _infraction_signatures(
+            detached_boxes, state_valid, scenario, config, candidate_mask, background_pair_indices
         )
-        offroad_signature = _candidate_offroad_signature(
-            detached_boxes, state_valid, scenario.drivable_area_raster, candidate_mask
-        )
-        background_collision_rejection_count += int(bool(new_background_pairs.any()))
+        background_collision_rejection_count += int(bool((background_pairs & ~baseline_background_pairs).any()))
         offroad_rejection_count += int(bool((offroad_signature & ~baseline_offroad_signature).any()))
 
         snapshot = _cost_snapshot(costs)
@@ -864,11 +743,8 @@ def optimize_frozen_ego_scenario(
     loss_adversary_id = int(scenario.agent_id[loss_adversary_idx].item()) if loss_adversary_idx >= 0 else -1
     selected_idx = collision_agent_idx if success else loss_adversary_idx
     selected_id = int(scenario.agent_id[selected_idx].item()) if selected_idx >= 0 else -1
-    final_background_pairs = _background_collision_signature(
-        final_boxes, state_valid, config.collision_distance_tolerance_meters, background_pair_indices
-    )
-    final_offroad_signature = _candidate_offroad_signature(
-        final_boxes, state_valid, scenario.drivable_area_raster, candidate_mask
+    final_background_pairs, final_offroad_signature = _infraction_signatures(
+        final_boxes, state_valid, scenario, config, candidate_mask, background_pair_indices
     )
     return ReGentSOptimizationResult(
         initial_actions=baseline_actions.clone(),

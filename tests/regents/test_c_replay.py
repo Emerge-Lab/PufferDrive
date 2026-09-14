@@ -4,6 +4,7 @@ import struct
 import sys
 import zlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -21,18 +22,12 @@ from pufferlib.ocean.regents.generation import (
     render_scenario_replays,
     save_loss_history_csv,
 )
-from pufferlib.ocean.regents.evaluation import (
-    EVALUATION_EGO_CONTROLLERS,
-    evaluate_artifact_set,
-    format_summary_table,
-    summarize_evaluations,
-)
 from pufferlib.ocean.regents.filters import ReGentSFilterConfig
 from pufferlib.ocean.regents.policy_ego import PolicyEgoActor, ReGentSPolicyEgoConfig
 from pufferlib.ocean.regents.optimizer import ReGentSOptimizationConfig, optimize_frozen_ego_scenario
 from pufferlib.ocean.regents.rollout import (
     C_REPLAY_TOLERANCE,
-    _current_states,
+    baseline_relative_events,
     replay_optimized_scenario_in_c,
     run_reactive_generation,
 )
@@ -40,6 +35,7 @@ from pufferlib.ocean.regents.state import (
     STATE_FEATURE_COUNT,
     STATE_HEADING,
     STATE_X,
+    agent_state_rows,
     single_scenario_payload,
 )
 from tests.regents.real_fixtures import NUPLAN_MAP_DIR, REGENTS_AUDIT_SCENARIO_IDS, resolve_nuplan_scenarios
@@ -53,6 +49,32 @@ HORIZON_TRANSITION_COUNT = 16
 # inside this window, which the adversary must not be blamed for.
 OPEN_LOOP_HORIZON_TRANSITION_COUNT = 50
 REPLAY_FIXTURES = ((7, 50),)
+
+
+def test_baseline_relative_events_accepts_any_injected_adversary_collision():
+    baseline = SimpleNamespace(collision_pairs=(), offroad=np.zeros(4, dtype=np.bool_))
+    adversarial = SimpleNamespace(
+        collision_pairs=((3, ((0, 2), (0, 3))),),
+        offroad=np.zeros(4, dtype=np.bool_),
+    )
+    injected_agent_mask = np.array((False, False, True, False), dtype=np.bool_)
+
+    events = baseline_relative_events(baseline, adversarial, injected_agent_mask)
+
+    assert events.ego_collision
+    assert events.actionable_collision
+    assert events.first_ego_collision_timestep == 3
+
+
+def test_baseline_relative_events_rejects_unperturbed_collision():
+    baseline = SimpleNamespace(collision_pairs=(), offroad=np.zeros(3, dtype=np.bool_))
+    adversarial = SimpleNamespace(collision_pairs=((4, ((0, 2),)),), offroad=np.zeros(3, dtype=np.bool_))
+    injected_agent_mask = np.array((False, True, False), dtype=np.bool_)
+
+    events = baseline_relative_events(baseline, adversarial, injected_agent_mask)
+
+    assert events.ego_collision
+    assert not events.actionable_collision
 
 
 def _drive_kwargs(map_idx, sdc_controller, dynamics_model="classic", zero_erratic=False):
@@ -526,7 +548,7 @@ def test_buffer_state_getter_reproduces_the_dict_getter_exactly():
         neutral_actions = np.zeros_like(drive.actions)
         for _ in range(30):
             drive.step(neutral_actions)
-            _, dict_states, dict_valid, dict_ego_action = _current_states(drive.get_state(), agent_count)
+            _, dict_states, dict_valid, dict_ego_action = agent_state_rows(drive.get_state(), agent_count)
             binding.regents_get_states(drive.c_envs, states, valid, ego_action)
             assert np.array_equal(states, dict_states)
             assert np.array_equal(valid, dict_valid)
@@ -612,30 +634,3 @@ def test_policy_ego_generation_is_deterministic_and_its_artifact_set_replays_und
             )
     finally:
         idm_drive.close()
-
-    # The evaluator rebuilds Drive from the artifact's recorded env and indexes the map
-    # by the artifact's file number, exactly as generation names it.
-    _, map_indices, fixture_paths = resolve_nuplan_scenarios()
-    artifact_dir = tmp_path / "npz"
-    artifact_dir.mkdir(parents=True)
-    generation = {"env": _drive_kwargs(1, "policy", dynamics_model="jerk", zero_erratic=True)}
-    map_index = map_indices[1]
-    save_generation_artifact(artifact_dir / f"scenario_{map_index:05d}.npz", first, generation, str(fixture_paths[1]))
-
-    reports = [
-        evaluate_artifact_set(
-            tmp_path,
-            ego_controller,
-            ego_policy=policy_config if ego_controller == "policy" else None,
-        )
-        for ego_controller in EVALUATION_EGO_CONTROLLERS
-    ]
-    by_controller = {report.ego_controller: report.rows[0] for report in reports}
-    assert set(by_controller) == set(EVALUATION_EGO_CONTROLLERS)
-    assert all(row["generated_against"] == "c_policy" for row in by_controller.values())
-    # Stage 8 gate: the controller the set was generated against reproduces C exactly.
-    assert by_controller["policy"]["collision_timestep"] == first.replay.metrics.first_collision_timestep
-    assert by_controller["policy"]["reproduces_recorded_collision"] == 1
-    summary = summarize_evaluations(reports)
-    assert len(summary) == len(EVALUATION_EGO_CONTROLLERS)
-    assert "ego col" in format_summary_table(summary)

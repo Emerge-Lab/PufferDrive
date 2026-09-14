@@ -12,6 +12,7 @@ from pufferlib.ocean.regents.geometry import (
 from pufferlib.ocean.regents.losses import (
     ReGentSCostConfig,
     _background_collision_avoidance_cost_and_diagnostics,
+    _masked_boxes,
     combined_regents_cost,
     drivable_area_deviation_cost,
     ego_background_collision_cost,
@@ -20,9 +21,22 @@ from pufferlib.ocean.regents.losses import (
 from pufferlib.ocean.regents.state import DrivableAreaRaster, RasterTransform
 
 
-def _background_cost(*args, **kwargs):
+# The cost terms take the box tensor they score; these wrappers keep the cases below
+# expressed in the states, dimensions and masks each one is actually about.
+def _background_cost(states, state_valid, length_meters, width_meters, candidate_mask, **kwargs):
     """The optimizer reads the diagnostics too; these tests only assert the cost."""
-    return _background_collision_avoidance_cost_and_diagnostics(*args, **kwargs)[0]
+    boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
+    return _background_collision_avoidance_cost_and_diagnostics(boxes, state_valid, candidate_mask, **kwargs)[0]
+
+
+def _ego_cost(states, state_valid, length_meters, width_meters, ego_mask, candidate_mask):
+    boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
+    return ego_background_collision_cost(boxes, state_valid, ego_mask, candidate_mask)
+
+
+def _drivable_cost(states, state_valid, length_meters, width_meters, candidate_mask, out_of_bounds_raster):
+    boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
+    return drivable_area_deviation_cost(boxes, state_valid, candidate_mask, out_of_bounds_raster)
 
 
 def _states(agent_x_positions, time_count=3, dtype=torch.float64):
@@ -69,7 +83,7 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
     valid[1, 2] = False
     valid[3] = False
     length, width = _dimensions(4)
-    ego_cost = ego_background_collision_cost(
+    ego_cost = _ego_cost(
         states,
         valid,
         length,
@@ -80,7 +94,7 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
     torch.testing.assert_close(ego_cost, torch.tensor(3.0, dtype=torch.float64))
 
     # Box extent, not center distance, determines which adversary wins the hard minimum.
-    size_sensitive_cost = ego_background_collision_cost(
+    size_sensitive_cost = _ego_cost(
         _states([0.0, 8.0, 6.0], time_count=1),
         torch.ones((3, 1), dtype=torch.bool),
         torch.tensor([4.0, 10.0, 2.0], dtype=torch.float64),
@@ -241,7 +255,7 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
     drivable_valid = torch.ones((3, 3), dtype=torch.bool)
     drivable_valid[2, 2] = False
     torch.testing.assert_close(
-        drivable_area_deviation_cost(
+        _drivable_cost(
             _states([0.0, 2.0, 4.0]),
             drivable_valid,
             three_length,
@@ -258,7 +272,7 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
     unit_length = torch.ones((1,), dtype=torch.float32)
     unit_width = torch.ones((1,), dtype=torch.float32)
     optimized_mask = torch.ones((1,), dtype=torch.bool)
-    absolute_cost = drivable_area_deviation_cost(
+    absolute_cost = _drivable_cost(
         baseline_states, torch.ones((2,), dtype=torch.bool), unit_length, unit_width, optimized_mask, raster
     ).sum()
     absolute_gradient = torch.autograd.grad(absolute_cost, baseline_states)[0]
@@ -325,7 +339,7 @@ def test_cost_gradients_reach_actions_and_the_combined_loss_decreases():
 
     raster = _drivable_raster()
     offroad_states = _states([0.0, 1.5], time_count=2, dtype=torch.float32).requires_grad_()
-    drivable = drivable_area_deviation_cost(
+    drivable = _drivable_cost(
         offroad_states,
         torch.ones((2, 2), dtype=torch.bool),
         torch.tensor([1.0, 1.0], dtype=torch.float32),
@@ -352,7 +366,7 @@ def test_cost_gradients_reach_actions_and_the_combined_loss_decreases():
     ego = torch.zeros((1, 1, time_count, 5), dtype=torch.float32)
     ego[..., 0] = 5.0
     ego[..., 1] = 1.0
-    action_cost = ego_background_collision_cost(
+    action_cost = _ego_cost(
         torch.cat((ego, adversary), dim=1)[0],
         torch.ones((2, time_count), dtype=torch.bool),
         torch.tensor([4.0, 4.0], dtype=torch.float32),

@@ -38,9 +38,7 @@ from torch.distributed.elastic.multiprocessing.errors import record
 
 import pufferlib
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
-from pufferlib.ocean.regents import evaluation as regents_evaluation
 from pufferlib.ocean.regents import generation as regents_generation
-from pufferlib.ocean.regents.policy_ego import ReGentSPolicyEgoConfig
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
 import pufferlib.sweep
 import pufferlib.utils
@@ -2911,44 +2909,6 @@ def regents(
     return report
 
 
-def regents_eval(artifact_dir, ego_controllers, *, ego_policy=None, output_dir=None):
-    """Replay one saved ReGentS artifact set under each requested ego controller."""
-    reports = [
-        regents_evaluation.evaluate_artifact_set(
-            artifact_dir,
-            ego_controller,
-            ego_policy=ego_policy,
-            output_dir=output_dir,
-        )
-        for ego_controller in ego_controllers
-    ]
-    for report in reports:
-        print(f"[REGENTS-EVAL] {report.ego_controller}: {len(report.rows)} scenarios -> {report.metrics_path}")
-    summary = regents_evaluation.summarize_evaluations(reports)
-    print(regents_evaluation.format_summary_table(summary))
-    return reports
-
-
-def _parse_regents_eval_cli_args(arguments):
-    parser = argparse.ArgumentParser(prog="puffer regents-eval puffer_drive")
-    parser.add_argument("artifact_dir")
-    parser.add_argument(
-        "--ego-controller",
-        dest="ego_controllers",
-        action="append",
-        choices=regents_evaluation.EVALUATION_EGO_CONTROLLERS,
-        help="Repeatable; defaults to every controller the artifact set can be replayed under.",
-    )
-    parser.add_argument("--output-dir", dest="output_dir")
-    parser.add_argument("--policy-checkpoint", dest="checkpoint_path")
-    parser.add_argument("--policy-config", dest="config_path")
-    parser.add_argument(
-        "--policy-action-selection", dest="action_selection", default=pufferlib.pytorch.ACTION_SELECT_MEAN
-    )
-    parser.add_argument("--policy-device", dest="device", default="cpu")
-    return parser.parse_args(arguments)
-
-
 def _parse_regents_cli_args(arguments):
     parser = argparse.ArgumentParser(prog="puffer regents puffer_drive")
     parser.add_argument("generation_name")
@@ -2963,7 +2923,7 @@ def _parse_regents_cli_args(arguments):
 
 
 def main():
-    err = "Usage: puffer [train, eval, regents, regents-eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, regents, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -2984,29 +2944,6 @@ def main():
             generation_name=regents_args.generation_name,
             experiment_name=regents_args.experiment_name,
             drivable_area_weight=regents_args.drivable_area_weight,
-        )
-    elif mode == "regents-eval":
-        if len(sys.argv) < 2:
-            raise pufferlib.APIUsageError("Usage: puffer regents-eval [env_name] [artifact_dir] [optional args]")
-        eval_args = _parse_regents_eval_cli_args(sys.argv[1:])
-        ego_controllers = eval_args.ego_controllers or list(regents_evaluation.EVALUATION_EGO_CONTROLLERS)
-        ego_policy = None
-        if "policy" in ego_controllers:
-            if eval_args.checkpoint_path is None or eval_args.config_path is None:
-                raise pufferlib.APIUsageError(
-                    "--ego-controller policy requires --policy-checkpoint and --policy-config"
-                )
-            ego_policy = ReGentSPolicyEgoConfig(
-                checkpoint_path=eval_args.checkpoint_path,
-                config_path=eval_args.config_path,
-                action_selection=eval_args.action_selection,
-                device=eval_args.device,
-            )
-        regents_eval(
-            eval_args.artifact_dir,
-            ego_controllers,
-            ego_policy=ego_policy,
-            output_dir=eval_args.output_dir,
         )
     elif mode == "sweep":
         sweep(env_name=env_name)

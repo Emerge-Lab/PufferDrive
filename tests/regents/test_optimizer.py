@@ -15,7 +15,6 @@ from pufferlib.ocean.regents.losses import ReGentSCostConfig, _masked_boxes
 from pufferlib.ocean.regents.optimizer import (
     FrozenEgoTrajectory,
     ReGentSOptimizationConfig,
-    capture_frozen_idm_trajectory,
     drive_actions_from_parameter,
     optimize_frozen_ego_scenario,
     parameter_from_drive_actions,
@@ -26,6 +25,7 @@ from pufferlib.ocean.regents.optimizer import (
     _candidate_background_pair_indices,
     _compose_rollout,
 )
+from pufferlib.ocean.regents.rollout import capture_frozen_ego_trajectory
 from pufferlib.ocean.regents.state import (
     DrivableAreaRaster,
     RasterTransform,
@@ -65,13 +65,9 @@ def _scenario(states, drivable_mask=None, resolution_meters=1.0, origin_xy=(-50.
         state_feature_valid=valid[..., None].expand_as(states).clone(),
         transition_valid=valid[:, :-1] & valid[:, 1:],
         current_state=states[:, 0].clone(),
-        current_valid=valid[:, 0].clone(),
         agent_present=present,
         agent_metadata_valid=present.clone(),
-        active_agent_mask=present.clone(),
         agent_id=torch.arange(agent_count, dtype=torch.int64),
-        agent_type=torch.full((agent_count,), binding.AGENT_TYPE_VEHICLE, dtype=torch.int64),
-        controller=torch.full((agent_count,), binding.CONTROLLER_REPLAY, dtype=torch.int64),
         trajectory_length=torch.full((agent_count,), time_count, dtype=torch.int64),
         ego_mask=ego_mask,
         vehicle_mask=present.clone(),
@@ -405,8 +401,8 @@ def test_real_scenario_optimization_is_deterministic_in_curvature_space(real_sce
     first_drive = Drive(**kwargs)
     second_drive = Drive(**kwargs)
     try:
-        first_scenario, first = capture_frozen_idm_trajectory(first_drive, 4, seed=42, raster_resolution_meters=2.0)
-        second_scenario, second = capture_frozen_idm_trajectory(second_drive, 4, seed=42, raster_resolution_meters=2.0)
+        first_scenario, first = capture_frozen_ego_trajectory(first_drive, 4, seed=42, raster_resolution_meters=2.0)
+        second_scenario, second = capture_frozen_ego_trajectory(second_drive, 4, seed=42, raster_resolution_meters=2.0)
     finally:
         first_drive.close()
         second_drive.close()

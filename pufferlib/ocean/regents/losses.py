@@ -98,7 +98,6 @@ def prepare_out_of_bounds_raster(
         config.gaussian_truncate_sigma,
         device=device,
         dtype=dtype,
-        normalize_kernel=True,
     )
 
 
@@ -133,22 +132,8 @@ def mean_candidate_ego_distances(boxes, state_valid, ego_idx, candidate_indices)
     return averaged_distances.masked_fill(valid_counts == 0, torch.inf)
 
 
-def ego_background_collision_cost(
-    states,
-    state_valid,
-    length_meters,
-    width_meters,
-    ego_mask,
-    candidate_adversary_mask,
-    boxes=None,
-):
-    """Return the paper's minimum candidate mean signed box distance.
-
-    ``boxes`` lets `combined_regents_cost` share one already-built box tensor
-    across the three terms instead of rebuilding it per term.
-    """
-    if boxes is None:
-        boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
+def ego_background_collision_cost(boxes, state_valid, ego_mask, candidate_adversary_mask):
+    """Return the paper's minimum candidate mean signed box distance."""
     ego_idx = int(torch.argmax(ego_mask.to(torch.int64)).item())
     candidate_indices = torch.where(candidate_adversary_mask)[0]
     if candidate_indices.numel() == 0:
@@ -176,29 +161,25 @@ def _truncated_signed_box_distances(boxes_a, boxes_b, valid, truncation_meters):
 
 
 def _background_collision_avoidance_cost_and_diagnostics(
-    states,
+    boxes,
     state_valid,
-    length_meters,
-    width_meters,
     candidate_adversary_mask,
     truncation_meters=DEFAULT_BACKGROUND_DISTANCE_TRUNCATION_METERS,
-    boxes=None,
 ):
     """Return the paper's truncated signed-box cost and its winning pair."""
     if not isinstance(truncation_meters, (float, int)) or not math.isfinite(truncation_meters):
         raise ValueError("truncation_meters must be a finite positive scalar")
     if truncation_meters <= 0:
         raise ValueError("truncation_meters must be a finite positive scalar")
-    if boxes is None:
-        boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
-    timestep_count = states.shape[1]
+    timestep_count = boxes.shape[1]
+    missing_idx = torch.tensor(-1, dtype=torch.int64, device=boxes.device)
     no_pair = (
-        states.new_zeros(()),
-        torch.tensor(-1, dtype=torch.int64, device=states.device),
-        torch.tensor(-1, dtype=torch.int64, device=states.device),
-        torch.tensor(-1, dtype=torch.int64, device=states.device),
-        states.new_zeros(()),
-        torch.tensor(False, dtype=torch.bool, device=states.device),
+        boxes.new_zeros(()),
+        missing_idx,
+        missing_idx,
+        missing_idx,
+        boxes.new_zeros(()),
+        torch.tensor(False, dtype=torch.bool, device=boxes.device),
     )
     # Released ReGentS builds this term over the adversary trajectories alone, so both
     # endpoints of a pair are candidates. Admitting a pair with one untouched
@@ -208,7 +189,7 @@ def _background_collision_avoidance_cost_and_diagnostics(
         candidate_indices.numel(),
         candidate_indices.numel(),
         offset=1,
-        device=states.device,
+        device=boxes.device,
     )
     pair_indices = candidate_indices[local_pairs]
     pair_valid = state_valid[pair_indices[0]] & state_valid[pair_indices[1]]
@@ -262,23 +243,13 @@ def _background_collision_avoidance_cost_and_diagnostics(
     )
 
 
-def drivable_area_deviation_cost(
-    states,
-    state_valid,
-    length_meters,
-    width_meters,
-    candidate_adversary_mask,
-    out_of_bounds_raster,
-    boxes=None,
-):
+def drivable_area_deviation_cost(boxes, state_valid, candidate_adversary_mask, out_of_bounds_raster):
     """Mean over time of summed valid-vehicle corner potential, as in the paper."""
-    if boxes is None:
-        boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
     if not isinstance(out_of_bounds_raster, SmoothedOutOfBoundsRaster):
         raise TypeError("The out-of-bounds raster must be precomputed and smoothed")
     potential = out_of_bounds_raster.potential
-    if potential.device != states.device or potential.dtype != states.dtype:
-        raise ValueError("The out-of-bounds raster and states must share device and dtype")
+    if potential.device != boxes.device or potential.dtype != boxes.dtype:
+        raise ValueError("The out-of-bounds raster and boxes must share device and dtype")
     corners = oriented_box_corners(boxes)
     corner_potential = sample_out_of_bounds_potential(corners, out_of_bounds_raster)
     valid = state_valid & candidate_adversary_mask[:, None]
@@ -287,7 +258,7 @@ def drivable_area_deviation_cost(
         corner_potential,
         torch.zeros_like(corner_potential),
     ).sum(dim=(-1, -2))
-    return potential_sum.sum() / states.shape[1]
+    return potential_sum.sum() / boxes.shape[1]
 
 
 def combined_regents_cost(
@@ -317,40 +288,16 @@ def combined_regents_cost(
         raise ValueError("The ego agent cannot be a candidate adversary")
     # One box tensor serves all three terms; each would otherwise rebuild it.
     boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
-    ego_collision = ego_background_collision_cost(
-        states,
-        state_valid,
-        length_meters,
-        width_meters,
-        ego_mask,
-        candidate_adversary_mask,
+    ego_collision = ego_background_collision_cost(boxes, state_valid, ego_mask, candidate_adversary_mask)
+    # The winning pair's identity, timestep and clearance ride along with the cost, in
+    # the field order `ReGentSCosts` declares them.
+    background_collision, *background_collision_diagnostics = _background_collision_avoidance_cost_and_diagnostics(
         boxes,
-    )
-    (
-        background_collision,
-        background_collision_first_agent_idx,
-        background_collision_second_agent_idx,
-        background_collision_timestep_idx,
-        background_collision_signed_distance_meters,
-        background_collision_truncated,
-    ) = _background_collision_avoidance_cost_and_diagnostics(
-        states,
         state_valid,
-        length_meters,
-        width_meters,
         candidate_adversary_mask,
         config.background_distance_truncation_meters,
-        boxes,
     )
-    drivable_area = drivable_area_deviation_cost(
-        states,
-        state_valid,
-        length_meters,
-        width_meters,
-        candidate_adversary_mask,
-        out_of_bounds_raster,
-        boxes,
-    )
+    drivable_area = drivable_area_deviation_cost(boxes, state_valid, candidate_adversary_mask, out_of_bounds_raster)
     total = (
         config.ego_collision_weight * ego_collision
         + config.background_collision_weight * background_collision
@@ -361,9 +308,5 @@ def combined_regents_cost(
         background_collision,
         drivable_area,
         total,
-        background_collision_first_agent_idx,
-        background_collision_second_agent_idx,
-        background_collision_timestep_idx,
-        background_collision_signed_distance_meters,
-        background_collision_truncated,
+        *background_collision_diagnostics,
     )

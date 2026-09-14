@@ -7,28 +7,23 @@ import numpy as np
 import torch
 
 from pufferlib.ocean.drive import binding
-from pufferlib.ocean.regents.adapter import DEFAULT_RASTER_RESOLUTION_METERS
+from pufferlib.ocean.regents.adapter import DEFAULT_RASTER_RESOLUTION_METERS, export_drive_scenarios
 from pufferlib.ocean.regents.inverse_dynamics import estimate_expert_actions
 from pufferlib.ocean.regents.optimizer import (
-    SUPPORTED_SDC_CONTROLLER_NAMES,
-    SUPPORTED_SDC_CONTROLLERS,
     FrozenEgoTrajectory,
     ReGentSOptimizationConfig,
     ReGentSOptimizationResult,
-    capture_frozen_idm_trajectory,
-    ego_trajectory_source,
     optimize_frozen_ego_scenario,
 )
 from pufferlib.ocean.regents.state import (
+    REGENTS_EGO_ACTION_FEATURE_COUNT,
     STATE_FEATURE_COUNT,
     STATE_HEADING,
     STATE_SPEED,
     STATE_STEERING,
-    STATE_X,
-    STATE_Y,
+    agent_state_rows,
     single_scenario_payload,
     Scenario,
-    signed_speed_from_c_velocity,
 )
 
 
@@ -37,6 +32,28 @@ from pufferlib.ocean.regents.state import (
 # C-confirmed collisions for expected transcendental rounding accumulation.
 C_REPLAY_TOLERANCE = 5e-4
 INITIAL_STATE_TOLERANCE = 1e-4
+# Drive pins the ego to stable agent row zero, and `regents_get_states` preserves that order.
+STABLE_EGO_AGENT_IDX = 0
+
+# The ego controllers ReGentS can freeze and refresh; backgrounds must stay replay. The
+# mapped name is the ego trajectory source recorded on an artifact.
+EGO_TRAJECTORY_SOURCE_BY_CONTROLLER = {
+    binding.CONTROLLER_IDM: "c_idm",
+    binding.CONTROLLER_CORRIDOR_IDM: "c_corridor_idm",
+    binding.CONTROLLER_PDM: "c_pdm",
+    binding.CONTROLLER_REPLAY: "c_replay",
+    binding.CONTROLLER_POLICY: "c_policy",
+}
+SUPPORTED_SDC_CONTROLLERS = tuple(EGO_TRAJECTORY_SOURCE_BY_CONTROLLER)
+SUPPORTED_SDC_CONTROLLER_NAMES = "'idm', 'corridor_idm', 'pdm', 'replay', or 'policy'"
+
+
+def ego_trajectory_source(sdc_controller):
+    """Name the C ego controller a captured trajectory came from."""
+    source = EGO_TRAJECTORY_SOURCE_BY_CONTROLLER.get(sdc_controller)
+    if source is None:
+        raise ValueError(f"ReGentS requires sdc_controller={SUPPORTED_SDC_CONTROLLER_NAMES}")
+    return source
 
 
 @dataclass(frozen=True)
@@ -68,7 +85,6 @@ class CReplayResult:
     baseline_frames: dict | None = None
     adversarial_frames: dict | None = None
     episode_log: dict | None = None
-    baseline_episode_log: dict | None = None
     avoidability_debug: dict | None = None
     baseline_avoidability_debug: dict | None = None
 
@@ -103,50 +119,10 @@ class _CRollout:
     ego_actions: torch.Tensor
     collision_pairs: tuple[tuple[int, tuple[tuple[int, int], ...]], ...]
     offroad: np.ndarray
-    scenario_payload: dict | None
+    scenario_payload: dict
     html_frames: dict | None
     episode_log: dict | None
     avoidability_debug: dict | None
-
-
-def _current_states(payload, expected_agent_count):
-    scenario = single_scenario_payload(payload)
-    agents = scenario.get("agents")
-    if not isinstance(agents, list) or len(agents) != expected_agent_count:
-        raise RuntimeError("C replay agent count changed")
-    states = np.zeros((expected_agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
-    valid = np.zeros(expected_agent_count, dtype=np.bool_)
-    ego_action = np.zeros(2, dtype=np.float32)
-    for stable_agent_idx, agent in enumerate(agents):
-        if int(agent.get("id", -1)) != stable_agent_idx:
-            raise RuntimeError("C replay changed stable agent identity")
-        values = np.asarray(
-            (
-                agent["sim_x"],
-                agent["sim_y"],
-                agent["sim_heading"],
-                agent["sim_vx"],
-                agent["sim_vy"],
-                agent["sim_steering"],
-            ),
-            dtype=np.float32,
-        )
-        serialized_valid = int(agent["sim_valid"])
-        if serialized_valid not in (0, 1):
-            raise RuntimeError("C replay emitted invalid sim_valid")
-        if serialized_valid and not np.isfinite(values).all():
-            raise RuntimeError("C replay emitted NaN or Inf")
-        heading = np.float32(math.atan2(math.sin(float(values[2])), math.cos(float(values[2]))))
-        states[stable_agent_idx, STATE_X] = values[0]
-        states[stable_agent_idx, STATE_Y] = values[1]
-        states[stable_agent_idx, STATE_HEADING] = heading
-        states[stable_agent_idx, STATE_SPEED] = signed_speed_from_c_velocity(values[3], values[4], heading)
-        states[stable_agent_idx, STATE_STEERING] = values[5]
-        valid[stable_agent_idx] = bool(serialized_valid)
-        if stable_agent_idx == 0:
-            ego_action[0] = np.float32(agent["accel_long"] / float(binding.ACCELERATION_VALUES[6]))
-            ego_action[1] = np.float32(agent["sim_steering"] / float(binding.STEERING_VALUES[8]))
-    return scenario, states, valid, ego_action
 
 
 def _html_frame_arrays(agent_count, traffic_count):
@@ -162,9 +138,10 @@ def _html_frame_arrays(agent_count, traffic_count):
 def _capture_c_rollout(
     drive,
     transition_count,
-    expected_scenario_id,
-    agent_count,
-    seed,
+    *,
+    expected_scenario_id=None,
+    agent_count=None,
+    seed=None,
     capture_html_frames=False,
     ego_action_fn=None,
     capture_observations=False,
@@ -173,15 +150,21 @@ def _capture_c_rollout(
 
     `ego_action_fn` supplies the ego action for a policy SDC. A native controller
     ignores the action buffer, so leaving it None steps neutral actions as before.
-    Observations ride alongside the HTML frames, one per captured frame.
+    Observations ride alongside the HTML frames, one per captured frame. A caller
+    that already knows the scenario identity passes it to be checked; the capture
+    that establishes it adopts what C reset to and still brackets the horizon with it.
     """
     if capture_observations and not capture_html_frames:
         raise ValueError("capture_observations requires capture_html_frames")
     observations, _ = drive.reset(seed=seed)
-    payload_scenario, initial_state, initial_valid, _ = _current_states(drive.get_state(), agent_count)
-    if payload_scenario.get("scenario_id") != expected_scenario_id:
+    payload = single_scenario_payload(drive.get_state())
+    if agent_count is None:
+        agent_count = len(payload.get("agents") or ())
+    payload_scenario, initial_state, initial_valid, _ = agent_state_rows(payload, agent_count)
+    if expected_scenario_id is None:
+        expected_scenario_id = payload_scenario.get("scenario_id")
+    elif payload_scenario.get("scenario_id") != expected_scenario_id:
         raise RuntimeError("C replay reset to a different scenario")
-    initial_payload_scenario = payload_scenario
     states = [initial_state]
     validity = [initial_valid]
     ego_actions = []
@@ -201,7 +184,7 @@ def _capture_c_rollout(
             html_frames["obs"] = [np.asarray(observations, dtype=np.float32).copy()]
     state_scratch = np.empty((agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
     valid_scratch = np.empty(agent_count, dtype=np.bool_)
-    ego_action_scratch = np.empty(2, dtype=np.float32)
+    ego_action_scratch = np.empty(REGENTS_EGO_ACTION_FEATURE_COUNT, dtype=np.float32)
     for transition_idx in range(transition_count):
         step_actions = neutral_actions if ego_action_fn is None else ego_action_fn(observations)
         observations = drive.step(step_actions)[0]
@@ -234,14 +217,14 @@ def _capture_c_rollout(
     if ego_actions:
         stacked_ego_actions = torch.from_numpy(np.ascontiguousarray(np.stack(ego_actions)))
     else:
-        stacked_ego_actions = torch.empty((0, 2), dtype=torch.float32)
+        stacked_ego_actions = torch.empty((0, REGENTS_EGO_ACTION_FEATURE_COUNT), dtype=torch.float32)
     return _CRollout(
         states=stacked_states,
         state_valid=stacked_valid,
         ego_actions=stacked_ego_actions,
         collision_pairs=tuple(collision_pairs),
         offroad=offroad,
-        scenario_payload=initial_payload_scenario if capture_html_frames else None,
+        scenario_payload=payload_scenario,
         html_frames=None
         if html_frames is None
         else {key: np.stack(frames, axis=0) for key, frames in html_frames.items()},
@@ -250,14 +233,81 @@ def _capture_c_rollout(
     )
 
 
+def capture_plan_pair(drive, baseline_plan, optimized_plan, action_mask, **capture_options):
+    """Capture the baseline and adversarial C rollouts of one action plan pair.
+
+    The baseline drives the same actors from their reconstructed logged actions, so
+    only events the optimization introduced are attributed to the adversary. The plan
+    is always cleared, leaving the env as clean as it was handed over.
+    """
+    rollouts = []
+    try:
+        for plan in (baseline_plan, optimized_plan):
+            binding.regents_set_action_plan(drive.c_envs, plan, action_mask)
+            rollouts.append(_capture_c_rollout(drive, **capture_options))
+    finally:
+        binding.regents_set_action_plan(drive.c_envs, baseline_plan, np.zeros_like(action_mask))
+    return rollouts
+
+
+def capture_frozen_ego_trajectory(
+    drive,
+    transition_count,
+    *,
+    seed=None,
+    raster_resolution_meters=DEFAULT_RASTER_RESOLUTION_METERS,
+    ego_action_fn=None,
+):
+    """Reset one Drive scenario and capture its C ego rollout under any ego controller.
+
+    Backgrounds remain under the Drive configuration's replay controller. The
+    caller owns the Drive instance and remains responsible for closing it.
+    """
+    if not isinstance(transition_count, int) or transition_count < 1:
+        raise ValueError("transition_count must be a positive integer")
+    if drive.sdc_controller not in SUPPORTED_SDC_CONTROLLERS:
+        raise ValueError(f"Frozen ego capture requires sdc_controller={SUPPORTED_SDC_CONTROLLER_NAMES}")
+    if (drive.sdc_controller == binding.CONTROLLER_POLICY) != (ego_action_fn is not None):
+        raise ValueError("A policy ego requires an ego action provider, and no other controller accepts one")
+    if drive.non_sdc_controller != binding.CONTROLLER_REPLAY:
+        raise ValueError("Frozen ego capture requires non_sdc_controller='replay'")
+    if drive.simulation_mode != binding.SIMULATION_MODE_REPLAY:
+        raise ValueError("Frozen ego capture requires simulation_mode='replay'")
+    if drive.num_envs != 1:
+        raise ValueError("Stage 5 frozen ego capture supports exactly one scenario")
+    if drive.resample_frequency > 0 and transition_count >= drive.resample_frequency:
+        raise ValueError("transition_count must end before Drive resamples the scenario")
+
+    rollout = _capture_c_rollout(drive, transition_count, seed=seed, ego_action_fn=ego_action_fn)
+    scenario = export_drive_scenarios(
+        drive,
+        payload=rollout.scenario_payload,
+        raster_resolution_meters=raster_resolution_meters,
+    )
+    # A backstop: the logged horizon is only known once the export has read the payload,
+    # so the callers that can bound the horizon up front already do.
+    if transition_count > scenario.max_time_count - 1:
+        raise ValueError("transition_count exceeds the exported scenario horizon")
+    ego = rollout.scenario_payload["agents"][STABLE_EGO_AGENT_IDX]
+    if int(ego.get("controller", -1)) != drive.sdc_controller:
+        raise ValueError(f"Stable agent zero must be controlled by {drive.sdc_controller}")
+    frozen_ego = FrozenEgoTrajectory(
+        state=rollout.states[STABLE_EGO_AGENT_IDX].clone(),
+        valid=rollout.state_valid[STABLE_EGO_AGENT_IDX].clone(),
+        scenario_id=scenario.scenario_id,
+        source=ego_trajectory_source(drive.sdc_controller),
+    )
+    return scenario, frozen_ego
+
+
 def _unconfirmed_collision_reason(ego_collision, baseline_ego_collision):
-    """Name why C attributed no ego/selected-adversary collision to the optimization.
+    """Name why C attributed no ego/adversary collision to the optimization.
 
     Torch found a collision and parity held, so the three outcomes below are the only
-    ways the authoritative replay can still decline to credit the adversary. They are
-    reported separately because they call for different work: a pre-existing baseline
-    contact is an ego-quality problem, an ego collision with another agent is an
-    adversary-selection problem, and neither is the optimization failing to converge.
+    ways the authoritative replay can still decline to credit an injected adversary.
+    They are reported separately because they call for different work: a pre-existing
+    baseline contact is an ego-quality problem, an ego collision with an unperturbed
+    actor is an attribution problem, and neither is the optimization failing to converge.
     """
     if ego_collision:
         return "ego_collision_with_other_agent"
@@ -266,12 +316,13 @@ def _unconfirmed_collision_reason(ego_collision, baseline_ego_collision):
     return "no_ego_collision_in_replay"
 
 
-def baseline_relative_events(baseline, adversarial, selected_adversary_idx, injected_agent_mask):
+def baseline_relative_events(baseline, adversarial, injected_agent_mask):
     """Attribute C events to the optimization by subtracting the baseline rollout's.
 
     This is the single definition of ego / actionable / background collision and
     introduced off-road; generation replay and artifact-set evaluation share it so the
-    two can never disagree about what an event means.
+    two can never disagree about what an event means. Any injected actor is an
+    adversary, so a new ego collision with any such actor is actionable.
     """
     baseline_pairs = {pair for _, pairs in baseline.collision_pairs for pair in pairs}
     baseline_ego_collision = any(0 in pair for pair in baseline_pairs)
@@ -296,7 +347,7 @@ def baseline_relative_events(baseline, adversarial, selected_adversary_idx, inje
             if first_ego_collision_timestep is None:
                 first_ego_collision_timestep = state_timestep
             other_idx = right_idx if left_idx == 0 else left_idx
-            actionable_collision |= other_idx == selected_adversary_idx
+            actionable_collision |= bool(injected_agent_mask[other_idx])
     introduced_offroad = adversarial.offroad & ~baseline.offroad
     return BaselineRelativeEvents(
         ego_collision=ego_collision,
@@ -309,6 +360,25 @@ def baseline_relative_events(baseline, adversarial, selected_adversary_idx, inje
         baseline_ego_collision=baseline_ego_collision,
         baseline_collision_pairs=frozenset(baseline_pairs),
     )
+
+
+def _parity_feature_mask(optimization, adversarial, joint_valid, timestep_count):
+    """Flag the state features C and Torch are required to agree on.
+
+    The initial state is a shared input rather than a result, C stores an adversary's
+    speed and wheel steering only once injection has integrated it, and once C reports
+    a contact the two integrators are no longer describing the same scene.
+    """
+    injected_state_mask = torch.zeros_like(joint_valid)
+    injected_state_mask[:, 1:] = optimization.optimized_action_mask.detach().cpu()
+    feature_mask = joint_valid[..., None].expand(*joint_valid.shape, STATE_FEATURE_COUNT).clone()
+    feature_mask[..., STATE_SPEED] &= injected_state_mask
+    feature_mask[..., STATE_STEERING] &= injected_state_mask
+    timestep_index = torch.arange(timestep_count)[None, :, None]
+    feature_mask &= timestep_index > 0
+    if adversarial.collision_pairs:
+        feature_mask &= timestep_index <= adversarial.collision_pairs[0][0]
+    return feature_mask
 
 
 def _validate_replay_inputs(drive, tolerance):
@@ -349,33 +419,19 @@ def replay_optimized_scenario_in_c(
     baseline_plan = np.ascontiguousarray(optimization.initial_actions.detach().cpu().numpy(), dtype=np.float32)
     optimized_plan = np.ascontiguousarray(optimization.optimized_actions.detach().cpu().numpy(), dtype=np.float32)
 
-    # The baseline drives the same actors from their reconstructed logged actions,
-    # so only events the optimization introduced are attributed to the adversary.
-    try:
-        binding.regents_set_action_plan(drive.c_envs, baseline_plan, action_mask)
-        baseline = _capture_c_rollout(
-            drive,
-            transition_count,
-            scenario_id,
-            agent_count,
-            seed,
-            capture_html_frames,
-            ego_action_fn,
-            capture_observations,
-        )
-        binding.regents_set_action_plan(drive.c_envs, optimized_plan, action_mask)
-        adversarial = _capture_c_rollout(
-            drive,
-            transition_count,
-            scenario_id,
-            agent_count,
-            seed,
-            capture_html_frames,
-            ego_action_fn,
-            capture_observations,
-        )
-    finally:
-        binding.regents_set_action_plan(drive.c_envs, baseline_plan, np.zeros_like(action_mask))
+    baseline, adversarial = capture_plan_pair(
+        drive,
+        baseline_plan,
+        optimized_plan,
+        action_mask,
+        transition_count=transition_count,
+        expected_scenario_id=scenario_id,
+        agent_count=agent_count,
+        seed=seed,
+        capture_html_frames=capture_html_frames,
+        ego_action_fn=ego_action_fn,
+        capture_observations=capture_observations,
+    )
 
     torch_states = optimization.optimized_states.detach().cpu()
     injected_agent_mask = optimization.optimized_action_mask.any(dim=1).detach().cpu()
@@ -388,18 +444,7 @@ def replay_optimized_scenario_in_c(
     if initial_difference.numel() and float(initial_difference.max().item()) > INITIAL_STATE_TOLERANCE:
         raise RuntimeError("C reset to a different initial pose than the Torch scenario")
 
-    # A state carries C speed and wheel steering only once injection has integrated it.
-    injected_state_mask = torch.zeros_like(joint_valid)
-    injected_state_mask[:, 1:] = optimization.optimized_action_mask.detach().cpu()
-    feature_mask = joint_valid[..., None].expand_as(torch_states).clone()
-    feature_mask[..., STATE_SPEED] &= injected_state_mask
-    feature_mask[..., STATE_STEERING] &= injected_state_mask
-    # The initial state is a shared input, and C stores adversary speed only once injection starts.
-    timestep_index = torch.arange(torch_states.shape[1])[None, :, None]
-    feature_mask &= timestep_index > 0
-    first_any_collision_timestep = adversarial.collision_pairs[0][0] if adversarial.collision_pairs else None
-    if first_any_collision_timestep is not None:
-        feature_mask &= timestep_index <= first_any_collision_timestep
+    feature_mask = _parity_feature_mask(optimization, adversarial, joint_valid, torch_states.shape[1])
     differences = torch.abs(adversarial.states - torch_states)
     ego_feature_mask = feature_mask & ego_mask[:, None, None]
     maximum_ego_reference_error = float(differences[ego_feature_mask].max().item()) if ego_feature_mask.any() else 0.0
@@ -412,7 +457,6 @@ def replay_optimized_scenario_in_c(
     events = baseline_relative_events(
         baseline,
         adversarial,
-        optimization.selected_adversary_idx,
         injected_agent_mask.numpy(),
     )
 
@@ -445,11 +489,12 @@ def replay_optimized_scenario_in_c(
         metrics=metrics,
         success=failure_reason is None,
         failure_reason=failure_reason,
-        scenario_payload=adversarial.scenario_payload,
+        # The payload rides every capture, but only the frames it accompanies make it
+        # worth retaining, so the default path still hands back nothing to hold.
+        scenario_payload=adversarial.scenario_payload if capture_html_frames else None,
         baseline_frames=baseline.html_frames,
         adversarial_frames=adversarial.html_frames,
         episode_log=adversarial.episode_log,
-        baseline_episode_log=baseline.episode_log,
         avoidability_debug=adversarial.avoidability_debug,
         baseline_avoidability_debug=baseline.avoidability_debug,
     )
@@ -475,9 +520,9 @@ def make_c_ego_rollout(drive, scenario, horizon_transition_count, seed, ego_acti
             rollout = _capture_c_rollout(
                 drive,
                 horizon_transition_count,
-                scenario_id,
-                agent_count,
-                seed,
+                expected_scenario_id=scenario_id,
+                agent_count=agent_count,
+                seed=seed,
                 ego_action_fn=ego_action_fn,
             )
         finally:
@@ -516,7 +561,7 @@ def run_reactive_generation(
     if optimization_config is None:
         optimization_config = ReGentSOptimizationConfig()
 
-    scenario, frozen_ego = capture_frozen_idm_trajectory(
+    scenario, frozen_ego = capture_frozen_ego_trajectory(
         drive,
         horizon_transition_count,
         seed=deterministic_seed,

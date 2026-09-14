@@ -113,7 +113,6 @@ def build_smoothed_out_of_bounds_raster(
     *,
     device=None,
     dtype=torch.float32,
-    normalize_kernel=True,
 ):
     """Build the map-static Gaussian out-of-bounds potential once per map.
 
@@ -124,8 +123,6 @@ def build_smoothed_out_of_bounds_raster(
         raise TypeError("drivable_area must be a DrivableAreaRaster")
     if not isinstance(dtype, torch.dtype) or not dtype.is_floating_point:
         raise TypeError("dtype must be a floating Torch dtype")
-    if not isinstance(normalize_kernel, bool):
-        raise TypeError("normalize_kernel must be a bool")
     for name, value in (
         ("gaussian_sigma_meters", gaussian_sigma_meters),
         ("gaussian_truncate_sigma", gaussian_truncate_sigma),
@@ -143,13 +140,6 @@ def build_smoothed_out_of_bounds_raster(
         out_of_bounds.device,
     )
     kernel_radius = kernel.shape[-1] // 2
-    if not normalize_kernel:
-        # Released ReGentS uses a 1D Gaussian prefactor on a 2D radial density,
-        # with neither discrete mass normalization nor a pixel-area factor.
-        coordinates = torch.arange(-kernel_radius, kernel_radius + 1, dtype=dtype, device=kernel.device)
-        radius_squared = coordinates[:, None].square() + coordinates[None, :].square()
-        kernel = torch.exp(-0.5 * radius_squared / sigma_pixels**2)
-        kernel = kernel / (float(gaussian_sigma_meters) * math.sqrt(2.0 * math.pi))
     padded = torch_functional.pad(out_of_bounds, (kernel_radius,) * 4, value=1.0)
     smoothed = torch_functional.conv2d(padded, kernel[None, None])[0, 0]
     potential = torch_functional.pad(smoothed, (1, 1, 1, 1), value=float(kernel.sum()))

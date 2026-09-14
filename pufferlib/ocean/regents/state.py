@@ -194,13 +194,9 @@ class Scenario:
     state_feature_valid: torch.Tensor
     transition_valid: torch.Tensor
     current_state: torch.Tensor
-    current_valid: torch.Tensor
     agent_present: torch.Tensor
     agent_metadata_valid: torch.Tensor
-    active_agent_mask: torch.Tensor
     agent_id: torch.Tensor
-    agent_type: torch.Tensor
-    controller: torch.Tensor
     trajectory_length: torch.Tensor
     ego_mask: torch.Tensor
     vehicle_mask: torch.Tensor

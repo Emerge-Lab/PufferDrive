@@ -40,7 +40,6 @@ class CandidateFilterReason(IntFlag):
     STATIC = 1 << 3
     REAR_SECTOR = 1 << 4
     SCENE_UNSUITABLE = 1 << 5
-    ORIGINAL_COLLISION = 1 << 6
     RECONSTRUCTION_FIDELITY = 1 << 7
     OFF_ROAD_START = 1 << 8
 
@@ -48,7 +47,6 @@ class CandidateFilterReason(IntFlag):
 class SceneFilterReason(IntFlag):
     NONE = 0
     INVALID_EGO = 1 << 0
-    ORIGINAL_COLLISION = 1 << 2
     NO_CANDIDATE = 1 << 3
 
 
@@ -81,6 +79,12 @@ class ReGentSFilterConfig:
             raise ValueError("rear_sector_half_angle_radians must be in (0, pi)")
 
 
+def _reason_names(reason_flags, reason_bits):
+    """Name every raised flag; NONE is the absence of a reason, never one of them."""
+    raised = int(reason_bits.item())
+    return tuple(reason.name.lower() for reason in reason_flags if reason and raised & int(reason))
+
+
 @dataclass(frozen=True)
 class CandidateSelection:
     candidate_mask: torch.Tensor
@@ -91,32 +95,19 @@ class CandidateSelection:
     original_collision: torch.Tensor
     original_collision_timestep: torch.Tensor
     valid_transition_count: torch.Tensor
-    valid_transition_fraction: torch.Tensor
     valid_state_fraction: torch.Tensor
     displacement_meters: torch.Tensor
-    maximum_absolute_speed_mps: torch.Tensor
     rear_sector_fraction: torch.Tensor
     maximum_reconstruction_residual_meters: torch.Tensor
     model_consistent_transition_fraction: torch.Tensor
     reconstruction_drift_meters: torch.Tensor
     start_off_road: torch.Tensor
-    horizon_transition_count: int
 
     def reasons_for(self, agent_idx):
-        reason_bits = int(self.filter_reason_bits[agent_idx].item())
-        return tuple(
-            reason.name.lower()
-            for reason in CandidateFilterReason
-            if reason is not CandidateFilterReason.NONE and reason_bits & int(reason)
-        )
+        return _reason_names(CandidateFilterReason, self.filter_reason_bits[agent_idx])
 
     def scene_reasons(self):
-        reason_bits = int(self.scene_reason_bits.item())
-        return tuple(
-            reason.name.lower()
-            for reason in SceneFilterReason
-            if reason is not SceneFilterReason.NONE and reason_bits & int(reason)
-        )
+        return _reason_names(SceneFilterReason, self.scene_reason_bits)
 
 
 def _resolve_selection_horizon(
@@ -265,7 +256,6 @@ def select_adversary_candidates(
     )
     transition_valid = scenario.transition_valid[:, :horizon_transition_count]
     valid_transition_count = transition_valid.sum(dim=-1)
-    valid_transition_fraction = valid_transition_count.to(scenario.logged_state.dtype) / horizon_transition_count
     logged_time_count = int(scenario.trajectory_length.max().item())
     if logged_time_count <= 0 or logged_time_count > scenario.max_time_count:
         raise ValueError("Candidate filtering requires a non-empty exported log within state storage")
@@ -281,22 +271,24 @@ def select_adversary_candidates(
         reconstruction_drift_meters = torch.zeros_like(maximum_reconstruction_residual)
     original_collision, original_collision_timestep = _original_collision_labels(scenario, horizon_transition_count)
 
-    agent_shape = scenario.ego_mask.shape
-    reason_bits = torch.zeros(agent_shape, dtype=torch.int64, device=scenario.logged_state.device)
-    reason_bits |= scenario.ego_mask.to(torch.int64) * int(CandidateFilterReason.EGO)
-    reason_bits |= (~scenario.vehicle_mask).to(torch.int64) * int(CandidateFilterReason.NON_VEHICLE)
-    insufficient = valid_state_fraction < config.minimum_valid_state_fraction
-    reason_bits |= insufficient.to(torch.int64) * int(CandidateFilterReason.INSUFFICIENT_VALID_STATES)
+    start_off_road = _start_off_road_flags(scenario)
     static = displacement < config.static_displacement_threshold_meters
     static |= maximum_speed < config.static_speed_threshold_mps
-    reason_bits |= static.to(torch.int64) * int(CandidateFilterReason.STATIC)
-    rear = rear_fraction > config.rear_sector_fraction
-    reason_bits |= rear.to(torch.int64) * int(CandidateFilterReason.REAR_SECTOR)
-    drifted = reconstruction_drift_meters > config.maximum_reconstruction_drift_meters
-    reason_bits |= drifted.to(torch.int64) * int(CandidateFilterReason.RECONSTRUCTION_FIDELITY)
-    start_off_road = _start_off_road_flags(scenario)
-    if config.filter_off_road_start:
-        reason_bits |= start_off_road.to(torch.int64) * int(CandidateFilterReason.OFF_ROAD_START)
+    rejected_by = (
+        (CandidateFilterReason.EGO, scenario.ego_mask),
+        (CandidateFilterReason.NON_VEHICLE, ~scenario.vehicle_mask),
+        (CandidateFilterReason.INSUFFICIENT_VALID_STATES, valid_state_fraction < config.minimum_valid_state_fraction),
+        (CandidateFilterReason.STATIC, static),
+        (CandidateFilterReason.REAR_SECTOR, rear_fraction > config.rear_sector_fraction),
+        (
+            CandidateFilterReason.RECONSTRUCTION_FIDELITY,
+            reconstruction_drift_meters > config.maximum_reconstruction_drift_meters,
+        ),
+        (CandidateFilterReason.OFF_ROAD_START, start_off_road & config.filter_off_road_start),
+    )
+    reason_bits = torch.zeros(scenario.ego_mask.shape, dtype=torch.int64, device=scenario.logged_state.device)
+    for reason, rejected in rejected_by:
+        reason_bits |= rejected.to(torch.int64) * int(reason)
 
     invalid_ego = (int(scenario.ego_mask.sum().item()) != 1) or (
         int((transition_valid & scenario.ego_mask[..., None]).sum().item()) < 1
@@ -321,16 +313,13 @@ def select_adversary_candidates(
         original_collision=original_collision,
         original_collision_timestep=original_collision_timestep,
         valid_transition_count=valid_transition_count,
-        valid_transition_fraction=valid_transition_fraction,
         valid_state_fraction=valid_state_fraction,
         displacement_meters=displacement,
-        maximum_absolute_speed_mps=maximum_speed,
         rear_sector_fraction=rear_fraction,
         maximum_reconstruction_residual_meters=maximum_reconstruction_residual,
         model_consistent_transition_fraction=model_consistent_fraction,
         reconstruction_drift_meters=reconstruction_drift_meters,
         start_off_road=start_off_road,
-        horizon_transition_count=horizon_transition_count,
     )
 
 

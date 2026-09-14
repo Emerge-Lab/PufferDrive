@@ -26,7 +26,8 @@ def source_configuration_hash(configuration, map_path):
     return digest.hexdigest()
 
 
-def _cost_dict(costs, scenario):
+def cost_row(costs, scenario):
+    """One cost snapshot as a flat mapping, with the background pair's agent ids resolved."""
     if costs is None:
         return None
     values = asdict(costs)
@@ -80,8 +81,8 @@ def save_generation_artifact(path, result, source_configuration, map_path):
             "collision_timestep": optimization.collision_timestep,
             "iteration_count": optimization.iteration_count,
             "best_iteration": optimization.best_iteration,
-            "initial_costs": _cost_dict(optimization.initial_costs, scenario),
-            "final_costs": _cost_dict(optimization.final_costs, scenario),
+            "initial_costs": cost_row(optimization.initial_costs, scenario),
+            "final_costs": cost_row(optimization.final_costs, scenario),
             "background_collision": optimization.background_collision,
             "offroad": optimization.offroad,
             "baseline_background_collision_pair_count": optimization.baseline_background_collision_pair_count,

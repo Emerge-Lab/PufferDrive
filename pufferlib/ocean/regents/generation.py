@@ -19,7 +19,7 @@ from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.regents.adapter import DEFAULT_RASTER_RESOLUTION_METERS
 from pufferlib.ocean.regents.dynamics import ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED
-from pufferlib.ocean.regents.artifacts import save_generation_artifact
+from pufferlib.ocean.regents.artifacts import cost_row, save_generation_artifact
 from pufferlib.ocean.regents.filters import ReGentSFilterConfig
 from pufferlib.ocean.regents.losses import ReGentSCostConfig
 from pufferlib.ocean.regents.optimizer import ReGentSOptimizationConfig
@@ -30,34 +30,6 @@ from pufferlib.ocean.regents.rollout import run_reactive_generation
 METRICS_FILE_NAME = "generation_metrics.csv"
 RENDER_DIR_NAME = "rendered_replays"
 REGENTS_ACTIVE_AGENT_COUNT = 1
-METRIC_FIELD_NAMES = (
-    "scenario_index",
-    "scenario_id",
-    "ego_controller",
-    "map_index",
-    "seed",
-    "candidate_count",
-    "torch_collision",
-    "generation_success",
-    "ego_collision",
-    "actionable_collision",
-    "background_collision",
-    "baseline_ego_collision",
-    "baseline_background_collision_pair_count",
-    "background_collision_rejection_count",
-    "offroad",
-    "c_torch_trajectory_error",
-    "ego_reference_error",
-    "torch_collision_timestep",
-    "collision_timestep",
-    "selected_adversary_idx",
-    "selected_adversary_id",
-    "ego_refresh_count",
-    "optimization_seconds",
-    "failure_reason",
-    "artifact_path",
-)
-
 # `puffer eval` reports one Log row per episode; the ReGentS horizon closes the same row and
 # carries it here under a prefix, so these never collide with the columns above.
 EVAL_METRIC_FIELD_PREFIX = "eval_"
@@ -273,58 +245,24 @@ def _replay_bundle(env_config, frames, ego_actions):
 
 
 def save_loss_history_csv(destination, scenario_idx, result):
-    """Write the optimization loss history to a CSV file per scenario/map."""
-    optimization = result.optimization
-    if not optimization.cost_history:
+    """Write the optimization loss history to a CSV file per scenario/map.
+
+    The columns are the cost snapshot's own fields, so the loss history and the
+    artifact metadata always describe an iterate the same way.
+    """
+    cost_history = result.optimization.cost_history
+    if not cost_history:
         return
     losses_dir = Path(destination) / "losses"
     losses_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = losses_dir / f"scenario_{scenario_idx:05d}.losses.csv"
-    with open(csv_path, mode="w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(
-            [
-                "iteration",
-                "total_loss",
-                "ego_collision_cost",
-                "background_collision_cost",
-                "drivable_area_cost",
-                "background_collision_first_agent_idx",
-                "background_collision_first_agent_id",
-                "background_collision_second_agent_idx",
-                "background_collision_second_agent_id",
-                "background_collision_timestep_idx",
-                "background_collision_signed_distance_meters",
-                "background_collision_truncated",
-            ]
-        )
-        for idx, snap in enumerate(optimization.cost_history):
-            first_agent_id = (
-                int(result.scenario.agent_id[snap.background_collision_first_agent_idx].item())
-                if snap.background_collision_first_agent_idx >= 0
-                else -1
-            )
-            second_agent_id = (
-                int(result.scenario.agent_id[snap.background_collision_second_agent_idx].item())
-                if snap.background_collision_second_agent_idx >= 0
-                else -1
-            )
-            writer.writerow(
-                [
-                    idx,
-                    snap.total,
-                    snap.ego_collision,
-                    snap.background_collision,
-                    snap.drivable_area,
-                    snap.background_collision_first_agent_idx,
-                    first_agent_id,
-                    snap.background_collision_second_agent_idx,
-                    second_agent_id,
-                    snap.background_collision_timestep_idx,
-                    snap.background_collision_signed_distance_meters,
-                    int(snap.background_collision_truncated),
-                ]
-            )
+    rows = [
+        {"iteration": iteration, **cost_row(snapshot, result.scenario)}
+        for iteration, snapshot in enumerate(cost_history)
+    ]
+    with (losses_dir / f"scenario_{scenario_idx:05d}.losses.csv").open("w", newline="", encoding="utf-8") as loss_file:
+        writer = csv.DictWriter(loss_file, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def _truncated_at_ego_collision(frames, ego_actions, first_ego_collision_timestep):
@@ -371,27 +309,29 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
         cut_frames, cut_ego_actions = _truncated_at_ego_collision(
             frames, replay.ego_actions, replay.metrics.first_ego_collision_timestep
         )
-        bundle = _replay_bundle(env_config, cut_frames, cut_ego_actions)
-        # Each page carries the counterfactual recorded for its own rollout.
-        bundle["avoidability_debug"] = avoidability_debug
-        bundle["candidate_adversary_ids"] = candidate_adversary_ids
-        # The optimizer's plan for every candidate, so the viewer can show the acceleration
-        # the log started from next to the one Adam ended on, frame-aligned with the replay.
-        bundle["adversary_plan_ids"] = candidate_adversary_ids
-        bundle["adversary_plan_initial"] = candidate_plan(
-            result.optimization.initial_actions, candidate_rows, cut_ego_actions.shape[1]
-        )
-        bundle["adversary_plan_optimized"] = candidate_plan(
-            result.optimization.optimized_actions, candidate_rows, cut_ego_actions.shape[1]
-        )
-        bundle["adversary_plan_acceleration_scale"] = ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED
-        bundle["selected_adversary_idx"] = result.optimization.selected_adversary_idx
-        bundle["selected_adversary_id"] = result.optimization.selected_adversary_id
-        bundle["ego_collision_loss_adversary_idx"] = result.optimization.ego_collision_loss_adversary_idx
-        bundle["ego_collision_loss_adversary_id"] = result.optimization.ego_collision_loss_adversary_id
-        bundle["optimization_update_count"] = result.optimization.iteration_count
-        bundle["optimization_ego_collision"] = result.optimization.success
-        bundle["ego_refresh_count"] = result.optimization.ego_refresh_count
+        optimization = result.optimization
+        transition_count = cut_ego_actions.shape[1]
+        bundle = {
+            **_replay_bundle(env_config, cut_frames, cut_ego_actions),
+            # Each page carries the counterfactual recorded for its own rollout.
+            "avoidability_debug": avoidability_debug,
+            "candidate_adversary_ids": candidate_adversary_ids,
+            # The optimizer's plan for every candidate, so the viewer can show the acceleration
+            # the log started from next to the one Adam ended on, frame-aligned with the replay.
+            "adversary_plan_ids": candidate_adversary_ids,
+            "adversary_plan_initial": candidate_plan(optimization.initial_actions, candidate_rows, transition_count),
+            "adversary_plan_optimized": candidate_plan(
+                optimization.optimized_actions, candidate_rows, transition_count
+            ),
+            "adversary_plan_acceleration_scale": ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
+            "selected_adversary_idx": optimization.selected_adversary_idx,
+            "selected_adversary_id": optimization.selected_adversary_id,
+            "ego_collision_loss_adversary_idx": optimization.ego_collision_loss_adversary_idx,
+            "ego_collision_loss_adversary_id": optimization.ego_collision_loss_adversary_id,
+            "optimization_update_count": optimization.iteration_count,
+            "optimization_ego_collision": optimization.success,
+            "ego_refresh_count": optimization.ego_refresh_count,
+        }
         binary_path = replays_dir / f"{stem}.replay.zlib"
         html_path = render_dir / f"{stem}.html"
         pufferlib.viz.save_interactive_replay_zlib(replay.scenario_payload, bundle, str(binary_path))
@@ -475,19 +415,11 @@ def _generate_scenario(task):
     import traceback
     import torch
 
-    (
-        scenario_idx,
-        generation,
-        optimization_config,
-        destination,
-        map_path,
-        env_config,
-        render_replays,
-        show_progress,
-        worker_torch_thread_count,
-    ) = task
-    if worker_torch_thread_count is not None:
-        torch.set_num_threads(worker_torch_thread_count)
+    scenario_idx = task.scenario_idx
+    generation = task.generation
+    destination = task.destination
+    if task.worker_torch_thread_count is not None:
+        torch.set_num_threads(task.worker_torch_thread_count)
     seed = generation["seed"] + scenario_idx
     try:
         drive = _build_drive(generation["env"], scenario_idx, seed)
@@ -496,12 +428,12 @@ def _generate_scenario(task):
             ego_policy = _ego_policy_config(generation["ego_policy"])
             result = run_reactive_generation(
                 drive,
-                optimization_config,
+                task.optimization_config,
                 deterministic_seed=seed,
                 horizon_transition_count=generation["horizon_transition_count"],
-                capture_html_frames=render_replays,
+                capture_html_frames=task.render_replays,
                 capture_observations=generation["capture_observations"],
-                show_progress=show_progress,
+                show_progress=task.show_progress,
                 raster_resolution_meters=generation["raster_resolution_meters"],
                 ego_action_fn=None if ego_policy is None else PolicyEgoActor(ego_policy, drive),
             )
@@ -511,7 +443,7 @@ def _generate_scenario(task):
         npz_dir = Path(destination) / "npz"
         npz_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = npz_dir / f"scenario_{scenario_idx:05d}.npz"
-        save_generation_artifact(artifact_path, result, generation, str(map_path))
+        save_generation_artifact(artifact_path, result, generation, str(task.map_path))
         save_loss_history_csv(destination, scenario_idx, result)
         row = _metric_row(
             scenario_idx,
@@ -522,7 +454,7 @@ def _generate_scenario(task):
             generation["env"]["sdc_controller"],
         )
         rendered_files = (
-            render_scenario_replays(destination, scenario_idx, result, env_config) if render_replays else {}
+            render_scenario_replays(destination, scenario_idx, result, task.env_config) if task.render_replays else {}
         )
         return scenario_idx, row, rendered_files
     except Exception:
@@ -530,6 +462,23 @@ def _generate_scenario(task):
         print(f"\n[ERROR] Generation failed for scenario {scenario_idx}:")
         traceback.print_exc()
         raise
+
+
+@dataclass(frozen=True)
+class _ScenarioTask:
+    """One scenario's whole generation input, shipped whole to a spawned worker."""
+
+    scenario_idx: int
+    generation: dict
+    optimization_config: ReGentSOptimizationConfig
+    destination: Path
+    map_path: Path
+    env_config: dict
+    render_replays: bool
+    show_progress: bool
+    # A spawned worker shares the machine, so it takes one Torch thread; in process, None
+    # leaves the caller's own thread count alone.
+    worker_torch_thread_count: int | None
 
 
 def _generation_report(rows, destination, replay_index, wall_clock_seconds):
@@ -549,6 +498,10 @@ def _generation_report(rows, destination, replay_index, wall_clock_seconds):
     generation_success_count = sum(row["generation_success"] for row in rows)
     torch_collision_count = sum(row["torch_collision"] for row in rows)
     c_confirmed_actionable_collision_count = sum(row["torch_collision"] and row["actionable_collision"] for row in rows)
+
+    def rate(count, denominator):
+        return count / denominator if denominator else 0.0
+
     return GenerationReport(
         output_dir=destination,
         replay_index=replay_index,
@@ -559,18 +512,14 @@ def _generation_report(rows, destination, replay_index, wall_clock_seconds):
         torch_collision_count=torch_collision_count,
         c_confirmed_actionable_collision_count=c_confirmed_actionable_collision_count,
         c_unconfirmed_actionable_collision_count=torch_collision_count - c_confirmed_actionable_collision_count,
-        generation_success_rate=generation_success_count / scenario_count,
-        candidate_success_rate=(
-            generation_success_count / candidate_scenario_count if candidate_scenario_count else 0.0
-        ),
-        torch_collision_rate=(torch_collision_count / candidate_scenario_count if candidate_scenario_count else 0.0),
-        c_collision_confirmation_rate=(
-            c_confirmed_actionable_collision_count / torch_collision_count if torch_collision_count else 0.0
-        ),
-        ego_collision_rate=sum(row["ego_collision"] for row in rows) / scenario_count,
-        actionable_collision_rate=sum(row["actionable_collision"] for row in rows) / scenario_count,
-        background_collision_rate=sum(row["background_collision"] for row in rows) / scenario_count,
-        offroad_rate=sum(row["offroad"] for row in rows) / scenario_count,
+        generation_success_rate=rate(generation_success_count, scenario_count),
+        candidate_success_rate=rate(generation_success_count, candidate_scenario_count),
+        torch_collision_rate=rate(torch_collision_count, candidate_scenario_count),
+        c_collision_confirmation_rate=rate(c_confirmed_actionable_collision_count, torch_collision_count),
+        ego_collision_rate=rate(sum(row["ego_collision"] for row in rows), scenario_count),
+        actionable_collision_rate=rate(sum(row["actionable_collision"] for row in rows), scenario_count),
+        background_collision_rate=rate(sum(row["background_collision"] for row in rows), scenario_count),
+        offroad_rate=rate(sum(row["offroad"] for row in rows), scenario_count),
         maximum_c_torch_trajectory_error=max(row["c_torch_trajectory_error"] for row in rows),
         total_optimization_seconds=sum(row["optimization_seconds"] for row in rows),
         wall_clock_seconds=wall_clock_seconds,
@@ -610,16 +559,16 @@ def generate_regents_scenarios(
         num_workers = os.cpu_count() or 1
     num_workers = min(num_workers, generation["scenario_count"])
     tasks = [
-        (
-            scenario_idx,
-            generation,
-            optimization_config,
-            destination,
-            map_paths[scenario_idx],
-            env_config,
-            render_replays,
-            num_workers <= 1,
-            1 if num_workers > 1 else None,
+        _ScenarioTask(
+            scenario_idx=scenario_idx,
+            generation=generation,
+            optimization_config=optimization_config,
+            destination=destination,
+            map_path=map_paths[scenario_idx],
+            env_config=env_config,
+            render_replays=render_replays,
+            show_progress=num_workers <= 1,
+            worker_torch_thread_count=1 if num_workers > 1 else None,
         )
         for scenario_idx in range(generation["scenario_count"])
     ]
@@ -661,10 +610,14 @@ def generate_regents_scenarios(
 
     metrics_path = destination / METRICS_FILE_NAME
     with metrics_path.open("w", encoding="utf-8", newline="") as metrics_file:
+        # _metric_row is the single source of the schema: its own key order gives the
+        # fixed columns, and the eval columns are the union over rows, since a scenario
+        # whose horizon closed no episode carries none.
         eval_field_names = sorted({name for row in rows for name in row if name.startswith(EVAL_METRIC_FIELD_PREFIX)})
+        fixed_field_names = [name for name in rows[0] if not name.startswith(EVAL_METRIC_FIELD_PREFIX)]
         writer = csv.DictWriter(
             metrics_file,
-            fieldnames=[*METRIC_FIELD_NAMES, *eval_field_names],
+            fieldnames=[*fixed_field_names, *eval_field_names],
             restval="",
         )
         writer.writeheader()
