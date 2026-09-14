@@ -110,6 +110,14 @@ static int test_reward_terminal_components(void) {
 
     init_reward_env(&env, &agent, &log, active, reward);
     reward[0] = 0.0f;
+    agent.metrics_array[STOP_SIGN_IDX] = 1.0f;
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(env.rewards[0], -5.0f, 1e-5f);
+    EXPECT_NEAR(log.reward_stop_sign, -5.0f, 1e-5f);
+    EXPECT_NEAR(log.stop_sign_violation_rate, 1.0f, 1e-5f);
+
+    init_reward_env(&env, &agent, &log, active, reward);
+    reward[0] = 0.0f;
     agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
     compute_rewards(&env, 0);
     EXPECT_NEAR(env.rewards[0], 2.0f, 1e-5f);

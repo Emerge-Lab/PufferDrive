@@ -4,6 +4,7 @@ env:
   collision_behavior: stop
   offroad_behavior: stop
   traffic_light_behavior: stop
+  stop_sign_behavior: stop
   dt: 0.1
   reward_randomization: false
   reward_collision: 3.0
@@ -57,6 +58,15 @@ benchmarks:
       scenario_length: 500
       control_mode: control_vehicles
       map_dir: pufferlib/resources/drive/binaries/carla
+
+  - name: carla_render
+    seed: 42
+    num_scenarios: 8
+    env:
+      simulation_mode: gigaflow
+      num_maps: 8
+      map_dir: pufferlib/resources/drive/binaries/carla
+      eval_training_render: true
 
   - name: womd_multi
     seed: 42
