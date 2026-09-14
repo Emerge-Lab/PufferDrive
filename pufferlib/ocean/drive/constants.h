@@ -147,12 +147,8 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define INVALID_POSITION -10000.0f
 #define EGO_IDX 0 // Ego agent is always at index 0 in the agents array
 
-// Lane fitting: score = distance_weight * dist_term + heading_weight * heading_term
-#define LANE_SELECTION_DISTANCE_WEIGHT 0.7f
-#define LANE_SELECTION_HEADING_WEIGHT 0.3f
+// Lane observation/reward normalization and evaluation geometry
 #define LANE_DISTANCE_NORMALIZATION 4.0f
-#define LANE_SWITCH_THRESHOLD 0.05f // Hysteresis: new lane must be 5% better to switch
-#define LANE_DISCONNECTED_SWITCH_THRESHOLD 0.20f
 #define LANE_ALIGN_COS_THRESHOLD 0.5f
 #define MAX_CHECKED_LANES 32
 #define LANE_WIDTH 3.7f

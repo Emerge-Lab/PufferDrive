@@ -3274,30 +3274,22 @@ static void subsample_road_observation_rows(
 // Core Simulation Functions
 // ========================================
 
-static int is_direct_lane_transition(const Drive *env, int from_lane_idx, int to_lane_idx) {
-    const RoadMapElement *from_lane = &env->road_elements[from_lane_idx];
-    for (int exit_idx = 0; exit_idx < from_lane->num_exits; exit_idx++) {
-        if (from_lane->exit_lanes[exit_idx] == to_lane_idx) {
-            return 1;
-        }
-    }
-    const RoadMapElement *to_lane = &env->road_elements[to_lane_idx];
-    for (int entry_idx = 0; entry_idx < to_lane->num_entries; entry_idx++) {
-        if (to_lane->entry_lanes[entry_idx] == from_lane_idx) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 static LaneSelection find_current_lane(
     const Drive *env,
     const Agent *agent,
     const GridMapEntity *entity_list,
     int entity_count) {
+    const float search_radius_width_multiplier = 3.0f;
+    const float min_segment_length_sq_meters = 1e-6f;
+    const float direction_preference_weight = 0.5f;
+    const float lane_switch_penalty_weight = 0.35f;
+
     LaneSelection selection = {.lane_idx = -1, .geometry_idx = -1};
-    float best_score = INFINITY;
-    float max_distance = 3.0f * agent->sim_width;
+    // Fit the vehicle's center and longitudinal axis to each nearby lane segment.
+    float best_fit = INFINITY;
+    float half_length_meters = 0.5f * agent->sim_length;
+    float half_width_meters = 0.5f * agent->sim_width;
+    float max_distance = search_radius_width_multiplier * agent->sim_width;
     float max_distance_sq = max_distance * max_distance;
 
     for (int entity_list_idx = 0; entity_list_idx < entity_count; entity_list_idx++) {
@@ -3311,49 +3303,47 @@ static LaneSelection find_current_lane(
         float segment_dx = lane->x[geometry_idx + 1] - lane->x[geometry_idx];
         float segment_dy = lane->y[geometry_idx + 1] - lane->y[geometry_idx];
         float segment_length_sq = segment_dx * segment_dx + segment_dy * segment_dy;
-        if (segment_length_sq <= 1e-6f) {
+        if (segment_length_sq <= min_segment_length_sq_meters) {
             continue;
         }
 
         float agent_dx = agent->sim_x - lane->x[geometry_idx];
         float agent_dy = agent->sim_y - lane->y[geometry_idx];
+        // Clamp to the finite segment: past an endpoint, distance includes the longitudinal gap.
         float projection = clip((agent_dx * segment_dx + agent_dy * segment_dy) / segment_length_sq, 0.0f, 1.0f);
         float distance_x = agent_dx - projection * segment_dx;
         float distance_y = agent_dy - projection * segment_dy;
         float distance_sq = distance_x * distance_x + distance_y * distance_y;
-        if (distance_sq > max_distance_sq) {
+        if (distance_sq > max_distance_sq || distance_sq >= best_fit) {
             continue;
         }
 
+        // Compare height at the projection, not at the segment's start (slopes/stacked roads).
         float lane_z = lane->z[geometry_idx] + projection * (lane->z[geometry_idx + 1] - lane->z[geometry_idx]);
         if (fabsf(lane_z - agent->sim_z) > Z_BUFFER) {
             continue;
         }
 
-        float lane_heading = lane->headings[geometry_idx];
-        float heading_penalty = fabsf(compute_heading_diff(agent->sim_heading, lane_heading)) / M_PI;
-        float switch_penalty = 0.0f;
-        if (agent->current_lane_idx != -1 && agent->current_lane_idx != entity.entity_idx) {
-            switch_penalty = is_direct_lane_transition(env, agent->current_lane_idx, entity.entity_idx)
-                ? LANE_SWITCH_THRESHOLD
-                : LANE_DISCONNECTED_SWITCH_THRESHOLD;
+        float heading_diff = compute_heading_diff(agent->sim_heading, lane->headings[geometry_idx]);
+        float alignment = cosf(heading_diff);
+        // Front/rear lateral spread is the same when parallel in either direction.
+        // A direction preference, bounded by half_width squared, separates near-equal opposing lanes.
+        float fit = distance_sq + half_length_meters * half_length_meters * (1.0f - alignment * alignment)
+            + direction_preference_weight * half_width_meters * half_width_meters * (1.0f - alignment);
+        // A width-scaled switching cost keeps near-tied intersection lanes from flickering.
+        if (agent->current_lane_idx != -1 && entity.entity_idx != agent->current_lane_idx) {
+            fit += lane_switch_penalty_weight * half_width_meters * half_width_meters;
         }
-        float score_without_distance = LANE_SELECTION_HEADING_WEIGHT * heading_penalty + switch_penalty;
-        float maximum_better_distance
-            = (best_score - score_without_distance) * LANE_DISTANCE_NORMALIZATION / LANE_SELECTION_DISTANCE_WEIGHT;
-        if (maximum_better_distance <= 0.0f || distance_sq >= maximum_better_distance * maximum_better_distance) {
+        if (fit >= best_fit) { // Exact ties retain the first segment in the deterministic grid order.
             continue;
         }
-
-        float distance = sqrtf(distance_sq);
-        float score = LANE_SELECTION_DISTANCE_WEIGHT * distance / LANE_DISTANCE_NORMALIZATION
-            + LANE_SELECTION_HEADING_WEIGHT * heading_penalty + switch_penalty;
         float cross = segment_dx * agent_dy - segment_dy * agent_dx;
-        best_score = score;
+        best_fit = fit;
         selection.lane_idx = entity.entity_idx;
         selection.geometry_idx = geometry_idx;
-        selection.signed_distance = cross >= 0.0f ? -distance : distance;
-        selection.heading = lane_heading;
+        // Lane-relative sign convention: left is negative, right is positive.
+        selection.signed_distance = cross >= 0.0f ? -sqrtf(distance_sq) : sqrtf(distance_sq);
+        selection.heading = lane->headings[geometry_idx];
     }
     return selection;
 }
