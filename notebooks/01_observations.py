@@ -216,7 +216,7 @@ plt.show()
 # ## Lane / boundary segments
 
 # %%
-road_labels = ["rel_x", "rel_y", "rel_z", "length", "width", "dir_cos", "dir_sin", "goal_dist_abs", "goal_dist_rel"]
+road_labels = ["rel_x", "rel_y", "rel_z", "length", "dir_cos", "dir_sin", "width", "goal_dist_abs", "goal_dist_rel"]
 
 lane_active = ~np.all(lanes == 0, axis=1)
 bound_active = ~np.all(boundaries == 0, axis=1)
@@ -228,7 +228,7 @@ fig, ax = plt.subplots(figsize=(10, 10))
 
 # Mirror the canonical road rendering in pufferlib.viz.plot_observation
 for seg in lanes[lane_active]:
-    x, y, z, length, width, dc, ds = seg[:7]
+    x, y, z, length, dc, ds = seg[:6]
     # seg[7] = goal_dist_abs (0 near goal lane -> 1 far); green->red colormap
     color = plt.cm.RdYlGn_r(float(seg[7])) if env.obs_goal_lane_distance else "lightgrey"
     ax.scatter(x, y, color=color, s=10, zorder=1)
@@ -241,7 +241,7 @@ for seg in lanes[lane_active]:
     )
 
 for seg in boundaries[bound_active]:
-    x, y, z, length, width, dc, ds = seg[:7]
+    x, y, z, length, dc, ds = seg[:6]
     ax.scatter(x, y, color="black", s=10, zorder=1)
     ax.plot(
         [x + dc * length / 2, x - dc * length / 2],
