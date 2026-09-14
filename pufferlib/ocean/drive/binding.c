@@ -1739,8 +1739,15 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         int offset = 0;
         for (int i = 0; i < env_count; i++) {
+            int map_id;
+            if (eval_mode) {
+                map_id = use_eval_map_indices ? (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, i))
+                                              : (s_map_counter + i) % num_maps;
+            } else {
+                map_id = rng_below(&shared_rng, num_maps);
+            }
             PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
-            PyList_SetItem(map_ids_list, i, PyLong_FromLong(rng_below(&shared_rng, num_maps)));
+            PyList_SetItem(map_ids_list, i, PyLong_FromLong(map_id));
             offset += agent_counts[i];
         }
         PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
@@ -1950,7 +1957,6 @@ static PyObject *map_cache_release_py(
 }
 
 static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
-    env->render_mode = (int) unpack(kwargs, "render_mode");
     env->action_type = (int) unpack(kwargs, "action_type");
     env->dynamics_model = (int) unpack(kwargs, "dynamics_model");
     env->reset_accel_on_stop = (bool) unpack(kwargs, "reset_accel_on_stop");
@@ -2011,12 +2017,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->terminate_on_goal = (int) unpack(kwargs, "terminate_on_goal");
     char *map_file = unpack_str(kwargs, "map_file");
     env->map_name = map_file;
-    char *resource_root = unpack_str(kwargs, "resource_root");
-    if (resource_root == NULL) {
-        return -1;
-    }
-    snprintf(env->resource_root, sizeof(env->resource_root), "%s", resource_root);
-    free(resource_root);
     env->num_controllable_agents = (int) unpack(kwargs, "max_agents");
     env->num_max_agents = (int) unpack(kwargs, "max_agents_per_env");
     int init_step = (int) unpack(kwargs, "init_step");
