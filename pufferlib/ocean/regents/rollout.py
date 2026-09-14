@@ -125,16 +125,6 @@ class _CRollout:
     avoidability_debug: dict | None
 
 
-def _html_frame_arrays(agent_count, traffic_count):
-    return {
-        "agent_f32": np.empty((1, agent_count, binding.AGENT_F32_FIELDS), dtype=np.float32),
-        "agent_i32": np.empty((1, agent_count, binding.AGENT_I32_FIELDS), dtype=np.int32),
-        "metrics_f32": np.empty((1, agent_count, binding.METRICS_F32_FIELDS), dtype=np.float32),
-        "puffer_f32": np.empty((1, agent_count, binding.SCORE_F32_FIELDS), dtype=np.float32),
-        "traffic_i16": np.empty((1, traffic_count, binding.TRAFFIC_I16_FIELDS), dtype=np.int16),
-    }
-
-
 def _capture_c_rollout(
     drive,
     transition_count,
@@ -175,7 +165,13 @@ def _capture_c_rollout(
     html_frames = None
     if capture_html_frames:
         traffic_count = max(len(payload_scenario.get("traffic_elements") or []), 1)
-        scratch = _html_frame_arrays(agent_count, traffic_count)
+        scratch = {
+            "agent_f32": np.empty((1, agent_count, binding.AGENT_F32_FIELDS), dtype=np.float32),
+            "agent_i32": np.empty((1, agent_count, binding.AGENT_I32_FIELDS), dtype=np.int32),
+            "metrics_f32": np.empty((1, agent_count, binding.METRICS_F32_FIELDS), dtype=np.float32),
+            "puffer_f32": np.empty((1, agent_count, binding.SCORE_F32_FIELDS), dtype=np.float32),
+            "traffic_i16": np.empty((1, traffic_count, binding.TRAFFIC_I16_FIELDS), dtype=np.int16),
+        }
         html_frames = {key: [] for key in scratch}
         drive.get_obs_html_frame(*(scratch[key] for key in scratch))
         for key, array in scratch.items():

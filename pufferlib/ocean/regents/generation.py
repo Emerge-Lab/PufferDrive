@@ -365,18 +365,6 @@ def _optimization_config(optimizer_config):
     )
 
 
-def _ego_policy_config(resolved_ego_policy):
-    """Rebuild the policy ego config from its persisted mapping, dropping the digest."""
-    if resolved_ego_policy is None:
-        return None
-    settings = {key: value for key, value in resolved_ego_policy.items() if key != "checkpoint_sha256"}
-    return ReGentSPolicyEgoConfig(**settings)
-
-
-def _build_drive(environment, map_idx, seed):
-    return Drive(**environment, eval_map_indices=[map_idx], eval_scenario_seeds=[seed], seed=seed)
-
-
 def _metric_row(scenario_idx, seed, result, elapsed_seconds, artifact_path, ego_controller):
     """One generation_metrics.csv row. Generation indexes one map per scenario."""
     metrics = result.replay.metrics
@@ -422,10 +410,20 @@ def _generate_scenario(task):
         torch.set_num_threads(task.worker_torch_thread_count)
     seed = generation["seed"] + scenario_idx
     try:
-        drive = _build_drive(generation["env"], scenario_idx, seed)
+        drive = Drive(
+            **generation["env"],
+            eval_map_indices=[scenario_idx],
+            eval_scenario_seeds=[seed],
+            seed=seed,
+        )
         started_at = time.perf_counter()
         try:
-            ego_policy = _ego_policy_config(generation["ego_policy"])
+            ego_policy = None
+            if generation["ego_policy"] is not None:
+                policy_settings = {
+                    key: value for key, value in generation["ego_policy"].items() if key != "checkpoint_sha256"
+                }
+                ego_policy = ReGentSPolicyEgoConfig(**policy_settings)
             result = run_reactive_generation(
                 drive,
                 task.optimization_config,
