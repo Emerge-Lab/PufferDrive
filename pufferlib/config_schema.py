@@ -213,6 +213,12 @@ class ActionSelection(Enum):
     mean = 2
 
 
+class ProfileMode(Enum):
+    sim = 0
+    training = 1
+    all = 2
+
+
 @dataclass
 class VectorConfig:
     backend: VectorBackend = MISSING
@@ -221,6 +227,15 @@ class VectorConfig:
     batch_size: int | str | None = MISSING
     zero_copy: bool = MISSING
     seed: int | None = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
+
+
+@dataclass
+class ProfileConfig:
+    mode: ProfileMode = MISSING
+    output_dir: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
+    warmup_cycles: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
+    trace_cycles: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    perf_frequency_hz: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
 
 
 @dataclass
@@ -238,6 +253,10 @@ class DriveEnvConfig:
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING
+    stop_sign_behavior: InfractionBehavior = MISSING
+    traffic_lights_enabled: bool = MISSING
+    stop_signs_enabled: bool = MISSING
+    yield_signs_enabled: bool = MISSING
     use_map_cache: bool = MISSING
     preload_map_cache: bool = MISSING
     use_neighbor_cache: bool = MISSING
@@ -397,14 +416,6 @@ class TrainingConfig:
     adv_filter_enabled: bool = MISSING
     adv_filter_ewma_beta: float = _constrained_field(PROBABILITY_CONSTRAINT)
     adv_filter_threshold_scale: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
-    render: bool = MISSING
-    render_interval: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
-    obs_only: bool = MISSING
-    show_grid: bool = MISSING
-    show_lasers: bool = MISSING
-    show_human_logs: bool = MISSING
-    render_map: Any = MISSING
-
     # Derived by load_config from rnn_name and intentionally absent from YAML.
     use_rnn: bool = MISSING
 
@@ -418,6 +429,7 @@ class EvaluationConfig:
     output_name: str | None = MISSING
     output_dir_name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     render_scenarios: bool = MISSING
+    keep_zlib_replays: bool = MISSING
     render_filter: Any = MISSING
     max_rendered_failures: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     failure_replay_csv: str | None = MISSING
@@ -431,14 +443,7 @@ class EvaluationConfig:
 class PufferDriveConfig:
     load_model_path: str | None = MISSING
     load_id: str | None = MISSING
-    render_mode: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
-    video_path: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     num_scenarios: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
-    render: bool = MISSING
-    agent_index: int | None = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
-    save_frames: bool = MISSING
-    gif_path: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
-    fps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     max_runs: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     wandb: bool = MISSING
     wandb_project: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
@@ -456,6 +461,7 @@ class PufferDriveConfig:
     policy_name: PolicyName = MISSING
     rnn_name: RNNName | None = MISSING
     max_suggestion_cost: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    profile: ProfileConfig = MISSING
     vec: VectorConfig = MISSING
     env: DriveEnvConfig = MISSING
     policy: DrivePolicyConfig = MISSING
@@ -604,7 +610,7 @@ def _validate_cross_field_constraints(config, context):
         not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip()
     ):
         _raise_config_error(context, "train.evaluation_benchmarks", "must be a non-empty string")
-    if not context.startswith("evaluation"):
+    if not context.startswith("evaluation") and context != "simulation profiling":
         for field_name in ("batch_size", "bptt_horizon"):
             if train[field_name] != "auto":
                 _validate_value_constraint(train[field_name], POSITIVE_INT_CONSTRAINT, context, f"train.{field_name}")
@@ -670,8 +676,6 @@ def _validate_cross_field_constraints(config, context):
                         "train.minibatch_size",
                         f"the effective minibatch size ({effective_minibatch_size}) must be divisible by the auto-computed bptt_horizon ({horizon})",
                     )
-    _validate_string_selection(train["render_map"], context, "train.render_map")
-
     eval_config = config["eval"]
     evaluation_required = context.startswith("evaluation") or config["train"]["evaluation_interval_epochs"] is not None
     if not eval_config:
@@ -788,9 +792,24 @@ def normalize_puffer_drive_benchmarks(environment_config, benchmarks, context, v
         simulation_mode = benchmark_environment.get("simulation_mode")
         if simulation_mode not in ("gigaflow", "replay"):
             _raise_config_error(context, f"{benchmark_path}.env.simulation_mode", "must be 'gigaflow' or 'replay'")
+        eval_training_render = benchmark_environment.get("eval_training_render", False)
+        if not isinstance(eval_training_render, bool):
+            _raise_config_error(
+                context,
+                f"{benchmark_path}.env.eval_training_render",
+                "must be a boolean",
+            )
         control_mode = benchmark_environment.get("control_mode")
-        if not isinstance(control_mode, str) or not control_mode:
+        if control_mode is not None and (not isinstance(control_mode, str) or not control_mode):
             _raise_config_error(context, f"{benchmark_path}.env.control_mode", "must be a non-empty string")
+        if control_mode is None and not eval_training_render:
+            _raise_config_error(context, f"{benchmark_path}.env.control_mode", "must be a non-empty string")
+        if eval_training_render and simulation_mode != "gigaflow":
+            _raise_config_error(
+                context,
+                f"{benchmark_path}.env.eval_training_render",
+                "is only supported in gigaflow mode",
+            )
 
         seed = benchmark.get("seed")
         if seed is None:
@@ -814,7 +833,7 @@ def normalize_puffer_drive_benchmarks(environment_config, benchmarks, context, v
 
         max_agents_per_env = benchmark_environment.get("max_agents_per_env")
         single_agent_replay = simulation_mode == "replay" and control_mode == "control_sdc_only"
-        if max_agents_per_env is None and not single_agent_replay:
+        if max_agents_per_env is None and not single_agent_replay and not eval_training_render:
             _raise_config_error(context, f"{benchmark_path}.env.max_agents_per_env", "must be a positive integer")
         if max_agents_per_env is not None:
             _validate_value_constraint(

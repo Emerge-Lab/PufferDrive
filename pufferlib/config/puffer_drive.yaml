@@ -1,13 +1,6 @@
 load_model_path: null
 load_id: null
-render_mode: auto
-video_path: videos
 num_scenarios: 3
-render: false
-agent_index: null
-save_frames: false
-gif_path: eval.gif
-fps: 15
 max_runs: 200
 wandb: false
 wandb_project: pufferlib
@@ -28,6 +21,13 @@ policy_name: Drive
 # Options: Recurrent, None (null)
 rnn_name: null
 max_suggestion_cost: 3600
+profile:
+  # Options: sim, training, all
+  mode: all
+  output_dir: profiles
+  warmup_cycles: 1
+  trace_cycles: 1
+  perf_frequency_hz: 99
 vec:
   backend: Multiprocessing
   num_envs: 20
@@ -62,6 +62,11 @@ env:
   offroad_behavior: stop
   # Traffic light behavior - options: "ignore", "stop", "remove"
   traffic_light_behavior: stop
+  # Stop sign behavior - options: "ignore", "stop", "remove"
+  stop_sign_behavior: stop
+  traffic_lights_enabled: true
+  stop_signs_enabled: false
+  yield_signs_enabled: false
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map
   use_map_cache: true
   # Load all configured maps before fork so workers inherit shared geometry
@@ -273,19 +278,6 @@ train:
   adv_filter_enabled: true
   adv_filter_ewma_beta: 0.25
   adv_filter_threshold_scale: 0.01
-  # Rendering options
-  render: false
-  render_interval: 1000
-  # If True, show exactly what the agent sees in agent observation
-  obs_only: true
-  # Show grid lines
-  show_grid: false
-  # Draws lines from ego agent observed ORUs and road elements to show detection range
-  show_lasers: false
-  # Display human xy logs in the background
-  show_human_logs: true
-  # Options: List[str to path], str to path (e.g., "resources/drive/training/binaries/map_001.bin"), None
-  render_map: none
 sweep:
   method: Protein
   metric: score
@@ -303,6 +295,8 @@ eval:
   output_dir_name: eval
   # Capture and render every scenario during the standard benchmark pass.
   render_scenarios: false
+  # Keep the intermediate .replay.zlib bundles after rendering HTML.
+  keep_zlib_replays: false
   # Render scenarios where any configured metric is positive.
   # Use all_infractions for every infraction type; null disables it.
   render_filter: null

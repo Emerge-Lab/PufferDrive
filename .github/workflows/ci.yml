@@ -74,8 +74,8 @@ jobs:
           pip install -e . --no-cache-dir
           python setup.py build_ext --inplace --force
 
-      - name: C drive unit and render tests
-        run: make -C tests/drive test render
+      - name: C drive tests
+        run: make -C tests/drive test
 
   notebook-tests:
     name: Notebook Execution
