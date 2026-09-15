@@ -43,11 +43,20 @@ env:
   # Records the braking counterfactual so the replay HTML can show the avoidability panel.
   capture_avoidability_debug: true
 
-# Shared optimizer settings for every generation; a generation's own optimizer block
-# overrides these key by key. Adam displaces a parameter by about the learning rate per
-# iteration, so learning_rate * iteration_count is the action-space budget a run has.
+# Standard generation settings. Python applies a selected generation on top of these
+# values, matching the base-env then benchmark-env precedence used by `puffer eval`.
+raster_resolution_meters: 1.0
 optimizer:
+  # Adam displaces a parameter by about the learning rate per iteration, so their
+  # product is the action-space budget.
   learning_rate: 0.001
+  iteration_count: 500
+  # Reactive egos answer every update. Replay egos coerce this to zero because a
+  # refresh would only reproduce the same logged trajectory.
+  ego_refresh_interval: 1
+  filter:
+    static_speed_threshold_mps: 0.2
+    maximum_reconstruction_drift_meters: 1.0
 
 # Shared cost geometry for every generation; a generation's own optimizer.costs
 # overrides these key by key. KING road geometry: sigma 1.0 m (5 px at its 5 px/m)
@@ -67,15 +76,6 @@ generations:
     raster_resolution_meters: 0.5
     output_dir: experiments/regents
     render_replays: true
-    optimizer:
-      iteration_count: 500
-      # The ego is log replay here, so it cannot answer the adversary. Every profile asks for
-      # a refresh per update; for a replay ego `run_reactive_generation` coerces this to 0,
-      # because a refresh would only re-derive the trajectory already captured.
-      ego_refresh_interval: 1
-      filter:
-        # NuPlan parked tracks can have >0.2 m of position jitter at exactly zero speed.
-        static_speed_threshold_mps: 0.2
     env:
       scenario_length: 101
       resample_frequency: 101
@@ -88,19 +88,8 @@ generations:
     scenario_count: 100
     num_workers: 24
     horizon_transition_count: 90
-    raster_resolution_meters: 1.0
     output_dir: experiments/regents
     render_replays: true
-    optimizer:
-      iteration_count: 500
-      # A reactive IDM ego answers each iterate before a contact is allowed to end the
-      # run, so stopping on the first contact means stopping on an IDM-confirmed one.
-      ego_refresh_interval: 1
-      filter:
-        static_speed_threshold_mps: 0.2
-        # Reject the upper reconstruction tail: 93.3% of WOD candidates stay
-        # within 1 m, retaining 244/246 pre-gate candidate-bearing scenes.
-        maximum_reconstruction_drift_meters: 1.0
     env:
       map_dir: pufferlib/resources/drive/binaries/wod-motion_val
       scenario_length: 91
@@ -111,8 +100,8 @@ generations:
       # reconstruction, so keep the cap above real traffic.
       base_max_speed_mps: 40.0
 
-  # WOD Motion validation against a PDM ego. Horizon, raster, learning rate, filters, and
-  # speed cap follow regents_wod_motion_val; only the ego differs. Note this is the profile
+  # WOD Motion validation against a PDM ego. Raster, optimizer, and filter settings come
+  # from the shared defaults above. Note this is the profile
   # that drives PDM's rollout buffer to its limit: base_max_speed_mps 40.0 puts a fast ego at
   # the speed-aware horizon cap of 8 s, which at pdm_planning_dt 0.1 is exactly the 81 steps
   # PDM_MAX_ROLLOUT_STEPS allows. Raising the cap or lowering pdm_planning_dt needs that
@@ -122,23 +111,29 @@ generations:
     scenario_count: 100
     num_workers: 24
     horizon_transition_count: 90
-    raster_resolution_meters: 1.0
     output_dir: experiments/regents
     render_replays: true
-    optimizer:
-      iteration_count: 500
-      # A reactive PDM ego answers each iterate before a contact is allowed to end the
-      # run, so stopping on the first contact means stopping on a PDM-confirmed one.
-      ego_refresh_interval: 1
-      filter:
-        static_speed_threshold_mps: 0.2
-        maximum_reconstruction_drift_meters: 1.0
     env:
       map_dir: pufferlib/resources/drive/binaries/wod-motion_val
       scenario_length: 91
       resample_frequency: 91
       sdc_controller: pdm
       base_max_speed_mps: 40.0
+
+  # One deterministic 150-transition log for each CARLA town. Agent 0 is the PDM
+  # ego; the other 149 vehicles replay their saved IDM trajectories.
+  - name: regents_carla_generated_idm_pdm
+    seed: 42
+    scenario_count: 8
+    num_workers: 24
+    horizon_transition_count: 150
+    output_dir: experiments/regents
+    render_replays: true
+    env:
+      map_dir: pufferlib/resources/drive/binaries/carla_generated_idm
+      scenario_length: 151
+      resample_frequency: 151
+      sdc_controller: pdm
 
   # WOD Motion validation against the learned ego. Horizon, raster, learning rate,
   # filters, and speed cap follow regents_wod_motion_val; only the ego differs.
@@ -147,7 +142,6 @@ generations:
     scenario_count: 100
     num_workers: 24
     horizon_transition_count: 90
-    raster_resolution_meters: 1.0
     output_dir: experiments/regents
     render_replays: true
     # Record the ego observation alongside each HTML frame, so a replay shows what the
@@ -158,15 +152,6 @@ generations:
       config_path: experiments/3_0_no_conditionning_target_config.yaml
       action_selection: mean
       device: cpu
-    optimizer:
-      iteration_count: 500
-      # A policy refresh is 90 C steps plus 90 forward passes, so this is the dominant
-      # per-scenario cost: up to 45k inferences. Accepted deliberately, so the adversary is
-      # always optimized against an ego that has answered it.
-      ego_refresh_interval: 1
-      filter:
-        static_speed_threshold_mps: 0.2
-        maximum_reconstruction_drift_meters: 1.0
     env:
       map_dir: pufferlib/resources/drive/binaries/wod-motion_val
       scenario_length: 91
@@ -192,13 +177,6 @@ generations:
     raster_resolution_meters: 0.5
     output_dir: experiments/regents
     render_replays: true
-    optimizer:
-      iteration_count: 500
-      # IDM ego: re-rolled in C on every update, so the adversary is always optimized
-      # against an ego that answers it.
-      ego_refresh_interval: 1
-      filter:
-        static_speed_threshold_mps: 0.2
     env:
       scenario_length: 201
       resample_frequency: 201
@@ -221,13 +199,6 @@ generations:
       config_path: experiments/3_0_no_conditionning_target_config.yaml
       action_selection: mean
       device: cpu
-    optimizer:
-      iteration_count: 500
-      # A policy refresh costs a full C rollout plus one forward pass per step, so this is
-      # the dominant per-scenario cost. Accepted deliberately for maximum ego reactivity.
-      ego_refresh_interval: 1
-      filter:
-        static_speed_threshold_mps: 0.2
     env:
       scenario_length: 101
       resample_frequency: 101
@@ -250,11 +221,6 @@ generations:
     raster_resolution_meters: 0.5
     output_dir: experiments/regents
     render_replays: true
-    optimizer:
-      iteration_count: 500
-      ego_refresh_interval: 1
-      filter:
-        static_speed_threshold_mps: 0.2
     env:
       scenario_length: 101
       resample_frequency: 101
@@ -273,11 +239,6 @@ generations:
     raster_resolution_meters: 0.5
     output_dir: experiments/regents
     render_replays: true
-    optimizer:
-      iteration_count: 500
-      ego_refresh_interval: 1
-      filter:
-        static_speed_threshold_mps: 0.2
     env:
       scenario_length: 101
       resample_frequency: 101
@@ -291,9 +252,3 @@ generations:
     raster_resolution_meters: 0.5
     output_dir: experiments/regents
     render_replays: true
-    optimizer:
-      iteration_count: 500
-      # One ego rollout per update: 500 updates is up to 500 ego trajectories.
-      ego_refresh_interval: 1
-      filter:
-        static_speed_threshold_mps: 0.2

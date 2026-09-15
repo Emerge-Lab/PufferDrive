@@ -144,9 +144,10 @@ def load_generation_config(config_path, generation_name):
     config = _require_mapping(config, "ReGentS generation config")
     shared_env = _require_mapping(config.get("env"), "ReGentS generation config env")
     shared_optimizer = _require_mapping(config.get("optimizer", {}), "ReGentS generation config optimizer")
-    # Nested blocks would be clobbered wholesale by a generation's own, so the shared
-    # optimizer carries scalars only; shared cost geometry has its own top-level block.
-    nested_shared_keys = [key for key, value in shared_optimizer.items() if isinstance(value, dict)]
+    shared_filter = _require_mapping(shared_optimizer.get("filter", {}), "ReGentS generation config optimizer filter")
+    # Filter has explicit key-by-key override semantics. Other shared nested optimizer
+    # blocks are rejected because silently replacing them would lose standard values.
+    nested_shared_keys = [key for key, value in shared_optimizer.items() if isinstance(value, dict) and key != "filter"]
     if nested_shared_keys:
         raise ValueError(f"ReGentS generation config optimizer must not nest: {', '.join(sorted(nested_shared_keys))}")
     shared_costs = _require_mapping(config.get("costs", {}), "ReGentS generation config costs")
@@ -178,8 +179,15 @@ def load_generation_config(config_path, generation_name):
     if unknown_keys:
         raise ValueError(f"ReGentS generation config has unsupported env keys: {', '.join(sorted(unknown_keys))}")
 
+    selected_optimizer = _require_mapping(selected.get("optimizer", {}), f"Generation {generation_name} optimizer")
     optimizer = dict(shared_optimizer)
-    optimizer.update(_require_mapping(selected.get("optimizer", {}), f"Generation {generation_name} optimizer"))
+    optimizer.update(selected_optimizer)
+    filter_settings = dict(shared_filter)
+    filter_settings.update(
+        _require_mapping(selected_optimizer.get("filter", {}), f"Generation {generation_name} optimizer filter")
+    )
+    if filter_settings:
+        optimizer["filter"] = filter_settings
     # Shared cost geometry, overridden key by key by a generation that declares its own.
     costs = dict(shared_costs)
     costs.update(_require_mapping(optimizer.get("costs", {}), f"Generation {generation_name} optimizer costs"))
@@ -198,7 +206,12 @@ def load_generation_config(config_path, generation_name):
         "horizon_transition_count": _require_positive_int(
             selected.get("horizon_transition_count"), "horizon_transition_count"
         ),
-        "raster_resolution_meters": float(selected.get("raster_resolution_meters", DEFAULT_RASTER_RESOLUTION_METERS)),
+        "raster_resolution_meters": float(
+            selected.get(
+                "raster_resolution_meters",
+                config.get("raster_resolution_meters", DEFAULT_RASTER_RESOLUTION_METERS),
+            )
+        ),
         "output_dir": str(selected.get("output_dir", "experiments/regents")),
         "render_replays": bool(selected.get("render_replays", False)),
         "capture_observations": bool(selected.get("capture_observations", False)),
