@@ -2078,8 +2078,10 @@ static void add_log(Drive *env) {
         episode_log.avg_speed_per_agent += avg_speed_per_agent / safe_timestep;
         int num_goals_reached = env->logs[i].num_goals_reached;
         episode_log.num_goals_reached += num_goals_reached;
-        // Score: 1 per agent that reached its full goal set without being removed/stopped.
-        if (num_goals_reached >= env->num_goals && !agent->removed && !agent->stopped) {
+        // Score: 1 per agent that reached its full goal set without any infraction. Checking
+        // total_infractions rather than agent->removed/stopped directly, since those flags are
+        // also set by goal_reached_behavior on a successful final-goal despawn.
+        if (num_goals_reached >= env->num_goals && !total_infractions) {
             episode_log.score += 1.0f;
         }
         if (!offroad && !collided && !red_light_violations && num_goals_reached < 1) {

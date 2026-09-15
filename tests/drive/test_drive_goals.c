@@ -283,6 +283,12 @@ static int test_goal_reached_behavior_remove_despawns_on_final_goal(void) {
     }
     EXPECT_TRUE(intermediate_goal_seen);
     EXPECT_TRUE(removed);
+
+    // A goal-driven despawn must still count toward episode score: score gates on
+    // total_infractions, not agent->removed, precisely because goal_reached_behavior=remove
+    // also sets agent->removed on a clean finish.
+    add_log(&env);
+    EXPECT_TRUE(env.log.score >= 1.0f);
     free_allocated(&env);
     return 0;
 }
