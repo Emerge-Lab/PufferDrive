@@ -13,8 +13,11 @@ from pufferlib.ocean.regents.inverse_dynamics import estimate_expert_actions
 from pufferlib.ocean.regents.geometry import signed_box_distance
 from pufferlib.ocean.regents.losses import ReGentSCostConfig, _masked_boxes
 from pufferlib.ocean.regents.optimizer import (
+    C_VERIFICATION_RETRY_UPDATE_INTERVAL,
     FrozenEgoTrajectory,
     ReGentSOptimizationConfig,
+    VERIFICATION_ACCEPT,
+    VERIFICATION_RETRY,
     drive_actions_from_parameter,
     optimize_frozen_ego_scenario,
     parameter_from_drive_actions,
@@ -255,6 +258,27 @@ def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions(monk
     assert steering_moments[0][1].abs().sum() > 0
     torch.testing.assert_close(steering_moments[1][0], steering_moments[0][1])
     torch.testing.assert_close(divergent.optimized_actions[..., 1], divergent.initial_actions[..., 1])
+
+
+def test_rejected_c_candidate_continues_the_same_optimization():
+    braking = _scenario(torch.stack((_straight_track(0.0, 0.0, 5.0, 13), _straight_track(12.0, 0.0, 3.0, 13))))
+    checked_actions = []
+
+    def verify_candidate(initial_actions, optimized_actions, optimized_states, state_valid, optimized_action_mask):
+        checked_actions.append(optimized_actions.clone())
+        return VERIFICATION_RETRY if len(checked_actions) == 1 else VERIFICATION_ACCEPT
+
+    result = optimize_frozen_ego_scenario(
+        braking,
+        config=_optimization_config(),
+        deterministic_seed=17,
+        show_progress=False,
+        verification_fn=verify_candidate,
+    )
+    assert result.success
+    assert len(checked_actions) == 2
+    assert result.iteration_count >= C_VERIFICATION_RETRY_UPDATE_INTERVAL
+    assert not torch.equal(checked_actions[0], checked_actions[1])
 
 
 def test_current_iterate_is_returned_with_baseline_relative_infraction_diagnostics():

@@ -2853,6 +2853,7 @@ def regents(
     *,
     experiment_name=None,
     drivable_area_weight=None,
+    scenario_count=None,
 ):
     """Generate ReGentS adversarial scenarios offline, without any training machinery."""
     config_path = config_path or REGENTS_GENERATION_CONFIG_PATH
@@ -2862,6 +2863,7 @@ def regents(
         output_dir=output_dir,
         experiment_name=experiment_name,
         drivable_area_weight=drivable_area_weight,
+        scenario_count=scenario_count,
     )
     run_name = generation_name if experiment_name is None else f"{generation_name}/{experiment_name}"
     print(f"[REGENTS] {run_name}: {report.scenario_count} scenarios -> {report.output_dir}")
@@ -2894,6 +2896,14 @@ def regents(
         f" | actionable {report.actionable_collision_rate:.1%}"
         f" | background {report.background_collision_rate:.1%} | offroad {report.offroad_rate:.1%}"
     )
+    for scope, class_counts in (
+        ("all scenarios", report.target_collision_class_counts),
+        ("C-verified successes", report.successful_target_collision_class_counts),
+    ):
+        print(
+            f"[REGENTS] ego collision classes over {scope}: genuine failure {class_counts['genuine_failure']}"
+            f" | adversary-forced {class_counts['adversary_forced']} | unavoidable {class_counts['unavoidable']}"
+        )
     print(
         f"[REGENTS] max C/Torch error {report.maximum_c_torch_trajectory_error:.3e}"
         f" | optimization cumulative {report.total_optimization_seconds:.1f}s (wall {report.wall_clock_seconds:.1f}s)"
@@ -2913,6 +2923,7 @@ def _parse_regents_cli_args(arguments):
     parser = argparse.ArgumentParser(prog="puffer regents puffer_drive")
     parser.add_argument("generation_name")
     parser.add_argument("--experiment-name", "--exp-name", dest="experiment_name")
+    parser.add_argument("--scenario-count", type=int)
     parser.add_argument(
         "--road-weight",
         "--drivable-area-weight",
@@ -2944,6 +2955,7 @@ def main():
             generation_name=regents_args.generation_name,
             experiment_name=regents_args.experiment_name,
             drivable_area_weight=regents_args.drivable_area_weight,
+            scenario_count=regents_args.scenario_count,
         )
     elif mode == "sweep":
         sweep(env_name=env_name)

@@ -13,6 +13,9 @@ from pufferlib.ocean.regents.optimizer import (
     FrozenEgoTrajectory,
     ReGentSOptimizationConfig,
     ReGentSOptimizationResult,
+    VERIFICATION_ACCEPT,
+    VERIFICATION_REJECT,
+    VERIFICATION_RETRY,
     optimize_frozen_ego_scenario,
 )
 from pufferlib.ocean.regents.state import (
@@ -87,6 +90,17 @@ class CReplayResult:
     episode_log: dict | None = None
     avoidability_debug: dict | None = None
     baseline_avoidability_debug: dict | None = None
+
+
+@dataclass(frozen=True)
+class CVerificationCandidate:
+    initial_actions: torch.Tensor
+    optimized_actions: torch.Tensor
+    optimized_states: torch.Tensor
+    state_valid: torch.Tensor
+    optimized_action_mask: torch.Tensor
+    success: bool = True
+    failure_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -400,11 +414,14 @@ def replay_optimized_scenario_in_c(
     capture_html_frames=False,
     ego_action_fn=None,
     capture_observations=False,
+    verified_parity_metrics=None,
 ):
-    """Replay optimized background controls in C and use C as the success oracle."""
+    """Replay optimized controls in C; optionally reuse a full-horizon parity check."""
     _validate_replay_inputs(drive, tolerance)
     if not isinstance(capture_html_frames, bool):
         raise TypeError("capture_html_frames must be a boolean")
+    if verified_parity_metrics is not None and not isinstance(verified_parity_metrics, CReplayMetrics):
+        raise TypeError("verified_parity_metrics must be CReplayMetrics")
     transition_count = optimization.optimized_actions.shape[1]
     if drive.resample_frequency > 0 and transition_count >= drive.resample_frequency:
         raise ValueError("C replay horizon must end before Drive resamples")
@@ -440,15 +457,24 @@ def replay_optimized_scenario_in_c(
     if initial_difference.numel() and float(initial_difference.max().item()) > INITIAL_STATE_TOLERANCE:
         raise RuntimeError("C reset to a different initial pose than the Torch scenario")
 
-    feature_mask = _parity_feature_mask(optimization, adversarial, joint_valid, torch_states.shape[1])
-    differences = torch.abs(adversarial.states - torch_states)
-    ego_feature_mask = feature_mask & ego_mask[:, None, None]
-    maximum_ego_reference_error = float(differences[ego_feature_mask].max().item()) if ego_feature_mask.any() else 0.0
-    # A reactive ego answers the new adversary, so it is reported instead of gated.
-    if drive.sdc_controller != binding.CONTROLLER_REPLAY:
-        feature_mask &= ~ego_mask[:, None, None]
-    maximum_error = float(differences[feature_mask].max().item()) if feature_mask.any() else 0.0
-    compared_state_count = int(feature_mask.sum().item())
+    if verified_parity_metrics is None:
+        feature_mask = _parity_feature_mask(optimization, adversarial, joint_valid, torch_states.shape[1])
+        differences = torch.abs(adversarial.states - torch_states)
+        ego_feature_mask = feature_mask & ego_mask[:, None, None]
+        maximum_ego_reference_error = (
+            float(differences[ego_feature_mask].max().item()) if ego_feature_mask.any() else 0.0
+        )
+        # A reactive ego answers the new adversary, so it is reported instead of gated.
+        if drive.sdc_controller != binding.CONTROLLER_REPLAY:
+            feature_mask &= ~ego_mask[:, None, None]
+        maximum_error = float(differences[feature_mask].max().item()) if feature_mask.any() else 0.0
+        compared_state_count = int(feature_mask.sum().item())
+    else:
+        # Stop mode deliberately diverges after contact; the same plan was already
+        # checked against Torch with infractions ignored before this final C replay.
+        maximum_error = verified_parity_metrics.maximum_trajectory_error
+        maximum_ego_reference_error = verified_parity_metrics.maximum_ego_reference_error
+        compared_state_count = verified_parity_metrics.compared_state_count
 
     events = baseline_relative_events(
         baseline,
@@ -545,15 +571,32 @@ def run_reactive_generation(
     raster_resolution_meters=DEFAULT_RASTER_RESOLUTION_METERS,
     ego_action_fn=None,
     capture_observations=False,
+    verification_drive=None,
+    verification_ego_action_fn=None,
 ):
     """Optimize one scenario against a periodically re-rolled C ego, then verify in C.
 
     The ego reacts inside the optimization loop, on `ego_refresh_interval`; C stays the
-    success oracle through a single verification replay at the end. `ego_action_fn`
-    supplies actions for a policy ego and must be absent for a native C controller.
+    success oracle. With a stopped `verification_drive`, C checks promising iterates
+    inside the Adam loop and allows bounded retries after an unconfirmed collision.
+    `ego_action_fn` supplies actions for a policy ego and must be absent for a native
+    C controller.
     """
     if drive.sdc_controller not in SUPPORTED_SDC_CONTROLLERS:
         raise ValueError(f"Reactive generation requires sdc_controller={SUPPORTED_SDC_CONTROLLER_NAMES}")
+    if verification_drive is not None and (
+        verification_drive.collision_behavior != binding.INFRACTION_BEHAVIOR_STOP
+        or verification_drive.offroad_behavior != binding.INFRACTION_BEHAVIOR_STOP
+    ):
+        raise ValueError("verification_drive must stop on collisions and off-road events")
+    if verification_drive is not None and verification_drive.sdc_controller != drive.sdc_controller:
+        raise ValueError("verification_drive must use the same ego controller")
+    if (
+        verification_drive is not None
+        and drive.sdc_controller == binding.CONTROLLER_POLICY
+        and verification_ego_action_fn is None
+    ):
+        raise ValueError("policy verification requires a verification ego action provider")
     if optimization_config is None:
         optimization_config = ReGentSOptimizationConfig()
 
@@ -578,6 +621,52 @@ def run_reactive_generation(
     else:
         optimization_config = replace(optimization_config, ego_refresh_interval=0)
 
+    verification_fn = None
+    checked_actions = None
+    checked_parity = None
+    checked_stopped = None
+    if verification_drive is not None:
+
+        def verify_candidate(initial_actions, optimized_actions, optimized_states, state_valid, optimized_action_mask):
+            nonlocal checked_actions, checked_parity, checked_stopped
+            candidate = CVerificationCandidate(
+                initial_actions=initial_actions,
+                optimized_actions=optimized_actions,
+                optimized_states=optimized_states,
+                state_valid=state_valid,
+                optimized_action_mask=optimized_action_mask,
+            )
+            parity_replay = replay_optimized_scenario_in_c(
+                drive,
+                scenario,
+                candidate,
+                seed=deterministic_seed,
+                tolerance=tolerance,
+                ego_action_fn=ego_action_fn,
+            )
+            checked_actions = optimized_actions
+            checked_parity = parity_replay
+            checked_stopped = None
+            if parity_replay.failure_reason == "c_torch_trajectory_mismatch":
+                return VERIFICATION_REJECT
+            stopped_replay = replay_optimized_scenario_in_c(
+                verification_drive,
+                scenario,
+                candidate,
+                seed=deterministic_seed,
+                tolerance=tolerance,
+                ego_action_fn=verification_ego_action_fn,
+                verified_parity_metrics=parity_replay.metrics,
+            )
+            checked_stopped = stopped_replay
+            if stopped_replay.success:
+                return VERIFICATION_ACCEPT
+            if stopped_replay.failure_reason in ("no_ego_collision_in_replay", "ego_collision_with_other_agent"):
+                return VERIFICATION_RETRY
+            return VERIFICATION_REJECT
+
+        verification_fn = verify_candidate
+
     optimization = optimize_frozen_ego_scenario(
         scenario,
         frozen_ego,
@@ -587,17 +676,44 @@ def run_reactive_generation(
         show_progress=show_progress,
         inverse_dynamics=inverse_dynamics,
         ego_rollout_fn=ego_rollout_fn,
+        verification_fn=verification_fn,
     )
-    replay = replay_optimized_scenario_in_c(
-        drive,
-        scenario,
-        optimization,
-        seed=deterministic_seed,
-        tolerance=tolerance,
-        capture_html_frames=capture_html_frames,
-        ego_action_fn=ego_action_fn,
-        capture_observations=capture_observations,
+    # The checked iterate is the returned iterate when Adam stopped at that C decision.
+    checked_final_actions = checked_actions is optimization.optimized_actions
+    replay = (
+        checked_parity
+        if checked_final_actions
+        else replay_optimized_scenario_in_c(
+            drive,
+            scenario,
+            optimization,
+            seed=deterministic_seed,
+            tolerance=tolerance,
+            capture_html_frames=capture_html_frames and verification_drive is None,
+            ego_action_fn=ego_action_fn,
+            capture_observations=capture_observations and verification_drive is None,
+        )
     )
+    if verification_drive is not None:
+        if (
+            checked_final_actions
+            and checked_stopped is not None
+            and not capture_html_frames
+            and not capture_observations
+        ):
+            replay = checked_stopped
+        else:
+            replay = replay_optimized_scenario_in_c(
+                verification_drive,
+                scenario,
+                optimization,
+                seed=deterministic_seed,
+                tolerance=tolerance,
+                capture_html_frames=capture_html_frames,
+                ego_action_fn=verification_ego_action_fn,
+                capture_observations=capture_observations,
+                verified_parity_metrics=replay.metrics,
+            )
     return ReactiveGenerationResult(
         scenario=scenario,
         optimization=optimization,

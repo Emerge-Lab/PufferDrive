@@ -2338,6 +2338,9 @@ def build_gallery_index(folder_path=".", file_metrics=None):
         ("iterationlimit", ("iteration_limit",), "Iteration limit"),
         ("offroad", ("offroad_rate", "offroad"), "Off-road"),
         ("collision", ("collision_rate", "collision"), "Collisions"),
+        ("genuinefailure", ("sdc_target_collision_genuine_failure_rate", "genuine_failure"), "Genuine failure"),
+        ("adversaryforced", ("sdc_target_collision_adversary_forced_rate", "adversary_forced"), "Adversary-forced"),
+        ("unavoidable", ("sdc_target_collision_unavoidable_rate", "unavoidable"), "Unavoidable"),
         ("idmcollision", ("idm_reconstruction_collision",), "IDM reconstruction collisions"),
         ("atfault", ("at_fault_collision_rate", "at_fault"), "At-fault collisions"),
         ("redlight", ("red_light_violation_rate", "red_light"), "Red-light violations"),
@@ -2428,6 +2431,9 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             --failure: #344054;
             --offroad: #b45309;
             --collision: #b42318;
+            --genuinefailure: #9f1239;
+            --adversaryforced: #b54708;
+            --unavoidable: #667085;
             --idmcollision: #c2410c;
             --atfault: #7e22ce;
             --redlight: #d92d20;
@@ -2530,6 +2536,9 @@ def build_gallery_index(folder_path=".", file_metrics=None):
         .iterationlimit-dot { background: var(--iterationlimit); }
         .offroad-dot { background: var(--offroad); }
         .collision-dot { background: var(--collision); }
+        .genuinefailure-dot { background: var(--genuinefailure); }
+        .adversaryforced-dot { background: var(--adversaryforced); }
+        .unavoidable-dot { background: var(--unavoidable); }
         .idmcollision-dot { background: var(--idmcollision); }
         .atfault-dot { background: var(--atfault); }
         .redlight-dot { background: var(--redlight); }
@@ -2769,6 +2778,21 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             color: var(--collision);
         }
 
+        .scenario-badge.genuinefailure {
+            border-left: 3px solid var(--genuinefailure);
+            color: var(--genuinefailure);
+        }
+
+        .scenario-badge.adversaryforced {
+            border-left: 3px solid var(--adversaryforced);
+            color: var(--adversaryforced);
+        }
+
+        .scenario-badge.unavoidable {
+            border-left: 3px solid var(--unavoidable);
+            color: var(--unavoidable);
+        }
+
         .scenario-badge.idmcollision {
             border-left: 3px solid var(--idmcollision);
             color: var(--idmcollision);
@@ -2944,6 +2968,11 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             }
             if (selectedOption.dataset.offroad === 'true') addFailureBadge('Off-road', 'offroad');
             if (selectedOption.dataset.collision === 'true') addFailureBadge('Collision', 'collision');
+            if (selectedOption.dataset.genuinefailure === 'true') addFailureBadge('Genuine failure', 'genuinefailure');
+            if (selectedOption.dataset.adversaryforced === 'true') {
+                addFailureBadge('Adversary-forced', 'adversaryforced');
+            }
+            if (selectedOption.dataset.unavoidable === 'true') addFailureBadge('Unavoidable', 'unavoidable');
             if (selectedOption.dataset.idmcollision === 'true') {
                 addFailureBadge('IDM reconstruction collision', 'idmcollision');
             }

@@ -48,6 +48,7 @@ HORIZON_TRANSITION_COUNT = 16
 # oracle needs a fixture that actually injects. Map 7 also logs an overlapping pair
 # inside this window, which the adversary must not be blamed for.
 OPEN_LOOP_HORIZON_TRANSITION_COUNT = 50
+REPLAY_STOPPED_FIELD_IDX = 4
 REPLAY_FIXTURES = ((7, 50),)
 
 
@@ -229,6 +230,35 @@ def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay)
         injection_drive.close()
 
 
+def test_final_stop_replay_freezes_colliding_agents_and_reuses_checked_parity(cached_replay):
+    map_idx, seed, scenario, optimization, full_horizon_replay = cached_replay
+    _, map_indices, _ = resolve_nuplan_scenarios()
+    drive = Drive(
+        **_drive_kwargs(map_idx, "replay"),
+        collision_behavior="stop",
+        offroad_behavior="stop",
+        eval_map_indices=[map_indices[map_idx]],
+        eval_scenario_seeds=[seed],
+    )
+    try:
+        stopped_replay = replay_optimized_scenario_in_c(
+            drive,
+            scenario,
+            optimization,
+            seed=seed,
+            capture_html_frames=True,
+            verified_parity_metrics=full_horizon_replay.metrics,
+        )
+    finally:
+        drive.close()
+
+    stopped = stopped_replay.baseline_frames["agent_i32"][:, :, REPLAY_STOPPED_FIELD_IDX]
+    assert np.any((stopped[1:] == 1) & (stopped[:-1] == 0))
+    assert stopped_replay.adversarial_frames["agent_f32"].shape[0] == OPEN_LOOP_HORIZON_TRANSITION_COUNT + 1
+    assert stopped_replay.metrics.maximum_trajectory_error == full_horizon_replay.metrics.maximum_trajectory_error
+    assert stopped_replay.metrics.compared_state_count == full_horizon_replay.metrics.compared_state_count
+
+
 def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_trips_its_artifact(tmp_path):
     """Full-log candidates outside a short horizon remain reportable and replayable."""
     drive = _drive(8, 50, "idm")
@@ -365,6 +395,16 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
     assert "IDM reconstruction collisions" in gallery
     assert "IDM reconstruction collision" in gallery
     assert 'data-idmcollision="false"' in gallery
+    for class_key in ("genuine_failure", "adversary_forced", "unavoidable"):
+        assert rendered["scenario_00008.logged.html"][class_key] == 0.0
+        assert class_key in rendered["scenario_00008.adversarial.html"]
+    for filter_key, filter_label in (
+        ("genuinefailure", "Genuine failure"),
+        ("adversaryforced", "Adversary-forced"),
+        ("unavoidable", "Unavoidable"),
+    ):
+        assert f'data-{filter_key}="false"' in gallery
+        assert filter_label in gallery
 
     # A policy ego is supported, but only with an action provider to drive it.
     policy_drive = _drive(8, 50, "policy")

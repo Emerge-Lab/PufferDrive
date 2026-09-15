@@ -56,6 +56,12 @@ DEFAULT_COLLISION_DISTANCE_TOLERANCE_METERS = 0.0
 DEFAULT_EGO_REFRESH_INTERVAL = 0
 MAXIMUM_STEERING_UPDATE_SCALE = 10.0
 BACKGROUND_COLLISION_PAIR_CHUNK_SIZE = 4096
+# Recheck after Adam has moved the rejected plan, with a fixed bound on C replay work.
+MAX_C_VERIFICATION_ATTEMPTS = 3
+C_VERIFICATION_RETRY_UPDATE_INTERVAL = 10
+VERIFICATION_ACCEPT = "accept"
+VERIFICATION_RETRY = "retry"
+VERIFICATION_REJECT = "reject"
 
 # Steering is optimized in the reference's path-curvature space, converted to the
 # simulator's normalized target wheel angle at the boundary. This is what keeps Adam
@@ -464,6 +470,7 @@ def optimize_frozen_ego_scenario(
     show_progress=True,
     inverse_dynamics=None,
     ego_rollout_fn=None,
+    verification_fn=None,
 ):
     """Optimize Stage 3 background actions against a detached ego rollout.
 
@@ -473,7 +480,9 @@ def optimize_frozen_ego_scenario(
     the current adversary plan every that many updates, which is what makes the ego
     reactive without ever placing it in the gradient path. The loop stops on the first
     generated ego collision confirmed against a fresh ego, on a non-finite loss or
-    gradient, or at the iteration limit, and returns the iterate it stopped on.
+    gradient, or at the iteration limit, and returns the iterate it stopped on. When
+    supplied, `verification_fn` may reject a collision and keep the same Adam state
+    moving through the remaining update budget.
     """
     if config is None:
         config = ReGentSOptimizationConfig()
@@ -573,6 +582,8 @@ def optimize_frozen_ego_scenario(
     ego_refresh_due = False
     # Without a refresh the caller's ego is the only ego there is, so it never goes stale.
     ego_is_fresh = True
+    verification_count = 0
+    last_verification_update = -C_VERIFICATION_RETRY_UPDATE_INTERVAL
 
     pbar = None
     if failure_reason is None and show_progress:
@@ -661,7 +672,31 @@ def optimize_frozen_ego_scenario(
         current_costs = snapshot
         last_iteration = completed_update_count
         success = collision_timestep is not None
-        if success and config.early_stop_on_collision:
+        terminal_collision = success and config.early_stop_on_collision
+        if terminal_collision and verification_fn is None:
+            break
+        verification_due = (
+            terminal_collision
+            and verification_fn is not None
+            and (
+                completed_update_count - last_verification_update >= C_VERIFICATION_RETRY_UPDATE_INTERVAL
+                or completed_update_count == config.iteration_count
+            )
+        )
+        decision = None
+        if verification_due:
+            decision = verification_fn(
+                baseline_actions,
+                current_actions,
+                current_states,
+                state_valid,
+                selection.optimized_action_mask,
+            )
+            verification_count += 1
+            last_verification_update = completed_update_count
+        if verification_due and decision not in (VERIFICATION_ACCEPT, VERIFICATION_RETRY, VERIFICATION_REJECT):
+            raise ValueError("verification_fn returned an invalid decision")
+        if verification_due and (decision != VERIFICATION_RETRY or verification_count == MAX_C_VERIFICATION_ATTEMPTS):
             break
         if completed_update_count == config.iteration_count:
             break

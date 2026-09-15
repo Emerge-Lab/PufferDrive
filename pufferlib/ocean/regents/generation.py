@@ -30,9 +30,16 @@ from pufferlib.ocean.regents.rollout import run_reactive_generation
 METRICS_FILE_NAME = "generation_metrics.csv"
 RENDER_DIR_NAME = "rendered_replays"
 REGENTS_ACTIVE_AGENT_COUNT = 1
+STANDARD_EVAL_INFRACTION_BEHAVIOR = "stop"
 # `puffer eval` reports one Log row per episode; the ReGentS horizon closes the same row and
 # carries it here under a prefix, so these never collide with the columns above.
 EVAL_METRIC_FIELD_PREFIX = "eval_"
+# Each closed episode carries exactly one of these as 1.0 when its ego collision was analyzed.
+TARGET_COLLISION_CLASS_FIELDS = (
+    ("genuine_failure", "sdc_target_collision_genuine_failure_rate"),
+    ("adversary_forced", "sdc_target_collision_adversary_forced_rate"),
+    ("unavoidable", "sdc_target_collision_unavoidable_rate"),
+)
 
 
 @dataclass(frozen=True)
@@ -58,6 +65,8 @@ class GenerationReport:
     total_optimization_seconds: float
     wall_clock_seconds: float
     rejection_reasons: dict
+    target_collision_class_counts: dict
+    successful_target_collision_class_counts: dict
 
 
 def _require_mapping(value, label):
@@ -86,10 +95,13 @@ def _validate_experiment_name(experiment_name):
     return experiment_name
 
 
-def _apply_generation_overrides(generation, experiment_name, drivable_area_weight):
+def _apply_generation_overrides(generation, experiment_name, drivable_area_weight, scenario_count=None):
     """Apply validated CLI overrides to the configuration persisted in artifacts."""
     resolved = dict(generation)
     resolved["experiment_name"] = _validate_experiment_name(experiment_name)
+    if scenario_count is not None:
+        resolved["scenario_count"] = _require_positive_int(scenario_count, "scenario_count")
+        resolved["env"] = {**resolved["env"], "num_maps": scenario_count}
     if drivable_area_weight is None:
         return resolved
     if isinstance(drivable_area_weight, bool) or not isinstance(drivable_area_weight, (int, float)):
@@ -265,20 +277,6 @@ def save_loss_history_csv(destination, scenario_idx, result):
         writer.writerows(rows)
 
 
-def _truncated_at_ego_collision(frames, ego_actions, first_ego_collision_timestep):
-    """Cut a captured rollout at the state where the ego is first struck.
-
-    Everything after the contact is the simulator carrying on past the event the
-    scenario exists to show, so the replay ends on the collision frame.
-    """
-    if first_ego_collision_timestep is None:
-        return frames, ego_actions
-    frame_count = first_ego_collision_timestep + 1
-    if frame_count >= next(iter(frames.values())).shape[0]:
-        return frames, ego_actions
-    return {key: array[:frame_count] for key, array in frames.items()}, ego_actions[: frame_count - 1]
-
-
 def candidate_plan(actions, candidate_rows, transition_count):
     """Return the candidate rows of an action plan, cut to the rendered transitions."""
     return actions[candidate_rows][:, :transition_count].detach().cpu().numpy()
@@ -304,15 +302,10 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
     candidate_adversary_ids = result.scenario.agent_id[candidate_rows].tolist()
     for label, frames, avoidability_debug in sources:
         stem = f"scenario_{scenario_idx:05d}.{label}"
-        # Both replays are cut to the same length so the logged and adversarial pages
-        # stay frame-aligned for comparison.
-        cut_frames, cut_ego_actions = _truncated_at_ego_collision(
-            frames, replay.ego_actions, replay.metrics.first_ego_collision_timestep
-        )
         optimization = result.optimization
-        transition_count = cut_ego_actions.shape[1]
+        transition_count = replay.ego_actions.shape[0]
         bundle = {
-            **_replay_bundle(env_config, cut_frames, cut_ego_actions),
+            **_replay_bundle(env_config, frames, replay.ego_actions),
             # Each page carries the counterfactual recorded for its own rollout.
             "avoidability_debug": avoidability_debug,
             "candidate_adversary_ids": candidate_adversary_ids,
@@ -343,6 +336,10 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
             "failure_reason": replay.failure_reason or "",
             "collision": float(replay.metrics.ego_collision and label == "adversarial"),
             "offroad": float(replay.metrics.offroad and label == "adversarial"),
+            **{
+                name: float(label == "adversarial" and (replay.episode_log or {}).get(field, 0.0) > 0.0)
+                for name, field in TARGET_COLLISION_CLASS_FIELDS
+            },
             "generation_success": float(replay.success),
             "idm_reconstruction_collision": float(
                 result.optimization.frozen_ego_source == "c_idm" and replay.metrics.baseline_ego_collision
@@ -417,7 +414,18 @@ def _generate_scenario(task):
             seed=seed,
         )
         started_at = time.perf_counter()
+        verification_drive = None
         try:
+            verification_drive = Drive(
+                **{
+                    **generation["env"],
+                    "collision_behavior": STANDARD_EVAL_INFRACTION_BEHAVIOR,
+                    "offroad_behavior": STANDARD_EVAL_INFRACTION_BEHAVIOR,
+                },
+                eval_map_indices=[scenario_idx],
+                eval_scenario_seeds=[seed],
+                seed=seed,
+            )
             ego_policy = None
             if generation["ego_policy"] is not None:
                 policy_settings = {
@@ -429,14 +437,20 @@ def _generate_scenario(task):
                 task.optimization_config,
                 deterministic_seed=seed,
                 horizon_transition_count=generation["horizon_transition_count"],
-                capture_html_frames=task.render_replays,
-                capture_observations=generation["capture_observations"],
                 show_progress=task.show_progress,
                 raster_resolution_meters=generation["raster_resolution_meters"],
                 ego_action_fn=None if ego_policy is None else PolicyEgoActor(ego_policy, drive),
+                verification_drive=verification_drive,
+                verification_ego_action_fn=(
+                    None if ego_policy is None else PolicyEgoActor(ego_policy, verification_drive)
+                ),
+                capture_html_frames=task.render_replays,
+                capture_observations=generation["capture_observations"],
             )
         finally:
             drive.close()
+            if verification_drive is not None:
+                verification_drive.close()
         elapsed_seconds = time.perf_counter() - started_at
         npz_dir = Path(destination) / "npz"
         npz_dir.mkdir(parents=True, exist_ok=True)
@@ -522,6 +536,16 @@ def _generation_report(rows, destination, replay_index, wall_clock_seconds):
         total_optimization_seconds=sum(row["optimization_seconds"] for row in rows),
         wall_clock_seconds=wall_clock_seconds,
         rejection_reasons=rejection_reasons,
+        target_collision_class_counts={
+            name: sum(row.get(f"{EVAL_METRIC_FIELD_PREFIX}{field}", 0.0) > 0.0 for row in rows)
+            for name, field in TARGET_COLLISION_CLASS_FIELDS
+        },
+        successful_target_collision_class_counts={
+            name: sum(
+                row["generation_success"] and row.get(f"{EVAL_METRIC_FIELD_PREFIX}{field}", 0.0) > 0.0 for row in rows
+            )
+            for name, field in TARGET_COLLISION_CLASS_FIELDS
+        },
     )
 
 
@@ -532,11 +556,12 @@ def generate_regents_scenarios(
     *,
     experiment_name=None,
     drivable_area_weight=None,
+    scenario_count=None,
 ):
     """Generate, C-verify, and save one artifact per scenario in the configured range."""
     overall_start = time.perf_counter()
     generation = load_generation_config(config_path, generation_name)
-    generation = _apply_generation_overrides(generation, experiment_name, drivable_area_weight)
+    generation = _apply_generation_overrides(generation, experiment_name, drivable_area_weight, scenario_count)
     destination = Path(output_dir) if output_dir is not None else Path(generation["output_dir"]) / generation_name
     if generation["experiment_name"] is not None:
         destination /= generation["experiment_name"]
@@ -548,7 +573,13 @@ def generate_regents_scenarios(
         raise ValueError("Configured scenario_count exceeds the available map binaries")
 
     render_replays = generation["render_replays"]
-    env_config = _full_env_config(generation["env"])
+    env_config = _full_env_config(
+        {
+            **generation["env"],
+            "collision_behavior": STANDARD_EVAL_INFRACTION_BEHAVIOR,
+            "offroad_behavior": STANDARD_EVAL_INFRACTION_BEHAVIOR,
+        }
+    )
     rows = [None] * generation["scenario_count"]
     rendered_files = {}
 
