@@ -1960,6 +1960,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->action_type = (int) unpack(kwargs, "action_type");
     env->dynamics_model = (int) unpack(kwargs, "dynamics_model");
     env->reset_accel_on_stop = (bool) unpack(kwargs, "reset_accel_on_stop");
+    env->spline_horizon_seconds = (float) unpack(kwargs, "spline_horizon_seconds");
     env->reward_goal = (float) unpack(kwargs, "reward_goal");
     env->reward_collision = (float) unpack(kwargs, "reward_collision");
     env->reward_offroad = (float) unpack(kwargs, "reward_offroad");
@@ -1974,6 +1975,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_timestep = (float) unpack(kwargs, "reward_timestep");
     env->reward_overspeed = (float) unpack(kwargs, "reward_overspeed");
     env->reward_ade = (float) unpack(kwargs, "reward_ade");
+    env->reward_trajectory_consistency = (float) unpack(kwargs, "reward_trajectory_consistency");
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
@@ -2009,6 +2011,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
     env->dt = (float) unpack(kwargs, "dt");
     env->base_max_speed_mps = (float) unpack(kwargs, "base_max_speed_mps");
+    // Shared with the C test fixture (drive_fixture.h), which never goes through this
+    // function — the formula must live in drive.h, not inline here.
+    init_spline_dynamics_fields(env);
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");
@@ -2151,6 +2156,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/reverse", log->reward_reverse);
     assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
     assign_to_dict(dict, "reward_components/ade", log->reward_ade);
+    assign_to_dict(dict, "reward_components/trajectory_consistency", log->reward_trajectory_consistency);
 
     if (env->compute_eval_metrics) {
         // Puffer score components

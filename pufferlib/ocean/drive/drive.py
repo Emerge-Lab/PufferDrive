@@ -32,6 +32,7 @@ class Drive(pufferlib.PufferEnv):
         reward_timestep=0.000025,
         reward_overspeed=0.05,
         reward_ade=0.0,
+        reward_trajectory_consistency=0.0,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
         num_goals=3,
@@ -58,6 +59,7 @@ class Drive(pufferlib.PufferEnv):
         action_type="discrete",
         dynamics_model="classic",
         reset_accel_on_stop=False,
+        spline_horizon_seconds=1.5,
         simulation_mode="gigaflow",
         termination_mode=False,
         inactive_agent_threshold=0.4,
@@ -146,6 +148,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_timestep = reward_timestep
         self.reward_overspeed = reward_overspeed
         self.reward_ade = reward_ade
+        self.reward_trajectory_consistency = reward_trajectory_consistency
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
@@ -187,6 +190,7 @@ class Drive(pufferlib.PufferEnv):
             "jerk": binding.DYNAMICS_MODEL_JERK,
         }[dynamics_model]
         self.reset_accel_on_stop = reset_accel_on_stop
+        self.spline_horizon_seconds = spline_horizon_seconds
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
         self.max_scenarios_per_batch = max_scenarios_per_batch
@@ -330,9 +334,14 @@ class Drive(pufferlib.PufferEnv):
                 )
             else:
                 self.single_action_space = gymnasium.spaces.Discrete(len(binding.JERK_LONG) * len(binding.JERK_LAT))
-        else:
+        elif action_type == "continuous":
             self._action_type_flag = binding.ACTION_TYPE_CONTINUOUS
             self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
+        elif action_type == "spline":
+            self._action_type_flag = binding.ACTION_TYPE_SPLINE
+            self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(6,), dtype=np.float32)
+        else:
+            raise ValueError(f"Unknown action_type: {action_type!r} (expected 'discrete', 'continuous', or 'spline')")
         self.starting_map_counter = starting_map
         self.starting_map_counter_init = starting_map
 
@@ -416,6 +425,7 @@ class Drive(pufferlib.PufferEnv):
             "action_type": self._action_type_flag,
             "dynamics_model": self.dynamics_model_flag,
             "reset_accel_on_stop": self.reset_accel_on_stop,
+            "spline_horizon_seconds": self.spline_horizon_seconds,
             "reward_goal": self.reward_goal,
             "reward_collision": self.reward_collision,
             "reward_offroad": self.reward_offroad,
@@ -430,6 +440,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_timestep": self.reward_timestep,
             "reward_overspeed": self.reward_overspeed,
             "reward_ade": self.reward_ade,
+            "reward_trajectory_consistency": self.reward_trajectory_consistency,
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,

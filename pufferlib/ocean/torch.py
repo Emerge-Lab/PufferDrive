@@ -402,8 +402,15 @@ class Drive(nn.Module):
         else:
             self.critic_backbone = DriveBackbone(**backbone_args)
 
-        # Setup action and value heads
-        self.is_continuous = action_type == "continuous"
+        # Setup action and value heads. "continuous" and "spline" both parameterize a diagonal
+        # Gaussian (Normal(loc, scale)) over env.single_action_space.shape[0] dims — spline just
+        # has more dims (6, vs continuous's 2) and needs no distribution code of its own.
+        # Deliberately kept named is_continuous (not e.g. is_gaussian) rather than renamed: this
+        # attribute is a de facto shared contract with generic infra outside this file
+        # (pufferlib.models.LSTMWrapper copies it at construction time; the WOSAC evaluator
+        # reads it directly) that doesn't know about "spline" — widening what True covers here
+        # is far lower blast-radius than renaming it everywhere those other consumers live.
+        self.is_continuous = action_type in ("continuous", "spline")
         if self.is_continuous:
             self.action_dim = env.single_action_space.shape[0]
         else:
@@ -435,6 +442,17 @@ class Drive(nn.Module):
         critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, 1), std=1))
         self.critic_head = nn.Sequential(*critic_head_layers)
 
+    def _decode_actions(self, hidden):
+        """Shared by forward() and decode_actions(): Normal(loc, scale) for a Gaussian action
+        type (continuous or spline), raw logits otherwise. Kept as one method so a third
+        Gaussian-like mode never has to be pasted into both call sites again."""
+        if self.is_continuous:
+            params = self.actor_head(hidden)
+            loc, scale = torch.split(params, self.action_dim, dim=1)
+            std = torch.nn.functional.softplus(scale) + 1e-4
+            return torch.distributions.Normal(loc, std)
+        return self.actor_head(hidden)
+
     def forward(self, observations, state=None):
         """
         Forward pass handling both Actor and Critic inference.
@@ -449,13 +467,7 @@ class Drive(nn.Module):
             critic_hidden = self.critic_backbone(observations, self.ego_dim)
 
         # Compute actions
-        if self.is_continuous:
-            params = self.actor_head(actor_hidden)
-            loc, scale = torch.split(params, self.action_dim, dim=1)
-            std = torch.nn.functional.softplus(scale) + 1e-4
-            actions = torch.distributions.Normal(loc, std)
-        else:
-            actions = self.actor_head(actor_hidden)
+        actions = self._decode_actions(actor_hidden)
 
         # Compute value
         value = self.critic_head(critic_hidden)
@@ -483,14 +495,7 @@ class Drive(nn.Module):
         Args:
             hidden: The hidden state for the actor (policy).
         """
-        if self.is_continuous:
-            parameters = self.actor_head(hidden)
-            loc, scale = torch.split(parameters, self.action_dim, dim=1)
-            std = torch.nn.functional.softplus(scale) + 1e-4
-            action = torch.distributions.Normal(loc, std)
-        else:
-            action = self.actor_head(hidden)
-
+        action = self._decode_actions(hidden)
         value = self.critic_head(hidden)
 
         return action, value

@@ -87,6 +87,7 @@ struct Log {
     float reward_reverse;
     float reward_overspeed;
     float reward_ade;
+    float reward_trajectory_consistency;
 };
 
 struct GridMapEntity {
@@ -193,6 +194,15 @@ struct Drive {
     float spawn_initial_speed;
     int dynamics_model;
     int reset_accel_on_stop;
+    float spline_horizon_seconds;
+    int spline_consistency_num_samples; // derived once at env-init from spline_horizon_seconds/dt
+    // Offset-limit fields below are also derived once at env-init (init_spline_dynamics_fields),
+    // from spline_horizon_seconds/base_max_speed_mps/ACCEL_LONG_LIMIT/ACCEL_LAT_LIMIT, not config knobs.
+    float spline_vel_fwd_offset_accel_mps;
+    float spline_vel_fwd_offset_brake_mps;
+    float spline_pos_fwd_offset_limit_m;
+    float spline_vel_left_offset_limit_mps;
+    float spline_pos_left_offset_limit_m;
     int init_mode;
     int control_mode;
     int collision_behavior;
@@ -224,6 +234,7 @@ struct Drive {
     float reward_timestep;
     float reward_overspeed;
     float reward_ade;
+    float reward_trajectory_consistency;
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
@@ -309,6 +320,9 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
     {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED C_vel
+    {0.0f,
+     0.1f,
+     0}, // REWARD_COEF_TRAJECTORY_CONSISTENCY α_trajectory-consistency ~ U(0, 0.1) [placeholder, tune empirically]
 };
 
 // Meaning of the values: [min_range, max_range, use_log_scale]
@@ -331,6 +345,8 @@ static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
     {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED C_vel
+    {1e-5f, 0.1f, 1}, // REWARD_COEF_TRAJECTORY_CONSISTENCY α_trajectory-consistency ~ logU(1e-5, 0.1) [placeholder,
+                      // tune empirically]
 };
 
 // ========================================
@@ -450,6 +466,28 @@ static void reset_agent_state(Agent *agent) {
     agent->partner_blindness_counter = 0;
     agent->is_blind_partner = 0;
     agent->is_phantom_braker = 0;
+    agent->spline_history_valid = 0;
+}
+
+// Derived spline-mode fields, computed once from spline_horizon_seconds/dt/base_max_speed_mps/
+// ACCEL_LONG_LIMIT/ACCEL_LAT_LIMIT — not config knobs themselves. Called from binding.c's env-init
+// AND from the C test fixture (which never goes through binding.c), so it must not live inline
+// in either caller.
+static void init_spline_dynamics_fields(Drive *env) {
+    float T = env->spline_horizon_seconds;
+    float dt = env->dt;
+    int derived_samples = (dt > 0.0f) ? (int) floorf((T - dt) / dt) : 0;
+    if (derived_samples < 0) {
+        derived_samples = 0;
+    } else if (derived_samples > SPLINE_CONSISTENCY_MAX_SAMPLES) {
+        derived_samples = SPLINE_CONSISTENCY_MAX_SAMPLES;
+    }
+    env->spline_consistency_num_samples = derived_samples;
+    env->spline_vel_fwd_offset_accel_mps = ACCEL_LONG_LIMIT[1] * T;
+    env->spline_vel_fwd_offset_brake_mps = -ACCEL_LONG_LIMIT[0] * T;
+    env->spline_pos_fwd_offset_limit_m = env->base_max_speed_mps * T + 0.5f * ACCEL_LONG_LIMIT[1] * T * T;
+    env->spline_vel_left_offset_limit_mps = ACCEL_LAT_LIMIT[1] * T;
+    env->spline_pos_left_offset_limit_m = 0.5f * ACCEL_LAT_LIMIT[1] * T * T;
 }
 
 static void invalidate_agent(Agent *agent) {
@@ -554,6 +592,32 @@ static inline void project_vector_to_ego_frame(
     float *rel_x,
     float *rel_y) {
     project_vector_to_local(world_vec_x, world_vec_y, ego->cos_heading, ego->sin_heading, rel_x, rel_y);
+}
+
+// Inverse of project_vector_to_local: rotate a local (ego-frame) vector back into world frame.
+// Rotation only — this codebase previously only ever projected world->ego (for observations).
+static inline void project_vector_from_ego_frame(
+    const Agent *ego,
+    float local_x,
+    float local_y,
+    float *world_x,
+    float *world_y) {
+    *world_x = local_x * ego->cos_heading - local_y * ego->sin_heading;
+    *world_y = local_x * ego->sin_heading + local_y * ego->cos_heading;
+}
+
+// Inverse of project_point_to_ego_frame: rotate then translate a local (ego-frame) point back
+// into world frame.
+static inline void project_point_from_ego_frame(
+    const Agent *ego,
+    float local_x,
+    float local_y,
+    float *world_x,
+    float *world_y) {
+    float rotated_x, rotated_y;
+    project_vector_from_ego_frame(ego, local_x, local_y, &rotated_x, &rotated_y);
+    *world_x = ego->sim_x + rotated_x;
+    *world_y = ego->sim_y + rotated_y;
 }
 
 #include "map_data.h"
@@ -2182,6 +2246,7 @@ static void add_log(Drive *env) {
         episode_log.reward_reverse += env->logs[i].reward_reverse;
         episode_log.reward_overspeed += env->logs[i].reward_overspeed;
         episode_log.reward_ade += env->logs[i].reward_ade;
+        episode_log.reward_trajectory_consistency += env->logs[i].reward_trajectory_consistency;
         // Comfort and velocity metrics (normalized per timestep)
         episode_log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         episode_log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -2265,6 +2330,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
             REWARD_COEF_VEL_ALIGN,
             REWARD_COEF_OVERSPEED,
             REWARD_COEF_REVERSE,
+            REWARD_COEF_TRAJECTORY_CONSISTENCY,
         };
         const RewardBound *bounds = env->reward_log_sampling ? REWARD_BOUNDS_LOG : REWARD_BOUNDS;
         for (int i = 0; i < (int) (sizeof(random_coefs) / sizeof(random_coefs[0])); i++) {
@@ -2294,6 +2360,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_OVERSPEED] = env->reward_overspeed;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = env->reward_timestep;
         agent->reward_coefs[REWARD_COEF_REVERSE] = env->reward_reverse;
+        agent->reward_coefs[REWARD_COEF_TRAJECTORY_CONSISTENCY] = env->reward_trajectory_consistency;
         agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
         agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
         agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
@@ -3122,7 +3189,7 @@ void allocate(Drive *env) {
     init(env);
     int max_obs = compute_observation_size(env);
     env->observations = (float *) calloc(env->active_agent_count * max_obs, sizeof(float));
-    env->actions = (float *) calloc(env->active_agent_count * 2, sizeof(float));
+    env->actions = (float *) calloc(env->active_agent_count * MAX_ACTION_STRIDE_FLOATS, sizeof(float));
     env->rewards = (float *) calloc(env->active_agent_count, sizeof(float));
     env->terminals = (unsigned char *) calloc(env->active_agent_count, sizeof(unsigned char));
     env->truncations = (unsigned char *) calloc(env->active_agent_count, sizeof(unsigned char));
@@ -3589,6 +3656,77 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     }
 }
 
+// Closed-form solve for a quintic's upper coefficients given boundary conditions at t=0
+// (p0,v0,a0, already fixing c0=p0,c1=v0,c2=a0/2) and t=T (p1,v1,a1). Derived by substituting
+// A=c3*T^3, B=c4*T^4, C=c5*T^5 to reduce the boundary system to a 3x3 in A,B,C, then eliminating;
+// verified by substituting back into the original three equations.
+static void solve_quintic_coefficients(
+    float p0,
+    float v0,
+    float a0,
+    float p1,
+    float v1,
+    float a1,
+    float T,
+    float *c3_out,
+    float *c4_out,
+    float *c5_out) {
+    float c2 = 0.5f * a0;
+    float delta_p = p1 - p0 - v0 * T - c2 * T * T;
+    float delta_v = v1 - v0 - a0 * T;
+    float delta_a = a1 - a0;
+    float T2 = T * T;
+    float T3 = T2 * T;
+    float T4 = T3 * T;
+    float T5 = T4 * T;
+    *c3_out = (10.0f * delta_p - 4.0f * delta_v * T + 0.5f * delta_a * T2) / T3;
+    *c4_out = (-15.0f * delta_p + 7.0f * delta_v * T - delta_a * T2) / T4;
+    *c5_out = (6.0f * delta_p - 3.0f * delta_v * T + 0.5f * delta_a * T2) / T5;
+}
+
+// Evaluates a quintic (coefs[0..5] = c0..c5) or one of its derivatives at time t.
+// order: 0=position, 1=velocity, 2=acceleration. if/else on a mode constant, not a function
+// pointer, per this codebase's control-flow conventions.
+static float evaluate_quintic_derivative(const float coefs[6], float t, int order) {
+    float c0 = coefs[0], c1 = coefs[1], c2 = coefs[2], c3 = coefs[3], c4 = coefs[4], c5 = coefs[5];
+    float t2 = t * t;
+    float t3 = t2 * t;
+    float t4 = t3 * t;
+    if (order == 0) {
+        return c0 + c1 * t + c2 * t2 + c3 * t3 + c4 * t4 + c5 * t4 * t;
+    } else if (order == 1) {
+        return c1 + 2.0f * c2 * t + 3.0f * c3 * t2 + 4.0f * c4 * t3 + 5.0f * c5 * t4;
+    } else {
+        assert(order == 2);
+        return 2.0f * c2 + 6.0f * c3 * t + 12.0f * c4 * t2 + 20.0f * c5 * t3;
+    }
+}
+
+// Sum of squared position differences between two curves' overlap window: prev's curve (solved
+// last step, valid over [0,T] measured from last step) sampled at dt+k*dt, against curr's curve
+// (solved this step, valid over [0,T] measured from this step) sampled at k*dt — both land on the
+// same absolute times, strictly inside both curves' fit domains for k in [0, num_samples]. Reward
+// logic, not dynamics — called from compute_rewards, not move_dynamics.
+static float compute_spline_consistency_cost(
+    const float *prev_coefs_x,
+    const float *prev_coefs_y,
+    const float *curr_coefs_x,
+    const float *curr_coefs_y,
+    int num_samples,
+    float dt) {
+    float total_cost = 0.0f;
+    for (int k = 0; k <= num_samples; k++) {
+        float prev_t = dt + (float) k * dt;
+        float curr_t = (float) k * dt;
+        float dx = evaluate_quintic_derivative(prev_coefs_x, prev_t, 0)
+            - evaluate_quintic_derivative(curr_coefs_x, curr_t, 0);
+        float dy = evaluate_quintic_derivative(prev_coefs_y, prev_t, 0)
+            - evaluate_quintic_derivative(curr_coefs_y, curr_t, 0);
+        total_cost += dx * dx + dy * dy;
+    }
+    return total_cost;
+}
+
 static void compute_rewards(Drive *env, int i) {
     int agent_idx = env->active_agent_indices[i];
     Agent *agent = &env->agents[agent_idx];
@@ -3704,6 +3842,31 @@ static void compute_rewards(Drive *env, int i) {
         agent_log->reward_ade += ade_reward;
     }
     agent_log->avg_displacement_error = current_ade;
+
+    // Trajectory-consistency reward (spline mode only): penalizes disagreement between this
+    // step's curve (move_dynamics already solved it earlier this step) and last step's curve,
+    // over their shared overlap. This is about coherence of *stated intent* across steps, not
+    // smoothness of *executed* motion — move_dynamics's jerk clamp already handles that.
+    if (env->action_type == ACTION_TYPE_SPLINE) {
+        if (agent->spline_history_valid) {
+            float consistency_cost = compute_spline_consistency_cost(
+                agent->prev_spline_coefs_x,
+                agent->prev_spline_coefs_y,
+                agent->spline_coefs_x,
+                agent->spline_coefs_y,
+                env->spline_consistency_num_samples,
+                env->dt);
+            float consistency_penalty = -agent->reward_coefs[REWARD_COEF_TRAJECTORY_CONSISTENCY] * consistency_cost;
+            env->rewards[i] += consistency_penalty;
+            agent_log->reward_trajectory_consistency += consistency_penalty;
+        }
+        // Rotate curr -> prev now that both have been used, for next step's comparison.
+        for (int k = 0; k < 6; k++) {
+            agent->prev_spline_coefs_x[k] = agent->spline_coefs_x[k];
+            agent->prev_spline_coefs_y[k] = agent->spline_coefs_y[k];
+        }
+        agent->spline_history_valid = 1;
+    }
 
     // Update episode return
     agent_log->episode_return += env->rewards[i];
@@ -4314,6 +4477,72 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             }
             // Symmetric scaling for lateral jerk
             j_lat = action_array_f[action_idx][1] * JERK_LAT[2];
+        } else {
+            assert(env->action_type == ACTION_TYPE_SPLINE);
+            // Raw layout: (p1_fwd, v1_fwd, a1_fwd, p1_left, v1_left, a1_left), each in [-1, 1].
+            float (*action_array_f)[6] = (float (*)[6]) env->actions;
+            float raw_p1_fwd = action_array_f[action_idx][0];
+            float raw_v1_fwd = action_array_f[action_idx][1];
+            float raw_a1_fwd = action_array_f[action_idx][2];
+            float raw_p1_left = action_array_f[action_idx][3];
+            float raw_v1_left = action_array_f[action_idx][4];
+            float raw_a1_left = action_array_f[action_idx][5];
+
+            // Rescale to physical ego-local (forward/left) units using the reachability-derived
+            // offset limits (init_spline_dynamics_fields) and, for a1, the sim's own absolute
+            // accel limits directly — same asymmetric accel/brake split the jerk decode above uses.
+            float p1_fwd = raw_p1_fwd * env->spline_pos_fwd_offset_limit_m;
+            float v1_fwd = (raw_v1_fwd < 0.0f) ? raw_v1_fwd * env->spline_vel_fwd_offset_brake_mps
+                                               : raw_v1_fwd * env->spline_vel_fwd_offset_accel_mps;
+            float a1_fwd = (raw_a1_fwd < 0.0f) ? raw_a1_fwd * (-ACCEL_LONG_LIMIT[0]) : raw_a1_fwd * ACCEL_LONG_LIMIT[1];
+            float p1_left = raw_p1_left * env->spline_pos_left_offset_limit_m;
+            float v1_left = raw_v1_left * env->spline_vel_left_offset_limit_mps;
+            float a1_left = raw_a1_left * ACCEL_LAT_LIMIT[1];
+
+            // Solve in global frame (drive.h:211-212's world_mean_x/y already keeps sim_x/sim_y
+            // small and well-conditioned, so no rotation is needed for the solve itself) — only
+            // the boundary conditions need rotating from ego-local to global first.
+            float p1_x, p1_y, v1_x, v1_y, a1_x, a1_y, a0_x, a0_y;
+            project_point_from_ego_frame(agent, p1_fwd, p1_left, &p1_x, &p1_y);
+            project_vector_from_ego_frame(agent, v1_fwd, v1_left, &v1_x, &v1_y);
+            project_vector_from_ego_frame(agent, a1_fwd, a1_left, &a1_x, &a1_y);
+            // accel_long/accel_lat are already ego-frame (local_x, local_y)-convention values.
+            project_vector_from_ego_frame(agent, agent->accel_long, agent->accel_lat, &a0_x, &a0_y);
+
+            float T = env->spline_horizon_seconds;
+            float c3_x, c4_x, c5_x, c3_y, c4_y, c5_y;
+            solve_quintic_coefficients(agent->sim_x, agent->sim_vx, a0_x, p1_x, v1_x, a1_x, T, &c3_x, &c4_x, &c5_x);
+            solve_quintic_coefficients(agent->sim_y, agent->sim_vy, a0_y, p1_y, v1_y, a1_y, T, &c3_y, &c4_y, &c5_y);
+
+            // Persist the full curve (c0..c5, not just the derivative we're about to extract) —
+            // compute_rewards compares this against next step's curve for the intent-consistency
+            // reward term. Rotation into prev_spline_coefs_x/y happens there, after it's been used.
+            agent->spline_coefs_x[0] = agent->sim_x;
+            agent->spline_coefs_x[1] = agent->sim_vx;
+            agent->spline_coefs_x[2] = 0.5f * a0_x;
+            agent->spline_coefs_x[3] = c3_x;
+            agent->spline_coefs_x[4] = c4_x;
+            agent->spline_coefs_x[5] = c5_x;
+            agent->spline_coefs_y[0] = agent->sim_y;
+            agent->spline_coefs_y[1] = agent->sim_vy;
+            agent->spline_coefs_y[2] = 0.5f * a0_y;
+            agent->spline_coefs_y[3] = c3_y;
+            agent->spline_coefs_y[4] = c4_y;
+            agent->spline_coefs_y[5] = c5_y;
+
+            // Extract only the second derivative, one raw step ahead — nothing else about the
+            // curve ever feeds control. Rotate back to ego frame, then treat it as an implied
+            // jerk command (not a raw accel target) so every existing jerk/accel/velocity/
+            // steering limit below applies exactly as it does to a real jerk action.
+            float accel_target_x = evaluate_quintic_derivative(agent->spline_coefs_x, env->dt, 2);
+            float accel_target_y = evaluate_quintic_derivative(agent->spline_coefs_y, env->dt, 2);
+            float a_long_target, a_lat_target;
+            project_vector_to_ego_frame(agent, accel_target_x, accel_target_y, &a_long_target, &a_lat_target);
+
+            float j_long_implied = (a_long_target - agent->accel_long) / env->dt;
+            float j_lat_implied = (a_lat_target - agent->accel_lat) / env->dt;
+            j_long = clip(j_long_implied, JERK_LONG[0], JERK_LONG[3]);
+            j_lat = clip(j_lat_implied, JERK_LAT[0], JERK_LAT[2]);
         }
 
         if (agent->phantom_braking_counter > 0) {

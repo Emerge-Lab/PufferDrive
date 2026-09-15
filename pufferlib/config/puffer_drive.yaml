@@ -20,6 +20,10 @@ env_name: puffer_drive
 policy_name: Drive
 # Options: Recurrent, None (null)
 rnn_name: null
+# Single on/off switch for the spline terminal-boundary action mode. When true,
+# env.action_type/policy.action_type are forced to "spline" internally regardless
+# of what's set below. When false (default), nothing here changes current behavior.
+trajectory_training: false
 max_suggestion_cost: 3600
 profile:
   # Options: sim, training, all
@@ -50,6 +54,9 @@ env:
   dynamics_model: jerk
   # Jerk dynamics: Zero both accelerations when velocity crosses zero
   reset_accel_on_stop: false
+  # Spline terminal-boundary planning horizon, seconds. Only meaningful when
+  # trajectory_training: true (top-level); placeholder default, tune empirically.
+  spline_horizon_seconds: 1.5
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap
@@ -142,6 +149,9 @@ env:
   reward_timestep: 2.5e-05
   reward_overspeed: 0.05
   reward_ade: 0.0
+  # Penalizes disagreement between consecutive predicted spline curves over their
+  # overlap; only used when trajectory_training: true. Placeholder, tune empirically.
+  reward_trajectory_consistency: 0.0
   # --- Map ---
   # Path to map used for training
   map_dir: pufferlib/resources/drive/binaries/carla

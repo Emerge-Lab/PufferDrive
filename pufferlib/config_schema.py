@@ -41,6 +41,9 @@ PROBABILITY_CONSTRAINT = 5
 NONEMPTY_STRING_CONSTRAINT = 6
 FINITE_NUMBER_CONSTRAINT = 7
 
+# Must match pufferlib/ocean/drive/constants.h's SPLINE_CONSISTENCY_MAX_SAMPLES.
+SPLINE_CONSISTENCY_MAX_SAMPLES = 64
+
 
 def _raise_config_error(context, path, message):
     """Raise a config error with separate field-path and validation-context labels."""
@@ -109,6 +112,7 @@ class SimulationMode(Enum):
 class ActionType(Enum):
     discrete = 0
     continuous = 1
+    spline = 2
 
 
 class DynamicsModel(Enum):
@@ -247,6 +251,7 @@ class DriveEnvConfig:
     action_type: ActionType = MISSING
     dynamics_model: DynamicsModel = MISSING
     reset_accel_on_stop: bool = MISSING
+    spline_horizon_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     dt: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     base_max_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     spawn_initial_speed: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
@@ -300,6 +305,7 @@ class DriveEnvConfig:
     reward_timestep: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_overspeed: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_ade: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    reward_trajectory_consistency: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
@@ -460,6 +466,7 @@ class PufferDriveConfig:
     env_name: EnvironmentName = MISSING
     policy_name: PolicyName = MISSING
     rnn_name: RNNName | None = MISSING
+    trajectory_training: bool = False
     max_suggestion_cost: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     profile: ProfileConfig = MISSING
     vec: VectorConfig = MISSING
@@ -499,6 +506,16 @@ def normalize_puffer_drive_config(config, context="load"):
         error_path = getattr(exc, "full_key", None) or "root"
         error_message = str(exc).splitlines()[0]
         _raise_config_error(context, error_path, error_message)
+    if container["trajectory_training"]:
+        # trajectory_training is the single user-facing switch for the spline action mode;
+        # env.action_type/policy.action_type are internal implementation details forced here
+        # rather than independently settable, to remove the cross-field footgun that already
+        # exists between them for discrete/continuous. This overrides unconditionally rather
+        # than attempting to detect an "explicit conflicting override", since OmegaConf's
+        # merge-to-plain-dict here does not preserve whether a value came from the user or a
+        # class default. env.dynamics_model=="jerk" is still enforced below, fail-fast.
+        container["env"]["action_type"] = "spline"
+        container["policy"]["action_type"] = "spline"
     return container
 
 
@@ -592,6 +609,30 @@ def _validate_cross_field_constraints(config, context):
             "policy.action_type",
             "cannot be continuous when env.action_type is discrete",
         )
+    # Unlike discrete/continuous, spline has no bridging table between a mismatched env/policy
+    # action_type — trajectory_training normally keeps both in lockstep, but env.action_type
+    # can still be set to "spline" directly (bypassing that switch), so this is a real
+    # reachable state, not just defense-in-depth.
+    if (env["action_type"] == "spline") != (policy["action_type"] == "spline"):
+        _raise_config_error(
+            context,
+            "policy.action_type",
+            "must be 'spline' if and only if env.action_type is 'spline' (no discrete/continuous "
+            "bridging exists for spline)",
+        )
+    if config["trajectory_training"]:
+        if env["dynamics_model"] != "jerk":
+            _raise_config_error(context, "trajectory_training", "requires env.dynamics_model to be 'jerk'")
+        if env["spline_horizon_seconds"] <= env["dt"]:
+            _raise_config_error(context, "env.spline_horizon_seconds", "must exceed env.dt")
+        implied_samples = (env["spline_horizon_seconds"] - env["dt"]) / env["dt"]
+        if implied_samples > SPLINE_CONSISTENCY_MAX_SAMPLES:
+            _raise_config_error(
+                context,
+                "env.spline_horizon_seconds",
+                f"implies {implied_samples:.0f} consistency-check samples, exceeding the "
+                f"{SPLINE_CONSISTENCY_MAX_SAMPLES} cap; reduce spline_horizon_seconds or increase dt",
+            )
     if config["rnn_name"] is not None:
         if policy["backbone_num_layers"] == 0:
             _raise_config_error(

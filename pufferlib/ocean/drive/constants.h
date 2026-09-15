@@ -116,6 +116,18 @@
 // Action representation
 #define ACTION_TYPE_DISCRETE 0
 #define ACTION_TYPE_CONTINUOUS 1
+#define ACTION_TYPE_SPLINE 2
+
+// Widest per-agent float action layout across all action_type modes (spline: p1/v1/a1 per
+// axis). Used only by the C test fixture's allocate()-equivalent, which must size env->actions
+// generously since tests set action_type after allocation, matching every existing test's
+// calling convention — the real Python runtime path owns and sizes its own actions buffer.
+#define MAX_ACTION_STRIDE_FLOATS 6
+
+// Cap on the intent-consistency reward term's sampling loop (Phase B), derived
+// from spline_horizon_seconds/dt at env-init and validated against this bound
+// in config_schema.py before it ever reaches C.
+#define SPLINE_CONSISTENCY_MAX_SAMPLES 64
 
 // =====================================================================================
 // 3. DYNAMICS
@@ -251,7 +263,8 @@ static const int ROAD_OFFSETS[25][2]
 #define REWARD_COEF_STEER 15
 #define REWARD_COEF_ACC 16
 #define REWARD_COEF_SPEED 17
-#define NUM_REWARD_COEFS 18
+#define REWARD_COEF_TRAJECTORY_CONSISTENCY 18
+#define NUM_REWARD_COEFS 19
 
 // =====================================================================================
 // 10. METRICS & SCORING

@@ -1,0 +1,21 @@
+# Opt-in variant of puffer_drive.yaml for the spline terminal-boundary action mode.
+# Usage: puffer train puffer_drive_spline [overrides...]
+#
+# trajectory_training is the only switch that matters here — flipping it forces
+# env.action_type and policy.action_type to "spline" internally (config_schema.py's
+# normalize_puffer_drive_config). Everything else below is inherited from puffer_drive.yaml
+# unchanged; only the spline-specific knobs are overridden.
+defaults:
+  - puffer_drive
+  - _self_
+
+trajectory_training: true
+
+env:
+  # Planning horizon T, seconds. Must exceed env.dt; see config_schema.py's validation for the
+  # derived-sample-count cap this also feeds. Placeholder — tune empirically.
+  spline_horizon_seconds: 1.5
+  # Weight on the intent-consistency penalty (compute_spline_consistency_cost in drive.h).
+  # Zero in the base config (the mechanism is inert by default); a small nonzero value here so
+  # this variant actually exercises it. Placeholder — tune empirically.
+  reward_trajectory_consistency: 0.02
