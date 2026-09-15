@@ -3,7 +3,6 @@ import zlib
 import numpy as np
 import gymnasium
 import os
-from importlib.resources import files as package_files
 import pufferlib
 from pufferlib.ocean.drive import binding
 
@@ -18,11 +17,7 @@ def compute_effective_road_obs_count(max_count, dropout):
 class Drive(pufferlib.PufferEnv):
     def __init__(
         self,
-        render_mode=None,
         report_interval=1,
-        width=1280,
-        height=1024,
-        human_agent_idx=0,
         reward_goal=1.0,
         reward_collision=3.0,
         reward_offroad=3.0,
@@ -44,6 +39,7 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior="ignore",
         offroad_behavior="ignore",
         traffic_light_behavior="ignore",
+        stop_sign_behavior="ignore",
         use_map_cache=False,
         preload_map_cache=False,
         use_neighbor_cache=True,
@@ -98,7 +94,9 @@ class Drive(pufferlib.PufferEnv):
         obs_boundary_stride=1,
         obs_slots_partners_n=16,
         obs_slots_traffic_controls_n=4,
-        traffic_control_scope=0,
+        traffic_lights_enabled=True,
+        stop_signs_enabled=False,
+        yield_signs_enabled=False,
         starting_map=0,
         obs_norm_speed_mps=60.0,
         obs_norm_goal_offset_m=100.0,
@@ -132,7 +130,6 @@ class Drive(pufferlib.PufferEnv):
         self.reward_log_sampling = reward_log_sampling
         self.compute_eval_metrics = compute_eval_metrics
         self.shared_network = shared_network
-        self.render_mode = render_mode
         self.num_maps = num_maps
         self.report_interval = report_interval
         self.reward_goal = reward_goal
@@ -171,6 +168,7 @@ class Drive(pufferlib.PufferEnv):
         self.collision_behavior = infraction_behavior_values[collision_behavior]
         self.offroad_behavior = infraction_behavior_values[offroad_behavior]
         self.traffic_light_behavior = infraction_behavior_values[traffic_light_behavior]
+        self.stop_sign_behavior = infraction_behavior_values[stop_sign_behavior]
         self.use_map_cache = bool(use_map_cache)
         self.preload_map_cache = bool(preload_map_cache)
         if self.preload_map_cache and not self.use_map_cache:
@@ -180,7 +178,6 @@ class Drive(pufferlib.PufferEnv):
         self.capture_replay = bool(capture_replay)
         self.replay_worker_idx = replay_worker_idx
         self._replay_captures = []
-        self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
         self.use_neighbor_cache = use_neighbor_cache
@@ -215,7 +212,9 @@ class Drive(pufferlib.PufferEnv):
         self.obs_lane_stride = obs_lane_stride
         self.obs_boundary_stride = obs_boundary_stride
         self.obs_slots_partners_n = obs_slots_partners_n
-        self.traffic_control_scope = traffic_control_scope
+        self.traffic_lights_enabled = traffic_lights_enabled
+        self.stop_signs_enabled = stop_signs_enabled
+        self.yield_signs_enabled = yield_signs_enabled
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
         self.obs_norm_speed_mps = float(obs_norm_speed_mps)
         self.obs_norm_goal_offset_m = float(obs_norm_goal_offset_m)
@@ -413,24 +412,10 @@ class Drive(pufferlib.PufferEnv):
         return cached
 
     def _env_init_kwargs(self, map_file, max_agents):
-        # render_mode_flag: 0 = live viewer (RENDER_WINDOW), 1 = headless batch
-        # recorder (RENDER_HEADLESS). The C side only distinguishes these two;
-        # Python's render_mode = "rgb_array" / "human" / None map to the viewer
-        # path, and only "headless" / "record" flip to RENDER_HEADLESS.
-        if self.render_mode in ("headless", "record", "rgb_array_headless"):
-            render_mode_flag = 1
-        else:
-            render_mode_flag = 0
         return {
-            "render_mode": render_mode_flag,
-            # Absolute directory holding render assets (.glb models), so the C
-            # renderer loads them regardless of the process CWD. Derived from
-            # the installed package location, not a config knob.
-            "resource_root": str(package_files("pufferlib") / "resources" / "drive"),
             "action_type": self._action_type_flag,
             "dynamics_model": self.dynamics_model_flag,
             "reset_accel_on_stop": self.reset_accel_on_stop,
-            "human_agent_idx": self.human_agent_idx,
             "reward_goal": self.reward_goal,
             "reward_collision": self.reward_collision,
             "reward_offroad": self.reward_offroad,
@@ -448,6 +433,7 @@ class Drive(pufferlib.PufferEnv):
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
+            "stop_sign_behavior": self.stop_sign_behavior,
             "use_map_cache": self.use_map_cache,
             "use_neighbor_cache": self.use_neighbor_cache,
             "goal_radius": self.goal_radius,
@@ -463,7 +449,9 @@ class Drive(pufferlib.PufferEnv):
             "obs_boundary_stride": self.obs_boundary_stride,
             "obs_slots_partners_n": self.obs_slots_partners_n,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
-            "traffic_control_scope": self.traffic_control_scope,
+            "traffic_lights_enabled": self.traffic_lights_enabled,
+            "stop_signs_enabled": self.stop_signs_enabled,
+            "yield_signs_enabled": self.yield_signs_enabled,
             "dt": self.dt,
             "base_max_speed_mps": self.base_max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,
@@ -737,22 +725,6 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
-    def render(self, env_idx=0, view_mode=0):
-        # view_mode: 0=default fixed perspective, 1=BEV ego-centered ortho.
-        # See VIEW_MODE_* defines in pufferlib/ocean/drive/render.h.
-        binding.vec_render(self.c_envs, view_mode, env_idx)
-
-    def set_video_suffix(self, suffix, env_idx=0):
-        # Append `suffix` to the next mp4 filename for the given env.
-        # Must be called BEFORE the first render of a rollout because
-        # make_client reads env->video_suffix when forking ffmpeg.
-        binding.vec_set_video_suffix(self.c_envs, suffix, env_idx)
-
-    def close_client(self, env_idx=0):
-        # Tear down the render Client for one env without destroying the env.
-        # Flushes ffmpeg + PBOs on the headless path so the mp4 is fully written.
-        binding.vec_close_client(self.c_envs, env_idx)
-
     # ====== Replay capture (active when capture_replay=True) ======
 
     def _normalize_scenarios(self, state):
@@ -783,7 +755,19 @@ class Drive(pufferlib.PufferEnv):
             "scenario": scenario,
             "agent_capacity": len(scenario["agents"] or []),
             "traffic_capacity": len(scenario["traffic_elements"] or []),
-            "frames": {key: [] for key in ("agent_f32", "agent_i32", "metrics_f32", "puffer_f32", "traffic_i16")},
+            "frames": {
+                key: []
+                for key in (
+                    "agent_f32",
+                    "agent_i32",
+                    "metrics_f32",
+                    "puffer_f32",
+                    "traffic_i16",
+                    "goals_f32",
+                    "rewards_f32",
+                    "coefs_f32",
+                )
+            },
         }
 
     def _initialize_replay_captures(self):
@@ -820,6 +804,18 @@ class Drive(pufferlib.PufferEnv):
                 (env_count, traffic_capacity, binding.TRAFFIC_I16_FIELDS),
                 dtype=np.int16,
             ),
+            "goals_f32": np.empty(
+                (env_count, agent_capacity, self.num_goals * binding.GOAL_XY_FIELDS),
+                dtype=np.float32,
+            ),
+            "rewards_f32": np.empty(
+                (env_count, agent_capacity, binding.REWARD_F32_FIELDS),
+                dtype=np.float32,
+            ),
+            "coefs_f32": np.empty(
+                (env_count, agent_capacity, binding.NUM_REWARD_COEFS),
+                dtype=np.float32,
+            ),
         }
 
     def _capture_replay_step(self):
@@ -829,11 +825,22 @@ class Drive(pufferlib.PufferEnv):
             self._replay_frame_arrays["metrics_f32"],
             self._replay_frame_arrays["puffer_f32"],
             self._replay_frame_arrays["traffic_i16"],
+            self._replay_frame_arrays["goals_f32"],
+            self._replay_frame_arrays["rewards_f32"],
+            self._replay_frame_arrays["coefs_f32"],
         )
         for env_idx, capture in enumerate(self._replay_captures):
             agent_capacity = capture["agent_capacity"]
             traffic_capacity = max(capture["traffic_capacity"], 1)
-            for key in ("agent_f32", "agent_i32", "metrics_f32", "puffer_f32"):
+            for key in (
+                "agent_f32",
+                "agent_i32",
+                "metrics_f32",
+                "puffer_f32",
+                "goals_f32",
+                "rewards_f32",
+                "coefs_f32",
+            ):
                 capture["frames"][key].append(self._replay_frame_arrays[key][env_idx, :agent_capacity].copy())
             capture["frames"]["traffic_i16"].append(
                 self._replay_frame_arrays["traffic_i16"][env_idx, :traffic_capacity].copy()
@@ -880,7 +887,17 @@ class Drive(pufferlib.PufferEnv):
         except Exception:
             return binding.env_get(self.c_envs)
 
-    def get_obs_html_frame(self, agent_f32, agent_i32, metrics_f32, puffer_f32, traffic_i16):
+    def get_obs_html_frame(
+        self,
+        agent_f32,
+        agent_i32,
+        metrics_f32,
+        puffer_f32,
+        traffic_i16,
+        goals_f32,
+        rewards_f32,
+        coefs_f32,
+    ):
         binding.vec_get_obs_html_frame(
             self.c_envs,
             agent_f32,
@@ -888,23 +905,7 @@ class Drive(pufferlib.PufferEnv):
             metrics_f32,
             puffer_f32,
             traffic_i16,
+            goals_f32,
+            rewards_f32,
+            coefs_f32,
         )
-
-
-def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
-    import time
-
-    env = Drive(num_agents=num_agents)
-    env.reset()
-    tick = 0
-    num_agents = 1024
-    actions = np.random.randint(0, env.single_action_space.n, (atn_cache, num_agents))
-
-    start = time.time()
-    while time.time() - start < timeout:
-        atn = actions[tick % atn_cache]
-        env.step(atn)
-        tick += 1
-
-    print(f"SPS: {num_agents * tick / (time.time() - start)}")
-    env.close()

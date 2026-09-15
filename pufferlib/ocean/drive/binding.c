@@ -1682,8 +1682,15 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         int offset = 0;
         for (int i = 0; i < env_count; i++) {
+            int map_id;
+            if (eval_mode) {
+                map_id = use_eval_map_indices ? (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, i))
+                                              : (s_map_counter + i) % num_maps;
+            } else {
+                map_id = rng_below(&shared_rng, num_maps);
+            }
             PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
-            PyList_SetItem(map_ids_list, i, PyLong_FromLong(rng_below(&shared_rng, num_maps)));
+            PyList_SetItem(map_ids_list, i, PyLong_FromLong(map_id));
             offset += agent_counts[i];
         }
         PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
@@ -1887,7 +1894,6 @@ static PyObject *map_cache_release_py(
 }
 
 static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
-    env->render_mode = (int) unpack(kwargs, "render_mode");
     env->action_type = (int) unpack(kwargs, "action_type");
     env->dynamics_model = (int) unpack(kwargs, "dynamics_model");
     env->reset_accel_on_stop = (bool) unpack(kwargs, "reset_accel_on_stop");
@@ -1908,6 +1914,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
+    env->stop_sign_behavior = (int) unpack(kwargs, "stop_sign_behavior");
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
     env->use_neighbor_cache = (int) unpack(kwargs, "use_neighbor_cache");
     env->eval_episode_done = 0;
@@ -1932,7 +1939,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
-    env->traffic_control_scope = (int) unpack(kwargs, "traffic_control_scope");
+    env->traffic_lights_enabled = (bool) unpack(kwargs, "traffic_lights_enabled");
+    env->stop_signs_enabled = (bool) unpack(kwargs, "stop_signs_enabled");
+    env->yield_signs_enabled = (bool) unpack(kwargs, "yield_signs_enabled");
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
     env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
     env->dt = (float) unpack(kwargs, "dt");
@@ -1945,12 +1954,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->terminate_on_goal = (int) unpack(kwargs, "terminate_on_goal");
     char *map_file = unpack_str(kwargs, "map_file");
     env->map_name = map_file;
-    char *resource_root = unpack_str(kwargs, "resource_root");
-    if (resource_root == NULL) {
-        return -1;
-    }
-    snprintf(env->resource_root, sizeof(env->resource_root), "%s", resource_root);
-    free(resource_root);
     env->num_max_agents = (int) unpack(kwargs, "num_max_agents");
     int init_step = (int) unpack(kwargs, "init_step");
     env->init_step = init_step;
@@ -2059,6 +2062,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "collision_rate", log->collision_rate);
     assign_to_dict(dict, "episode_return", log->episode_return);
     assign_to_dict(dict, "red_light_violation_rate", log->red_light_violation_rate);
+    assign_to_dict(dict, "stop_sign_violation_rate", log->stop_sign_violation_rate);
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
@@ -2073,6 +2077,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/collision", log->reward_collision);
     assign_to_dict(dict, "reward_components/offroad", log->reward_offroad);
     assign_to_dict(dict, "reward_components/red_light", log->reward_red_light);
+    assign_to_dict(dict, "reward_components/stop_sign", log->reward_stop_sign);
     assign_to_dict(dict, "reward_components/goal", log->reward_goal);
     assign_to_dict(dict, "reward_components/lane_align", log->reward_lane_align);
     assign_to_dict(dict, "reward_components/lane_center", log->reward_lane_center);

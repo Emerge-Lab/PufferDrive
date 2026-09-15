@@ -1,6 +1,7 @@
 import numbers
 import os
 import pickle
+import shutil
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 
@@ -10,6 +11,10 @@ from tqdm import tqdm
 
 import pufferlib
 import pufferlib.viz
+
+
+ZLIB_REPLAY_DIR_NAME = "replays_zlib"
+ZLIB_REPLAY_SUFFIX = ".replay.zlib"
 
 
 def _eval_replay_stem(summary, episode_id):
@@ -140,7 +145,7 @@ class EvalReplayCapture:
         for replay_key, history_values in self.policy_history.items():
             replay[replay_key] = history_values[:episode_length, global_agent_start:global_agent_end]
         replay_stem = _eval_replay_stem(summary, self.episode_id_offset + episode_id)
-        replay_path = os.path.abspath(os.path.join(self.replay_output_dir, f"{replay_stem}.replay.zlib"))
+        replay_path = os.path.abspath(os.path.join(self.replay_output_dir, f"{replay_stem}{ZLIB_REPLAY_SUFFIX}"))
         self.pending_replays.append((replay_environment["scenario"], replay, replay_path))
         summary["has_replay"] = 1
         summary["replay_path"] = replay_path
@@ -159,7 +164,7 @@ class EvalReplayCapture:
         self.pending_replays = []
 
 
-def _render_eval_replays(episode_summaries, out_dir):
+def _render_eval_replays(episode_summaries, out_dir, keep_zlib_replays):
     """Render captured eval replays as navigable HTML pages plus an index."""
     render_dir = os.path.join(out_dir, "rendered_replays")
     os.makedirs(render_dir, exist_ok=True)
@@ -172,10 +177,9 @@ def _render_eval_replays(episode_summaries, out_dir):
         if not replay_path or not os.path.isfile(replay_path):
             raise RuntimeError(f"Cannot render episode {episode_id}: replay file is missing: {replay_path}")
         replay_filename = os.path.basename(replay_path)
-        replay_suffix = ".replay.zlib"
-        if not replay_filename.endswith(replay_suffix):
+        if not replay_filename.endswith(ZLIB_REPLAY_SUFFIX):
             raise RuntimeError(f"Cannot render episode {episode_id}: unexpected replay filename: {replay_filename}")
-        html_filename = f"{replay_filename[: -len(replay_suffix)]}.html"
+        html_filename = f"{replay_filename[: -len(ZLIB_REPLAY_SUFFIX)]}.html"
         output_path = os.path.join(render_dir, html_filename)
         replay_paths.append(replay_path)
         output_paths.append(output_path)
@@ -197,4 +201,6 @@ def _render_eval_replays(episode_summaries, out_dir):
     pufferlib.viz.build_gallery_index(render_dir, file_metrics=file_metrics)
     print(f"Rendered {len(episode_summaries)} replay pages into {render_dir}")
     print(f"Wrote replay index to {os.path.join(render_dir, 'index.html')}")
+    if not keep_zlib_replays:
+        shutil.rmtree(os.path.join(out_dir, ZLIB_REPLAY_DIR_NAME))
     return render_dir
