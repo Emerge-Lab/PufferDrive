@@ -3483,7 +3483,7 @@ static void compute_rewards(Drive *env, int agent_idx) {
     // Stop sign violation reward
     if (agent->metrics_array[STOP_SIGN_IDX] > 0.0f) {
         float reward_stop_sign = -agent->reward_coefs[REWARD_COEF_STOP_LINE];
-        env->rewards[i] += reward_stop_sign;
+        env->rewards[agent_idx] += reward_stop_sign;
         agent_log->stop_sign_violation_rate = 1.0f;
         agent_log->reward_stop_sign += reward_stop_sign;
     }
@@ -3698,11 +3698,11 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
     } AgentDistance;
     AgentDistance nearby_agents[env->num_total_agents];
     int nearby_count = 0;
-    for (int j = 0; j < env->num_total_agents; j++) {
-        if (j == agent_idx) {
+    for (int i = 0; i < env->num_total_agents; i++) {
+        if (i == agent_idx) {
             continue;
         }
-        Agent *other = &env->agents[j];
+        Agent *other = &env->agents[i];
         float dx = other->sim_x - ego->sim_x;
         float dy = other->sim_y - ego->sim_y;
         float dz = other->sim_z - ego->sim_z;
@@ -3710,7 +3710,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         if (dist_sq > env->obs_range_partner_m * env->obs_range_partner_m) {
             continue;
         }
-        nearby_agents[nearby_count].index = j;
+        nearby_agents[nearby_count].index = i;
         nearby_agents[nearby_count].dist_sq = dist_sq;
         nearby_agents[nearby_count].dz = dz;
         nearby_count++;
