@@ -244,6 +244,79 @@ static int test_gt_goals_along_trajectory_are_laneless(void) {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// goal_reached_behavior: despawn (or not) on the agent's final goal.
+// ---------------------------------------------------------------------------
+
+static int test_goal_reached_behavior_remove_despawns_on_final_goal(void) {
+    // "remove" must despawn the agent once it consumes its FINAL goal, not on
+    // intermediate waypoints. sdc_controller=replay deterministically retraces the
+    // logged trajectory, which is guaranteed to pass through every GT-sampled goal.
+    // scenario_length is pushed well past the trajectory length so the goal-driven
+    // removal happens mid-episode, not on the same step as a scenario_length reset.
+    srand(17);
+    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1, 0);
+    env.goal_source = GOAL_SOURCE_GT;
+    env.sdc_controller = CONTROLLER_REPLAY;
+    env.goal_reached_behavior = INFRACTION_BEHAVIOR_REMOVE;
+    env.scenario_length = 2000;
+    allocate(&env);
+    c_reset(&env);
+    EXPECT_TRUE(env.active_agent_count > 0);
+
+    Agent *agent = &env.agents[env.active_agent_indices[0]];
+    int goal_count = agent->goal_count;
+    int intermediate_goal_seen = 0;
+    int prior_goal_idx = agent->current_goal_idx;
+    int removed = 0;
+    for (int t = 0; t < env.scenario_length; t++) {
+        c_step(&env);
+        if (agent->current_goal_idx > prior_goal_idx && agent->current_goal_idx < goal_count) {
+            intermediate_goal_seen = 1;
+            EXPECT_FALSE(agent->removed); // must not despawn before the final goal
+        }
+        prior_goal_idx = agent->current_goal_idx;
+        if (agent->removed) {
+            removed = 1;
+            break;
+        }
+    }
+    EXPECT_TRUE(intermediate_goal_seen);
+    EXPECT_TRUE(removed);
+    free_allocated(&env);
+    return 0;
+}
+
+static int test_goal_reached_behavior_ignore_keeps_agent_alive(void) {
+    // Default behavior: reaching the final goal must not despawn the agent.
+    srand(17);
+    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1, 0);
+    env.goal_source = GOAL_SOURCE_GT;
+    env.sdc_controller = CONTROLLER_REPLAY;
+    env.goal_reached_behavior = INFRACTION_BEHAVIOR_IGNORE;
+    env.scenario_length = 2000;
+    allocate(&env);
+    c_reset(&env);
+    EXPECT_TRUE(env.active_agent_count > 0);
+
+    Agent *agent = &env.agents[env.active_agent_indices[0]];
+    int goal_count = agent->goal_count;
+    int reached_final = 0;
+    for (int t = 0; t < env.scenario_length; t++) {
+        c_step(&env);
+        if (agent->current_goal_idx >= goal_count) {
+            reached_final = 1;
+        }
+        EXPECT_FALSE(agent->removed);
+        if (reached_final) {
+            break;
+        }
+    }
+    EXPECT_TRUE(reached_final);
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_commit_goals_front_align_fills_every_slot);
@@ -255,5 +328,7 @@ int main(void) {
     RUN_TEST(test_roll_goals_slides_window_and_appends);
     RUN_TEST(test_roll_goals_bails_on_replay_pins);
     RUN_TEST(test_gt_goals_along_trajectory_are_laneless);
+    RUN_TEST(test_goal_reached_behavior_remove_despawns_on_final_goal);
+    RUN_TEST(test_goal_reached_behavior_ignore_keeps_agent_alive);
     return test_summary(failures);
 }

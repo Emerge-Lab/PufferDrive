@@ -60,6 +60,8 @@ env:
   offroad_behavior: stop
   # Traffic light behavior - options: "ignore", "stop", "remove"
   traffic_light_behavior: stop
+  # Behavior when an agent reaches its final goal - options: "ignore", "stop", "remove"
+  goal_reached_behavior: ignore
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map - 0 off, 1 on
   use_map_cache: 0
   # Precompute neighboring road entities for observation queries - 0 off, 1 on

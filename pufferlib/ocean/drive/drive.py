@@ -72,6 +72,7 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior="ignore",
         offroad_behavior="ignore",
         traffic_light_behavior="ignore",
+        goal_reached_behavior="ignore",
         use_map_cache=0,
         use_neighbor_cache=1,
         capture_replay=False,
@@ -208,12 +209,14 @@ class Drive(pufferlib.PufferEnv):
             ("collision_behavior", collision_behavior),
             ("offroad_behavior", offroad_behavior),
             ("traffic_light_behavior", traffic_light_behavior),
+            ("goal_reached_behavior", goal_reached_behavior),
         ):
             if behavior not in infraction_behavior_values:
                 raise ValueError(f"{behavior_name} must be one of 'ignore', 'stop', or 'remove'. Got: {behavior}")
         self.collision_behavior = infraction_behavior_values[collision_behavior]
         self.offroad_behavior = infraction_behavior_values[offroad_behavior]
         self.traffic_light_behavior = infraction_behavior_values[traffic_light_behavior]
+        self.goal_reached_behavior = infraction_behavior_values[goal_reached_behavior]
         if use_map_cache not in (0, 1):
             raise ValueError(f"use_map_cache must be 0 (off) or 1 (on). Got: {use_map_cache}")
         self.use_map_cache = use_map_cache
@@ -548,6 +551,7 @@ class Drive(pufferlib.PufferEnv):
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
+            "goal_reached_behavior": self.goal_reached_behavior,
             "use_map_cache": self.use_map_cache,
             "use_neighbor_cache": self.use_neighbor_cache,
             "goal_radius": self.goal_radius,
