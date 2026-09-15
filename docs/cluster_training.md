@@ -8,6 +8,8 @@ How to run PufferDrive training on a SLURM cluster. This is written with the NYU
 # One-time per cluster: create the singularity overlay and install deps
 # into the venv (this also installs submitit and the other submission
 # deps as part of the project's pyproject.toml).
+# Non-NYU clusters: export OVERLAY_TEMPLATE/IMAGE_PATH first, or create the
+# overlay with `apptainer overlay create` (see the README defaults table).
 ./scripts/setup_container.sh create-overlay
 sbatch --account=<acct> --gres=gpu:1 --cpus-per-task=8 --mem=32gb --time=60 \
     --wrap "./scripts/setup_container.sh install"

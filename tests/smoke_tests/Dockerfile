@@ -14,7 +14,13 @@
 #       -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
 #       pufferdrive-smoke
 # then commit tests/smoke_tests/data/drive_smoke_golden.json.
-FROM python:3.11-slim-bookworm
+#
+# This image is x86-64-only by definition: the golden is bit-exact AVX2 math
+# run under qemu-x86_64-static, and setup.py ships only the amd64 raylib
+# archive. On ARM hosts (e.g. Apple Silicon) Docker runs it under emulation —
+# pass --platform linux/amd64 to docker build/run if the FROM pin below is
+# not honored.
+FROM --platform=linux/amd64 python:3.11-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PUFFER_CPU=1 \
