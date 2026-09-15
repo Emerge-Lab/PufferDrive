@@ -114,7 +114,7 @@ static int test_reward_terminal_components(void) {
     EXPECT_NEAR(log.reward_stop_sign, -5.0f, 1e-5f);
     EXPECT_NEAR(log.stop_sign_violation_rate, 1.0f, 1e-5f);
 
-    init_reward_env(&env, &agent, &log, active, reward);
+    init_reward_env(&env, &agent, &log, reward);
     reward[0] = 0.0f;
     agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
     compute_rewards(&env, 0);

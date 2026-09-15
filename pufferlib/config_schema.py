@@ -565,6 +565,8 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.init_step_min_horizon", "must be smaller than env.scenario_length")
     if env["goal_source"] == "gt" and env["simulation_mode"] != "replay":
         _raise_config_error(context, "env.goal_source", "'gt' is only supported in replay mode")
+    if env["goal_source"] == "map" and env["simulation_mode"] == "replay":
+        _raise_config_error(context, "env.goal_source", "'map' is not supported in replay mode")
     if env["terminate_on_goal"] and (env["simulation_mode"] != "replay" or env["control_mode"] != "control_sdc_only"):
         _raise_config_error(context, "env.terminate_on_goal", "requires replay mode with control_sdc_only")
     if env.get("eval_mode") is not None and (
