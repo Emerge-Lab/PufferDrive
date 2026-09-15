@@ -233,7 +233,7 @@ static PyObject *env_close(PyObject *self, PyObject *args) {
     if (!env) {
         return NULL;
     }
-    c_close(env);
+    free_drive_resources(env);
     free(env);
     Py_RETURN_NONE;
 }
@@ -862,7 +862,7 @@ static PyObject *vec_close(PyObject *self, PyObject *args) {
     }
 
     for (int i = 0; i < vec->num_envs; i++) {
-        c_close(vec->envs[i]);
+        free_drive_resources(vec->envs[i]);
         free(vec->envs[i]);
     }
     free(vec->envs);

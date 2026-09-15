@@ -822,8 +822,7 @@ static void free_shared_map_data(struct SharedMapData *shared) {
     free(shared);
 }
 
-// Free binary-loaded scenario data and owned geometry, or release borrowed geometry.
-static void free_loaded_map_data(Drive *env) {
+static void free_scenario_data(Drive *env) {
     for (int i = 0; i < env->num_total_agents; i++) {
         free_agent(&env->agents[i]);
     }
@@ -832,6 +831,11 @@ static void free_loaded_map_data(Drive *env) {
     }
     free(env->agents);
     free(env->traffic_elements);
+    free(env->objects_of_interest);
+    free(env->tracks_to_predict);
+}
+
+static void release_map_geometry(Drive *env) {
     if (env->shared_map != NULL) {
         env->shared_map->ref_count--;
         if (env->shared_map->ref_count <= 0 && env->shared_map->owner_pid == getpid()) {
@@ -847,8 +851,14 @@ static void free_loaded_map_data(Drive *env) {
         free_grid_map(env->grid_map);
         free_lane_graph(&env->lane_graph);
     }
-    free(env->objects_of_interest);
-    free(env->tracks_to_predict);
+}
+
+// Free resources allocated by init. The caller owns I/O buffers and the Drive allocation.
+void free_drive_resources(Drive *env) {
+    free(env->logs);
+    free(env->obs_neighbor_scratch);
+    free_scenario_data(env);
+    release_map_geometry(env);
     free(env->map_name);
 }
 
@@ -904,13 +914,13 @@ static int preload_map_cache(Drive *config, const char **map_files, int num_map_
         }
         if (load_map_binary(env.map_name, &env) != 0) {
             fprintf(stderr, "[ERROR] -> Failed to load map binary: %s\n", env.map_name);
-            free_loaded_map_data(&env);
+            free_drive_resources(&env);
             release_preloaded_map_cache(config, map_files, i);
             return -1;
         }
         if (init_grid_map(&env) != 0) {
             fprintf(stderr, "[ERROR] -> Failed to build grid map for map: %s\n", env.map_name);
-            free_loaded_map_data(&env);
+            free_drive_resources(&env);
             release_preloaded_map_cache(config, map_files, i);
             return -1;
         }
@@ -921,7 +931,7 @@ static int preload_map_cache(Drive *config, const char **map_files, int num_map_
         }
         env.shared_map = map_cache_store(&env);
         env.shared_map->ref_count++;
-        free_loaded_map_data(&env);
+        free_drive_resources(&env);
     }
     return g_map_cache_count;
 }

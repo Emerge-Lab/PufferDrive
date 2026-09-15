@@ -115,8 +115,8 @@ struct GridMap {
 // cache), and lane graph. Per-env mutable data (agents, traffic-light states)
 // is never shared.
 //
-// Reference-counted. owner_pid is set at create_shared_map_data; c_close frees
-// the entry only when owner_pid == getpid(), so a process that inherits an
+// Reference-counted. owner_pid is set at create_shared_map_data; free_drive_resources
+// frees the entry only when owner_pid == getpid(), so a process that inherits an
 // entry via fork-COW does not free it.
 struct SharedMapData {
     char *map_name;
@@ -2955,23 +2955,6 @@ void init(Drive *env) {
     env->logs = (Log *) calloc(env->num_agents, sizeof(Log));
 }
 
-void c_close(Drive *env) {
-    for (int i = 0; i < env->num_total_agents; i++) {
-        free_agent(&env->agents[i]);
-    }
-    for (int i = 0; i < env->num_traffic_elements; i++) {
-        free_traffic_element(&env->traffic_elements[i]);
-    }
-    free(env->agents);
-    free(env->traffic_elements);
-    free(env->logs);
-    free(env->obs_neighbor_scratch);
-    free(env->objects_of_interest);
-    free(env->tracks_to_predict);
-    free(env->map_name);
-    free_loaded_map_data(env);
-}
-
 static int compute_observation_size(Drive *env) {
     return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n + LANE_FEATURES * env->obs_slots_lane_kept
         + BOUNDARY_FEATURES * env->obs_slots_boundary_kept
@@ -2997,7 +2980,7 @@ void free_allocated(Drive *env) {
     free(env->terminals);
     free(env->truncations);
     free(env->masks);
-    c_close(env);
+    free_drive_resources(env);
 }
 
 // ========================================

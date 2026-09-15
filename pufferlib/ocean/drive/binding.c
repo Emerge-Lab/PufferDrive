@@ -1751,18 +1751,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if (env->num_agents == 0) {
-            for (int j = 0; j < env->num_total_agents; j++) {
-                free_agent(&env->agents[j]);
-            }
-            for (int j = 0; j < env->num_road_elements; j++) {
-                free_road_element(&env->road_elements[j]);
-            }
-            for (int j = 0; j < env->num_traffic_elements; j++) {
-                free_traffic_element(&env->traffic_elements[j]);
-            }
-            free(env->agents);
-            free(env->road_elements);
-            free(env->traffic_elements);
+            free_drive_resources(env);
             free(env);
             continue;
         }
@@ -1777,18 +1766,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             total_agent_count += env->num_agents;
             env_count++;
         }
-        for (int j = 0; j < env->num_total_agents; j++) {
-            free_agent(&env->agents[j]);
-        }
-        for (int j = 0; j < env->num_road_elements; j++) {
-            free_road_element(&env->road_elements[j]);
-        }
-        for (int j = 0; j < env->num_traffic_elements; j++) {
-            free_traffic_element(&env->traffic_elements[j]);
-        }
-        free(env->agents);
-        free(env->road_elements);
-        free(env->traffic_elements);
+        free_drive_resources(env);
         free(env);
         if (!fits) {
             break;
