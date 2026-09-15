@@ -233,7 +233,7 @@ static PyObject *env_close(PyObject *self, PyObject *args) {
     if (!env) {
         return NULL;
     }
-    c_close(env);
+    free_drive_resources(env);
     free(env);
     Py_RETURN_NONE;
 }
@@ -776,7 +776,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_f32[f32_base + 11] = a->jerk_lat;
             agent_f32[f32_base + AGENT_F32_GOAL_RADIUS_IDX] = a->reward_coefs[REWARD_COEF_GOAL_RADIUS];
 
-            agent_i32[i32_base + 0] = i;
+            agent_i32[i32_base + 0] = a->id;
             agent_i32[i32_base + 1] = a->type;
             agent_i32[i32_base + 2] = a->sim_valid;
             agent_i32[i32_base + 3] = a->active_agent;
@@ -791,60 +791,54 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             memcpy(&coefs_f32[(e * agent_cap + i) * coef_fields], a->reward_coefs, sizeof(float) * NUM_REWARD_COEFS);
         }
 
-        if (drive->active_agent_indices) {
-            for (int j = 0; j < drive->active_agent_count; j++) {
-                int agent_idx = drive->active_agent_indices[j];
-                if (agent_idx < 0 || agent_idx >= agent_count) {
-                    continue;
-                }
-                int i32_base = (e * agent_cap + agent_idx) * agent_i32_fields;
-                int puffer_base = (e * agent_cap + agent_idx) * puffer_fields;
-                int reward_base = (e * agent_cap + agent_idx) * reward_fields;
-                agent_i32[i32_base + 7] = j;
+        for (int agent_idx = 0; agent_idx < drive->num_agents && agent_idx < agent_count; agent_idx++) {
+            int i32_base = (e * agent_cap + agent_idx) * agent_i32_fields;
+            int puffer_base = (e * agent_cap + agent_idx) * puffer_fields;
+            int reward_base = (e * agent_cap + agent_idx) * reward_fields;
+            agent_i32[i32_base + 7] = agent_idx;
 
-                Agent *active = &drive->agents[agent_idx];
-                int goal_count = active->goal_count < goal_slots ? active->goal_count : goal_slots;
-                int goal_base = (e * agent_cap + agent_idx) * goal_fields;
-                for (int goal_idx = active->current_goal_idx; goal_idx < goal_count; goal_idx++) {
-                    goals_f32[goal_base + goal_idx * GOAL_XY_FIELDS] = active->list_goal_x[goal_idx];
-                    goals_f32[goal_base + goal_idx * GOAL_XY_FIELDS + 1] = active->list_goal_y[goal_idx];
-                }
-
-                if (!drive->compute_eval_metrics || !drive->logs || j >= drive->logs_capacity) {
-                    continue;
-                }
-                Log *log = &drive->logs[j];
-                puffer_f32[puffer_base + 0] = log->puffer_score;
-                puffer_f32[puffer_base + 1] = log->no_at_fault;
-                puffer_f32[puffer_base + 2] = log->no_offroad;
-                puffer_f32[puffer_base + 3] = log->no_red_light;
-                puffer_f32[puffer_base + 4] = log->making_progress;
-                puffer_f32[puffer_base + 5] = log->driving_direction_score;
-                puffer_f32[puffer_base + 6] = log->ttc_puffer_rate;
-                puffer_f32[puffer_base + 7] = log->progress_ratio;
-                puffer_f32[puffer_base + 8] = log->speed_limit_compliance;
-                puffer_f32[puffer_base + 9] = log->comfort_score;
-                puffer_f32[puffer_base + 10] = log->multi_lane_score;
-                puffer_f32[puffer_base + 11] = log->wrong_way_distance;
-                puffer_f32[puffer_base + 12] = log->speed_violation_sum;
-                puffer_f32[puffer_base + 13] = log->multiplier;
-                puffer_f32[puffer_base + 14] = log->weighted_average;
-
-                rewards_f32[reward_base + REWARD_F32_EPISODE_RETURN_IDX] = log->episode_return;
-                rewards_f32[reward_base + REWARD_F32_COLLISION_IDX] = log->reward_collision;
-                rewards_f32[reward_base + REWARD_F32_OFFROAD_IDX] = log->reward_offroad;
-                rewards_f32[reward_base + REWARD_F32_RED_LIGHT_IDX] = log->reward_red_light;
-                rewards_f32[reward_base + REWARD_F32_STOP_SIGN_IDX] = log->reward_stop_sign;
-                rewards_f32[reward_base + REWARD_F32_GOAL_IDX] = log->reward_goal;
-                rewards_f32[reward_base + REWARD_F32_LANE_ALIGN_IDX] = log->reward_lane_align;
-                rewards_f32[reward_base + REWARD_F32_LANE_CENTER_IDX] = log->reward_lane_center;
-                rewards_f32[reward_base + REWARD_F32_COMFORT_IDX] = log->reward_comfort;
-                rewards_f32[reward_base + REWARD_F32_VELOCITY_IDX] = log->reward_velocity;
-                rewards_f32[reward_base + REWARD_F32_TIMESTEP_IDX] = log->reward_timestep;
-                rewards_f32[reward_base + REWARD_F32_REVERSE_IDX] = log->reward_reverse;
-                rewards_f32[reward_base + REWARD_F32_OVERSPEED_IDX] = log->reward_overspeed;
-                rewards_f32[reward_base + REWARD_F32_ADE_IDX] = log->reward_ade;
+            Agent *active = &drive->agents[agent_idx];
+            int goal_count = active->goal_count < goal_slots ? active->goal_count : goal_slots;
+            int goal_base = (e * agent_cap + agent_idx) * goal_fields;
+            for (int goal_idx = active->current_goal_idx; goal_idx < goal_count; goal_idx++) {
+                goals_f32[goal_base + goal_idx * GOAL_XY_FIELDS] = active->list_goal_x[goal_idx];
+                goals_f32[goal_base + goal_idx * GOAL_XY_FIELDS + 1] = active->list_goal_y[goal_idx];
             }
+
+            if (!drive->compute_eval_metrics || !drive->logs || agent_idx >= drive->logs_capacity) {
+                continue;
+            }
+            Log *log = &drive->logs[agent_idx];
+            puffer_f32[puffer_base + 0] = log->puffer_score;
+            puffer_f32[puffer_base + 1] = log->no_at_fault;
+            puffer_f32[puffer_base + 2] = log->no_offroad;
+            puffer_f32[puffer_base + 3] = log->no_red_light;
+            puffer_f32[puffer_base + 4] = log->making_progress;
+            puffer_f32[puffer_base + 5] = log->driving_direction_score;
+            puffer_f32[puffer_base + 6] = log->ttc_puffer_rate;
+            puffer_f32[puffer_base + 7] = log->progress_ratio;
+            puffer_f32[puffer_base + 8] = log->speed_limit_compliance;
+            puffer_f32[puffer_base + 9] = log->comfort_score;
+            puffer_f32[puffer_base + 10] = log->multi_lane_score;
+            puffer_f32[puffer_base + 11] = log->wrong_way_distance;
+            puffer_f32[puffer_base + 12] = log->speed_violation_sum;
+            puffer_f32[puffer_base + 13] = log->multiplier;
+            puffer_f32[puffer_base + 14] = log->weighted_average;
+
+            rewards_f32[reward_base + REWARD_F32_EPISODE_RETURN_IDX] = log->episode_return;
+            rewards_f32[reward_base + REWARD_F32_COLLISION_IDX] = log->reward_collision;
+            rewards_f32[reward_base + REWARD_F32_OFFROAD_IDX] = log->reward_offroad;
+            rewards_f32[reward_base + REWARD_F32_RED_LIGHT_IDX] = log->reward_red_light;
+            rewards_f32[reward_base + REWARD_F32_STOP_SIGN_IDX] = log->reward_stop_sign;
+            rewards_f32[reward_base + REWARD_F32_GOAL_IDX] = log->reward_goal;
+            rewards_f32[reward_base + REWARD_F32_LANE_ALIGN_IDX] = log->reward_lane_align;
+            rewards_f32[reward_base + REWARD_F32_LANE_CENTER_IDX] = log->reward_lane_center;
+            rewards_f32[reward_base + REWARD_F32_COMFORT_IDX] = log->reward_comfort;
+            rewards_f32[reward_base + REWARD_F32_VELOCITY_IDX] = log->reward_velocity;
+            rewards_f32[reward_base + REWARD_F32_TIMESTEP_IDX] = log->reward_timestep;
+            rewards_f32[reward_base + REWARD_F32_REVERSE_IDX] = log->reward_reverse;
+            rewards_f32[reward_base + REWARD_F32_OVERSPEED_IDX] = log->reward_overspeed;
+            rewards_f32[reward_base + REWARD_F32_ADE_IDX] = log->reward_ade;
         }
 
         for (int i = 0; i < traffic_count; i++) {
@@ -868,7 +862,7 @@ static PyObject *vec_close(PyObject *self, PyObject *args) {
     }
 
     for (int i = 0; i < vec->num_envs; i++) {
-        c_close(vec->envs[i]);
+        free_drive_resources(vec->envs[i]);
         free(vec->envs[i]);
     }
     free(vec->envs);
@@ -976,7 +970,7 @@ static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
             &width_base[offset]);
 
         // Move offset forward by the number of agents in this environment
-        offset += drive->active_agent_count;
+        offset += drive->num_agents;
     }
 
     Py_RETURN_NONE;
@@ -1096,8 +1090,8 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
             &scenario_id_base[agent_offset]);
 
         // Move offsets forward
-        agent_offset += drive->active_agent_count;
-        traj_offset += drive->active_agent_count * num_timesteps;
+        agent_offset += drive->num_agents;
+        traj_offset += drive->num_agents * num_timesteps;
     }
 
     Py_RETURN_NONE;

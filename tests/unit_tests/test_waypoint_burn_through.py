@@ -75,8 +75,7 @@ def _make_sdc_replay_env(terminate_on_goal: bool):
 def _sdc_state(env):
     """Per-agent state dict of the single active (SDC) agent."""
     env_state = env.get_state()[0]
-    sdc_idx = env_state["active_agent_indices"][0]
-    return env_state["agents"][sdc_idx]
+    return env_state["agents"][0]
 
 
 def _expected_waypoints(agent_state):

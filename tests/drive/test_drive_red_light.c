@@ -50,7 +50,7 @@ static int test_red_crossing_flags(void) {
     Agent agent = drive_test_driving_agent(1.5f, 2.5f, 0.0f);
     env.agents = &agent;
     EXPECT_TRUE(check_stop_line_crossing_event(&env, &agent));
-    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    EXPECT_TRUE(check_red_light_violation(&env, &agent));
     return 0;
 }
 
@@ -71,11 +71,11 @@ static int test_green_crossing_then_red_inside_no_flag(void) {
     set_light(TRAFFIC_CONTROL_STATE_GREEN);
     Agent agent = drive_test_driving_agent(1.5f, 2.5f, 0.0f);
     env.agents = &agent;
-    EXPECT_TRUE(!check_red_light_violation(&env, 0));
+    EXPECT_TRUE(!check_red_light_violation(&env, &agent));
     // light turns red once the agent is fully inside the junction
     set_light(TRAFFIC_CONTROL_STATE_RED);
     agent = drive_test_driving_agent(4.0f, 5.0f, 0.0f);
-    EXPECT_TRUE(!check_red_light_violation(&env, 0));
+    EXPECT_TRUE(!check_red_light_violation(&env, &agent));
     return 0;
 }
 
@@ -85,7 +85,7 @@ static int test_stationary_straddle_no_flag(void) {
     set_light(TRAFFIC_CONTROL_STATE_RED);
     Agent agent = drive_test_driving_agent(-0.5f, -0.5f, 0.0f);
     env.agents = &agent;
-    EXPECT_TRUE(!check_red_light_violation(&env, 0));
+    EXPECT_TRUE(!check_red_light_violation(&env, &agent));
     // the overlap check (spawn semantics) still sees the straddle
     EXPECT_TRUE(check_agent_on_stop_line(&env, &agent, false));
     return 0;
@@ -119,7 +119,7 @@ static int test_lane_change_cheat_flags(void) {
     agent.previous_lane_idx = 50;
     env.agents = &agent;
     EXPECT_TRUE(check_lane_change_red_light(&env, &agent));
-    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    EXPECT_TRUE(check_red_light_violation(&env, &agent));
     return 0;
 }
 
