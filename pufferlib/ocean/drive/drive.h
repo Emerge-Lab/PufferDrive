@@ -4127,17 +4127,17 @@ void set_active_agents(Drive *env) {
             continue;
         }
 
-        env->num_agents++;
-
         // Determine if this agent should be policy-controlled
         bool is_controlled = should_control_agent(env, i);
 
         if (is_controlled) {
+            env->num_agents++;
             active_agent_indices[env->active_agent_count] = i;
             env->active_agent_count++;
             env->agents[i].active_agent = 1;
             env->agents[i].controller = resolve_agent_controller(env, i, 1, 0);
         } else if (is_log_replay || env->init_mode != INIT_MODE_CREATE_ONLY_CONTROLLED) {
+            env->num_agents++;
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++;
             env->agents[i].active_agent = 0;
