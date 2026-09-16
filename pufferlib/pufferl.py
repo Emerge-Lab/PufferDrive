@@ -2429,7 +2429,14 @@ def _run_eval_rollout(
         policy = evaluation_policy_cache["policy"]
         if uses_policy:
             if policy is None:
-                policy = load_policy(args, vecenv, env_name)
+                traffic_policy_path = args["eval"].get("traffic_policy")
+                if traffic_policy_path is not None:
+                    traffic_args = _prepare_target_policy_args(args, traffic_policy_path)
+                    traffic_args["policy_name"] = "TargetDrive"
+                    traffic_env = _make_target_policy_env_view(vecenv.driver_env, traffic_args)
+                    policy = load_policy(traffic_args, vecenv, env_name, policy_env=traffic_env)
+                else:
+                    policy = load_policy(args, vecenv, env_name)
                 evaluation_policy_cache["policy"] = policy
             policy.eval()
             if "policy_forward_eval" not in evaluation_policy_cache:

@@ -494,6 +494,7 @@ class EvaluationConfig:
     render_filter: Any = MISSING
     render_selection: RenderSelection = MISSING
     max_rendered_failures: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    traffic_policy: str | None = None
     failure_replay_csv: str | None = MISSING
     capture_observations: bool = MISSING
     observation_replay_wave_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)

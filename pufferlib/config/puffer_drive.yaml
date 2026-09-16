@@ -328,6 +328,7 @@ sweep:
   downsample: 10
 # Catalog-defined evaluation and replay rendering settings.
 eval:
+  traffic_policy: null
   num_agents: 256
   # Worker cap for replay benchmarks that control only the SDC. Needed for now to limit RAM usage.
   max_sdc_replay_workers: 4
