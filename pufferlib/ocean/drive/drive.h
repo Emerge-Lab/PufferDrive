@@ -4102,8 +4102,14 @@ void set_active_agents(Drive *env) {
     int *static_agent_indices = (int *) malloc(max_agents * sizeof(int));
     int *expert_static_agent_indices = (int *) malloc(max_agents * sizeof(int));
 
+    active_agent_indices[0] = EGO_IDX;
+    env->active_agent_count++;
+    env->num_agents++;
+    env->agents[EGO_IDX].active_agent = 1;
+    env->agents[EGO_IDX].controller = resolve_agent_controller(env, EGO_IDX, 1, 0);
+
     // Iterate through entities to find agents to create and/or control
-    for (int i = 0; i < env->num_total_agents && env->num_agents < max_agents; i++) {
+    for (int i = EGO_IDX + 1; i < env->num_total_agents && env->num_agents < max_agents; i++) {
         Agent *agent = &env->agents[i];
 
         // Skip if not valid at initialization

@@ -1846,7 +1846,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->goal_radius = goal_radius;
         load_map_binary(map_file, env);
 
-        set_active_agents(env);
+        if (env->num_total_agents > 0 && env->agents[EGO_IDX].route_length != 0) {
+            set_active_agents(env);
+        }
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
