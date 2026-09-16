@@ -301,8 +301,8 @@ class PuffeRL:
         # Initializations
         self.config = config
         self.vecenv = vecenv
-        self.normalized_obs_idx = torch.as_tensor(
-            np.flatnonzero(vecenv.driver_env.normalized_obs_mask), device=config["device"]
+        self.obs_stats_feature_idx = torch.as_tensor(
+            np.flatnonzero(vecenv.driver_env.obs_stats_feature_mask), device=config["device"]
         )
         self.epoch = 0
         self.global_step = 0
@@ -396,7 +396,9 @@ class PuffeRL:
             # Obs distribution stats (max/min/mean across the batch and obs
             # dims, appended per env step). Surfaces clipping / unbounded
             # features / normalization regressions in wandb.
-            obs_stat_source = o_device if self.normalized_obs_idx is None else o_device[..., self.normalized_obs_idx]
+            obs_stat_source = (
+                o_device if self.obs_stats_feature_idx is None else o_device[..., self.obs_stats_feature_idx]
+            )
             self.stats["obs/max"].append(obs_stat_source.max().item())
             self.stats["obs/min"].append(obs_stat_source.min().item())
             self.stats["obs/mean"].append(obs_stat_source.mean().item())
