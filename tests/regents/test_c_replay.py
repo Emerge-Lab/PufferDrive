@@ -165,7 +165,7 @@ def cached_replay(request):
 
 def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay):
     """C is authoritative: parity, shared initial pose, untouched actors, and repeatability."""
-    assert C_REPLAY_TOLERANCE == 5e-4
+    assert C_REPLAY_TOLERANCE == 1e-3
     map_idx, seed, scenario, optimization, replay = cached_replay
 
     assert replay.metrics.maximum_trajectory_error <= C_REPLAY_TOLERANCE

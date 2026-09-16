@@ -8,6 +8,8 @@ from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.regents import classic_rollout, classic_step, export_drive_scenarios
 from pufferlib.ocean.regents.dynamics import (
+    BRAKING_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
+    FORWARD_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
     MAX_BACKWARD_SPEED_MPS,
     STEERING_LIMIT_RADIANS,
     STEERING_RATE_LIMIT_RADIANS_PER_SECOND,
@@ -106,7 +108,9 @@ def test_classic_step_and_rollout_match_c_including_limits_and_masking():
     limits = _torch_classic_step(
         limit_states, limit_actions, np.full(6, 2.7, dtype=np.float32), np.full(6, 20.0, dtype=np.float32), 1.0
     )
-    assert limits[0, STATE_STEERING] == pytest.approx(STEERING_RATE_LIMIT_RADIANS_PER_SECOND)
+    assert limits[0, STATE_STEERING] == pytest.approx(
+        min(STEERING_RATE_LIMIT_RADIANS_PER_SECOND, STEERING_LIMIT_RADIANS)
+    )
     assert limits[1, STATE_STEERING] == pytest.approx(STEERING_LIMIT_RADIANS)
     assert limits[2, STATE_SPEED] == pytest.approx(20.0)
     assert limits[3, STATE_SPEED] == pytest.approx(MAX_BACKWARD_SPEED_MPS)
@@ -165,6 +169,25 @@ def test_classic_step_and_rollout_match_c_including_limits_and_masking():
         )
 
 
+def test_regents_action_uses_asymmetric_acceleration_and_one_radian_steering_rate():
+    state = np.asarray([[0.0, 0.0, 0.0, 5.0, 0.0], [0.0, 0.0, 0.0, 5.0, 0.0]], dtype=np.float32)
+    action = np.asarray([[-1.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    wheelbase = np.full(2, 2.7, dtype=np.float32)
+    maximum_speed = np.full(2, 20.0, dtype=np.float32)
+
+    assert BRAKING_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED == pytest.approx(5.0)
+    assert FORWARD_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED == pytest.approx(4.0)
+    assert STEERING_RATE_LIMIT_RADIANS_PER_SECOND == pytest.approx(1.0)
+    c_next_state = _c_classic_step(state, action, wheelbase, maximum_speed, 0.1)
+    torch_next_state = _torch_classic_step(state, action, wheelbase, maximum_speed, 0.1)
+    np.testing.assert_allclose(torch_next_state, c_next_state, rtol=0.0, atol=STRICT_ONE_STEP_ATOL)
+    np.testing.assert_allclose(c_next_state[:, STATE_SPEED], [4.5, 5.4], rtol=0.0, atol=STRICT_ONE_STEP_ATOL)
+    steering_next_state = _c_classic_step(
+        state[:1], np.asarray([[0.0, 1.0]], dtype=np.float32), wheelbase[:1], maximum_speed[:1], 0.1
+    )
+    assert steering_next_state[0, STATE_STEERING] == pytest.approx(0.1)
+
+
 def test_actions_derived_from_a_real_trajectory_match_the_c_rollout():
     drive = _real_replay_drive()
     try:
@@ -190,7 +213,11 @@ def test_actions_derived_from_a_real_trajectory_match_the_c_rollout():
         torch.cos(logged[1:, STATE_HEADING] - logged[:-1, STATE_HEADING]),
     )
     acceleration_action = (logged[1:, STATE_SPEED] - logged[:-1, STATE_SPEED]) / scenario.dt_seconds
-    acceleration_action /= float(binding.ACCELERATION_VALUES[-1])
+    acceleration_action = torch.where(
+        acceleration_action < 0,
+        acceleration_action / BRAKING_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
+        acceleration_action / FORWARD_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
+    )
     next_speed = logged[1:, STATE_SPEED]
     safe_speed = torch.where(next_speed.abs() > 0.5, next_speed, torch.full_like(next_speed, 0.5))
     yaw_rate = wrapped_heading_delta / scenario.dt_seconds
@@ -328,9 +355,8 @@ def test_action_gradients_reach_both_channels_and_survive_a_stationary_agent():
         epsilon = 1e-3
         forward = torch.zeros((1, transition_count, 2), dtype=torch.float32)
         forward[0, 0, 0] = epsilon
-        backward = torch.zeros((1, transition_count, 2), dtype=torch.float32)
-        backward[0, 0, 0] = -epsilon
+        neutral = torch.zeros((1, transition_count, 2), dtype=torch.float32)
         finite_difference = (
-            float(final_x(forward, initial_speed_mps)) - float(final_x(backward, initial_speed_mps))
-        ) / (2 * epsilon)
+            float(final_x(forward, initial_speed_mps)) - float(final_x(neutral, initial_speed_mps))
+        ) / epsilon
         assert finite_difference == pytest.approx(analytic, rel=1e-3)

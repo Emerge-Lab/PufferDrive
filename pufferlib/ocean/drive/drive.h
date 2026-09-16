@@ -5645,7 +5645,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx, bool use_re
             int plan_idx = agent_idx * env->regents_transition_count + transition_idx;
             acceleration = env->regents_actions[2 * plan_idx];
             steering = env->regents_actions[2 * plan_idx + 1];
-            acceleration *= ACCELERATION_VALUES[6];
+            acceleration *= acceleration < 0.0f ? REGENTS_BRAKING_ACCELERATION_METERS_PER_SECOND_SQUARED
+                                                : REGENTS_FORWARD_ACCELERATION_METERS_PER_SECOND_SQUARED;
             steering *= STEERING_VALUES[8];
         } else if (env->action_type == ACTION_TYPE_DISCRETE) {
             // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
@@ -5671,7 +5672,9 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx, bool use_re
         }
 
         // Limit the steering rate similar to the jerk model
-        float max_steering_delta = STEERING_RATE_LIMIT_RADIANS_PER_SECOND * env->dt;
+        float steering_rate_limit = use_regents_action ? REGENTS_STEERING_RATE_LIMIT_RADIANS_PER_SECOND
+                                                       : STEERING_RATE_LIMIT_RADIANS_PER_SECOND;
+        float max_steering_delta = steering_rate_limit * env->dt;
         float delta_steer = clip(steering - agent->steering_angle, -max_steering_delta, max_steering_delta);
         steering = clip(agent->steering_angle + delta_steer, -STEERING_LIMIT, STEERING_LIMIT);
         agent->steering_angle = steering;

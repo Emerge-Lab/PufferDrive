@@ -863,6 +863,13 @@ def encode_interactive_replay(scenario, replay):
     boundary_count = compute_effective_road_obs_count(
         env_cfg["obs_slots_boundary_n"], env_cfg.get("obs_dropout_boundary", 0.0)
     )
+    legacy_acceleration_scale = float(replay.get("adversary_plan_acceleration_scale", 0.0))
+    forward_acceleration_scale = float(
+        replay.get("adversary_plan_forward_acceleration_scale", legacy_acceleration_scale)
+    )
+    braking_acceleration_scale = float(
+        replay.get("adversary_plan_braking_acceleration_scale", legacy_acceleration_scale)
+    )
 
     observation_scale = 1.0
     quantized_observations = None
@@ -980,7 +987,8 @@ def encode_interactive_replay(scenario, replay):
         "optimization_ego_collision": bool(replay.get("optimization_ego_collision", False)),
         "ego_refresh_count": int(replay.get("ego_refresh_count", -1)),
         "adversary_plan_ids": [int(agent_id) for agent_id in replay.get("adversary_plan_ids", [])],
-        "adversary_plan_acceleration_scale": float(replay.get("adversary_plan_acceleration_scale", 0.0)),
+        "adversary_plan_forward_acceleration_scale": forward_acceleration_scale,
+        "adversary_plan_braking_acceleration_scale": braking_acceleration_scale,
     }
     return _pack_replay_binary(metadata, chunks)
 
@@ -1234,7 +1242,8 @@ __PAYLOAD_CHUNKS__
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
         let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D(),3:new Path2D()}, lastDrawn = -1;
         let adversaryIds = new Set(), egoCollisionLossAdversaryId = -1;
-        let adversaryPlanRows = new Map(), adversaryPlanTransitions = 0, adversaryPlanDims = 0, accelScale = 0;
+        let adversaryPlanRows = new Map(), adversaryPlanTransitions = 0, adversaryPlanDims = 0;
+        let forwardAccelScale = 0, brakingAccelScale = 0;
         const c = document.getElementById('c'), ctx = c.getContext('2d');
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
         const avoidabilityPanel = document.getElementById('avoidability-panel');
@@ -1365,7 +1374,9 @@ self.onmessage = async event => {
             if (C.adversary_plan_initial) {
                 adversaryPlanTransitions = H.chunks.adversary_plan_initial.shape[1];
                 adversaryPlanDims = H.chunks.adversary_plan_initial.shape[2];
-                accelScale = H.adversary_plan_acceleration_scale || 0;
+                const legacyAccelerationScale = H.adversary_plan_acceleration_scale || 0;
+                forwardAccelScale = H.adversary_plan_forward_acceleration_scale ?? legacyAccelerationScale;
+                brakingAccelScale = H.adversary_plan_braking_acceleration_scale ?? legacyAccelerationScale;
             }
             egoCollisionLossAdversaryId = H.ego_collision_loss_adversary_id ?? -1;
             if (egoCollisionLossAdversaryId !== -1) adversaryIds.add(egoCollisionLossAdversaryId);
@@ -2221,12 +2232,13 @@ self.onmessage = async event => {
             g.strokeStyle = "#eef1f6"; g.lineWidth = dpr; g.setLineDash([3 * dpr, 3 * dpr]);
             g.beginPath(); g.moveTo(xOf(cursor), pad); g.lineTo(xOf(cursor), h - pad); g.stroke(); g.setLineDash([]);
             g.fillStyle = "#c8d1e0"; g.font = (9 * dpr) + 'px ui-monospace,monospace'; g.textAlign = 'left';
-            g.fillText('+' + accelScale.toFixed(1), pad + 2 * dpr, pad + 9 * dpr);
-            g.fillText('-' + accelScale.toFixed(1), pad + 2 * dpr, h - pad - 2 * dpr);
+            g.fillText('+' + forwardAccelScale.toFixed(1), pad + 2 * dpr, pad + 9 * dpr);
+            g.fillText('-' + brakingAccelScale.toFixed(1), pad + 2 * dpr, h - pad - 2 * dpr);
             const readout = [["adv-plan-init", "adversary_plan_initial"], ["adv-plan-opt", "adversary_plan_optimized"]];
             for (const [elementId, chunkName] of readout) {
                 const normalized = C[chunkName][base + cursor * adversaryPlanDims];
-                document.getElementById(elementId).textContent = (normalized * accelScale).toFixed(2) + ' / ' + normalized.toFixed(2);
+                const accelerationScale = normalized < 0 ? brakingAccelScale : forwardAccelScale;
+                document.getElementById(elementId).textContent = (normalized * accelerationScale).toFixed(2) + ' / ' + normalized.toFixed(2);
             }
         }
         function updateUI(agent=null) {

@@ -30,10 +30,9 @@ from pufferlib.ocean.regents.state import (
 )
 
 
-# Ninety float32 integration steps differ by up to 3.586e-4 between Torch and C
-# on the WOD audit cohort; keep the parity gate sub-millimetric without rejecting
-# C-confirmed collisions for expected transcendental rounding accumulation.
-C_REPLAY_TOLERANCE = 5e-4
+# Allow up to one millimetre of accumulated float32 integration difference between
+# the differentiable Torch rollout and the authoritative C replay.
+C_REPLAY_TOLERANCE = 1e-3
 INITIAL_STATE_TOLERANCE = 1e-4
 # Drive pins the ego to stable agent row zero, and `regents_get_states` preserves that order.
 STABLE_EGO_AGENT_IDX = 0

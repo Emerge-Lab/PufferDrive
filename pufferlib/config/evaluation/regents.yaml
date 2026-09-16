@@ -120,19 +120,20 @@ generations:
       sdc_controller: pdm
       base_max_speed_mps: 40.0
 
-  # One deterministic 150-transition log for each CARLA town. Agent 0 is the PDM
-  # ego; the other 149 vehicles replay their saved IDM trajectories.
-  - name: regents_carla_generated_idm_pdm
+  # Ten continuous 100-transition segments from one 1000-transition PDM rollout
+  # for each CARLA town. Agent 0 is the PDM ego; the other 149 vehicles replay
+  # their saved PDM trajectories.
+  - name: regents_carla_generated_pdm
     seed: 42
-    scenario_count: 8
+    scenario_count: 80
     num_workers: 24
-    horizon_transition_count: 150
+    horizon_transition_count: 100
     output_dir: experiments/regents
     render_replays: true
     env:
-      map_dir: pufferlib/resources/drive/binaries/carla_generated_idm
-      scenario_length: 151
-      resample_frequency: 151
+      map_dir: pufferlib/resources/drive/binaries/carla_generated_pdm
+      scenario_length: 101
+      resample_frequency: 101
       sdc_controller: pdm
 
   # WOD Motion validation against the learned ego. Horizon, raster, learning rate,

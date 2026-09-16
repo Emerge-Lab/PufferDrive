@@ -127,6 +127,25 @@ def test_inverse_exactly_reconstructs_torch_c_limit_and_reverse_trajectories(syn
     assert torch.all(c_result.actions.abs() <= 1.0)
 
 
+def test_inverse_recovers_asymmetric_acceleration_limits(synthetic_scenario_batch):
+    initial_state = torch.tensor([[0.0, 0.0, 0.0, 5.0, 0.0]], dtype=torch.float32)
+    actions = torch.tensor([[[-1.0, 0.0], [1.0, 0.0]]], dtype=torch.float32)
+    states = classic_rollout(
+        initial_state,
+        actions,
+        torch.ones((1, 2), dtype=torch.bool),
+        torch.tensor([2.7], dtype=torch.float32),
+        torch.tensor([20.0], dtype=torch.float32),
+        0.1,
+    )
+
+    result = estimate_expert_actions(synthetic_scenario_batch(states, steering_observed=False))
+
+    torch.testing.assert_close(result.actions, actions, rtol=0.0, atol=2e-5)
+    torch.testing.assert_close(result.predicted_next_state, states[:, 1:], rtol=0.0, atol=EXACT_RECONSTRUCTION_ATOL)
+    assert result.model_consistent.all()
+
+
 def test_inverse_handles_gaps_low_speed_and_inconsistency(synthetic_scenario_batch):
     """Validity gaps are never bridged, low speed keeps steering, and residuals are reported."""
     resumed_state = torch.tensor([[1.0, 1.0, 0.0, 2.0, 0.0]], dtype=torch.float32)

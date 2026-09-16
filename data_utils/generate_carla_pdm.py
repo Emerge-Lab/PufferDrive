@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Generate deterministic IDM replay binaries from CARLA map-only binaries.
+"""Generate deterministic, segmented PDM replays from CARLA map binaries.
 
-Each input map is instantiated as one Gigaflow environment. The initial state
-and every subsequent transition are captured into a normal Drive replay binary
-while the source map geometry and metadata are preserved.
+Each map is instantiated once and simulated continuously. The captured states
+are split into replay binaries with an overlapping state at segment boundaries.
 """
 
 import argparse
@@ -26,13 +25,16 @@ except ModuleNotFoundError:  # Direct execution adds data_utils/, not the reposi
 
 
 DEFAULT_INPUT = Path("pufferlib/resources/drive/binaries/carla")
-DEFAULT_OUTPUT = Path("pufferlib/resources/drive/binaries/carla_generated_idm")
+DEFAULT_OUTPUT = Path("pufferlib/resources/drive/binaries/carla_generated_pdm")
 DEFAULT_AGENT_COUNT = 150
-DEFAULT_TRANSITION_COUNT = 150
+DEFAULT_TRANSITION_COUNT = 1000
+DEFAULT_SEGMENT_TRANSITION_COUNT = 100
 DEFAULT_BASE_SEED = 42
 LOG_DT_SECONDS = 0.1
 INITIAL_SPEED_MPS = 0.0
-DATASET_NAME = "carla_generated_idm"
+PDM_HORIZON_SECONDS = 4.0
+PDM_PLANNING_DT_SECONDS = 0.1
+DATASET_NAME = "carla_generated_pdm"
 SCENARIO_ID_BYTES = 128
 DATASET_NAME_BYTES = 32
 
@@ -101,7 +103,7 @@ def _single_scenario(state):
         return state
     if isinstance(state, list) and len(state) == 1:
         return state[0]
-    raise RuntimeError("CARLA IDM generation requires exactly one Drive environment")
+    raise RuntimeError("CARLA PDM generation requires exactly one Drive environment")
 
 
 def _create_generation_drive(source_path: Path, agent_count: int, sample_count: int, seed: int) -> Drive:
@@ -122,12 +124,14 @@ def _create_generation_drive(source_path: Path, agent_count: int, sample_count: 
         eval_mode=True,
         compute_eval_metrics=False,
         control_mode="control_agents",
-        sdc_controller="idm",
-        non_sdc_controller="idm",
+        sdc_controller="pdm",
+        non_sdc_controller="pdm",
         non_vehicle_controller="auto",
         action_type="continuous",
         dynamics_model="classic",
         dt=LOG_DT_SECONDS,
+        pdm_horizon=PDM_HORIZON_SECONDS,
+        pdm_planning_dt=PDM_PLANNING_DT_SECONDS,
         spawn_initial_speed=INITIAL_SPEED_MPS,
         spawn_speed_mode="fixed",
         gigaflow_spawn_mode="uniform",
@@ -158,30 +162,60 @@ def _create_generation_drive(source_path: Path, agent_count: int, sample_count: 
     )
 
 
-def _capture_rollout(source_path: Path, agent_count: int, transition_count: int, seed: int):
+def _validate_boundary_scenario(
+    scenario: dict, source_path: Path, agent_count: int, sample_idx: int
+) -> tuple[dict, ...]:
+    if scenario["timestep"] != sample_idx:
+        raise RuntimeError(
+            f"{source_path.name} reset or skipped a state at sample {sample_idx}: "
+            f"reported timestep {scenario['timestep']}"
+        )
+    if scenario["num_total_agents"] != agent_count:
+        raise RuntimeError(
+            f"{source_path.name} created {scenario['num_total_agents']} agent slots, expected {agent_count}"
+        )
+    if scenario["active_agent_count"] != agent_count:
+        raise RuntimeError(
+            f"{source_path.name} has {scenario['active_agent_count']} active agents at sample {sample_idx}, "
+            f"expected {agent_count}"
+        )
+    if scenario["active_agent_indices"] != list(range(agent_count)):
+        raise RuntimeError(f"{source_path.name} did not preserve every stable agent index at sample {sample_idx}")
+
+    agents = scenario["agents"]
+    if len(agents) != agent_count:
+        raise RuntimeError(f"{source_path.name} returned incomplete agent metadata at sample {sample_idx}")
+    for agent_idx, agent in enumerate(agents):
+        if agent["id"] != agent_idx:
+            raise RuntimeError(f"{source_path.name} returned unstable agent metadata at sample {sample_idx}")
+        if agent["type"] != binding.AGENT_TYPE_VEHICLE:
+            raise RuntimeError(f"{source_path.name} generated a non-vehicle agent at sample {sample_idx}")
+        if agent["controller"] != binding.CONTROLLER_PDM:
+            raise RuntimeError(f"{source_path.name} did not keep every generated vehicle under PDM control")
+        if not agent["route"]:
+            raise RuntimeError(f"{source_path.name} agent {agent_idx} has no route at sample {sample_idx}")
+
+    # get_state() allocates these dictionaries, so retaining the boundary payload
+    # preserves the route and dimensions even if Gigaflow later replaces a route.
+    return tuple(agents)
+
+
+def _capture_rollout(
+    source_path: Path,
+    agent_count: int,
+    transition_count: int,
+    segment_transition_count: int,
+    seed: int,
+):
     sample_count = transition_count + 1
     drive = _create_generation_drive(source_path, agent_count, sample_count, seed)
     try:
         drive.reset()
         initial_scenario = _single_scenario(drive.get_state())
-        if initial_scenario["num_total_agents"] != agent_count:
-            raise RuntimeError(
-                f"{source_path.name} created {initial_scenario['num_total_agents']} agent slots, expected {agent_count}"
-            )
-        if initial_scenario["active_agent_count"] != agent_count:
-            raise RuntimeError(
-                f"{source_path.name} spawned {initial_scenario['active_agent_count']} agents, expected {agent_count}"
-            )
-        if initial_scenario["active_agent_indices"] != list(range(agent_count)):
-            raise RuntimeError(f"{source_path.name} did not spawn every stable agent index")
-
-        agents = initial_scenario["agents"]
-        if len(agents) != agent_count:
-            raise RuntimeError(f"{source_path.name} returned incomplete initial agent metadata")
-        if any(agent["controller"] != binding.CONTROLLER_IDM for agent in agents):
-            raise RuntimeError(f"{source_path.name} did not assign IDM to every generated vehicle")
+        initial_agents = _validate_boundary_scenario(initial_scenario, source_path, agent_count, 0)
         traffic_elements = initial_scenario["traffic_elements"] or []
         traffic_count = len(traffic_elements)
+
         agent_frames = np.empty((sample_count, agent_count, binding.AGENT_F32_FIELDS), dtype=np.float32)
         agent_integer_frames = np.empty((sample_count, agent_count, binding.AGENT_I32_FIELDS), dtype=np.int32)
         traffic_frames = np.empty(
@@ -197,6 +231,7 @@ def _capture_rollout(source_path: Path, agent_count: int, transition_count: int,
             dtype=np.int16,
         )
         neutral_actions = np.zeros_like(drive.actions)
+        boundary_agents = [initial_agents]
 
         for sample_idx in range(sample_count):
             if sample_idx > 0:
@@ -216,6 +251,14 @@ def _capture_rollout(source_path: Path, agent_count: int, transition_count: int,
             agent_integer_frames[sample_idx] = live_agent_integer_frame[0]
             traffic_frames[sample_idx] = live_traffic_frame[0]
 
+            if sample_idx > 0 and sample_idx % segment_transition_count == 0:
+                scenario = _single_scenario(drive.get_state())
+                boundary_agents.append(_validate_boundary_scenario(scenario, source_path, agent_count, sample_idx))
+
+        expected_boundary_count = transition_count // segment_transition_count + 1
+        if len(boundary_agents) != expected_boundary_count:
+            raise RuntimeError(f"{source_path.name} did not capture every segment boundary")
+
         expected_ids = np.arange(agent_count, dtype=np.int32)
         if not np.all(agent_integer_frames[:, :, AGENT_ID_IDX] == expected_ids):
             raise RuntimeError(f"{source_path.name} telemetry returned unstable agent IDs")
@@ -230,7 +273,7 @@ def _capture_rollout(source_path: Path, agent_count: int, transition_count: int,
         if not np.isfinite(agent_frames).all():
             raise RuntimeError(f"{source_path.name} contains non-finite agent telemetry")
         if np.any(agent_frames[:, :, AGENT_SPEED_IDX] < 0.0):
-            raise RuntimeError(f"{source_path.name} contains a negative IDM speed")
+            raise RuntimeError(f"{source_path.name} contains a negative PDM speed")
         if traffic_count:
             if not np.all(traffic_frames[:, :traffic_count, TRAFFIC_VALID_IDX] == 1):
                 raise RuntimeError(f"{source_path.name} contains invalid traffic-control telemetry")
@@ -241,37 +284,38 @@ def _capture_rollout(source_path: Path, agent_count: int, transition_count: int,
             if not np.all(traffic_frames[:, :traffic_count, TRAFFIC_TYPE_IDX] == expected_traffic_types):
                 raise RuntimeError(f"{source_path.name} traffic-control types changed during generation")
 
-        return initial_scenario, agents, agent_frames, agent_integer_frames, traffic_frames[:, :traffic_count]
+        return boundary_agents, agent_frames, agent_integer_frames, traffic_frames[:, :traffic_count]
     finally:
         drive.close()
 
 
-def _build_generated_data(
+def _build_segment_data(
     source_data: dict,
     town_name: str,
     seed: int,
-    initial_agents: list,
+    segment_idx: int,
+    boundary_agents: tuple[dict, ...],
     agent_frames: np.ndarray,
     agent_integer_frames: np.ndarray,
     traffic_frames: np.ndarray,
 ) -> tuple[dict, str]:
     sample_count, agent_count, _ = agent_frames.shape
-    scenario_id = f"{town_name}_seed_{seed}"
+    scenario_id = f"{town_name}_seed_{seed}_segment_{segment_idx:02d}"
     generated_agents = []
     for agent_idx in range(agent_count):
-        initial_agent = initial_agents[agent_idx]
-        route = tuple(int(lane_idx) for lane_idx in initial_agent["route"])
+        boundary_agent = boundary_agents[agent_idx]
+        route = tuple(int(lane_idx) for lane_idx in boundary_agent["route"])
         if not route:
-            raise RuntimeError(f"Agent {agent_idx} has no generated route")
+            raise RuntimeError(f"Agent {agent_idx} has no generated route in segment {segment_idx}")
         headings = agent_frames[:, agent_idx, AGENT_HEADING_IDX]
         speeds = agent_frames[:, agent_idx, AGENT_SPEED_IDX]
         velocity_x = speeds * np.cos(headings)
         velocity_y = speeds * np.sin(headings)
-        height = np.full(sample_count, initial_agent["sim_height"], dtype=np.float32)
+        height = np.full(sample_count, boundary_agent["sim_height"], dtype=np.float32)
         generated_agents.append(
             {
                 "id": agent_idx,
-                "type": int(initial_agent["type"]),
+                "type": int(boundary_agent["type"]),
                 "T": sample_count,
                 "cols": {
                     "x": tuple(agent_frames[:, agent_idx, AGENT_X_IDX]),
@@ -292,7 +336,7 @@ def _build_generated_data(
                     float(agent_frames[-1, agent_idx, AGENT_Y_IDX]),
                     float(agent_frames[-1, agent_idx, AGENT_Z_IDX]),
                 ),
-                "mark_as_expert": int(initial_agent["mark_as_expert"]),
+                "mark_as_expert": int(boundary_agent["mark_as_expert"]),
             }
         )
 
@@ -393,28 +437,53 @@ def _validate_generated_data(
             raise RuntimeError("Validated binary changed a static traffic-control state")
 
 
-def generate_scenario(
+def _validate_generation_arguments(
     source_path: Path,
-    output_path: Path,
-    agent_count: int = DEFAULT_AGENT_COUNT,
-    transition_count: int = DEFAULT_TRANSITION_COUNT,
-    seed: int = DEFAULT_BASE_SEED,
-    overwrite: bool = False,
-) -> GenerationSummary:
-    source_path = Path(source_path)
-    output_path = Path(output_path)
+    output_directory: Path,
+    agent_count: int,
+    transition_count: int,
+    segment_transition_count: int,
+    seed: int,
+) -> None:
     if not source_path.is_file() or source_path.suffix != ".bin":
         raise ValueError(f"Input is not a .bin file: {source_path}")
-    if agent_count <= 0:
+    if output_directory.exists() and not output_directory.is_dir():
+        raise ValueError(f"Output path is not a directory: {output_directory}")
+    if not isinstance(agent_count, int) or isinstance(agent_count, bool) or agent_count <= 0:
         raise ValueError("agent_count must be positive")
-    if transition_count <= 0:
+    if not isinstance(transition_count, int) or isinstance(transition_count, bool) or transition_count <= 0:
         raise ValueError("transition_count must be positive")
-    if seed < 0 or seed >= 2**63:
+    if (
+        not isinstance(segment_transition_count, int)
+        or isinstance(segment_transition_count, bool)
+        or segment_transition_count <= 0
+    ):
+        raise ValueError("segment_transition_count must be positive")
+    if transition_count % segment_transition_count != 0:
+        raise ValueError("transition_count must be divisible by segment_transition_count")
+    if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0 or seed >= 2**63:
         raise ValueError("seed must be in [0, 2**63)")
-    if output_path.exists() and not output_path.is_file():
-        raise ValueError(f"Output path is not a file: {output_path}")
-    if source_path.resolve() == output_path.resolve():
-        raise ValueError("Input and output binary paths must differ")
+
+
+def generate_map_segments(
+    source_path: Path,
+    output_directory: Path,
+    agent_count: int = DEFAULT_AGENT_COUNT,
+    transition_count: int = DEFAULT_TRANSITION_COUNT,
+    segment_transition_count: int = DEFAULT_SEGMENT_TRANSITION_COUNT,
+    seed: int = DEFAULT_BASE_SEED,
+    overwrite: bool = False,
+) -> list[GenerationSummary]:
+    source_path = Path(source_path)
+    output_directory = Path(output_directory)
+    _validate_generation_arguments(
+        source_path,
+        output_directory,
+        agent_count,
+        transition_count,
+        segment_transition_count,
+        seed,
+    )
 
     source_data = read_bin(source_path)
     if source_data["agents"]:
@@ -422,68 +491,90 @@ def generate_scenario(
     town_name = _decoded_fixed_string(source_data["scenario_id"])
     if not town_name:
         raise ValueError(f"Source binary has no scenario ID: {source_path}")
-    _, initial_agents, agent_frames, agent_integer_frames, traffic_frames = _capture_rollout(
+
+    boundary_agents, agent_frames, agent_integer_frames, traffic_frames = _capture_rollout(
         source_path,
         agent_count,
         transition_count,
+        segment_transition_count,
         seed,
     )
     if traffic_frames.shape[1] != len(source_data["traffic"]):
         raise RuntimeError(f"{source_path.name} changed its traffic-control count during initialization")
-    generated_data, scenario_id = _build_generated_data(
-        source_data,
-        town_name,
-        seed,
-        initial_agents,
-        agent_frames,
-        agent_integer_frames,
-        traffic_frames,
-    )
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_file = tempfile.NamedTemporaryFile(
-        dir=output_path.parent,
-        prefix=f".{output_path.name}.",
-        suffix=".tmp",
-        delete=False,
-    )
-    temporary_path = Path(temporary_file.name)
-    temporary_file.close()
-    try:
-        write_bin(generated_data, temporary_path)
-        validated_data = read_bin(temporary_path)
-        _validate_generated_data(
-            validated_data,
-            source_data,
-            agent_count,
-            transition_count + 1,
-            scenario_id,
-        )
-        digest = _sha256(temporary_path)
-        if output_path.exists():
-            if _files_equal(temporary_path, output_path):
-                temporary_path.unlink()
-            elif not overwrite:
-                raise FileExistsError(
-                    f"Output differs from the deterministic generation: {output_path}; pass --overwrite to replace it"
+    output_directory.mkdir(parents=True, exist_ok=True)
+    segment_count = transition_count // segment_transition_count
+    summaries = []
+    temporary_paths = []
+    final_paths = []
+    with tempfile.TemporaryDirectory(dir=output_directory, prefix=f".{source_path.stem}.") as temporary_directory:
+        temporary_directory = Path(temporary_directory)
+        for segment_idx in range(segment_count):
+            first_sample_idx = segment_idx * segment_transition_count
+            last_sample_idx = first_sample_idx + segment_transition_count + 1
+            generated_data, scenario_id = _build_segment_data(
+                source_data,
+                town_name,
+                seed,
+                segment_idx,
+                boundary_agents[segment_idx],
+                agent_frames[first_sample_idx:last_sample_idx],
+                agent_integer_frames[first_sample_idx:last_sample_idx],
+                traffic_frames[first_sample_idx:last_sample_idx],
+            )
+            output_name = f"{source_path.stem}__segment_{segment_idx:02d}.bin"
+            temporary_path = temporary_directory / output_name
+            final_path = output_directory / output_name
+            if source_path.resolve() == final_path.resolve():
+                raise ValueError("Input and output binary paths must differ")
+            write_bin(generated_data, temporary_path)
+            validated_data = read_bin(temporary_path)
+            _validate_generated_data(
+                validated_data,
+                source_data,
+                agent_count,
+                segment_transition_count + 1,
+                scenario_id,
+            )
+            digest = _sha256(temporary_path)
+            temporary_paths.append(temporary_path)
+            final_paths.append(final_path)
+            summaries.append(
+                GenerationSummary(
+                    source_path=source_path,
+                    output_path=final_path,
+                    scenario_id=scenario_id,
+                    seed=seed,
+                    agent_count=agent_count,
+                    sample_count=segment_transition_count + 1,
+                    sha256=digest,
                 )
-            else:
-                os.replace(temporary_path, output_path)
-        else:
-            os.replace(temporary_path, output_path)
-    finally:
-        if temporary_path.exists():
-            temporary_path.unlink()
+            )
 
-    return GenerationSummary(
-        source_path=source_path,
-        output_path=output_path,
-        scenario_id=scenario_id,
-        seed=seed,
-        agent_count=agent_count,
-        sample_count=transition_count + 1,
-        sha256=digest,
-    )
+        # Resolve every collision before installing any file from this map.
+        should_install_segments = []
+        for temporary_path, final_path in zip(temporary_paths, final_paths):
+            if final_path.exists() and not final_path.is_file():
+                raise ValueError(f"Output path is not a file: {final_path}")
+            if final_path.exists() and _files_equal(temporary_path, final_path):
+                should_install_segments.append(False)
+                continue
+            if final_path.exists() and not overwrite:
+                raise FileExistsError(
+                    f"Output differs from the deterministic generation: {final_path}; pass --overwrite to replace it"
+                )
+            should_install_segments.append(True)
+
+        for should_install, temporary_path, final_path in zip(should_install_segments, temporary_paths, final_paths):
+            if should_install:
+                os.replace(temporary_path, final_path)
+
+    return summaries
+
+
+def generate_scenario(*args, **kwargs) -> list[GenerationSummary]:
+    """Compatibility name for generating every segment belonging to one map."""
+    return generate_map_segments(*args, **kwargs)
 
 
 def generate_all(
@@ -491,6 +582,7 @@ def generate_all(
     output_directory: Path = DEFAULT_OUTPUT,
     agent_count: int = DEFAULT_AGENT_COUNT,
     transition_count: int = DEFAULT_TRANSITION_COUNT,
+    segment_transition_count: int = DEFAULT_SEGMENT_TRANSITION_COUNT,
     base_seed: int = DEFAULT_BASE_SEED,
     overwrite: bool = False,
 ) -> list[GenerationSummary]:
@@ -506,25 +598,32 @@ def generate_all(
         raise ValueError(f"Input contains no .bin files: {input_path}")
     if output_directory.exists() and not output_directory.is_dir():
         raise ValueError(f"Output path is not a directory: {output_directory}")
-    if base_seed < 0 or base_seed + len(source_paths) - 1 >= 2**63:
+    if (
+        not isinstance(base_seed, int)
+        or isinstance(base_seed, bool)
+        or base_seed < 0
+        or base_seed + len(source_paths) - 1 >= 2**63
+    ):
         raise ValueError("Assigned seeds must be in [0, 2**63)")
 
     summaries = []
     for map_idx, source_path in enumerate(source_paths):
-        summary = generate_scenario(
+        map_summaries = generate_map_segments(
             source_path,
-            output_directory / source_path.name,
+            output_directory,
             agent_count=agent_count,
             transition_count=transition_count,
+            segment_transition_count=segment_transition_count,
             seed=base_seed + map_idx,
             overwrite=overwrite,
         )
-        summaries.append(summary)
-        print(
-            f"{source_path.name}: seed={summary.seed} agents={summary.agent_count} "
-            f"samples={summary.sample_count} output={summary.output_path} sha256={summary.sha256}",
-            flush=True,
-        )
+        summaries.extend(map_summaries)
+        for summary in map_summaries:
+            print(
+                f"{source_path.name}: seed={summary.seed} agents={summary.agent_count} "
+                f"samples={summary.sample_count} output={summary.output_path} sha256={summary.sha256}",
+                flush=True,
+            )
     return summaries
 
 
@@ -532,8 +631,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="CARLA binary directory or one .bin file")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output directory")
-    parser.add_argument("--agents", type=int, default=DEFAULT_AGENT_COUNT, help="IDM vehicles per map")
+    parser.add_argument("--agents", type=int, default=DEFAULT_AGENT_COUNT, help="PDM vehicles per map")
     parser.add_argument("--steps", type=int, default=DEFAULT_TRANSITION_COUNT, help="Transitions to record per map")
+    parser.add_argument(
+        "--segment-steps",
+        type=int,
+        default=DEFAULT_SEGMENT_TRANSITION_COUNT,
+        help="Transitions stored in each output segment",
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_BASE_SEED, help="Seed assigned to the first sorted map")
     parser.add_argument("--overwrite", action="store_true", help="Replace existing outputs that differ")
     args = parser.parse_args()
@@ -543,6 +648,7 @@ def main() -> None:
             output_directory=args.output,
             agent_count=args.agents,
             transition_count=args.steps,
+            segment_transition_count=args.segment_steps,
             base_seed=args.seed,
             overwrite=args.overwrite,
         )

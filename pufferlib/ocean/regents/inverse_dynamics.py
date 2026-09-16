@@ -13,12 +13,14 @@ from dataclasses import dataclass
 import torch
 
 from pufferlib.ocean.regents.dynamics import (
-    ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
+    BRAKING_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
+    FORWARD_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
     MAX_BACKWARD_SPEED_MPS,
     REAR_AXLE_RATIO,
     STEERING_LIMIT_RADIANS,
     STEERING_RATE_LIMIT_RADIANS_PER_SECOND,
     TARGET_STEERING_SCALE_RADIANS,
+    acceleration_from_normalized_action,
     classic_step,
     injection_wheelbase_by_transition,
 )
@@ -62,20 +64,27 @@ class InverseDynamicsResult:
 
 
 def _closest_reachable_acceleration_action(current_speed, target_speed, maximum_speed, dt_seconds):
-    maximum_speed_delta = ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED * dt_seconds
+    maximum_braking_speed_delta = BRAKING_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED * dt_seconds
+    maximum_forward_speed_delta = FORWARD_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED * dt_seconds
     lowest_reachable_speed = torch.clamp(
-        current_speed - maximum_speed_delta,
+        current_speed - maximum_braking_speed_delta,
         min=MAX_BACKWARD_SPEED_MPS,
     )
     lowest_reachable_speed = torch.minimum(lowest_reachable_speed, maximum_speed)
     highest_reachable_speed = torch.clamp(
-        current_speed + maximum_speed_delta,
+        current_speed + maximum_forward_speed_delta,
         min=MAX_BACKWARD_SPEED_MPS,
     )
     highest_reachable_speed = torch.minimum(highest_reachable_speed, maximum_speed)
     desired_speed = torch.clamp(target_speed, min=lowest_reachable_speed, max=highest_reachable_speed)
+    desired_speed_delta = desired_speed - current_speed
+    normalized_acceleration = torch.where(
+        desired_speed_delta < 0,
+        desired_speed_delta / maximum_braking_speed_delta,
+        desired_speed_delta / maximum_forward_speed_delta,
+    )
     return torch.clamp(
-        (desired_speed - current_speed) / maximum_speed_delta,
+        normalized_acceleration,
         min=-1.0,
         max=1.0,
     )
@@ -147,7 +156,7 @@ def _select_bounded_steering(
         max=STEERING_LIMIT_RADIANS,
     )
     reconstructed_speed = current_state[..., STATE_SPEED] + (
-        acceleration_action * ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED * dt_seconds
+        acceleration_from_normalized_action(acceleration_action) * dt_seconds
     )
     reconstructed_speed = torch.clamp(reconstructed_speed, min=MAX_BACKWARD_SPEED_MPS)
     reconstructed_speed = torch.minimum(reconstructed_speed, maximum_speed_mps)

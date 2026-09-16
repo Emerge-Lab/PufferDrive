@@ -252,7 +252,9 @@ static PyObject *regents_get_states_py(PyObject *self __attribute__((unused)), P
         valid[agent_idx] = agent->sim_valid ? NPY_TRUE : NPY_FALSE;
     }
     Agent *ego = &env->agents[EGO_IDX];
-    ego_action[0] = ego->accel_long / ACCELERATION_VALUES[6];
+    float ego_acceleration_scale = ego->accel_long < 0.0f ? REGENTS_BRAKING_ACCELERATION_METERS_PER_SECOND_SQUARED
+                                                          : REGENTS_FORWARD_ACCELERATION_METERS_PER_SECOND_SQUARED;
+    ego_action[0] = ego->accel_long / ego_acceleration_scale;
     ego_action[1] = ego->steering_angle / STEERING_VALUES[8];
     Py_RETURN_NONE;
 }
@@ -434,13 +436,15 @@ static PyObject *classic_step_diagnostic_py(PyObject *self __attribute__((unused
         GridMap diagnostic_grid = {0};
         Drive env = {0};
         env.agents = &agent;
-        env.actions = &diagnostic_action[0][0];
+        env.regents_actions = &diagnostic_action[0][0];
+        env.regents_transition_count = 1;
+        env.timestep = 1;
         env.grid_map = &diagnostic_grid;
         env.action_type = ACTION_TYPE_CONTINUOUS;
         env.dynamics_model = DYNAMICS_MODEL_CLASSIC;
         env.dt = (float) dt_seconds;
         env.base_max_speed_mps = maximum_speeds[sample_idx];
-        move_dynamics(&env, 0, 0, false);
+        move_dynamics(&env, 0, 0, true);
 
         outputs[sample_idx][REGENTS_STATE_X] = agent.sim_x;
         outputs[sample_idx][REGENTS_STATE_Y] = agent.sim_y;

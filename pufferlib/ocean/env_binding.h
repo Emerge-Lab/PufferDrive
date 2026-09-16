@@ -1477,6 +1477,21 @@ PyMODINIT_FUNC PyInit_binding(void) {
     if (add_float_constant(m, "LANE_WIDTH_METERS", LANE_WIDTH) < 0
         || add_float_constant(m, "WHEELBASE_LENGTH_RATIO", WHEELBASE_LENGTH_RATIO) < 0
         || add_float_constant(m, "MAX_BACKWARD_SPEED_MPS", MAX_BACKWARD_SPEED) < 0
+        || add_float_constant(
+               m,
+               "REGENTS_BRAKING_ACCELERATION_METERS_PER_SECOND_SQUARED",
+               REGENTS_BRAKING_ACCELERATION_METERS_PER_SECOND_SQUARED)
+            < 0
+        || add_float_constant(
+               m,
+               "REGENTS_FORWARD_ACCELERATION_METERS_PER_SECOND_SQUARED",
+               REGENTS_FORWARD_ACCELERATION_METERS_PER_SECOND_SQUARED)
+            < 0
+        || add_float_constant(
+               m,
+               "REGENTS_STEERING_RATE_LIMIT_RADIANS_PER_SECOND",
+               REGENTS_STEERING_RATE_LIMIT_RADIANS_PER_SECOND)
+            < 0
         || add_float_constant(m, "STEERING_LIMIT_RADIANS", STEERING_LIMIT) < 0
         || add_float_constant(m, "STEERING_RATE_LIMIT_RADIANS_PER_SECOND", STEERING_RATE_LIMIT_RADIANS_PER_SECOND) < 0
         || add_float_constant(m, "REAR_AXLE_RATIO", REAR_AXLE_RATIO) < 0

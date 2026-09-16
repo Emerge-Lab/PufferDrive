@@ -99,9 +99,15 @@ def agent_state_rows(payload, expected_agent_count):
             values[5],
         )
         valid[stable_agent_idx] = bool(serialized_valid)
+    ego_acceleration = agents[0]["accel_long"]
+    ego_acceleration_scale = (
+        float(binding.REGENTS_BRAKING_ACCELERATION_METERS_PER_SECOND_SQUARED)
+        if ego_acceleration < 0.0
+        else float(binding.REGENTS_FORWARD_ACCELERATION_METERS_PER_SECOND_SQUARED)
+    )
     ego_action = np.asarray(
         (
-            agents[0]["accel_long"] / float(binding.ACCELERATION_VALUES[6]),
+            ego_acceleration / ego_acceleration_scale,
             agents[0]["sim_steering"] / float(binding.STEERING_VALUES[8]),
         ),
         dtype=np.float32,

@@ -18,7 +18,10 @@ from tqdm import tqdm
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.regents.adapter import DEFAULT_RASTER_RESOLUTION_METERS
-from pufferlib.ocean.regents.dynamics import ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED
+from pufferlib.ocean.regents.dynamics import (
+    BRAKING_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
+    FORWARD_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
+)
 from pufferlib.ocean.regents.artifacts import cost_row, save_generation_artifact
 from pufferlib.ocean.regents.filters import ReGentSFilterConfig
 from pufferlib.ocean.regents.losses import ReGentSCostConfig
@@ -329,7 +332,8 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
             "adversary_plan_optimized": candidate_plan(
                 optimization.optimized_actions, candidate_rows, transition_count
             ),
-            "adversary_plan_acceleration_scale": ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
+            "adversary_plan_forward_acceleration_scale": FORWARD_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
+            "adversary_plan_braking_acceleration_scale": BRAKING_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
             "selected_adversary_idx": optimization.selected_adversary_idx,
             "selected_adversary_id": optimization.selected_adversary_id,
             "ego_collision_loss_adversary_idx": optimization.ego_collision_loss_adversary_idx,

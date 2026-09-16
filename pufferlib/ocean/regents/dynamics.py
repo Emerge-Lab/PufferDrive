@@ -19,13 +19,27 @@ ACTION_FEATURE_COUNT = 2
 ACTION_ACCELERATION = 0
 ACTION_TARGET_STEERING = 1
 
-ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED = float(binding.ACCELERATION_VALUES[-1])
+BRAKING_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED = float(
+    binding.REGENTS_BRAKING_ACCELERATION_METERS_PER_SECOND_SQUARED
+)
+FORWARD_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED = float(
+    binding.REGENTS_FORWARD_ACCELERATION_METERS_PER_SECOND_SQUARED
+)
 TARGET_STEERING_SCALE_RADIANS = float(binding.STEERING_VALUES[-1])
-STEERING_LIMIT_RADIANS = float(binding.STEERING_LIMIT_RADIANS)
-STEERING_RATE_LIMIT_RADIANS_PER_SECOND = float(binding.STEERING_RATE_LIMIT_RADIANS_PER_SECOND)
+STEERING_LIMIT_RADIAeNS = float(binding.STEERING_LIMIT_RADIANS)
+STEERING_RATE_LIMIT_RADIANS_PER_SECOND = float(binding.REGENTS_STEERING_RATE_LIMIT_RADIANS_PER_SECOND)
 MAX_BACKWARD_SPEED_MPS = float(binding.MAX_BACKWARD_SPEED_MPS)
 REAR_AXLE_RATIO = float(binding.REAR_AXLE_RATIO)
 WHEELBASE_LENGTH_RATIO = float(binding.WHEELBASE_LENGTH_RATIO)
+
+
+def acceleration_from_normalized_action(normalized_acceleration):
+    """Convert a ReGentS action to its asymmetric physical acceleration."""
+    return torch.where(
+        normalized_acceleration < 0,
+        normalized_acceleration * BRAKING_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
+        normalized_acceleration * FORWARD_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
+    )
 
 
 def injection_wheelbase_by_transition(logged_length_meters, fallback_wheelbase_meters, transition_active):
@@ -54,7 +68,7 @@ def _wrap_heading_like_c(heading):
 
 def classic_step(state, action, wheelbase_meters, maximum_speed_mps, dt_seconds):
     """Advance one classic-dynamics step without mutating any input."""
-    acceleration = action[..., ACTION_ACCELERATION] * ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED
+    acceleration = acceleration_from_normalized_action(action[..., ACTION_ACCELERATION])
     target_steering = action[..., ACTION_TARGET_STEERING] * TARGET_STEERING_SCALE_RADIANS
 
     previous_steering = state[..., STATE_STEERING]
