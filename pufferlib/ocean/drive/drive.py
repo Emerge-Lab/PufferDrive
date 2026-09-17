@@ -174,7 +174,6 @@ class Drive(pufferlib.PufferEnv):
         self.compute_eval_metrics = compute_eval_metrics
         self.shared_network = shared_network
         self.render_mode = render_mode
-        self.num_maps = num_maps
         self.report_interval = report_interval
         self.reward_goal = reward_goal
         self.reward_collision = reward_collision
@@ -363,6 +362,10 @@ class Drive(pufferlib.PufferEnv):
             self.map_files = [map_dir]
         else:
             self.map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
+
+        if num_maps == -1:
+            num_maps = len(self.map_files)
+        self.num_maps = num_maps
 
         self.simulation_mode = {
             "gigaflow": binding.SIMULATION_MODE_GIGAFLOW,
