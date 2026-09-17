@@ -1410,6 +1410,25 @@ static bool controller_uses_route_goals(int controller) {
     return controller == CONTROLLER_IDM || controller == CONTROLLER_CORRIDOR_IDM || controller == CONTROLLER_PDM;
 }
 
+static int gt_goal_step(Drive *env, Agent *agent) {
+    if (env->init_step >= agent->trajectory_size || !agent->log_valid[env->init_step]) {
+        return -1;
+    }
+    for (int step = agent->trajectory_size - 1; step >= env->init_step; step--) {
+        if (!agent->log_valid[step]) {
+            continue;
+        }
+        float dx = agent->log_trajectory_x[step] - agent->log_trajectory_x[env->init_step];
+        float dy = agent->log_trajectory_y[step] - agent->log_trajectory_y[env->init_step];
+        float dz = agent->log_trajectory_z[step] - agent->log_trajectory_z[env->init_step];
+        if (dx * dx + dy * dy < env->goal_radius * env->goal_radius && fabsf(dz) < Z_BUFFER) {
+            return -1;
+        }
+        return step;
+    }
+    return -1;
+}
+
 static bool generate_agent_goals(Drive *env, Agent *agent) {
     if (controller_uses_route_goals(agent->controller) || env->goal_source == GOAL_SOURCE_ROUTE) {
         if (agent->route_length == 0) {
@@ -1424,26 +1443,15 @@ static bool generate_agent_goals(Drive *env, Agent *agent) {
         return generate_new_goals_from_map(env, agent);
     }
 
-    int start_step = env->init_step > 0 ? env->init_step : 0;
-    int remaining_steps = agent->trajectory_size - 1 - start_step;
-    if (remaining_steps < 1) {
-        remaining_steps = 1;
+    int trajectory_step = gt_goal_step(env, agent);
+    if (trajectory_step < 0) {
+        return false;
     }
-    for (int goal_idx = 0; goal_idx < env->num_goals; goal_idx++) {
-        int trajectory_step = start_step + (goal_idx + 1) * remaining_steps / env->num_goals;
-        if (trajectory_step >= agent->trajectory_size) {
-            trajectory_step = agent->trajectory_size - 1;
-        }
-        agent->list_goal_x[goal_idx] = agent->log_trajectory_x[trajectory_step];
-        agent->list_goal_y[goal_idx] = agent->log_trajectory_y[trajectory_step];
-        agent->list_goal_z[goal_idx] = agent->log_trajectory_z[trajectory_step];
-        agent->list_goal_lane[goal_idx] = -1;
-    }
-    agent->goal_count = env->num_goals;
-    agent->current_goal_idx = 0;
-    agent->current_goal_x = agent->list_goal_x[0];
-    agent->current_goal_y = agent->list_goal_y[0];
-    agent->current_goal_z = agent->list_goal_z[0];
+    agent->gt_goal_x = agent->log_trajectory_x[trajectory_step];
+    agent->gt_goal_y = agent->log_trajectory_y[trajectory_step];
+    agent->gt_goal_z = agent->log_trajectory_z[trajectory_step];
+    int goal_lane = -1;
+    commit_goals(env, agent, &agent->gt_goal_x, &agent->gt_goal_y, &agent->gt_goal_z, &goal_lane, 1, 0);
     return true;
 }
 
@@ -3050,6 +3058,10 @@ static void add_log(Drive *env) {
         episode_log.num_goals_reached += num_goals_reached;
         // Score: 1 per agent that reached its full goal set without being removed/stopped.
         float agent_score = (num_goals_reached >= env->num_goals && !agent->removed && !agent->stopped) ? 1.0f : 0.0f;
+        if (env->goal_source == GOAL_SOURCE_GT && !controller_uses_route_goals(agent->controller)) {
+            agent_score
+                = (num_goals_reached >= agent->goal_count && agent->goal_count > 0 && !total_infractions) ? 1.0f : 0.0f;
+        }
         episode_log.score += agent_score;
         float agent_dnf = (!offroad && !collided && !red_light_violations && num_goals_reached < 1) ? 1.0f : 0.0f;
         episode_log.dnf_rate += agent_dnf;
@@ -4013,12 +4025,8 @@ static bool should_control_agent(Drive *env, int agent_idx) {
         return false;
     }
 
-    // In REPLAY mode without route data, control agents spawning far enough from their goal
-    if (env->goal_source == GOAL_SOURCE_GT && agent->route_length == 0) {
-        float dx = agent->gt_goal_x - agent->log_trajectory_x[env->init_step];
-        float dy = agent->gt_goal_y - agent->log_trajectory_y[env->init_step];
-        float dz = agent->gt_goal_z - agent->log_trajectory_z[env->init_step];
-        return sqrtf(dx * dx + dy * dy + dz * dz) > env->goal_radius;
+    if (env->goal_source == GOAL_SOURCE_GT) {
+        return gt_goal_step(env, agent) >= 0;
     }
 
     // Control if the agent has a route to follow
@@ -5976,6 +5984,18 @@ static bool adversary_proximity_grace_expired(Drive *env, int target_agent_idx) 
     return env->adversary_out_of_range_step_count >= grace_step_count;
 }
 
+static void remove_finished_gt_agents(Drive *env) {
+    for (int i = 0; i < env->active_agent_count; i++) {
+        Agent *agent = &env->agents[env->active_agent_indices[i]];
+        if (agent->stopped || agent->removed || controller_uses_route_goals(agent->controller)
+            || agent->metrics_array[REACHED_GOAL_IDX] == 0.0f || agent->current_goal_idx != agent->goal_count) {
+            continue;
+        }
+        invalidate_agent(agent);
+        agent->removed = 1;
+    }
+}
+
 void c_step(Drive *env) {
     // In eval, a scenario is evaluated once: hold the env after its episode
     // ended, so a short episode does not replay and re-emit within the window.
@@ -6121,6 +6141,10 @@ void c_step(Drive *env) {
         }
     }
 
+    if (env->goal_source == GOAL_SOURCE_GT) {
+        remove_finished_gt_agents(env);
+    }
+
     // Mark terminals for stopped or removed agents
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
@@ -6149,7 +6173,7 @@ void c_step(Drive *env) {
         && env->control_mode == CONTROL_MODE_SDC_ONLY) {
         for (int i = 0; i < env->active_agent_count; i++) {
             Agent *agent = &env->agents[env->active_agent_indices[i]];
-            if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f && agent->current_goal_idx == env->num_goals) {
+            if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f && agent->current_goal_idx == agent->goal_count) {
                 early_reset = 1;
             }
         }
@@ -6161,6 +6185,11 @@ void c_step(Drive *env) {
     if (env->adversarial_termination_mode != ADVERSARIAL_TERMINATION_MODE_DISABLED) {
         int target_agent_idx = env->active_agent_indices[0];
         int target_inactive = env->agents[target_agent_idx].removed || env->agents[target_agent_idx].stopped;
+        Agent *target = &env->agents[target_agent_idx];
+        if (env->goal_source == GOAL_SOURCE_GT && !controller_uses_route_goals(target->controller)
+            && target->goal_count > 0 && target->current_goal_idx == target->goal_count) {
+            target_inactive = 0;
+        }
         int active_adversary_count = 0;
         for (int i = 1; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];

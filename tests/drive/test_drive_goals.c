@@ -218,10 +218,7 @@ static int test_roll_goals_bails_on_replay_pins(void) {
 // Ground-truth goal source (replay: goals sampled off the logged trajectory).
 // ---------------------------------------------------------------------------
 
-static int test_gt_goals_along_trajectory_are_laneless(void) {
-    // GT source spaces num_goals goals along the logged trajectory. They carry no lane (list_goal_lane
-    // = -1, so no GPS lane-distance) and every coordinate is finite. current_goal_idx starts at 0 but
-    // may already have advanced if the agent spawns inside the first goal's radius (metrics run in reset).
+static int test_gt_endpoint_is_laneless(void) {
     srand(17);
     Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1, 0);
     env.goal_source = GOAL_SOURCE_GT;
@@ -231,13 +228,23 @@ static int test_gt_goals_along_trajectory_are_laneless(void) {
     EXPECT_TRUE(env.active_agent_count > 0);
     for (int i = 0; i < env.active_agent_count; i++) {
         Agent *agent = &env.agents[env.active_agent_indices[i]];
-        EXPECT_EQ_INT(agent->goal_count, env.num_goals);
+        EXPECT_EQ_INT(agent->goal_count, 1);
         EXPECT_TRUE(agent->current_goal_idx >= 0 && agent->current_goal_idx <= agent->goal_count);
-        for (int slot = 0; slot < agent->goal_count; slot++) {
+        int endpoint_step = gt_goal_step(&env, agent);
+        EXPECT_TRUE(endpoint_step >= env.init_step);
+        EXPECT_NEAR(agent->list_goal_x[0], agent->log_trajectory_x[endpoint_step], 1e-6f);
+        EXPECT_NEAR(agent->list_goal_y[0], agent->log_trajectory_y[endpoint_step], 1e-6f);
+        EXPECT_NEAR(agent->list_goal_z[0], agent->log_trajectory_z[endpoint_step], 1e-6f);
+        for (int slot = 0; slot < env.num_goals; slot++) {
             EXPECT_EQ_INT(agent->list_goal_lane[slot], -1);
             EXPECT_FINITE(agent->list_goal_x[slot]);
             EXPECT_FINITE(agent->list_goal_y[slot]);
             EXPECT_FINITE(agent->list_goal_z[slot]);
+        }
+        for (int slot = agent->goal_count; slot < env.num_goals; slot++) {
+            EXPECT_NEAR(agent->list_goal_x[slot], 0.0f, 1e-6f);
+            EXPECT_NEAR(agent->list_goal_y[slot], 0.0f, 1e-6f);
+            EXPECT_NEAR(agent->list_goal_z[slot], 0.0f, 1e-6f);
         }
     }
     free_allocated(&env);
@@ -254,6 +261,6 @@ int main(void) {
     RUN_TEST(test_route_goals_front_aligned_with_lanes);
     RUN_TEST(test_roll_goals_slides_window_and_appends);
     RUN_TEST(test_roll_goals_bails_on_replay_pins);
-    RUN_TEST(test_gt_goals_along_trajectory_are_laneless);
+    RUN_TEST(test_gt_endpoint_is_laneless);
     return test_summary(failures);
 }

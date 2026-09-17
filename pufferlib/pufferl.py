@@ -702,7 +702,6 @@ class PuffeRL:
                 self.masks[batch_rows, l] = m
                 self.target_masks[batch_rows, l] = target_mask
 
-                # Note: We are not yet handling masks in this version
                 self.ep_lengths[env_id] += 1
                 if l + 1 >= config["bptt_horizon"]:
                     num_full = env_id.stop - env_id.start
@@ -896,8 +895,8 @@ class PuffeRL:
         config = self.config
         device = config["device"]
 
-        masks = self.masks.bool()
-        terminals = (self.terminals | ~masks).float()
+        transition_masks = self.masks.bool()
+        terminals = (self.terminals | ~transition_masks).float()
         advantages = compute_puff_advantage(
             self.values,
             self.rewards,
@@ -909,6 +908,8 @@ class PuffeRL:
             rho_clip,
             c_clip,
         )
+        masks = torch.zeros_like(transition_masks)
+        masks[:, :-1] = transition_masks[:, 1:]
         advantages = advantages.masked_fill(~masks, 0.0)
         return advantages, advantages + self.values, masks
 
@@ -1767,6 +1768,7 @@ def _make_target_policy_env_view(live_env, target_args):
 
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
+    requested_goal_source = args["env"]["goal_source"]
 
     # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
     if args["load_model_path"]:
@@ -1817,6 +1819,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 "policy/observation architecture instead of the checkpoint's."
             )
 
+    if requested_goal_source == "gt":
+        args["env"]["goal_source"] = requested_goal_source
     args = normalize_puffer_drive_config(args, "training")
     validate_puffer_drive_config(args, "training")
     if vecenv is None:

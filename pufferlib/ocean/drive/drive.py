@@ -439,6 +439,7 @@ class Drive(pufferlib.PufferEnv):
             num_eval_scenarios=self.current_num_eval_scenarios,
             eval_map_indices=self.eval_map_indices,
             goal_radius=self.goal_radius,
+            goal_source=self.goal_source,
         )
         # In eval mode, don't wrap counter - allows termination condition to work correctly
         self.starting_map_counter = self.starting_map_counter + num_envs
@@ -703,6 +704,7 @@ class Drive(pufferlib.PufferEnv):
                     num_eval_scenarios=self.current_num_eval_scenarios,  # Use the dynamic size here
                     eval_map_indices=remaining_map_indices,
                     goal_radius=self.goal_radius,
+                    goal_source=self.goal_source,
                 )
                 self.agent_offsets = agent_offsets
                 self.map_ids = map_ids
