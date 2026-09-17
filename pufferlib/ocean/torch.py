@@ -449,7 +449,11 @@ class Drive(nn.Module):
         if self.is_continuous:
             params = self.actor_head(hidden)
             loc, scale = torch.split(params, self.action_dim, dim=1)
-            std = torch.nn.functional.softplus(scale) + 1e-4
+            # softplus is unbounded above; observed run away to std ~1e3 (entropy ~54 nats over
+            # 6 dims, vs. ~6 nats at init) once a reward term was badly scaled, and never
+            # recovered even after 300+ epochs. Actions are clipped to [-1,1] regardless, so a
+            # std beyond that range buys no real exploration -- clamp comfortably above it.
+            std = torch.nn.functional.softplus(scale).clamp(max=2.0) + 1e-4
             return torch.distributions.Normal(loc, std)
         return self.actor_head(hidden)
 

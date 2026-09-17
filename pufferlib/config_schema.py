@@ -620,9 +620,17 @@ def _validate_cross_field_constraints(config, context):
             "must be 'spline' if and only if env.action_type is 'spline' (no discrete/continuous "
             "bridging exists for spline)",
         )
-    if config["trajectory_training"]:
+    # Gated on env["action_type"]=="spline" itself, not config["trajectory_training"] --
+    # these are physical requirements of the C spline decode path (move_dynamics), and
+    # env.action_type can reach "spline" by being set directly, bypassing the
+    # trajectory_training convenience switch (line 616 above already requires
+    # policy.action_type to match it when that happens). Gating on trajectory_training
+    # alone would let dynamics_model=="classic"/an unfit horizon through untouched in
+    # that direct-set path -- move_dynamics's DYNAMICS_MODEL_CLASSIC branch has no
+    # ACTION_TYPE_SPLINE case and would silently leave the agent inert instead of erroring.
+    if env["action_type"] == "spline":
         if env["dynamics_model"] != "jerk":
-            _raise_config_error(context, "trajectory_training", "requires env.dynamics_model to be 'jerk'")
+            _raise_config_error(context, "env.action_type", "'spline' requires env.dynamics_model to be 'jerk'")
         if env["spline_horizon_seconds"] <= env["dt"]:
             _raise_config_error(context, "env.spline_horizon_seconds", "must exceed env.dt")
         implied_samples = (env["spline_horizon_seconds"] - env["dt"]) / env["dt"]

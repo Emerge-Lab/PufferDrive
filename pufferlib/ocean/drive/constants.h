@@ -319,8 +319,13 @@ static const int ROAD_OFFSETS[25][2]
 
 // obs_html_frame array field counts
 #define AGENT_F32_GOAL_RADIUS_IDX 12
+// Ego-only predicted-path samples (spline action_type), world-frame (x,y) pairs; zero for
+// every other agent row and for non-spline replays.
+#define AGENT_F32_PATH_BASE_IDX 13
+#define AGENT_F32_PATH_SAMPLES 8
 #define AGENT_F32_FIELDS                                                                                               \
-    13 // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat, jerk_long, jerk_lat, goal_radius
+    (13 + 2 * AGENT_F32_PATH_SAMPLES) // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat,
+                                       // jerk_long, jerk_lat, goal_radius, then AGENT_F32_PATH_SAMPLES (x,y) pairs
 #define AGENT_I32_FIELDS                                                                                               \
     10 // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx, blindness_active, braking_active
 #define GOAL_XY_FIELDS 2               // goal x, y per goal slot; reached slots stay zeroed

@@ -776,6 +776,16 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_f32[f32_base + 11] = a->jerk_lat;
             agent_f32[f32_base + AGENT_F32_GOAL_RADIUS_IDX] = a->reward_coefs[REWARD_COEF_GOAL_RADIUS];
 
+            if (i == EGO_IDX && drive->action_type == ACTION_TYPE_SPLINE) {
+                float path_sample_dt = drive->spline_horizon_seconds / (AGENT_F32_PATH_SAMPLES - 1);
+                for (int sample_idx = 0; sample_idx < AGENT_F32_PATH_SAMPLES; sample_idx++) {
+                    float sample_t = sample_idx * path_sample_dt;
+                    int path_base = f32_base + AGENT_F32_PATH_BASE_IDX + 2 * sample_idx;
+                    agent_f32[path_base] = evaluate_quintic_derivative(a->spline_coefs_x, sample_t, 0);
+                    agent_f32[path_base + 1] = evaluate_quintic_derivative(a->spline_coefs_y, sample_t, 0);
+                }
+            }
+
             agent_i32[i32_base + 0] = i;
             agent_i32[i32_base + 1] = a->type;
             agent_i32[i32_base + 2] = a->sim_valid;
@@ -1319,6 +1329,8 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "MAX_GOALS", MAX_GOALS);
     PyModule_AddIntConstant(m, "AGENT_F32_FIELDS", AGENT_F32_FIELDS);
     PyModule_AddIntConstant(m, "AGENT_F32_GOAL_RADIUS_IDX", AGENT_F32_GOAL_RADIUS_IDX);
+    PyModule_AddIntConstant(m, "AGENT_F32_PATH_BASE_IDX", AGENT_F32_PATH_BASE_IDX);
+    PyModule_AddIntConstant(m, "AGENT_F32_PATH_SAMPLES", AGENT_F32_PATH_SAMPLES);
     PyModule_AddIntConstant(m, "AGENT_I32_FIELDS", AGENT_I32_FIELDS);
     PyModule_AddIntConstant(m, "GOAL_XY_FIELDS", GOAL_XY_FIELDS);
     PyModule_AddIntConstant(m, "METRICS_F32_FIELDS", METRICS_F32_FIELDS);

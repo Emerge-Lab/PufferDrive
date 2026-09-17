@@ -1474,8 +1474,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
     torch_seed, env_seed = derive_rank_seeds(args["vec"]["seed"], train_seed, world_size, global_rank)
     torch.manual_seed(torch_seed)
-    vecenv = vecenv or load_env(env_name, args, seed=env_seed)
-    policy = policy or load_policy(args, vecenv, env_name)
+    # args["env_name"] (from the composed config's own env_name field) resolves the actual
+    # environment class/module; the env_name parameter is whatever Hydra config file was
+    # requested on the CLI, which for an opt-in override file (e.g. puffer_drive_spline.yaml)
+    # legitimately differs -- env_creator's module-name convention only knows the former.
+    vecenv = vecenv or load_env(args["env_name"], args, seed=env_seed)
+    policy = policy or load_policy(args, vecenv, args["env_name"])
 
     if "LOCAL_RANK" in os.environ:
         args["train"]["device"] = "cuda"
@@ -2270,7 +2274,7 @@ def _run_eval_rollout(
                     continuous_actions = cont_action.reshape(-1, *vecenv.single_action_space.shape)
                     action = continuous_actions[:agents_per_batch].float().cpu().numpy()
                 else:
-                    raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
+                    raw_action = action[:agents_per_batch].float().cpu().numpy().reshape(vecenv.action_space.shape)
                     action = raw_action
             if env_continuous:
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)

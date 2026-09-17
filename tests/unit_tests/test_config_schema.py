@@ -304,6 +304,91 @@ class TestConfigSchema(unittest.TestCase):
         with self.assertRaisesRegex(pufferlib.APIUsageError, "preload_map_cache"):
             validate_puffer_drive_config(args, "test")
 
+    @patch("sys.argv", ["pufferl.py"])
+    def test_trajectory_training_forces_spline_action_types(self):
+        args = load_config("puffer_drive")
+        args["trajectory_training"] = True
+        # Base config already ships dynamics_model=jerk and spline_horizon_seconds(1.5) > dt(0.3);
+        # only trajectory_training itself needs flipping to exercise the forcing behavior.
+
+        normalized = normalize_puffer_drive_config(args, "test")
+
+        self.assertEqual(normalized["env"]["action_type"], "spline")
+        self.assertEqual(normalized["policy"]["action_type"], "spline")
+        self.assertIsNone(validate_puffer_drive_config(normalized, "test"))
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_trajectory_training_off_leaves_action_types_untouched(self):
+        args = load_config("puffer_drive")
+        self.assertIs(args["trajectory_training"], False)
+        baseline_env_action_type = args["env"]["action_type"]
+        baseline_policy_action_type = args["policy"]["action_type"]
+
+        normalized = normalize_puffer_drive_config(args, "test")
+
+        self.assertEqual(normalized["env"]["action_type"], baseline_env_action_type)
+        self.assertEqual(normalized["policy"]["action_type"], baseline_policy_action_type)
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_trajectory_training_requires_jerk_dynamics(self):
+        args = load_config("puffer_drive")
+        args["trajectory_training"] = True
+        args["env"]["dynamics_model"] = "classic"
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "spline.*requires env.dynamics_model"):
+            validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_spline_action_type_requires_jerk_dynamics_even_without_trajectory_training(self):
+        """The dynamics_model/horizon/sample-cap checks must fire off of env.action_type
+        itself, not just the trajectory_training convenience switch -- otherwise setting
+        env.action_type=spline/policy.action_type=spline directly (bypassing
+        trajectory_training) with dynamics_model=classic would validate cleanly and then
+        silently produce an inert agent in move_dynamics's DYNAMICS_MODEL_CLASSIC branch,
+        which has no ACTION_TYPE_SPLINE case."""
+        args = load_config("puffer_drive")
+        self.assertIs(args["trajectory_training"], False)
+        args["env"]["action_type"] = "spline"
+        args["policy"]["action_type"] = "spline"
+        args["env"]["dynamics_model"] = "classic"
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "spline.*requires env.dynamics_model"):
+            validate_puffer_drive_config(args, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_trajectory_training_requires_horizon_exceeds_dt(self):
+        args = load_config("puffer_drive")
+        args["trajectory_training"] = True
+        args["env"]["spline_horizon_seconds"] = args["env"]["dt"]
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "spline_horizon_seconds"):
+            validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_trajectory_training_caps_consistency_sample_count(self):
+        args = load_config("puffer_drive")
+        args["trajectory_training"] = True
+        args["env"]["dt"] = 0.01
+        args["env"]["spline_horizon_seconds"] = 5.0  # (5.0-0.01)/0.01 ~= 499 samples, way over the cap
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "consistency"):
+            validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_spline_env_action_type_requires_matching_policy_action_type(self):
+        """env.action_type can be set to 'spline' directly, bypassing trajectory_training
+        entirely -- there is no discrete/continuous-style bridging table for spline, so a
+        mismatched policy.action_type must be rejected rather than silently misinterpreted."""
+        args = load_config("puffer_drive")
+        args["env"]["action_type"] = "spline"
+        self.assertNotEqual(args["policy"]["action_type"], "spline")
+
+        with self.assertRaisesRegex(
+            pufferlib.APIUsageError,
+            r"must be 'spline' if and only if env\.action_type is 'spline'",
+        ):
+            validate_puffer_drive_config(args, "test")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,10 +12,15 @@ defaults:
 trajectory_training: true
 
 env:
-  # Planning horizon T, seconds. Must exceed env.dt; see config_schema.py's validation for the
-  # derived-sample-count cap this also feeds. Placeholder — tune empirically.
-  spline_horizon_seconds: 1.5
+  # env.spline_horizon_seconds is inherited from puffer_drive.yaml (1.5s) unchanged; override it
+  # here if this variant's horizon needs to diverge from the base config's.
   # Weight on the intent-consistency penalty (compute_spline_consistency_cost in drive.h).
   # Zero in the base config (the mechanism is inert by default); a small nonzero value here so
   # this variant actually exercises it. Placeholder — tune empirically.
-  reward_trajectory_consistency: 0.02
+  # 2026-09-16: 0.02 was measured (first ~350-epoch run) to average -63/episode vs. every other
+  # reward_components/* term averaging -0.01 to -1 -- a ~60x scale mismatch that dominated the
+  # PPO objective and coincided with entropy climbing unboundedly instead of settling (offroad_rate
+  # and episode_length were both still flat at epoch 338 vs. epoch 100). Rescaled to 0.0003
+  # accordingly; still measured too large relative to the other reward_components/* terms after
+  # that first rescale, so cut by a further 10^4x. Still a placeholder pending real tuning.
+  reward_trajectory_consistency: 0.00000003

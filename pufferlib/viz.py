@@ -940,6 +940,8 @@ def encode_interactive_replay(scenario, replay):
         "frames": int(replay["agent_f32"].shape[0]),
         "agent_cap": int(replay["agent_f32"].shape[1]),
         "agent_goal_radius_field": int(binding.AGENT_F32_GOAL_RADIUS_IDX),
+        "agent_path_field": int(binding.AGENT_F32_PATH_BASE_IDX),
+        "agent_path_sample_count": int(binding.AGENT_F32_PATH_SAMPLES),
         "default_goal_radius_meters": float(env_cfg["goal_radius"]),
         "traffic_cap": int(replay["traffic_i16"].shape[1]),
         "active_count": int(replay["raw_action"].shape[1]),
@@ -1130,6 +1132,7 @@ __PAYLOAD_CHUNKS__
         const INFRACTION_AGENT_COLOR = "#d92d20";
         const PARTNER_BLINDNESS_OUTLINE_COLOR = "#6d28d9";
         const PHANTOM_BRAKING_OUTLINE_COLOR = "#b45309";
+        const PREDICTED_PATH_COLOR = "#00e5ff";
         const INFRACTION_METRIC_COUNT = 4;
         const DEFAULT_GOAL_RADIUS_METERS = 2;
         const SVG_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>';
@@ -1140,7 +1143,7 @@ __PAYLOAD_CHUNKS__
         const dpr = window.devicePixelRatio || 1;
         let step = 0, play = false, speed = 4, lastTick = 0;
         let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0};
-        let followedId = null, isEgoCam = false, darkMode = false, showGhost = false;
+        let followedId = null, isEgoCam = false, darkMode = false, showGhost = false, showPredictedPath = false;
         let obsZoom = 2.2, obsExpanded = false, obsMode = 2;
         let expertAgentIndices = new Set();
         const OBS_MODES = ["ALL","POOL","BOTH"];
@@ -1361,6 +1364,19 @@ self.onmessage = async event => {
             for (let j=0;j<N;j++) { const b=(f*N+j)*5, w=C.ghost_f32[b+4]; if (w <= 0) continue; ctx.save(); ctx.translate(C.ghost_f32[b], C.ghost_f32[b+1]); ctx.rotate(C.ghost_f32[b+2]); ctx.beginPath(); ctx.rect(-C.ghost_f32[b+3]/2, -w/2, C.ghost_f32[b+3], w); ctx.fill(); ctx.stroke(); ctx.restore(); }
             ctx.setLineDash([]);
         }
+        function drawPredictedPath(f) {
+            if (!showPredictedPath || H.action_type !== "spline") return;
+            const ego = agentAt(f, 0); // EGO_IDX = 0, matches constants.h
+            if (!ego) return;
+            const base = (f * H.agent_cap) * F.af + H.agent_path_field, n = H.agent_path_sample_count;
+            const path = new Path2D();
+            path.moveTo(C.agent_f32[base], C.agent_f32[base+1]);
+            for (let k=1;k<n;k++) path.lineTo(C.agent_f32[base+2*k], C.agent_f32[base+2*k+1]);
+            ctx.save();
+            ctx.strokeStyle = PREDICTED_PATH_COLOR; ctx.globalAlpha = .5; ctx.lineWidth = Math.max(ego.w, .1); ctx.lineCap = 'round';
+            ctx.stroke(path);
+            ctx.restore();
+        }
         function findAgent(frame, id) { for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a && a.id === id) return a; } return null; }
         function trafficAt(frame, idx) {
             const db = (frame * H.traffic_cap + idx) * F.tf;
@@ -1385,7 +1401,7 @@ self.onmessage = async event => {
         function toggleObsMode(e){ if(e) e.stopPropagation(); obsMode=(obsMode+1)%OBS_MODES.length; document.getElementById('obsModeBtn').textContent=OBS_MODES[obsMode]; draw(true); }
         function toggleObsSize(e){ if(e) e.stopPropagation(); const p=document.getElementById('obs-container'), b=e ? e.currentTarget : null; obsExpanded=!obsExpanded; p.style.width=obsExpanded?'680px':'390px'; p.style.height=obsExpanded?'680px':'390px'; if(b) b.textContent=obsExpanded?'Collapse':'Expand'; resizeObsCanvas(); draw(true); }
         function searchAgent(){ const id=parseInt(document.getElementById('agentSearch').value); if(!isNaN(id)){ followedId=id; play=false; updateBtn(); draw(true); } }
-        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } });
+        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } if(e.code === 'KeyP' && H.action_type === 'spline'){ showPredictedPath=!showPredictedPath; draw(true); } });
         c.onwheel = e => { e.preventDefault(); cam.z *= Math.exp(-e.deltaY * .001); draw(true); };
         c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), wx=(e.clientX-r.left-c.width/2)/cam.z+cam.x, wy=(e.clientY-r.top-c.height/2)/-cam.z+cam.y; let hit=null, agents=getFrameAgents(Math.floor(step)); if(!isEgoCam) for(const a of agents) if(Math.hypot(wx-a.x, wy-a.y) < Math.max(a.l,3)){ hit=a.id; break; } if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; } draw(true); };
         window.onmouseup = () => cam.drag = false;
@@ -1606,6 +1622,7 @@ self.onmessage = async event => {
             ctx.lineCap='round'; ctx.strokeStyle=colors.road; ctx.lineWidth=.5; ctx.stroke(paths[0]); ctx.strokeStyle=colors.line; ctx.setLineDash([1,1]); ctx.stroke(paths[1]); ctx.setLineDash([]); ctx.strokeStyle=colors.edge; ctx.lineWidth=.8; ctx.stroke(paths[2]);
             drawCurrentLane(target, colors);
             drawGhosts(f);
+            drawPredictedPath(f);
             for(const a of getFrameAgents(f)){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
             for(let i=0;i<H.traffic_static_count;i++){ const t=trafficAt(f,i); if(!t) continue; const sl=t.stop_line; ctx.lineCap='butt'; if(t.type === 1){ ctx.strokeStyle=trafficColor(t); ctx.lineWidth=Math.min(1.5,3/cam.z); } else { ctx.strokeStyle=t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth=Math.min(1.2,2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]); } ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke(); ctx.setLineDash([]); }
             if(target){ for(const g of selectedGoals(f,target)){ ctx.strokeStyle='#38bdf8'; ctx.fillStyle='rgba(56,189,248,.22)'; ctx.lineWidth=Math.max(.25,2.5/cam.z); ctx.beginPath(); ctx.arc(g.x,g.y,g.radius,0,7); ctx.fill(); ctx.stroke(); } }
