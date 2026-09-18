@@ -2853,6 +2853,7 @@ def regents(
     *,
     experiment_name=None,
     drivable_area_weight=None,
+    gaussian_sigma_meters=None,
     scenario_count=None,
 ):
     """Generate ReGentS adversarial scenarios offline, without any training machinery."""
@@ -2863,6 +2864,7 @@ def regents(
         output_dir=output_dir,
         experiment_name=experiment_name,
         drivable_area_weight=drivable_area_weight,
+        gaussian_sigma_meters=gaussian_sigma_meters,
         scenario_count=scenario_count,
     )
     run_name = generation_name if experiment_name is None else f"{generation_name}/{experiment_name}"
@@ -2930,6 +2932,12 @@ def _parse_regents_cli_args(arguments):
         dest="drivable_area_weight",
         type=float,
     )
+    parser.add_argument(
+        "--gaussian-sigma",
+        "--gaussian-sigma-meters",
+        dest="gaussian_sigma_meters",
+        type=float,
+    )
     return parser.parse_args(arguments)
 
 
@@ -2955,6 +2963,7 @@ def main():
             generation_name=regents_args.generation_name,
             experiment_name=regents_args.experiment_name,
             drivable_area_weight=regents_args.drivable_area_weight,
+            gaussian_sigma_meters=regents_args.gaussian_sigma_meters,
             scenario_count=regents_args.scenario_count,
         )
     elif mode == "sweep":

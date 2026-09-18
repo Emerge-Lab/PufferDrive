@@ -98,23 +98,37 @@ def _validate_experiment_name(experiment_name):
     return experiment_name
 
 
-def _apply_generation_overrides(generation, experiment_name, drivable_area_weight, scenario_count=None):
+def _apply_generation_overrides(
+    generation,
+    experiment_name,
+    drivable_area_weight,
+    gaussian_sigma_meters=None,
+    scenario_count=None,
+):
     """Apply validated CLI overrides to the configuration persisted in artifacts."""
     resolved = dict(generation)
     resolved["experiment_name"] = _validate_experiment_name(experiment_name)
     if scenario_count is not None:
         resolved["scenario_count"] = _require_positive_int(scenario_count, "scenario_count")
         resolved["env"] = {**resolved["env"], "num_maps": scenario_count}
-    if drivable_area_weight is None:
+    if drivable_area_weight is None and gaussian_sigma_meters is None:
         return resolved
-    if isinstance(drivable_area_weight, bool) or not isinstance(drivable_area_weight, (int, float)):
-        raise TypeError("ReGentS drivable-area weight must be a number")
-    drivable_area_weight = float(drivable_area_weight)
-    if not math.isfinite(drivable_area_weight) or drivable_area_weight < 0.0:
-        raise ValueError("ReGentS drivable-area weight must be finite and non-negative")
     optimizer = dict(resolved["optimizer"])
     costs = dict(_require_mapping(optimizer.get("costs", {}), "optimizer costs"))
-    costs["drivable_area_weight"] = drivable_area_weight
+    if drivable_area_weight is not None:
+        if isinstance(drivable_area_weight, bool) or not isinstance(drivable_area_weight, (int, float)):
+            raise TypeError("ReGentS drivable-area weight must be a number")
+        drivable_area_weight = float(drivable_area_weight)
+        if not math.isfinite(drivable_area_weight) or drivable_area_weight < 0.0:
+            raise ValueError("ReGentS drivable-area weight must be finite and non-negative")
+        costs["drivable_area_weight"] = drivable_area_weight
+    if gaussian_sigma_meters is not None:
+        if isinstance(gaussian_sigma_meters, bool) or not isinstance(gaussian_sigma_meters, (int, float)):
+            raise TypeError("ReGentS Gaussian sigma must be a number")
+        gaussian_sigma_meters = float(gaussian_sigma_meters)
+        if not math.isfinite(gaussian_sigma_meters) or gaussian_sigma_meters <= 0.0:
+            raise ValueError("ReGentS Gaussian sigma must be finite and positive")
+        costs["gaussian_sigma_meters"] = gaussian_sigma_meters
     optimizer["costs"] = costs
     resolved["optimizer"] = optimizer
     return resolved
@@ -573,12 +587,19 @@ def generate_regents_scenarios(
     *,
     experiment_name=None,
     drivable_area_weight=None,
+    gaussian_sigma_meters=None,
     scenario_count=None,
 ):
     """Generate, C-verify, and save one artifact per scenario in the configured range."""
     overall_start = time.perf_counter()
     generation = load_generation_config(config_path, generation_name)
-    generation = _apply_generation_overrides(generation, experiment_name, drivable_area_weight, scenario_count)
+    generation = _apply_generation_overrides(
+        generation,
+        experiment_name,
+        drivable_area_weight,
+        gaussian_sigma_meters,
+        scenario_count,
+    )
     destination = Path(output_dir) if output_dir is not None else Path(generation["output_dir"]) / generation_name
     if generation["experiment_name"] is not None:
         destination /= generation["experiment_name"]

@@ -100,8 +100,8 @@ generations:
       # reconstruction, so keep the cap above real traffic.
       base_max_speed_mps: 40.0
 
-  # WOD Motion validation against a PDM ego. Raster, optimizer, and filter settings come
-  # from the shared defaults above. Note this is the profile
+  # WOD Motion validation against a PDM ego. It keeps the shared settings except for
+  # the 0.25 m Gaussian sigma selected by the 100-scenario sweep. Note this is the profile
   # that drives PDM's rollout buffer to its limit: base_max_speed_mps 40.0 puts a fast ego at
   # the speed-aware horizon cap of 8 s, which at pdm_planning_dt 0.1 is exactly the 81 steps
   # PDM_MAX_ROLLOUT_STEPS allows. Raising the cap or lowering pdm_planning_dt needs that
@@ -113,6 +113,9 @@ generations:
     horizon_transition_count: 90
     output_dir: experiments/regents
     render_replays: true
+    optimizer:
+      costs:
+        gaussian_sigma_meters: 0.25
     env:
       map_dir: pufferlib/resources/drive/binaries/wod-motion_val
       scenario_length: 91
@@ -135,6 +138,24 @@ generations:
       scenario_length: 101
       resample_frequency: 101
       sdc_controller: pdm
+
+  # CARLA validation logs contain 201 states (200 transitions). Use the standard
+  # 10 s ReGentS window and run a PDM ego while all other vehicles replay their
+  # logged trajectories. A few candidate tracks exceed 20 m/s, so leave enough
+  # speed headroom to reconstruct them without clamping.
+  - name: regents_carla_val_pdm
+    seed: 42
+    scenario_count: 100
+    num_workers: 24
+    horizon_transition_count: 200
+    output_dir: experiments/regents
+    render_replays: true
+    env:
+      map_dir: pufferlib/resources/drive/binaries/carla_val
+      scenario_length: 201
+      resample_frequency: 201
+      sdc_controller: pdm
+      base_max_speed_mps: 40.0
 
   # WOD Motion validation against the learned ego. Horizon, raster, learning rate,
   # filters, and speed cap follow regents_wod_motion_val; only the ego differs.

@@ -435,6 +435,13 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
             output_dir=tmp_path,
             drivable_area_weight=math.nan,
         )
+    with pytest.raises(ValueError, match="Gaussian sigma"):
+        generate_regents_scenarios(
+            GENERATION_CONFIG,
+            "regents_nuplan_smoke",
+            output_dir=tmp_path,
+            gaussian_sigma_meters=0.0,
+        )
 
     wod_motion = load_generation_config(GENERATION_CONFIG, "regents_wod_motion_val")
     assert wod_motion["scenario_count"] == 250
@@ -535,6 +542,7 @@ def test_pufferl_regents_prints_success(tmp_path, capsys, monkeypatch):
         output_dir=tmp_path,
         experiment_name="roadless",
         drivable_area_weight=0.0,
+        gaussian_sigma_meters=0.1,
     )
     captured = capsys.readouterr()
     assert "[REGENTS] eligible" in captured.out
@@ -545,6 +553,7 @@ def test_pufferl_regents_prints_success(tmp_path, capsys, monkeypatch):
     source_configuration = metadata["source_configuration"]
     assert source_configuration["experiment_name"] == "roadless"
     assert source_configuration["optimizer"]["costs"]["drivable_area_weight"] == 0.0
+    assert source_configuration["optimizer"]["costs"]["gaussian_sigma_meters"] == 0.1
     assert metadata["schema"] == "pufferdrive_regents_generation"
     assert metadata["optimization"]["collision_loss_metric"] == "signed_oriented_box_distance_meters"
     assert metadata["optimization"]["road_loss_reduction"] == "mean_timesteps_sum_valid_agents_and_corners"
@@ -564,6 +573,8 @@ def test_pufferl_regents_prints_success(tmp_path, capsys, monkeypatch):
             "road_weight_zero",
             "--road-weight",
             "0",
+            "--gaussian-sigma",
+            "0.1",
         ],
     )
     pufferl.main()
@@ -572,6 +583,8 @@ def test_pufferl_regents_prints_success(tmp_path, capsys, monkeypatch):
             "generation_name": "regents_nuplan",
             "experiment_name": "road_weight_zero",
             "drivable_area_weight": 0.0,
+            "gaussian_sigma_meters": 0.1,
+            "scenario_count": None,
         }
     ]
 
