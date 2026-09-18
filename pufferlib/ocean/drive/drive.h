@@ -320,9 +320,7 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
     {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED C_vel
-    {0.0f,
-     0.1f,
-     0}, // REWARD_COEF_TRAJECTORY_CONSISTENCY α_trajectory-consistency ~ U(0, 0.1) [placeholder, tune empirically]
+    {0.0f, 0.1f, 0}, // REWARD_COEF_TRAJECTORY_CONSISTENCY -- unused: this coefficient is pinned, not randomized
 };
 
 // Meaning of the values: [min_range, max_range, use_log_scale]
@@ -345,8 +343,7 @@ static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
     {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED C_vel
-    {1e-5f, 0.1f, 1}, // REWARD_COEF_TRAJECTORY_CONSISTENCY α_trajectory-consistency ~ logU(1e-5, 0.1) [placeholder,
-                      // tune empirically]
+    {1e-5f, 0.1f, 1}, // REWARD_COEF_TRAJECTORY_CONSISTENCY -- unused: this coefficient is pinned, not randomized
 };
 
 // ========================================
@@ -2330,7 +2327,6 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
             REWARD_COEF_VEL_ALIGN,
             REWARD_COEF_OVERSPEED,
             REWARD_COEF_REVERSE,
-            REWARD_COEF_TRAJECTORY_CONSISTENCY,
         };
         const RewardBound *bounds = env->reward_log_sampling ? REWARD_BOUNDS_LOG : REWARD_BOUNDS;
         for (int i = 0; i < (int) (sizeof(random_coefs) / sizeof(random_coefs[0])); i++) {
@@ -2360,12 +2356,16 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_OVERSPEED] = env->reward_overspeed;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = env->reward_timestep;
         agent->reward_coefs[REWARD_COEF_REVERSE] = env->reward_reverse;
-        agent->reward_coefs[REWARD_COEF_TRAJECTORY_CONSISTENCY] = env->reward_trajectory_consistency;
         agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
         agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
         agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
         agent->reward_coefs[REWARD_COEF_SPEED] = 1.0f;
     }
+    // Pinned to the configured scalar unconditionally (not part of the randomized set above):
+    // this term measures the spline policy's own intent-consistency, a property of the action
+    // representation itself rather than a domain-randomization axis like collision/offroad/etc,
+    // so per-agent reward-conditioning diversity doesn't apply to it the same way.
+    agent->reward_coefs[REWARD_COEF_TRAJECTORY_CONSISTENCY] = env->reward_trajectory_consistency;
 }
 
 static void generate_traffic_light_states(Drive *env) {
