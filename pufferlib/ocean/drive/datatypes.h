@@ -150,6 +150,12 @@ struct Agent {
     float trajectory_hist_z[TARGET_TRAJECTORY_HISTORY_LEN];
     float trajectory_hist_heading[TARGET_TRAJECTORY_HISTORY_LEN];
     float trajectory_hist_speed_signed[TARGET_TRAJECTORY_HISTORY_LEN];
+
+    int compliance_hist_count;
+    int compliance_hist_timestep[COMPLIANCE_HISTORY_LEN];
+    unsigned char compliance_hist_flags[COMPLIANCE_HISTORY_LEN];
+    float compliance_hist_wrong_way_distance_meters[COMPLIANCE_HISTORY_LEN];
+    float compliance_hist_speed_ratio[COMPLIANCE_HISTORY_LEN];
 };
 
 struct RoadMapElement {

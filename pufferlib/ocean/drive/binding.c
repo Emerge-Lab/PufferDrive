@@ -2470,6 +2470,47 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         ASSIGN_SPLIT_METRIC("multi_lane_time", multi_lane_time, sdc_multi_lane_time);
         ASSIGN_SPLIT_METRIC("multi_lane_score", multi_lane_score, sdc_multi_lane_score);
         ASSIGN_SPLIT_METRIC("puffer_score", puffer_score, sdc_puffer_score);
+        assign_to_dict(dict, "hitter_compliance_valid", log->hitter_compliance_valid);
+        assign_to_dict(dict, "hitter_compliance_compliant", log->hitter_compliance_compliant);
+        assign_to_dict(dict, "hitter_compliance_window_sample_count", log->hitter_compliance_window_sample_count);
+        assign_to_dict(dict, "hitter_compliance_lane_sample_count", log->hitter_compliance_lane_sample_count);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_lane_unavailable_sample_count",
+            log->hitter_compliance_lane_unavailable_sample_count);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_speed_limit_sample_count",
+            log->hitter_compliance_speed_limit_sample_count);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_speed_limit_unavailable_sample_count",
+            log->hitter_compliance_speed_limit_unavailable_sample_count);
+        assign_to_dict(dict, "hitter_compliance_red_light_violation", log->hitter_compliance_red_light_violation);
+        assign_to_dict(dict, "hitter_compliance_wrong_way_violation", log->hitter_compliance_wrong_way_violation);
+        assign_to_dict(dict, "hitter_compliance_solid_line_violation", log->hitter_compliance_solid_line_violation);
+        assign_to_dict(dict, "hitter_compliance_speed_limit_violation", log->hitter_compliance_speed_limit_violation);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_first_red_light_timestep",
+            log->hitter_compliance_first_red_light_timestep);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_first_wrong_way_timestep",
+            log->hitter_compliance_first_wrong_way_timestep);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_first_solid_line_timestep",
+            log->hitter_compliance_first_solid_line_timestep);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_first_speed_limit_timestep",
+            log->hitter_compliance_first_speed_limit_timestep);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_wrong_way_distance_meters",
+            log->hitter_compliance_wrong_way_distance_meters);
+        assign_to_dict(dict, "hitter_compliance_max_speed_ratio", log->hitter_compliance_max_speed_ratio);
     }
 
 #undef ASSIGN_SPLIT_METRIC
