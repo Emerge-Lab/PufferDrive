@@ -459,6 +459,8 @@ struct Drive {
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
+    int use_at_fault_ablation;
+    int terminate_hitter_on_collision;
     // Goals
     float goal_radius;
     float goal_speed;
@@ -6376,30 +6378,44 @@ void c_step(Drive *env) {
         && env->target_last_avoidable_braking_seconds_before_collision == NO_AVOIDABLE_BRAKING_TIME_SECONDS;
     if (env->target_hit_this_step) {
         record_hitter_compliance_diagnostics(env, env->target_hit_hitter_idx_this_step);
-        float target_collision_reward;
+        float target_collision_reward = 0.0f;
         float genuine_failure_reward = 0.0f;
         float adversary_forced_reward = 0.0f;
         float unavoidable_reward = 0.0f;
-        if (target_collision_unavoidable_this_step) {
-            target_collision_reward = env->adversarial_target_unavoidable_reward;
-            unavoidable_reward = target_collision_reward;
-        } else if (env->target_reaction_window_danger_episode) {
-            target_collision_reward = env->adversarial_target_genuine_failure_reward;
-            genuine_failure_reward = target_collision_reward;
+        float at_fault_reward = 0.0f;
+
+        if (env->use_at_fault_ablation) {
+            if (target_collision_unavoidable_this_step) {
+                target_collision_reward = env->adversarial_target_unavoidable_reward;
+                unavoidable_reward = target_collision_reward;
+            } else if (target_at_fault_collision_this_step) {
+                target_collision_reward = env->adversarial_target_at_fault_reward;
+                at_fault_reward = target_collision_reward;
+            }
         } else {
-            target_collision_reward = env->adversarial_target_adversary_forced_reward;
-            adversary_forced_reward = target_collision_reward;
+            if (target_collision_unavoidable_this_step) {
+                target_collision_reward = env->adversarial_target_unavoidable_reward;
+                unavoidable_reward = target_collision_reward;
+            } else if (env->target_reaction_window_danger_episode) {
+                target_collision_reward = env->adversarial_target_genuine_failure_reward;
+                genuine_failure_reward = target_collision_reward;
+            } else {
+                target_collision_reward = env->adversarial_target_adversary_forced_reward;
+                adversary_forced_reward = target_collision_reward;
+            }
         }
+
         for (int i = EGO_IDX + 1; i < env->active_agent_count; i++) {
             env->rewards[i] += target_collision_reward;
             env->logs[i].episode_return += target_collision_reward;
             env->logs[i].reward_target_genuine_failure += genuine_failure_reward;
             env->logs[i].reward_target_adversary_forced += adversary_forced_reward;
             env->logs[i].reward_target_unavoidable += unavoidable_reward;
+            env->logs[i].reward_target_at_fault += at_fault_reward;
         }
     }
 
-    if (target_at_fault_collision_this_step && !target_collision_unavoidable_this_step) {
+    if (!env->use_at_fault_ablation && target_at_fault_collision_this_step && !target_collision_unavoidable_this_step) {
         for (int i = EGO_IDX + 1; i < env->active_agent_count; i++) {
             env->rewards[i] += env->adversarial_target_at_fault_reward;
             env->logs[i].episode_return += env->adversarial_target_at_fault_reward;
@@ -6505,14 +6521,24 @@ void c_step(Drive *env) {
 
     if (env->timestep == env->scenario_length || early_reset || adversarial_early_reset) {
         for (int i = 0; i < env->active_agent_count; i++) {
-            if (target_collision_continuation_active && env->terminals[i]) {
-                continue;
-            }
-            if (target_failure_early_reset
-                && env->target_failure_episode_end == TARGET_FAILURE_EPISODE_END_TERMINATED) {
-                env->terminals[i] = 1;
+            if (env->terminate_hitter_on_collision && target_failure_early_reset) {
+                if (env->active_agent_indices[i] == env->target_hit_hitter_idx_this_step) {
+                    env->terminals[i] = 1;
+                    env->truncations[i] = 0;
+                } else {
+                    env->terminals[i] = 0;
+                    env->truncations[i] = 1;
+                }
             } else {
-                env->truncations[i] = 1;
+                if (target_collision_continuation_active && env->terminals[i]) {
+                    continue;
+                }
+                if (target_failure_early_reset
+                    && env->target_failure_episode_end == TARGET_FAILURE_EPISODE_END_TERMINATED) {
+                    env->terminals[i] = 1;
+                } else {
+                    env->truncations[i] = 1;
+                }
             }
         }
         add_log(env);

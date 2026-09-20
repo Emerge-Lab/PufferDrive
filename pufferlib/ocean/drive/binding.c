@@ -2047,6 +2047,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         = (float) unpack(kwargs, "adversarial_target_adversary_forced_reward");
     env->adversarial_target_unavoidable_reward = (float) unpack(kwargs, "adversarial_target_unavoidable_reward");
     env->adversarial_target_at_fault_reward = (float) unpack(kwargs, "adversarial_target_at_fault_reward");
+    env->use_at_fault_ablation = (bool) unpack(kwargs, "use_at_fault_ablation");
+    env->terminate_hitter_on_collision = (bool) unpack(kwargs, "terminate_hitter_on_collision");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->capture_avoidability_debug = (bool) unpack(kwargs, "capture_avoidability_debug");
