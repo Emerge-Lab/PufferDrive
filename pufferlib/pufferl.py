@@ -441,7 +441,6 @@ class PuffeRL:
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob.float()
-                # Drive returns terminal observations before its deferred reset.
                 if config["use_value_bootstrapping"]:
                     trunc_mask = (t > 0) & (d == 0)
                     r = r + trunc_mask.to(r.dtype) * config["gamma"] * value.flatten().float()

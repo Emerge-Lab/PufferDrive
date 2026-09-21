@@ -571,7 +571,6 @@ class Drive(pufferlib.PufferEnv):
             log = binding.vec_log(self.c_envs, self.num_agents)
             if log:
                 info.append(log)
-                # print(log)
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             if not self.eval_mode and not self._resample_pending:
                 self._resample_pending = True
