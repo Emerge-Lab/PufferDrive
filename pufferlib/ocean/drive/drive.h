@@ -5925,7 +5925,12 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     } else if (env->dynamics_model == DYNAMICS_MODEL_JERK) {
         // Extract jerk action components
         float j_long, j_lat;
-        if (env->action_type == ACTION_TYPE_DISCRETE) {
+        if (agent->controller == CONTROLLER_RANDOM) {
+            int long_count = sizeof(JERK_LONG) / sizeof(JERK_LONG[0]);
+            int lat_count = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
+            j_long = JERK_LONG[rng_below(&env->rng_state, long_count)];
+            j_lat = JERK_LAT[rng_below(&env->rng_state, lat_count)];
+        } else if (env->action_type == ACTION_TYPE_DISCRETE) {
             // Interpret action as a single integer: a = long_idx * num_lat + lat_idx
             int *action_array = (int *) env->actions;
             int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
@@ -6307,7 +6312,9 @@ void c_step(Drive *env) {
         if (env->eval_mode && (agent->stopped || agent->removed)) {
             continue;
         }
-        if (agent->controller == CONTROLLER_IDM) {
+        if (agent->controller == CONTROLLER_RANDOM) {
+            move_dynamics(env, 0, background_idx);
+        } else if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, background_idx);
         } else if (agent->controller == CONTROLLER_CORRIDOR_IDM) {
             move_corridor_idm(env, background_idx);
@@ -6326,7 +6333,7 @@ void c_step(Drive *env) {
         }
         env->logs[i].score = 0.0f;
         env->logs[i].episode_length += 1;
-        if (agent->controller == CONTROLLER_POLICY) {
+        if (agent->controller == CONTROLLER_POLICY || agent->controller == CONTROLLER_RANDOM) {
             move_dynamics(env, i, agent_idx);
         } else if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, agent_idx);

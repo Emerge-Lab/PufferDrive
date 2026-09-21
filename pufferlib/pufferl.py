@@ -126,6 +126,19 @@ TARGET_REWARD_CONDITIONING_FIELDS = (
     "reward_overspeed",
 )
 
+TRAFFIC_RANDOMIZED_REWARD_FIELDS = (
+    "reward_collision",
+    "reward_offroad",
+    "reward_comfort",
+    "reward_lane_align",
+    "reward_vel_align",
+    "reward_lane_center",
+    "reward_center_bias",
+    "reward_reverse",
+    "reward_stop_line",
+    "reward_overspeed",
+)
+
 
 def environment_metric_log_key(metric_name):
     if metric_name.startswith("sdc_reward_components/"):
@@ -2097,7 +2110,13 @@ def eval(
             cli_overrides,
         )
         uses_policy = _evaluation_uses_policy(run_args["env"])
-        if uses_policy and policy is None and run_args["load_model_path"] is None:
+        if (
+            uses_policy
+            and policy is None
+            and run_args["load_model_path"] is None
+            and run_args["eval"]["traffic_policy"] is None
+            and not (run_args["env"]["non_sdc_controller"] != "policy" and run_args["train"]["target_policy"])
+        ):
             raise pufferlib.APIUsageError("Evaluation with policy controllers requires load_model_path")
         output_directory_name = benchmark["name"]
         if output_name is not None:
@@ -2426,17 +2445,40 @@ def _run_eval_rollout(
         if evaluation_policy_cache is None:
             evaluation_policy_cache = {"policy": policy}
         uses_policy = _evaluation_uses_policy(args["env"])
+        traffic_conditioning_mode = args["eval"]["traffic_conditioning"]
+        condition_traffic = evaluation_policy_cache.get("condition_traffic", False)
         policy = evaluation_policy_cache["policy"]
         if uses_policy:
             if policy is None:
                 traffic_policy_path = args["eval"].get("traffic_policy")
-                if traffic_policy_path is not None:
-                    traffic_args = _prepare_target_policy_args(args, traffic_policy_path)
+                policy_path = traffic_policy_path
+                if args["env"]["non_sdc_controller"] != "policy" and args["train"]["target_policy"]:
+                    policy_path = args["train"]["target_policy"]
+                if policy_path is not None:
+                    traffic_args = _prepare_target_policy_args(args, policy_path)
                     traffic_args["policy_name"] = "TargetDrive"
+                    traffic_config = traffic_args.get("_target_policy_env_config", {})
+                    condition_traffic = (
+                        args["env"]["non_sdc_controller"] == "policy"
+                        and traffic_policy_path is not None
+                        and traffic_config.get("reward_conditioning", False)
+                        and traffic_conditioning_mode != "checkpoint_defaults"
+                    )
+                    if condition_traffic:
+                        traffic_config["goal_radius"] = vecenv.driver_env.goal_radius
+                        traffic_config["goal_speed"] = vecenv.driver_env.goal_speed
+                        if traffic_conditioning_mode == "collision_zero":
+                            traffic_config["reward_collision"] = 0.0
                     traffic_env = _make_target_policy_env_view(vecenv.driver_env, traffic_args)
+                    if condition_traffic:
+                        traffic_env.live_num_reward_coefs = traffic_env.num_reward_coefs
+                        evaluation_policy_cache["traffic_conditioning"] = traffic_env.fixed_reward_conditioning
                     policy = load_policy(traffic_args, vecenv, env_name, policy_env=traffic_env)
                 else:
                     policy = load_policy(args, vecenv, env_name)
+                if traffic_conditioning_mode != "checkpoint_defaults" and not condition_traffic:
+                    print("Ignoring eval.traffic_conditioning: no conditioned eval.traffic_policy controls traffic.")
+                evaluation_policy_cache["condition_traffic"] = condition_traffic
                 evaluation_policy_cache["policy"] = policy
             policy.eval()
             if "policy_forward_eval" not in evaluation_policy_cache:
@@ -2490,14 +2532,15 @@ def _run_eval_rollout(
         _require_finite_eval_batch(obs, "observations after eval reset", num_workers, worker_env_kwargs)
         padding_agent_count = inference_agents_per_batch - agents_per_batch
         policy_obs_tensor = None
+        padded_obs_tensor = None
         if uses_policy and padding_agent_count:
-            policy_obs_tensor = torch.zeros(
+            padded_obs_tensor = torch.zeros(
                 (inference_agents_per_batch, *obs.shape[1:]),
                 dtype=torch.as_tensor(obs).dtype,
                 device=device,
             )
         recurrent_state = None
-        if uses_policy and args["train"].get("use_rnn", False):
+        if uses_policy and hasattr(base_policy(policy), "lstm"):
             recurrent_state = {
                 "lstm_h": torch.zeros(inference_agents_per_batch, policy.hidden_size, device=device),
                 "lstm_c": torch.zeros(inference_agents_per_batch, policy.hidden_size, device=device),
@@ -2519,6 +2562,15 @@ def _run_eval_rollout(
             )
 
         capture_batch_steps = worker_env_kwargs[0]["resample_frequency"]
+        traffic_conditioning = None
+        if condition_traffic:
+            fixed_traffic_conditioning = torch.tensor(
+                evaluation_policy_cache["traffic_conditioning"], device=device, dtype=torch.float32
+            )
+            traffic_conditioning_generator = torch.Generator(device=device).manual_seed(rollout_seed)
+            randomized_reward_indices = [
+                TARGET_REWARD_CONDITIONING_FIELDS.index(field) for field in TRAFFIC_RANDOMIZED_REWARD_FIELDS
+            ]
         replay_capture = None
         if replay_output_dir is not None:
             if not uses_policy:
@@ -2536,14 +2588,41 @@ def _run_eval_rollout(
 
         episode_summaries = []
         scenario_progress = tqdm(total=expected_episodes, desc=desc, unit="scenario")
-        for _ in range(total_steps):
+        for rollout_step in range(total_steps):
             if uses_policy:
                 with torch.no_grad(), eval_amp_context:
                     environment_obs_tensor = torch.as_tensor(obs, device=device)
                     if padding_agent_count:
-                        policy_obs_tensor[:agents_per_batch].copy_(environment_obs_tensor)
+                        padded_obs_tensor[:agents_per_batch].copy_(environment_obs_tensor)
+                        policy_obs_tensor = padded_obs_tensor
                     else:
                         policy_obs_tensor = environment_obs_tensor
+                    target_obs_tensor = policy_obs_tensor
+                    if condition_traffic:
+                        if rollout_step % capture_batch_steps == 0:
+                            traffic_conditioning = fixed_traffic_conditioning.expand(
+                                inference_agents_per_batch, -1
+                            ).clone()
+                            if traffic_conditioning_mode == "randomized":
+                                traffic_conditioning[:, randomized_reward_indices] = (
+                                    2.0
+                                    * torch.rand(
+                                        (inference_agents_per_batch, len(randomized_reward_indices)),
+                                        device=device,
+                                        generator=traffic_conditioning_generator,
+                                    )
+                                    - 1.0
+                                )
+                        ego_features = vecenv.driver_env.ego_features
+                        live_context_end = ego_features + vecenv.driver_env.num_reward_coefs
+                        policy_obs_tensor = torch.cat(
+                            (
+                                policy_obs_tensor[:, :ego_features],
+                                traffic_conditioning,
+                                policy_obs_tensor[:, live_context_end:],
+                            ),
+                            dim=1,
+                        )
                     if recurrent_state is None:
                         logits, value = policy_forward_eval(policy_obs_tensor)
                     else:
@@ -2552,7 +2631,7 @@ def _run_eval_rollout(
                         target_indices = torch.nonzero(target_mask, as_tuple=False).flatten()
                         target_logits, target_value = _forward_policy_subset(
                             target_policy_forward_eval,
-                            policy_obs_tensor,
+                            target_obs_tensor,
                             target_indices,
                             target_recurrent_state,
                         )
