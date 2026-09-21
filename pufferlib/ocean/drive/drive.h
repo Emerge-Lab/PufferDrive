@@ -6385,7 +6385,7 @@ void c_step(Drive *env) {
         float at_fault_reward = 0.0f;
 
         if (env->use_at_fault_ablation) {
-            if (target_collision_unavoidable_this_step) {
+            if (target_collision_unavoidable_this_step && env->adversarial_target_unavoidable_reward != 0.0f) {
                 target_collision_reward = env->adversarial_target_unavoidable_reward;
                 unavoidable_reward = target_collision_reward;
             } else if (target_at_fault_collision_this_step) {
@@ -6519,26 +6519,24 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->timestep == env->scenario_length || early_reset || adversarial_early_reset) {
+    int hitter_collision_early_reset = env->terminate_hitter_on_collision && target_collided_this_step;
+    if (env->timestep == env->scenario_length || early_reset || adversarial_early_reset
+        || hitter_collision_early_reset) {
         for (int i = 0; i < env->active_agent_count; i++) {
-            if (env->terminate_hitter_on_collision && target_failure_early_reset) {
-                if (env->active_agent_indices[i] == env->target_hit_hitter_idx_this_step) {
-                    env->terminals[i] = 1;
-                    env->truncations[i] = 0;
-                } else {
-                    env->terminals[i] = 0;
-                    env->truncations[i] = 1;
-                }
+            if (hitter_collision_early_reset) {
+                env->terminals[i]
+                    |= i == EGO_IDX || env->active_agent_indices[i] == env->target_hit_hitter_idx_this_step;
+                env->truncations[i] = !env->terminals[i];
+                continue;
+            }
+            if (target_collision_continuation_active && env->terminals[i]) {
+                continue;
+            }
+            if (target_failure_early_reset
+                && env->target_failure_episode_end == TARGET_FAILURE_EPISODE_END_TERMINATED) {
+                env->terminals[i] = 1;
             } else {
-                if (target_collision_continuation_active && env->terminals[i]) {
-                    continue;
-                }
-                if (target_failure_early_reset
-                    && env->target_failure_episode_end == TARGET_FAILURE_EPISODE_END_TERMINATED) {
-                    env->terminals[i] = 1;
-                } else {
-                    env->truncations[i] = 1;
-                }
+                env->truncations[i] = 1;
             }
         }
         add_log(env);
