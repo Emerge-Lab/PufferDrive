@@ -149,7 +149,6 @@ checkpoints/
 experiments/
 benchmark*/
 wandb/
-.neptune/
 raylib*/
 box2d*/
 

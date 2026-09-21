@@ -172,7 +172,6 @@ def _standalone_eval_args(benchmark_config_path):
         }
     )
     args["wandb"] = False
-    args["neptune"] = False
     args["tb"] = False
     return args
 
@@ -589,7 +588,6 @@ def _training_args(tmp_path, benchmark_config_path, evaluation_enabled):
         }
     )
     args["wandb"] = False
-    args["neptune"] = False
     args["tb"] = False
     return args
 
@@ -765,7 +763,6 @@ def _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir):
         }
     )
     args["wandb"] = False
-    args["neptune"] = False
     args["tb"] = False
     return args
 

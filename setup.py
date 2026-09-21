@@ -223,7 +223,6 @@ if not NO_TRAIN:
         "imageio",
         "pyro-ppl",
         "heavyball",
-        "neptune",
         "wandb",
         "wandb-workspaces",
         "tensorboard",
