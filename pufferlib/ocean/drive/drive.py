@@ -195,7 +195,7 @@ class Drive(pufferlib.PufferEnv):
         self.adversarial_traffic_light_reward_weight = adversarial_traffic_light_reward_weight
         self.adversarial_target_genuine_failure_reward = adversarial_target_genuine_failure_reward
         self.adversarial_target_adversary_forced_reward = adversarial_target_adversary_forced_reward
-        self.adversarial_target_unavoidable_reward = unavoidable_reward
+        self.adversarial_target_unavoidable_reward = adversarial_target_unavoidable_reward
         self.adversarial_target_at_fault_reward = adversarial_target_at_fault_reward
         self.use_at_fault_ablation = use_at_fault_ablation
         self.terminate_hitter_on_collision = terminate_hitter_on_collision
