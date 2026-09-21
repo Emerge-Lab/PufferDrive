@@ -2157,6 +2157,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
     assign_to_dict(dict, "reward_components/ade", log->reward_ade);
     assign_to_dict(dict, "reward_components/trajectory_consistency", log->reward_trajectory_consistency);
+    assign_to_dict(dict, "spline/consistency_msd_m2", log->spline_consistency_msd_m2);
 
     if (env->compute_eval_metrics) {
         // Puffer score components

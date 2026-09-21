@@ -88,6 +88,7 @@ struct Log {
     float reward_overspeed;
     float reward_ade;
     float reward_trajectory_consistency;
+    float spline_consistency_msd_m2;
 };
 
 struct GridMapEntity {
@@ -2247,6 +2248,7 @@ static void add_log(Drive *env) {
         episode_log.reward_overspeed += env->logs[i].reward_overspeed;
         episode_log.reward_ade += env->logs[i].reward_ade;
         episode_log.reward_trajectory_consistency += env->logs[i].reward_trajectory_consistency;
+        episode_log.spline_consistency_msd_m2 += env->logs[i].spline_consistency_msd_m2 / safe_timestep;
         // Comfort and velocity metrics (normalized per timestep)
         episode_log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         episode_log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -3707,7 +3709,7 @@ static float evaluate_quintic_derivative(const float coefs[6], float t, int orde
     }
 }
 
-// Sum of squared position differences between two curves' overlap window: prev's curve (solved
+// Mean squared position difference between two curves' overlap window: prev's curve (solved
 // last step, valid over [0,T] measured from last step) sampled at dt+k*dt, against curr's curve
 // (solved this step, valid over [0,T] measured from this step) sampled at k*dt — both land on the
 // same absolute times, strictly inside both curves' fit domains for k in [0, num_samples]. Reward
@@ -3729,7 +3731,8 @@ static float compute_spline_consistency_cost(
             - evaluate_quintic_derivative(curr_coefs_y, curr_t, 0);
         total_cost += dx * dx + dy * dy;
     }
-    return total_cost;
+    // Mean, not sum: keeps the coefficient independent of the T/dt sample count.
+    return total_cost / (float) (num_samples + 1);
 }
 
 static void compute_rewards(Drive *env, int i) {
@@ -3864,6 +3867,7 @@ static void compute_rewards(Drive *env, int i) {
             float consistency_penalty = -agent->reward_coefs[REWARD_COEF_TRAJECTORY_CONSISTENCY] * consistency_cost;
             env->rewards[i] += consistency_penalty;
             agent_log->reward_trajectory_consistency += consistency_penalty;
+            agent_log->spline_consistency_msd_m2 += consistency_cost;
         }
         // Rotate curr -> prev now that both have been used, for next step's comparison.
         for (int k = 0; k < 6; k++) {

@@ -178,6 +178,14 @@ static int test_consistency_cost_math(void) {
     float curr_far_x[6] = {100.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     float cost_far = compute_spline_consistency_cost(prev_x, prev_y, curr_far_x, curr_y, 5, dt);
     EXPECT_TRUE(cost_far > 100.0f);
+
+    // Units: the cost is a mean squared displacement in m^2, so a constant 2 m
+    // offset reads 4.0 whatever the sample count is.
+    float prev_y_offset[6] = {2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    float cost_few = compute_spline_consistency_cost(prev_x, prev_y_offset, curr_x, curr_y, 2, dt);
+    float cost_many = compute_spline_consistency_cost(prev_x, prev_y_offset, curr_x, curr_y, 9, dt);
+    EXPECT_NEAR(cost_few, 4.0f, 1e-4f);
+    EXPECT_NEAR(cost_many, 4.0f, 1e-4f);
     return 0;
 }
 
