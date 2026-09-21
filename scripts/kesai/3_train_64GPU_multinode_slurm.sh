@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0037_${SEED}
+export RUN_NAME=k_scaled_0038_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -58,11 +58,11 @@ srun torchrun \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine \
+    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine_zones \
     env.num_maps=128 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
-    train.total_timesteps=5000000000000 \
+    train.total_timesteps=1000000000000 \
     vec.num_envs=16 \
     train.compile=True \
     train.max_minibatch_size=131072 \
@@ -75,6 +75,8 @@ srun torchrun \
     env.obs_partner_relative_velocity=true \
     env.pose_noise_xy_m=0.025 \
     env.pose_noise_yaw_deg=0.25 \
+    env.speed_limit_random_prob=1.0 \
+    env.conditioning_speed_scale=2.0 \
     policy.mask_padded_features=true \
     train.evaluation_benchmarks=carla_fast \
     train.final_model_name=${FINAL_MODEL_NAME} \

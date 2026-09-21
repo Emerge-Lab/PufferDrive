@@ -29,6 +29,7 @@ from pathlib import Path
 
 TRAFFIC_PHASE_SECTION_TAG = b"TLPHASE1"
 LANE_WIDTH_SECTION_TAG = b"LANEWID1"
+SPEED_ZONE_SECTION_TAG = b"SPDZONE1"
 
 
 def _is_lane(road_type: int) -> bool:
@@ -155,6 +156,13 @@ def read_bin(path: Path) -> dict:
                 if _is_lane(r["type"]):
                     r["widths"] = _read_f_array(f, r["S"])
 
+        zone_tag = f.read(len(SPEED_ZONE_SECTION_TAG))
+        has_zone_section = zone_tag == SPEED_ZONE_SECTION_TAG
+        assert has_zone_section or zone_tag == b"", f"unexpected bytes after width section in {path}"
+        for r in roads:
+            if _is_lane(r["type"]):
+                (r["speed_zone_idx"],) = _read("<i", f) if has_zone_section else (-1,)
+
         trailing = f.read()
         assert not trailing, f"{len(trailing)} unparsed trailing bytes in {path}"
 
@@ -172,6 +180,7 @@ def read_bin(path: Path) -> dict:
         "tracks_to_predict": tracks_to_predict,
         "has_phase_section": has_phase_section,
         "has_width_section": has_width_section,
+        "has_zone_section": has_zone_section,
     }
 
 
@@ -292,6 +301,11 @@ def write_bin(data: dict, path: Path):
             for r in roads:
                 if _is_lane(r["type"]) and r["S"]:
                     f.write(struct.pack(f"<{r['S']}f", *r["widths"]))
+        if data["has_zone_section"]:
+            f.write(SPEED_ZONE_SECTION_TAG)
+            for r in roads:
+                if _is_lane(r["type"]):
+                    f.write(struct.pack("<i", r["speed_zone_idx"]))
 
 
 def main():

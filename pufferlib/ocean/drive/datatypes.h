@@ -164,7 +164,8 @@ struct RoadMapElement {
     float speed_limit;
     float length;
     float *cum_lengths;
-    float *widths; // per-point lane width, meters
+    float *widths;      // per-point lane width, meters
+    int speed_zone_idx; // lanes sharing one posted limit; -1 = none (junction lane or map without zones)
 };
 
 struct TrafficControlElement {

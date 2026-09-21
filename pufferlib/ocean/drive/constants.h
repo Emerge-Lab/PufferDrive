@@ -242,6 +242,8 @@ static const int ROAD_OFFSETS[25][2]
 #define TL_DEFAULT_YELLOW_DURATION 3.0f
 #define TL_DEFAULT_GREEN_DURATION 10.0f
 #define TL_EPISODE_DISABLE_PROB 0.20f
+// Junction lanes inherit the min limit over their entry lanes; passes bound chained connectors
+#define SPEED_LIMIT_JUNCTION_INHERIT_PASSES 4
 #define TL_INDIVIDUAL_REMOVE_PROB 0.20f
 #define TL_ALWAYS_GREEN_PROB 0.05f
 

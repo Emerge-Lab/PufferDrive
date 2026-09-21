@@ -99,11 +99,16 @@ class DriveEnvConfig:
     dt: float = MISSING
     base_max_speed_mps: float = MISSING
     max_speed_mps: Optional[float] = None
+    conditioning_speed_scale: float = MISSING
     spawn_initial_speed: float = MISSING
     spawn_lateral_offset_max_frac: float = MISSING
     spawn_heading_max_deg: float = MISSING
     pose_noise_xy_m: float = MISSING
     pose_noise_yaw_deg: float = MISSING
+    speed_limit_random_prob: float = MISSING
+    speed_limit_random_delta_mps: float = MISSING
+    speed_limit_random_min_mps: float = MISSING
+    speed_limit_random_max_mps: float = MISSING
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING

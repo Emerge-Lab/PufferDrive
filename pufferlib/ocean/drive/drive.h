@@ -198,6 +198,7 @@ struct Drive {
     char *map_name;
     RoadMapElement *road_elements;
     int num_road_elements;
+    int num_speed_zones;
     TrafficControlElement *traffic_elements;
     int num_traffic_elements;
     struct LaneGraph lane_graph;
@@ -232,6 +233,13 @@ struct Drive {
     float spawn_heading_max_deg;
     float pose_noise_xy_m;
     float pose_noise_yaw_rad;
+    float speed_limit_random_prob;
+    float speed_limit_random_delta_mps;
+    float speed_limit_random_min_mps;
+    float speed_limit_random_max_mps;
+    float *lane_speed_limit_mps;       // per-episode effective limit per road element (zone-randomized)
+    float *speed_zone_offset_mps;      // num_speed_zones
+    unsigned char *lane_limit_resolved; // scratch for junction-lane inheritance
     int dynamics_model;
     int reset_accel_on_stop;
     int init_mode;
@@ -278,6 +286,7 @@ struct Drive {
     float goal_heading_max_deg; // 0 disables the successive-waypoint heading constraint
     int goal_speed_randomization;
     float conditioning_accel_scale; // eval C_acc: scales the positive accel cap (ACCEL_LONG_LIMIT[1]); 1.0 = paper eval
+    float conditioning_speed_scale; // training C_vel ~ X(a): speed cap = base_max_speed_mps * [1/a, a]; 1.5 = paper
  // 0 pins the goal-speed coef to goal_speed (paper: v_goal fixed)
     int goal_reach_requires_speed; // 1: final goal is consumed only below goal speed (paper semantics)
     int num_goals;
@@ -2364,7 +2373,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_THROTTLE] = sample_mixed_uniform(&env->rng_state, 1.25f);
         agent->reward_coefs[REWARD_COEF_STEER] = sample_mixed_uniform(&env->rng_state, 1.25f);
         agent->reward_coefs[REWARD_COEF_ACC] = sample_mixed_uniform(&env->rng_state, 1.5f);
-        agent->reward_coefs[REWARD_COEF_SPEED] = sample_mixed_uniform(&env->rng_state, 1.5f);
+        agent->reward_coefs[REWARD_COEF_SPEED] = sample_mixed_uniform(&env->rng_state, env->conditioning_speed_scale);
     } else {
         agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
         agent->reward_coefs[REWARD_COEF_GOAL_SPEED] = env->goal_speed;
@@ -2470,6 +2479,67 @@ static void fill_traffic_light_states(
             tc->states[t] = TRAFFIC_CONTROL_STATE_YELLOW;
         } else {
             tc->states[t] = TRAFFIC_CONTROL_STATE_RED;
+        }
+    }
+}
+
+static float min_resolved_entry_limit(const Drive *env, const RoadMapElement *road) {
+    float min_limit = INFINITY;
+    for (int k = 0; k < road->num_entries; k++) {
+        int entry_idx = road->entry_lanes[k];
+        if (env->lane_limit_resolved[entry_idx]) {
+            min_limit = fminf(min_limit, env->lane_speed_limit_mps[entry_idx]);
+        }
+    }
+    return min_limit;
+}
+
+static int inherit_junction_speed_limits_pass(Drive *env) {
+    int changed = 0;
+    for (int i = 0; i < env->num_road_elements; i++) {
+        const RoadMapElement *road = &env->road_elements[i];
+        if (env->lane_limit_resolved[i] || !is_road_lane(road->type) || road->speed_limit <= 0.0f) {
+            continue;
+        }
+        float min_limit = min_resolved_entry_limit(env, road);
+        if (!isfinite(min_limit)) {
+            continue;
+        }
+        env->lane_speed_limit_mps[i] = min_limit;
+        env->lane_limit_resolved[i] = 1;
+        changed = 1;
+    }
+    return changed;
+}
+
+// Per-episode: one additive offset per speed zone; lanes without a zone inherit the min over their entries.
+static void sample_zone_speed_limits(Drive *env) {
+    for (int i = 0; i < env->num_road_elements; i++) {
+        env->lane_speed_limit_mps[i] = env->road_elements[i].speed_limit;
+    }
+    if (env->speed_limit_random_prob <= 0.0f || env->num_speed_zones <= 0) {
+        return;
+    }
+    if (sample_uniform(&env->rng_state, 0.0f, 1.0f) >= env->speed_limit_random_prob) {
+        return;
+    }
+    float delta = env->speed_limit_random_delta_mps;
+    for (int zone_idx = 0; zone_idx < env->num_speed_zones; zone_idx++) {
+        env->speed_zone_offset_mps[zone_idx] = sample_uniform(&env->rng_state, -delta, delta);
+    }
+    for (int i = 0; i < env->num_road_elements; i++) {
+        const RoadMapElement *road = &env->road_elements[i];
+        int has_zone_limit = road->speed_zone_idx >= 0 && road->speed_limit > 0.0f;
+        env->lane_limit_resolved[i] = (unsigned char) has_zone_limit;
+        if (!has_zone_limit) {
+            continue;
+        }
+        float limit = road->speed_limit + env->speed_zone_offset_mps[road->speed_zone_idx];
+        env->lane_speed_limit_mps[i] = clip(limit, env->speed_limit_random_min_mps, env->speed_limit_random_max_mps);
+    }
+    for (int pass = 0; pass < SPEED_LIMIT_JUNCTION_INHERIT_PASSES; pass++) {
+        if (!inherit_junction_speed_limits_pass(env)) {
+            break;
         }
     }
 }
@@ -3343,7 +3413,15 @@ void init(Drive *env) {
     env->road_dropout_enabled = (env->obs_slots_lane_kept < env->obs_slots_lane_n)
         || (env->obs_slots_boundary_kept < env->obs_slots_boundary_n);
     env->logs_capacity = 0;
+    if (env->speed_limit_random_prob > 0.0f && env->num_speed_zones <= 0) {
+        raise_error_with_message(
+            ERROR_INVALID_ARGUMENT, "speed_limit_random_prob > 0 but map %s carries no speed zones", env->map_name);
+    }
+    env->lane_speed_limit_mps = (float *) malloc(env->num_road_elements * sizeof(float));
+    env->lane_limit_resolved = (unsigned char *) calloc(env->num_road_elements, sizeof(unsigned char));
+    env->speed_zone_offset_mps = (float *) malloc((env->num_speed_zones > 0 ? env->num_speed_zones : 1) * sizeof(float));
     begin_episode_rng(env);
+    sample_zone_speed_limits(env);
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         int steps = env->scenario_length;
         if (steps > 0) {
@@ -3405,6 +3483,9 @@ void c_close(Drive *env) {
     free(env->traffic_elements);
     free(env->active_agent_indices);
     free(env->logs);
+    free(env->lane_speed_limit_mps);
+    free(env->speed_zone_offset_mps);
+    free(env->lane_limit_resolved);
     if (env->shared_map != NULL) {
         // Geometry is borrowed from the cache. Release our reference; free the
         // entry only on the last reference, and only in the process that built it.
@@ -4048,8 +4129,8 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     // Speed limit metric (CUSTOM)
     float target_speed = 15.0f; // Default target speed
     int current_lane_idx = agent->current_lane_idx;
-    if (current_lane_idx != -1 && env->road_elements[current_lane_idx].speed_limit > 0) {
-        target_speed = env->road_elements[current_lane_idx].speed_limit;
+    if (current_lane_idx != -1 && env->lane_speed_limit_mps[current_lane_idx] > 0) {
+        target_speed = env->lane_speed_limit_mps[current_lane_idx];
     }
     // Binary overspeed metric, 1.0 if overspeeding by more than 2 m/s
     agent->metrics_array[SPEED_LIMIT_IDX] = (agent->sim_speed > target_speed + 2.0f) ? 1.0f : 0.0f;
@@ -4323,7 +4404,7 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     obs[obs_idx++] = fmaxf(-1.0f, fminf(1.0f, ego->metrics_array[LANE_DIST_IDX] / LANE_DISTANCE_NORMALIZATION));
     obs[obs_idx++] = ego->metrics_array[LANE_ANGLE_IDX];
     float current_lane_speed_limit
-        = (ego->current_lane_idx != -1) ? env->road_elements[ego->current_lane_idx].speed_limit : -1.0f;
+        = (ego->current_lane_idx != -1) ? env->lane_speed_limit_mps[ego->current_lane_idx] : -1.0f;
     obs[obs_idx++] = current_lane_speed_limit / env->obs_norm_speed_mps;
     obs[obs_idx++] = fminf(1.0f, ego->seconds_stopped / MAX_STOPPED_SECONDS);
     obs[obs_idx++] = fmaxf(-1.0f, fminf(1.0f, ego->lane_curvature / LANE_CURVATURE_NORM));
@@ -4335,6 +4416,10 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
         for (int coef_idx = 0; coef_idx < NUM_REWARD_COEFS; coef_idx++) {
             float lo = REWARD_BOUNDS[coef_idx].min_val;
             float hi = REWARD_BOUNDS[coef_idx].max_val;
+            if (coef_idx == REWARD_COEF_SPEED) {
+                lo = 1.0f / env->conditioning_speed_scale;
+                hi = env->conditioning_speed_scale;
+            }
             float coef = ego->reward_coefs[coef_idx];
             float normalized_coef;
             if (REWARD_BOUNDS[coef_idx].log_scale) {
@@ -5054,6 +5139,7 @@ void c_reset(Drive *env) {
     env->timestep = env->init_step;
 
     begin_episode_rng(env);
+    sample_zone_speed_limits(env);
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         generate_traffic_light_states(env);
         int num_reset = 0;

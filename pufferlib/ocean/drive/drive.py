@@ -81,9 +81,14 @@ class Drive(pufferlib.PufferEnv):
         spawn_heading_max_deg=0.0,
         pose_noise_xy_m=0.0,
         pose_noise_yaw_deg=0.0,
+        speed_limit_random_prob=0.0,
+        speed_limit_random_delta_mps=9.72,
+        speed_limit_random_min_mps=1.39,
+        speed_limit_random_max_mps=36.11,
         goal_speed=3.0,
         goal_speed_randomization=True,
         conditioning_accel_scale=1.0,
+        conditioning_speed_scale=1.5,
         goal_reach_requires_speed=False,
         scenario_length=None,
         resample_frequency=91,
@@ -175,9 +180,25 @@ class Drive(pufferlib.PufferEnv):
         self.pose_noise_yaw_deg = float(pose_noise_yaw_deg)
         if self.pose_noise_xy_m < 0.0 or self.pose_noise_yaw_deg < 0.0:
             raise ValueError(f"pose noise must be >= 0, got xy {pose_noise_xy_m}, yaw {pose_noise_yaw_deg}")
+        self.speed_limit_random_prob = float(speed_limit_random_prob)
+        self.speed_limit_random_delta_mps = float(speed_limit_random_delta_mps)
+        self.speed_limit_random_min_mps = float(speed_limit_random_min_mps)
+        self.speed_limit_random_max_mps = float(speed_limit_random_max_mps)
+        if not 0.0 <= self.speed_limit_random_prob <= 1.0:
+            raise ValueError(f"speed_limit_random_prob must be in [0, 1], got {speed_limit_random_prob}")
+        if not np.isfinite(self.speed_limit_random_delta_mps) or self.speed_limit_random_delta_mps < 0.0:
+            raise ValueError(f"speed_limit_random_delta_mps must be finite and >= 0, got {speed_limit_random_delta_mps}")
+        if not (0.0 < self.speed_limit_random_min_mps <= self.speed_limit_random_max_mps < float("inf")):
+            raise ValueError(
+                "speed_limit_random_min_mps/max_mps must satisfy 0 < min <= max, "
+                f"got {speed_limit_random_min_mps} / {speed_limit_random_max_mps}"
+            )
         self.goal_speed = float(goal_speed)
         self.goal_speed_randomization = int(bool(goal_speed_randomization))
         # Eval-time C_acc conditioning coefficient (training samples it in REWARD_BOUNDS[REWARD_COEF_ACC]).
+        self.conditioning_speed_scale = float(conditioning_speed_scale)
+        if not np.isfinite(self.conditioning_speed_scale) or self.conditioning_speed_scale < 1.0:
+            raise ValueError(f"conditioning_speed_scale must be finite and >= 1, got {conditioning_speed_scale}")
         self.conditioning_accel_scale = float(conditioning_accel_scale)
         if not (binding.CONDITIONING_ACC_MIN <= self.conditioning_accel_scale <= binding.CONDITIONING_ACC_MAX):
             raise ValueError(
@@ -662,9 +683,14 @@ class Drive(pufferlib.PufferEnv):
             "spawn_heading_max_deg": self.spawn_heading_max_deg,
             "pose_noise_xy_m": self.pose_noise_xy_m,
             "pose_noise_yaw_deg": self.pose_noise_yaw_deg,
+            "speed_limit_random_prob": self.speed_limit_random_prob,
+            "speed_limit_random_delta_mps": self.speed_limit_random_delta_mps,
+            "speed_limit_random_min_mps": self.speed_limit_random_min_mps,
+            "speed_limit_random_max_mps": self.speed_limit_random_max_mps,
             "goal_speed": self.goal_speed,
             "goal_speed_randomization": self.goal_speed_randomization,
             "conditioning_accel_scale": self.conditioning_accel_scale,
+            "conditioning_speed_scale": self.conditioning_speed_scale,
             "goal_reach_requires_speed": self.goal_reach_requires_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),

@@ -376,7 +376,7 @@ static inline float idm_lane_speed_limit(Drive *env, int lane_idx) {
     if (lane_idx < 0 || lane_idx >= env->num_road_elements) {
         return 0.0f;
     }
-    return env->road_elements[lane_idx].speed_limit;
+    return env->lane_speed_limit_mps[lane_idx];
 }
 
 static float idm_desired_speed(Drive *env, Agent *agent) {

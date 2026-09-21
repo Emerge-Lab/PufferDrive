@@ -1320,7 +1320,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
-            PyObject *pf = PyFloat_FromDouble((double) r->speed_limit);
+            PyObject *pf = PyFloat_FromDouble((double) env->lane_speed_limit_mps[i]);
             if (!pf) {
                 Py_DECREF(road);
                 Py_DECREF(road_list);
@@ -1966,9 +1966,31 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->spawn_heading_max_deg = (float) unpack(kwargs, "spawn_heading_max_deg");
     env->pose_noise_xy_m = (float) unpack(kwargs, "pose_noise_xy_m");
     env->pose_noise_yaw_rad = (float) unpack(kwargs, "pose_noise_yaw_deg") * (float) M_PI / 180.0f;
+    env->speed_limit_random_prob = (float) unpack(kwargs, "speed_limit_random_prob");
+    env->speed_limit_random_delta_mps = (float) unpack(kwargs, "speed_limit_random_delta_mps");
+    env->speed_limit_random_min_mps = (float) unpack(kwargs, "speed_limit_random_min_mps");
+    env->speed_limit_random_max_mps = (float) unpack(kwargs, "speed_limit_random_max_mps");
+    if (!(env->speed_limit_random_prob >= 0.0f && env->speed_limit_random_prob <= 1.0f)) {
+        PyErr_SetString(PyExc_ValueError, "speed_limit_random_prob must be in [0, 1]");
+        return -1;
+    }
+    if (!(env->speed_limit_random_delta_mps >= 0.0f) || !isfinite(env->speed_limit_random_delta_mps)) {
+        PyErr_SetString(PyExc_ValueError, "speed_limit_random_delta_mps must be finite and >= 0");
+        return -1;
+    }
+    if (!(env->speed_limit_random_min_mps > 0.0f && env->speed_limit_random_min_mps <= env->speed_limit_random_max_mps)
+        || !isfinite(env->speed_limit_random_max_mps)) {
+        PyErr_SetString(PyExc_ValueError, "speed limit clip must satisfy 0 < min <= max (finite)");
+        return -1;
+    }
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
     env->goal_speed_randomization = (int) unpack(kwargs, "goal_speed_randomization");
     env->conditioning_accel_scale = (float) unpack(kwargs, "conditioning_accel_scale");
+    env->conditioning_speed_scale = (float) unpack(kwargs, "conditioning_speed_scale");
+    if (!(env->conditioning_speed_scale >= 1.0f) || !isfinite(env->conditioning_speed_scale)) {
+        PyErr_SetString(PyExc_ValueError, "conditioning_speed_scale must be finite and >= 1");
+        return -1;
+    }
     env->goal_reach_requires_speed = (int) unpack(kwargs, "goal_reach_requires_speed");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");
     env->termination_mode = (int) unpack(kwargs, "termination_mode");

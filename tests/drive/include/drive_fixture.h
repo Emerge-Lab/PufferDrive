@@ -72,6 +72,7 @@ static inline Drive drive_test_env_config(
     env.offroad_behavior = INFRACTION_BEHAVIOR_IGNORE;
     env.traffic_light_behavior = INFRACTION_BEHAVIOR_IGNORE;
     env.use_map_cache = use_map_cache;
+    env.conditioning_speed_scale = 1.5f;
     env.goal_radius = 2.0f;
     env.goal_speed = 3.0f;
     env.goal_speed_randomization = 1;

@@ -59,8 +59,10 @@ static int test_desired_speed_fallback_and_lane_limit(void) {
 
     make_lane(&lanes[0], x0, y0, z0, h0, 0.0f);
     make_lane(&lanes[1], x1, y1, z1, h1, 12.0f);
+    float lane_limits[2] = {0.0f, 12.0f};
     env.road_elements = lanes;
     env.num_road_elements = 2;
+    env.lane_speed_limit_mps = lane_limits;
     env.base_max_speed_mps = 20.0f;
     agent.current_lane_idx = 0;
     agent.route = route;
@@ -68,7 +70,7 @@ static int test_desired_speed_fallback_and_lane_limit(void) {
     agent.current_route_idx = 0;
     EXPECT_NEAR(idm_desired_speed(&env, &agent), 12.0f, 1e-5f);
 
-    lanes[1].speed_limit = 0.0f;
+    lane_limits[1] = 0.0f;
     EXPECT_NEAR(idm_desired_speed(&env, &agent), IDM_DEFAULT_DESIRED_SPEED, 1e-5f);
     return 0;
 }

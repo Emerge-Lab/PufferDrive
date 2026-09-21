@@ -316,6 +316,8 @@ static int get_neighbors_entities(
 #define TRAFFIC_PHASE_SECTION_TAG_LEN 8
 #define LANE_WIDTH_SECTION_TAG "LANEWID1"
 #define LANE_WIDTH_SECTION_TAG_LEN 8
+#define SPEED_ZONE_SECTION_TAG "SPDZONE1"
+#define SPEED_ZONE_SECTION_TAG_LEN 8
 
 // Optional tail section; files written before it existed end right after the metadata.
 static int load_traffic_phase_section(FILE *file, Drive *drive) {
@@ -393,9 +395,48 @@ static int load_lane_width_section(FILE *file, Drive *drive) {
             }
         }
     }
+    return 0;
+}
+
+// Optional tail section; files without it get -1 (no zone) for every lane.
+static int load_speed_zone_section(FILE *file, Drive *drive) {
+    char tag[SPEED_ZONE_SECTION_TAG_LEN];
+    size_t tag_bytes_read = fread(tag, sizeof(char), SPEED_ZONE_SECTION_TAG_LEN, file);
+    int has_section = tag_bytes_read == SPEED_ZONE_SECTION_TAG_LEN
+        && memcmp(tag, SPEED_ZONE_SECTION_TAG, SPEED_ZONE_SECTION_TAG_LEN) == 0;
+    if (tag_bytes_read != 0 && !has_section) {
+        printf(
+            "[ERROR] -> Unexpected bytes after %s section (expected EOF or %s).\n",
+            LANE_WIDTH_SECTION_TAG,
+            SPEED_ZONE_SECTION_TAG);
+        return -1;
+    }
+    int lane_count = 0;
+    for (int i = 0; i < drive->num_road_elements; i++) {
+        lane_count += is_road_lane(drive->road_elements[i].type);
+    }
+    drive->num_speed_zones = 0;
+    for (int i = 0; i < drive->num_road_elements; i++) {
+        RoadMapElement *road = &drive->road_elements[i];
+        road->speed_zone_idx = -1;
+        if (!is_road_lane(road->type) || !has_section) {
+            continue;
+        }
+        if (fread(&road->speed_zone_idx, sizeof(int), 1, file) != 1) {
+            printf("[ERROR] -> Truncated %s section at lane %d.\n", SPEED_ZONE_SECTION_TAG, i);
+            return -1;
+        }
+        if (road->speed_zone_idx < -1 || road->speed_zone_idx >= lane_count) {
+            printf("[ERROR] -> Lane %d has invalid speed zone %d.\n", i, road->speed_zone_idx);
+            return -1;
+        }
+        if (road->speed_zone_idx + 1 > drive->num_speed_zones) {
+            drive->num_speed_zones = road->speed_zone_idx + 1;
+        }
+    }
     char trailing_byte;
     if (fread(&trailing_byte, sizeof(char), 1, file) == 1) {
-        printf("[ERROR] -> Trailing bytes after %s section.\n", LANE_WIDTH_SECTION_TAG);
+        printf("[ERROR] -> Trailing bytes after %s section.\n", SPEED_ZONE_SECTION_TAG);
         return -1;
     }
     return 0;
@@ -816,6 +857,10 @@ int load_map_binary(const char *filename, Drive *drive) {
         return -1;
     }
     if (load_lane_width_section(file, drive) != 0) {
+        fclose(file);
+        return -1;
+    }
+    if (load_speed_zone_section(file, drive) != 0) {
         fclose(file);
         return -1;
     }

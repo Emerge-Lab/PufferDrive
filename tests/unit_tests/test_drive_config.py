@@ -50,6 +50,18 @@ class TestDriveConfig(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "obs_boundary_stride"):
             Drive(obs_boundary_stride=0)
 
+    def test_speed_limit_randomization_validation(self):
+        with self.assertRaisesRegex(ValueError, "speed_limit_random_prob"):
+            Drive(speed_limit_random_prob=1.5)
+        with self.assertRaisesRegex(ValueError, "speed_limit_random_delta_mps"):
+            Drive(speed_limit_random_delta_mps=-1.0)
+        with self.assertRaisesRegex(ValueError, "min <= max"):
+            Drive(speed_limit_random_min_mps=20.0, speed_limit_random_max_mps=10.0)
+
+    def test_conditioning_speed_scale_validation(self):
+        with self.assertRaisesRegex(ValueError, "conditioning_speed_scale"):
+            Drive(conditioning_speed_scale=0.9)
+
     @patch("sys.argv", ["pufferl.py", "train.learning_rate=0.5"])
     def test_cli_override(self):
         """Test that Hydra CLI overrides win over the config file values."""
