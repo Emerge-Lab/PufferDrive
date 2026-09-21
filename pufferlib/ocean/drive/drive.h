@@ -187,6 +187,7 @@ struct Drive {
     int *tracks_to_predict;
     // Simulation
     int timestep;
+    int autoreset_pending;
     int init_step;
     float dt;
     float base_max_speed_mps;
@@ -4436,6 +4437,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 #include "idm.h"
 
 void c_reset(Drive *env) {
+    env->autoreset_pending = 0;
     if (env->timestep == 0) {
         for (int i = 0; i < env->num_total_agents; i++) {
             copy_pose_to_prev(&env->agents[i]);
@@ -4445,6 +4447,8 @@ void c_reset(Drive *env) {
             int agent_idx = env->active_agent_indices[x];
             sample_erratic_flags(env, &env->agents[agent_idx]);
             compute_metrics(env, agent_idx, x);
+            Agent *agent = &env->agents[agent_idx];
+            env->masks[x] = !agent->stopped && !agent->removed && !agent->is_blind_partner && !agent->is_phantom_braker;
         }
         compute_observations(env);
         return;
@@ -4483,6 +4487,7 @@ void c_reset(Drive *env) {
             int agent_idx = env->active_agent_indices[x];
             Agent *agent = &env->agents[agent_idx];
             if (agent->removed) {
+                env->masks[x] = 0;
                 continue;
             }
             reset_agent_metrics(env, agent_idx);
@@ -4490,6 +4495,7 @@ void c_reset(Drive *env) {
             sample_erratic_flags(env, agent);
             generate_reward_coefs(env, agent);
             compute_metrics(env, agent_idx, x);
+            env->masks[x] = !agent->stopped && !agent->removed && !agent->is_blind_partner && !agent->is_phantom_braker;
         }
         compute_observations(env);
         return;
@@ -4533,6 +4539,7 @@ void c_reset(Drive *env) {
             generate_new_goals_from_route(env, agent);
         }
         compute_metrics(env, agent_idx, x);
+        env->masks[x] = !agent->stopped && !agent->removed && !agent->is_blind_partner && !agent->is_phantom_braker;
     }
     compute_observations(env);
 }
@@ -4549,18 +4556,10 @@ void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
-
-    // Update masks for stopped/removed agents
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        Agent *a = &env->agents[agent_idx];
-        if (a->stopped || a->removed || a->is_blind_partner || a->is_phantom_braker) {
-            env->masks[i] = 0;
-        } else {
-            env->masks[i] = 1;
-        }
+    if (env->autoreset_pending) {
+        c_reset(env);
+        return;
     }
-
     env->timestep++;
 
     // -> 1. Apply actions and move agents
@@ -4615,8 +4614,10 @@ void c_step(Drive *env) {
 
     // Mark terminals for stopped or removed agents
     for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        if (env->agents[agent_idx].stopped || env->agents[agent_idx].removed) {
+        Agent *agent = &env->agents[env->active_agent_indices[i]];
+        // Masks describe the next action's eligibility; terminal rewards belong to the previous action.
+        env->masks[i] = !agent->stopped && !agent->removed && !agent->is_blind_partner && !agent->is_phantom_braker;
+        if (agent->stopped || agent->removed) {
             env->terminals[i] = 1;
         }
     }
@@ -4656,7 +4657,10 @@ void c_step(Drive *env) {
             env->eval_episode_done = 1;
             return;
         }
-        c_reset(env);
+        // Expose the terminal state for value bootstrap; the next call resets without applying its action.
+        compute_observations(env);
+        memset(env->masks, 0, env->active_agent_count * sizeof(unsigned char));
+        env->autoreset_pending = 1;
         return;
     }
 
@@ -4699,6 +4703,8 @@ void c_step(Drive *env) {
         if (!regen_ok) {
             invalidate_agent(agent);
             agent->removed = 1;
+            env->masks[i] = 0;
+            env->terminals[i] = 1;
         }
     }
 }

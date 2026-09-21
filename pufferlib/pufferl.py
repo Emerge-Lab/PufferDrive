@@ -441,19 +441,14 @@ class PuffeRL:
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob.float()
-                # Truncation bootstrap hack for auto-reset envs.
-                # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
-                # the value at index `l` is post-reset. We use `values[..., l-1]` as a heuristic
-                # proxy for the pre-reset terminal value (bootstrap term is not clipped).
-                if l > 0 and config["use_value_bootstrapping"]:
+                if config["use_value_bootstrapping"]:
                     trunc_mask = (t > 0) & (d == 0)
-                    r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
+                    r = r + trunc_mask.to(r.dtype) * config["gamma"] * value.flatten().float()
                 self.rewards[batch_rows, l] = r
                 self.terminals[batch_rows, l] = done_mask.bool()
                 self.values[batch_rows, l] = value.flatten().float()
                 self.masks[batch_rows, l] = m
 
-                # Note: We are not yet handling masks in this version
                 self.ep_lengths[env_id] += 1
                 if l + 1 >= config["bptt_horizon"]:
                     num_full = env_id.stop - env_id.start
