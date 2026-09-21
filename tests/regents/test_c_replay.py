@@ -96,11 +96,13 @@ def _drive_kwargs(map_idx, sdc_controller, dynamics_model="classic", zero_errati
         eval_mode=True,
         control_mode="control_sdc_only",
         sdc_controller=sdc_controller,
-        non_sdc_controller="replay",
+        non_sdc_controller="idm",
         non_vehicle_controller="replay",
         action_type="continuous",
         dynamics_model=dynamics_model,
         dt=0.1,
+        adversarial_termination_mode="disabled",
+        target_infraction_behavior="normal",
         **(
             {
                 "obs_dropout_lane": 0.0,
@@ -123,10 +125,19 @@ def _drive_kwargs(map_idx, sdc_controller, dynamics_model="classic", zero_errati
     )
 
 
-def _drive(map_idx, seed, sdc_controller, dynamics_model="classic", zero_erratic=False):
+def _drive(
+    map_idx,
+    seed,
+    sdc_controller,
+    dynamics_model="classic",
+    zero_erratic=False,
+    non_sdc_controller="idm",
+):
     _, map_indices, _ = resolve_nuplan_scenarios()
+    kwargs = _drive_kwargs(map_idx, sdc_controller, dynamics_model, zero_erratic)
+    kwargs["non_sdc_controller"] = non_sdc_controller
     return Drive(
-        **_drive_kwargs(map_idx, sdc_controller, dynamics_model, zero_erratic),
+        **kwargs,
         eval_map_indices=[map_indices[map_idx]],
         eval_scenario_seeds=[seed],
     )
@@ -181,12 +192,15 @@ def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay)
     initial_difference = torch.abs(replay.states[:, 0, pose] - optimization.optimized_states[:, 0, pose])
     assert float(initial_difference[joint_valid[:, 0]].max()) <= C_REPLAY_TOLERANCE
 
-    # Actors without an injected plan must still follow their logged trajectory.
+    # Unselected vehicles are reactive IDM actors, while non-vehicles remain on replay.
     injected = optimization.optimized_action_mask.any(dim=1)
     assert int(injected.sum()) > 0
     logged = scenario.logged_state[:, : replay.states.shape[1]]
     logged_difference = torch.abs(replay.states[..., pose] - logged[..., pose])
-    assert float(logged_difference[joint_valid & ~injected[..., None]].max()) <= C_REPLAY_TOLERANCE
+    non_adversarial_vehicle = scenario.vehicle_mask & ~scenario.ego_mask & ~injected
+    assert float(logged_difference[joint_valid & non_adversarial_vehicle[..., None]].max()) > C_REPLAY_TOLERANCE
+    replayed_non_vehicle = ~scenario.vehicle_mask
+    assert float(logged_difference[joint_valid & replayed_non_vehicle[..., None]].max()) <= C_REPLAY_TOLERANCE
 
     # Map 7 logs overlapping actors, so C must not blame the adversary for them.
     assert replay.metrics.baseline_collision_pair_count > 0
@@ -217,7 +231,7 @@ def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay)
         actions = np.zeros((agent_count, OPEN_LOOP_HORIZON_TRANSITION_COUNT, 2), dtype=np.float32)
         mask = np.zeros((agent_count, OPEN_LOOP_HORIZON_TRANSITION_COUNT), dtype=np.bool_)
         mask[0] = True
-        with pytest.raises(ValueError, match="replay-controlled non-ego vehicles"):
+        with pytest.raises(ValueError, match="replay- or IDM-controlled non-ego vehicles"):
             binding.regents_set_action_plan(injection_drive.c_envs, actions, mask)
         mask[:] = False
         actions[1, 0, 0] = 1.5
@@ -259,9 +273,12 @@ def test_final_stop_replay_freezes_colliding_agents_and_reuses_checked_parity(ca
     assert stopped_replay.metrics.compared_state_count == full_horizon_replay.metrics.compared_state_count
 
 
-def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_trips_its_artifact(tmp_path):
+@pytest.mark.parametrize("non_sdc_controller", ("idm", "replay"))
+def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_trips_its_artifact(
+    tmp_path, non_sdc_controller
+):
     """Full-log candidates outside a short horizon remain reportable and replayable."""
-    drive = _drive(8, 50, "idm")
+    drive = _drive(8, 50, "idm", non_sdc_controller=non_sdc_controller)
     try:
         result = run_reactive_generation(
             drive,

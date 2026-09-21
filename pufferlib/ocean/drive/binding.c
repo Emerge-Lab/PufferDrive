@@ -160,9 +160,10 @@ static PyObject *regents_set_action_plan_py(PyObject *self __attribute__((unused
             if (!mask[plan_idx]) {
                 continue;
             }
+            int controller = env->agents[agent_idx].controller;
             if (agent_idx == EGO_IDX || env->agents[agent_idx].type != VEHICLE
-                || env->agents[agent_idx].controller != CONTROLLER_REPLAY) {
-                PyErr_SetString(PyExc_ValueError, "ReGentS may inject only replay-controlled non-ego vehicles");
+                || (controller != CONTROLLER_REPLAY && controller != CONTROLLER_IDM)) {
+                PyErr_SetString(PyExc_ValueError, "ReGentS may inject only replay- or IDM-controlled non-ego vehicles");
                 return NULL;
             }
         }

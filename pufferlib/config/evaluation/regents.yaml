@@ -6,7 +6,7 @@ env:
   compute_eval_metrics: true
   control_mode: control_sdc_only
   sdc_controller: idm
-  non_sdc_controller: replay
+  non_sdc_controller: idm
   non_vehicle_controller: replay
   collision_behavior: ignore
   # ReGentS scenes have no adv3.0 "adversary", so the default

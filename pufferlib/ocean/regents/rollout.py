@@ -37,8 +37,9 @@ INITIAL_STATE_TOLERANCE = 1e-4
 # Drive pins the ego to stable agent row zero, and `regents_get_states` preserves that order.
 STABLE_EGO_AGENT_IDX = 0
 
-# The ego controllers ReGentS can freeze and refresh; backgrounds must stay replay. The
-# mapped name is the ego trajectory source recorded on an artifact.
+# The ego controllers ReGentS can freeze and refresh. Background vehicles either replay
+# their logs or use IDM; an installed plan temporarily overrides only the selected
+# adversaries. The mapped name is the ego trajectory source recorded on an artifact.
 EGO_TRAJECTORY_SOURCE_BY_CONTROLLER = {
     binding.CONTROLLER_IDM: "c_idm",
     binding.CONTROLLER_CORRIDOR_IDM: "c_corridor_idm",
@@ -48,6 +49,7 @@ EGO_TRAJECTORY_SOURCE_BY_CONTROLLER = {
 }
 SUPPORTED_SDC_CONTROLLERS = tuple(EGO_TRAJECTORY_SOURCE_BY_CONTROLLER)
 SUPPORTED_SDC_CONTROLLER_NAMES = "'idm', 'corridor_idm', 'pdm', 'replay', or 'policy'"
+SUPPORTED_NON_SDC_CONTROLLERS = (binding.CONTROLLER_REPLAY, binding.CONTROLLER_IDM)
 
 
 def ego_trajectory_source(sdc_controller):
@@ -269,8 +271,9 @@ def capture_frozen_ego_trajectory(
 ):
     """Reset one Drive scenario and capture its C ego rollout under any ego controller.
 
-    Backgrounds remain under the Drive configuration's replay controller. The
-    caller owns the Drive instance and remains responsible for closing it.
+    Background vehicles retain the configured replay or IDM controller unless selected
+    as injected adversaries. The caller owns the Drive instance and remains responsible
+    for closing it.
     """
     if not isinstance(transition_count, int) or transition_count < 1:
         raise ValueError("transition_count must be a positive integer")
@@ -278,8 +281,8 @@ def capture_frozen_ego_trajectory(
         raise ValueError(f"Frozen ego capture requires sdc_controller={SUPPORTED_SDC_CONTROLLER_NAMES}")
     if (drive.sdc_controller == binding.CONTROLLER_POLICY) != (ego_action_fn is not None):
         raise ValueError("A policy ego requires an ego action provider, and no other controller accepts one")
-    if drive.non_sdc_controller != binding.CONTROLLER_REPLAY:
-        raise ValueError("Frozen ego capture requires non_sdc_controller='replay'")
+    if drive.non_sdc_controller not in SUPPORTED_NON_SDC_CONTROLLERS:
+        raise ValueError("Frozen ego capture requires non_sdc_controller='replay' or 'idm'")
     if drive.simulation_mode != binding.SIMULATION_MODE_REPLAY:
         raise ValueError("Frozen ego capture requires simulation_mode='replay'")
     if drive.num_envs != 1:
@@ -371,16 +374,29 @@ def baseline_relative_events(baseline, adversarial, injected_agent_mask):
     )
 
 
-def _parity_feature_mask(optimization, adversarial, joint_valid, timestep_count):
+def _parity_feature_mask(
+    optimization,
+    adversarial,
+    joint_valid,
+    ego_mask,
+    timestep_count,
+    compare_uninjected_agents,
+):
     """Flag the state features C and Torch are required to agree on.
 
     The initial state is a shared input rather than a result, C stores an adversary's
-    speed and wheel steering only once injection has integrated it, and once C reports
-    a contact the two integrators are no longer describing the same scene.
+    speed and wheel steering only once injection has integrated it, and unselected IDM
+    traffic intentionally diverges from Torch's logged reference. Once C reports a
+    contact the two integrators are no longer describing the same scene.
     """
     injected_state_mask = torch.zeros_like(joint_valid)
     injected_state_mask[:, 1:] = optimization.optimized_action_mask.detach().cpu()
-    feature_mask = joint_valid[..., None].expand(*joint_valid.shape, STATE_FEATURE_COUNT).clone()
+    compared_agent_mask = (
+        torch.ones_like(joint_valid) if compare_uninjected_agents else injected_state_mask | ego_mask[:, None]
+    )
+    feature_mask = (
+        (joint_valid & compared_agent_mask)[..., None].expand(*joint_valid.shape, STATE_FEATURE_COUNT).clone()
+    )
     feature_mask[..., STATE_SPEED] &= injected_state_mask
     feature_mask[..., STATE_STEERING] &= injected_state_mask
     timestep_index = torch.arange(timestep_count)[None, :, None]
@@ -457,7 +473,14 @@ def replay_optimized_scenario_in_c(
         raise RuntimeError("C reset to a different initial pose than the Torch scenario")
 
     if verified_parity_metrics is None:
-        feature_mask = _parity_feature_mask(optimization, adversarial, joint_valid, torch_states.shape[1])
+        feature_mask = _parity_feature_mask(
+            optimization,
+            adversarial,
+            joint_valid,
+            ego_mask,
+            torch_states.shape[1],
+            compare_uninjected_agents=drive.non_sdc_controller == binding.CONTROLLER_REPLAY,
+        )
         differences = torch.abs(adversarial.states - torch_states)
         ego_feature_mask = feature_mask & ego_mask[:, None, None]
         maximum_ego_reference_error = (

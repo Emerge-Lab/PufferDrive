@@ -3978,6 +3978,14 @@ static bool has_any_regents_action(Drive *env, int agent_idx) {
 static void start_regents_injection(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     int step = env->timestep - 1;
+    agent->sim_x = agent->log_trajectory_x[step];
+    agent->sim_y = agent->log_trajectory_y[step];
+    agent->sim_z = agent->log_trajectory_z[step];
+    agent->sim_heading = agent->log_heading[step];
+    agent->cos_heading = cosf(agent->sim_heading);
+    agent->sin_heading = sinf(agent->sim_heading);
+    agent->sim_valid = agent->log_valid[step];
+    copy_pose_to_prev(agent);
     agent->steering_angle = 0.0f;
     agent->reward_coefs[REWARD_COEF_SPEED] = 1.0f;
     agent->sim_length = agent->log_length[step];
@@ -4043,7 +4051,7 @@ static void set_start_position(Drive *env) {
                 continue;
             }
 
-            if (is_active == 0) {
+            if (is_active == 0 && agent->controller == CONTROLLER_REPLAY) {
                 agent->sim_vx = 0.0f;
                 agent->sim_vy = 0.0f;
                 agent->yaw_rate = 0.0f;
@@ -4225,8 +4233,11 @@ void set_active_agents(Drive *env) {
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++;
             env->agents[i].active_agent = 0;
-            int replay_by_default
-                = is_log_replay || env->agents[i].mark_as_expert == 1 || env->active_agent_count == env->num_max_agents;
+            int use_idm_background
+                = is_log_replay && env->agents[i].type == VEHICLE && env->non_sdc_controller == CONTROLLER_IDM;
+            int replay_by_default = !use_idm_background
+                && (is_log_replay || env->agents[i].mark_as_expert == 1
+                    || env->active_agent_count == env->num_max_agents);
             env->agents[i].controller = resolve_agent_controller(env, i, 0, replay_by_default);
             if (env->agents[i].controller == CONTROLLER_REPLAY) {
                 expert_static_agent_indices[env->expert_static_agent_count] = i;
@@ -4319,18 +4330,22 @@ void remove_bad_trajectories(Drive *env) {
     for (int i = 0; i < env->active_agent_count; ++i) {
         collided_with_indices[i] = -1;
     }
-    // move experts through trajectories to check for collisions and remove as illegal agents
+    // move experts through trajectories to check for collisions and remove as illegal agents.
+    // Every background actor that moves at runtime is audited on its log, whatever its
+    // runtime controller: freezing a reactive actor here fakes collisions with the logged
+    // ego and would delete an actor the rollout still needs.
     for (int t = 0; t < env->scenario_length; t++) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             move_expert(env, agent_idx);
         }
-        for (int i = 0; i < env->expert_static_agent_count; i++) {
-            int expert_idx = env->expert_static_agent_indices[i];
-            if (env->agents[expert_idx].sim_x == INVALID_POSITION) {
+        for (int i = 0; i < env->static_agent_count; i++) {
+            int background_idx = env->static_agent_indices[i];
+            Agent *background = &env->agents[background_idx];
+            if (background->controller == CONTROLLER_STATIC || background->sim_x == INVALID_POSITION) {
                 continue;
             }
-            move_expert(env, expert_idx);
+            move_expert(env, background_idx);
         }
         // check collisions
         for (int i = 0; i < env->active_agent_count; i++) {
@@ -6104,9 +6119,9 @@ void c_step(Drive *env) {
     env->timestep++;
 
     // -> 1. Apply actions and move agents
-    // Move static experts
-    for (int i = 0; i < env->expert_static_agent_count; i++) {
-        int background_idx = env->expert_static_agent_indices[i];
+    // ReGentS plans temporarily override the configured background controller.
+    for (int i = 0; i < env->static_agent_count; i++) {
+        int background_idx = env->static_agent_indices[i];
         Agent *agent = &env->agents[background_idx];
         if (env->eval_mode && (agent->stopped || agent->removed)) {
             continue;
@@ -6181,8 +6196,8 @@ void c_step(Drive *env) {
     // but do not contribute to policy episode logs or rewards.
     Log regents_scratch_log = {0};
     int regents_transition_idx = env->timestep - env->init_step - 1;
-    for (int i = 0; i < env->expert_static_agent_count; i++) {
-        int background_idx = env->expert_static_agent_indices[i];
+    for (int i = 0; i < env->static_agent_count; i++) {
+        int background_idx = env->static_agent_indices[i];
         if (has_regents_action(env, background_idx, regents_transition_idx)) {
             compute_metrics(env, background_idx, &regents_scratch_log);
         }

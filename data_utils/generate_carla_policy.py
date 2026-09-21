@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import yaml
+from tqdm import tqdm
 
 try:
     from data_utils.generate_carla_pdm import _files_equal, _fixed_string
@@ -237,15 +238,21 @@ def _build_scenario_data(source_data, replay_environment, summary, episode_idx, 
     scenario = replay_environment["scenario"]
     metadata = replay_environment["metadata"]
     frames = _append_terminal_frame(replay_environment)
-    agent_frames = frames["agent_f32"]
-    agent_integer_frames = frames["agent_i32"]
+    # Gigaflow sizes replay rows by requested vehicles, so failed spawns leave inactive rows.
+    active_agent_indices = scenario["active_agent_indices"]
+    if not active_agent_indices:
+        raise RuntimeError("Policy rollout produced a scenario with no spawned vehicles")
+    active_agent_indices = np.asarray(active_agent_indices, dtype=np.intp)
+    if active_agent_indices.size != int(metadata["active_agent_count"]):
+        raise RuntimeError("Replay agent capacity does not match its active policy-agent count")
+    agent_frames = frames["agent_f32"][:, active_agent_indices]
+    agent_integer_frames = frames["agent_i32"][:, active_agent_indices]
     traffic_frames = frames["traffic_i16"]
     sample_count, agent_count, _ = agent_frames.shape
-    if agent_count != int(metadata["active_agent_count"]):
-        raise RuntimeError("Replay agent capacity does not match its active policy-agent count")
-    boundary_agents = scenario.get("agents") or []
-    if len(boundary_agents) != agent_count:
-        raise RuntimeError("Initial scenario metadata does not cover every policy-controlled vehicle")
+    replay_agents = scenario.get("agents") or []
+    if len(replay_agents) != frames["agent_f32"].shape[1]:
+        raise RuntimeError("Initial scenario metadata does not cover every replay agent row")
+    boundary_agents = [replay_agents[agent_idx] for agent_idx in active_agent_indices]
 
     expected_ids = np.asarray([agent["id"] for agent in boundary_agents], dtype=np.int32)
     if not np.all(agent_integer_frames[:, :, AGENT_ID_IDX] == expected_ids):
@@ -357,10 +364,12 @@ class PolicyScenarioWriter:
         staging_directory,
         dt_seconds,
         reject_infractions=False,
+        verbose=False,
     ):
         self.staging_directory = Path(staging_directory)
         self.dt_seconds = float(dt_seconds)
         self.reject_infractions = bool(reject_infractions)
+        self.verbose = bool(verbose)
         self.source_cache = {}
         self.entries = []
         self.rejections = []
@@ -378,10 +387,9 @@ class PolicyScenarioWriter:
                 "reasons": rejection_reasons,
             }
             self.rejections.append(rejection)
-            print(
-                f"REJECT {rejection['map']} seed={seed} reasons={','.join(rejection_reasons)}",
-                flush=True,
-            )
+            if self.verbose:
+                # The progress bar owns the terminal line, so step around it.
+                tqdm.write(f"REJECT {rejection['map']} seed={seed} reasons={','.join(rejection_reasons)}")
             return
         replay_bytes = summary.get("replay_environment_bundle")
         if not isinstance(replay_bytes, bytes):
@@ -425,11 +433,6 @@ class PolicyScenarioWriter:
             "sha256": _sha256(output_path),
         }
         self.entries.append(entry)
-        print(
-            f"{episode_idx + 1}: {scenario_id} agents={entry['agent_count']} "
-            f"samples={entry['sample_count']} sha256={entry['sha256']}",
-            flush=True,
-        )
 
 
 def _install_outputs(staging_directory, output_directory, entries, overwrite):
@@ -464,6 +467,7 @@ def generate_policy_scenarios(
     overwrite=False,
     reject_infractions=False,
     max_candidate_scenarios=None,
+    verbose=False,
 ):
     output_directory = Path(output_directory)
     if output_directory.exists() and not output_directory.is_dir():
@@ -524,6 +528,7 @@ def generate_policy_scenarios(
             staging_directory,
             run_args["env"]["dt"],
             reject_infractions=reject_infractions,
+            verbose=verbose,
         )
         summaries = _run_eval_rollout(
             run_args,
@@ -578,6 +583,11 @@ def generate_policy_scenarios(
         with staged_manifest.open("w", encoding="utf-8") as manifest_file:
             yaml.safe_dump(manifest, manifest_file, sort_keys=False)
         os.replace(staged_manifest, output_directory / MANIFEST_FILE_NAME)
+    print(
+        f"Generated {len(selected_entries)} scenarios from {candidate_scenario_count} candidates "
+        f"({len(writer.rejections)} rejected) -> {output_directory / MANIFEST_FILE_NAME}",
+        flush=True,
+    )
     return selected_entries
 
 
@@ -595,6 +605,7 @@ def main():
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--reject-infractions", action="store_true")
     parser.add_argument("--max-candidate-scenarios", type=int, default=None)
+    parser.add_argument("--verbose", action="store_true", help="Log every rejected candidate scenario")
     cli = parser.parse_args()
     try:
         generate_policy_scenarios(
@@ -610,6 +621,7 @@ def main():
             overwrite=cli.overwrite,
             reject_infractions=cli.reject_infractions,
             max_candidate_scenarios=cli.max_candidate_scenarios,
+            verbose=cli.verbose,
         )
     except (FileExistsError, RuntimeError, ValueError) as error:
         parser.error(str(error))
