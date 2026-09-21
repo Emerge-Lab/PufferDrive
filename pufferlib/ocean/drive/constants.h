@@ -236,6 +236,8 @@ static const int ROAD_OFFSETS[25][2]
 #define TRAFFIC_CONTROL_FEATURES 7
 #define GOAL_FEATURES 3
 #define OBS_VALID_COUNT_FEATURES 4
+// (p, v, a) x (fwd, left) of the spline target the policy last committed to; spline mode only.
+#define SPLINE_INTENT_FEATURES 6
 // Heading deviation since last kept point that forces a keep when obs stride > 1 (~15 degrees).
 #define OBS_STRIDE_HEADING_THRESHOLD 0.2618f
 

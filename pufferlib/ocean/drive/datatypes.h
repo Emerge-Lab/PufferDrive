@@ -131,6 +131,7 @@ struct Agent {
     float prev_spline_coefs_x[6];
     float prev_spline_coefs_y[6];
     int spline_history_valid; // 0 until the first spline step after spawn/reset has run
+    float spline_intent[SPLINE_INTENT_FEATURES]; // last emitted action, raw [-1, 1], fed back as obs
 
     // Reward conditioning coefficients (per-agent, randomized at spawn)
     float reward_coefs[NUM_REWARD_COEFS];

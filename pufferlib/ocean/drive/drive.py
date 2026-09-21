@@ -256,6 +256,7 @@ class Drive(pufferlib.PufferEnv):
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
         self.obs_valid_count_features = binding.OBS_VALID_COUNT_FEATURES
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
+        self.spline_intent_features = binding.SPLINE_INTENT_FEATURES if action_type == "spline" else 0
 
         # One uniform target representation (ego-frame x, y, z) regardless of goal_regen_mode.
         self.goal_features = binding.GOAL_FEATURES
@@ -264,6 +265,7 @@ class Drive(pufferlib.PufferEnv):
         # GPS goal-distance (abs + rel) columns are lane-only (LANE_FEATURES); zero-filled when flag off.
         self.num_obs = (
             self.ego_features
+            + self.spline_intent_features
             + self.num_reward_coefs
             + self.goal_dim
             + self.obs_slots_partners_n * self.partner_features

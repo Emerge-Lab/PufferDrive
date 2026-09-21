@@ -464,6 +464,9 @@ static void reset_agent_state(Agent *agent) {
     agent->is_blind_partner = 0;
     agent->is_phantom_braker = 0;
     agent->spline_history_valid = 0;
+    for (int feature_idx = 0; feature_idx < SPLINE_INTENT_FEATURES; feature_idx++) {
+        agent->spline_intent[feature_idx] = 0.0f;
+    }
 }
 
 // Derived spline-mode fields, computed once from spline_horizon_seconds/dt/base_max_speed_mps/
@@ -3182,12 +3185,14 @@ static int compute_observation_size(Drive *env) {
     return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n + LANE_FEATURES * env->obs_slots_lane_kept
         + BOUNDARY_FEATURES * env->obs_slots_boundary_kept
         + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
-        + env->reward_conditioning * NUM_REWARD_COEFS + env->num_goals * GOAL_FEATURES;
+        + env->reward_conditioning * NUM_REWARD_COEFS + env->num_goals * GOAL_FEATURES
+        + (env->action_type == ACTION_TYPE_SPLINE) * SPLINE_INTENT_FEATURES;
 }
 
 void allocate(Drive *env) {
     init(env);
-    int max_obs = compute_observation_size(env);
+    // Slack for the spline intent block: tests set action_type only after allocate() runs.
+    int max_obs = compute_observation_size(env) + SPLINE_INTENT_FEATURES;
     env->observations = (float *) calloc(env->active_agent_count * max_obs, sizeof(float));
     env->actions = (float *) calloc(env->active_agent_count * MAX_ACTION_STRIDE_FLOATS, sizeof(float));
     env->rewards = (float *) calloc(env->active_agent_count, sizeof(float));
@@ -3936,6 +3941,16 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     return obs_idx;
 }
 
+static int write_spline_intent_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
+    if (env->action_type != ACTION_TYPE_SPLINE) {
+        return obs_idx;
+    }
+    for (int feature_idx = 0; feature_idx < SPLINE_INTENT_FEATURES; feature_idx++) {
+        obs[obs_idx++] = ego->spline_intent[feature_idx];
+    }
+    return obs_idx;
+}
+
 static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     if (env->reward_conditioning) {
         const RewardBound *reward_bounds = env->reward_log_sampling ? REWARD_BOUNDS_LOG : REWARD_BOUNDS;
@@ -4338,6 +4353,7 @@ static void compute_observations(Drive *env) {
         int obs_idx = 0;
 
         obs_idx = write_ego_obs(env, ego, obs, obs_idx);
+        obs_idx = write_spline_intent_obs(env, ego, obs, obs_idx);
         obs_idx = write_reward_target_obs(env, ego, obs, obs_idx);
         obs_idx = write_partner_obs(env, ego, i, obs, obs_idx, &partner_count);
         obs_idx = write_road_obs(env, ego, obs, obs_idx, &lane_count, &boundary_count);
@@ -4487,6 +4503,9 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             float raw_p1_left = action_array_f[action_idx][3];
             float raw_v1_left = action_array_f[action_idx][4];
             float raw_a1_left = action_array_f[action_idx][5];
+            for (int feature_idx = 0; feature_idx < SPLINE_INTENT_FEATURES; feature_idx++) {
+                agent->spline_intent[feature_idx] = action_array_f[action_idx][feature_idx];
+            }
 
             // Rescale to physical ego-local (forward/left) units using the reachability-derived
             // offset limits (init_spline_dynamics_fields) and, for a1, the sim's own absolute

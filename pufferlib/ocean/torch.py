@@ -371,7 +371,9 @@ class Drive(nn.Module):
 
         # Configuration flags from policy kwargs
         self.shared_network = shared_network
-        self.ego_dim = env.ego_features
+        # The spline intent block sits directly after the ego block in the C layout, so it must be
+        # counted here or every downstream slice (context/partner/road/traffic) shifts by its width.
+        self.ego_dim = env.ego_features + env.spline_intent_features
 
         # Prepare arguments for the Backbone
         backbone_args = {

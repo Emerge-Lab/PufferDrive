@@ -230,6 +230,51 @@ static int test_consistency_reward_guard_and_rotation(void) {
     return 0;
 }
 
+static int test_spline_intent_obs_block(void) {
+    Drive env = make_spline_env(1.0f);
+    int agent_idx = env.active_agent_indices[0];
+    Agent *agent = &env.agents[agent_idx];
+
+    int spline_obs_size = compute_observation_size(&env);
+    env.action_type = ACTION_TYPE_CONTINUOUS;
+    int baseline_obs_size = compute_observation_size(&env);
+    env.action_type = ACTION_TYPE_SPLINE;
+    EXPECT_EQ_INT(spline_obs_size - baseline_obs_size, SPLINE_INTENT_FEATURES);
+
+    // Before the agent has ever acted there is no intent to report, so the block reads zeros.
+    compute_observations(&env);
+    for (int feature_idx = 0; feature_idx < SPLINE_INTENT_FEATURES; feature_idx++) {
+        EXPECT_NEAR(env.observations[EGO_FEATURES + feature_idx], 0.0f, 1e-6f);
+    }
+
+    agent->sim_heading = 0.0f;
+    agent->cos_heading = 1.0f;
+    agent->sin_heading = 0.0f;
+    agent->sim_vx = 5.0f;
+    agent->sim_vy = 0.0f;
+    agent->accel_long = 0.0f;
+    agent->accel_lat = 0.0f;
+    const float emitted[SPLINE_INTENT_FEATURES] = {0.5f, -0.25f, 0.75f, -0.4f, 0.1f, 0.6f};
+    set_spline_action(&env, emitted[0], emitted[1], emitted[2], emitted[3], emitted[4], emitted[5]);
+    move_dynamics(&env, 0, agent_idx);
+    compute_observations(&env);
+
+    // The block is the emitted action verbatim, unaffected by whatever the clamps did downstream.
+    for (int feature_idx = 0; feature_idx < SPLINE_INTENT_FEATURES; feature_idx++) {
+        EXPECT_NEAR(env.observations[EGO_FEATURES + feature_idx], emitted[feature_idx], 1e-6f);
+    }
+
+    // A reset clears it, so a recycled agent slot cannot leak last episode's intent.
+    reset_agent_state(agent);
+    compute_observations(&env);
+    for (int feature_idx = 0; feature_idx < SPLINE_INTENT_FEATURES; feature_idx++) {
+        EXPECT_NEAR(env.observations[EGO_FEATURES + feature_idx], 0.0f, 1e-6f);
+    }
+
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_straight_ahead_target_gives_near_zero_lateral_accel);
@@ -240,5 +285,6 @@ int main(void) {
     RUN_TEST(test_stopped_agent_spline_action_still_clears_motion);
     RUN_TEST(test_consistency_cost_math);
     RUN_TEST(test_consistency_reward_guard_and_rotation);
+    RUN_TEST(test_spline_intent_obs_block);
     return test_summary(failures);
 }
