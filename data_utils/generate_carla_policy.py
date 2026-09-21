@@ -155,6 +155,7 @@ def resolve_generation_args(
     benchmark_name,
     scenario_count=None,
     scenario_length=None,
+    seed=None,
     device=None,
 ):
     checkpoint_path = Path(checkpoint_path)
@@ -174,6 +175,10 @@ def resolve_generation_args(
         if isinstance(scenario_length, bool) or not isinstance(scenario_length, int) or scenario_length <= 0:
             raise ValueError("scenario_length must be a positive integer")
         benchmark["env"]["scenario_length"] = scenario_length
+    if seed is not None:
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0 or seed >= 2**63:
+            raise ValueError("seed must be in [0, 2**63)")
+        benchmark["seed"] = seed
 
     original_argv = sys.argv
     try:
@@ -374,22 +379,25 @@ class PolicyScenarioWriter:
         self.entries = []
         self.rejections = []
 
+    def _record_rejection(self, summary, seed, rejection_reasons):
+        rejection = {
+            "map": Path(summary["map_name"]).name,
+            "seed": seed,
+            "termination_timestep": int(summary["episode_timestep"]),
+            "offroad_rate": float(summary["offroad_rate"]),
+            "collision_rate": float(summary["collision_rate"]),
+            "reasons": rejection_reasons,
+        }
+        self.rejections.append(rejection)
+        if self.verbose:
+            # The progress bar owns the terminal line, so step around it.
+            tqdm.write(f"REJECT {rejection['map']} seed={seed} reasons={','.join(rejection_reasons)}")
+
     def __call__(self, summary, episode_idx):
         seed = int(summary["seed"])
         rejection_reasons = _episode_infraction_reasons(summary) if self.reject_infractions else ()
         if rejection_reasons:
-            rejection = {
-                "map": Path(summary["map_name"]).name,
-                "seed": seed,
-                "termination_timestep": int(summary["episode_timestep"]),
-                "offroad_rate": float(summary["offroad_rate"]),
-                "collision_rate": float(summary["collision_rate"]),
-                "reasons": rejection_reasons,
-            }
-            self.rejections.append(rejection)
-            if self.verbose:
-                # The progress bar owns the terminal line, so step around it.
-                tqdm.write(f"REJECT {rejection['map']} seed={seed} reasons={','.join(rejection_reasons)}")
+            self._record_rejection(summary, seed, rejection_reasons)
             return
         replay_bytes = summary.get("replay_environment_bundle")
         if not isinstance(replay_bytes, bytes):
@@ -397,6 +405,24 @@ class PolicyScenarioWriter:
         replay_environment = pickle.loads(zlib.decompress(replay_bytes))
         if replay_environment.get("schema") != "interactive_replay_environment_v1":
             raise RuntimeError("Environment replay bundle has an unsupported schema")
+        scenario = replay_environment.get("scenario")
+        if not isinstance(scenario, dict):
+            raise RuntimeError("Environment replay bundle is missing its initial scenario")
+        replay_agents = scenario.get("agents")
+        active_agent_indices = scenario.get("active_agent_indices")
+        if not isinstance(replay_agents, list) or not isinstance(active_agent_indices, list):
+            raise RuntimeError("Initial scenario has invalid agent metadata")
+        for active_agent_idx in active_agent_indices:
+            if (
+                isinstance(active_agent_idx, bool)
+                or not isinstance(active_agent_idx, int)
+                or active_agent_idx < 0
+                or active_agent_idx >= len(replay_agents)
+            ):
+                raise RuntimeError(f"Initial scenario has invalid active agent index: {active_agent_idx!r}")
+        if any(not replay_agents[active_agent_idx].get("route") for active_agent_idx in active_agent_indices):
+            self._record_rejection(summary, seed, ("spawn_failure",))
+            return
         source_path = Path(replay_environment["metadata"]["map_path"])
         if source_path not in self.source_cache:
             source_data = read_bin(source_path)
@@ -462,6 +488,7 @@ def generate_policy_scenarios(
     output_directory=DEFAULT_OUTPUT,
     scenario_count=None,
     scenario_length=None,
+    seed=None,
     num_workers=None,
     device=None,
     overwrite=False,
@@ -502,6 +529,7 @@ def generate_policy_scenarios(
         benchmark_name,
         scenario_count=candidate_scenario_count,
         scenario_length=scenario_length,
+        seed=seed,
         device=device,
     )
     candidate_scenario_count = int(run_args["num_scenarios"])
@@ -600,6 +628,7 @@ def main():
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--num-scenarios", type=int, default=None)
     parser.add_argument("--scenario-length", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=None, help="Override the benchmark evaluation seed")
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--overwrite", action="store_true")
@@ -616,6 +645,7 @@ def main():
             output_directory=cli.output,
             scenario_count=cli.num_scenarios,
             scenario_length=cli.scenario_length,
+            seed=cli.seed,
             num_workers=cli.num_workers,
             device=cli.device,
             overwrite=cli.overwrite,

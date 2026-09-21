@@ -6,6 +6,8 @@ env:
   compute_eval_metrics: true
   control_mode: control_sdc_only
   sdc_controller: idm
+  # Reactive background traffic for every generation in this file. An installed ReGentS
+  # plan takes priority over it, so only the unselected vehicles are driven by IDM.
   non_sdc_controller: idm
   non_vehicle_controller: replay
   collision_behavior: ignore
@@ -120,8 +122,8 @@ generations:
       base_max_speed_mps: 40.0
 
   # Ten continuous 100-transition segments from one 1000-transition PDM rollout
-  # for each CARLA town. Agent 0 is the PDM ego; the other 149 vehicles replay
-  # their saved PDM trajectories.
+  # for each CARLA town. Agent 0 is the PDM ego; the other 149 vehicles are reactive
+  # IDM traffic, so they no longer follow the PDM trajectories saved in the logs.
   - name: regents_carla_generated_pdm
     seed: 42
     scenario_count: 80
@@ -137,8 +139,8 @@ generations:
 
   # Policy-generated CARLA rollouts capped at 150 transitions. Candidates with
   # any controlled-agent collision or off-road event are replaced.
-  # PDM controls the reactive ego; all other vehicles replay their saved policy
-  # trajectories.
+  # PDM controls the reactive ego; all other vehicles are reactive IDM traffic
+  # rather than replays of their saved policy trajectories.
   - name: regents_carla_generated_policy
     seed: 42
     scenario_count: 100
@@ -287,3 +289,95 @@ generations:
     raster_resolution_meters: 0.5
     output_dir: experiments/regents
     render_replays: true
+
+  # The 10k policy-generated CARLA cohort: 500 transitions per scenario, agent 0 is the
+  # ex-gigaflow target and becomes the ego. Background vehicles are reactive IDM from the
+  # shared env block; a ReGentS plan overrides only the selected adversary. The three
+  # profiles below differ in nothing but the ego, so their success rates are comparable.
+  # scenario_length is the 10 s ReGentS window, not the 50 s the logs hold: raise it and
+  # resample_frequency to 501 to optimize over the full episode.
+  - name: regents_carla_generated_policy_10k_idm
+    seed: 42
+    scenario_count: 10000
+    num_workers: 24
+    horizon_transition_count: 100
+    output_dir: experiments/regents
+    render_replays: false
+    env:
+      map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_500
+      scenario_length: 101
+      resample_frequency: 101
+      sdc_controller: idm
+
+  - name: regents_carla_generated_policy_10k_pdm
+    seed: 42
+    scenario_count: 10000
+    num_workers: 24
+    horizon_transition_count: 100
+    output_dir: experiments/regents
+    render_replays: false
+    env:
+      map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_500
+      scenario_length: 101
+      resample_frequency: 101
+      sdc_controller: pdm
+
+  # The ego is the checkpoint that generated the cohort, so this attacks the policy on its
+  # own clean driving. dynamics_model is jerk because that is what the 12-class action head
+  # was trained on; injected adversaries still integrate the classic bicycle model. The
+  # erratic-driver and observation-dropout knobs are zeroed so the ego stays deterministic
+  # and on-distribution.
+  - name: regents_carla_generated_policy_10k_policy
+    seed: 42
+    scenario_count: 10000
+    num_workers: 24
+    horizon_transition_count: 100
+    output_dir: experiments/regents
+    render_replays: false
+    ego_policy:
+      checkpoint_path: experiments/3_0_no_conditionning_target.pt
+      config_path: experiments/3_0_no_conditionning_target_config.yaml
+      action_selection: mean
+      device: cpu
+    env:
+      map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_500
+      scenario_length: 101
+      resample_frequency: 101
+      sdc_controller: policy
+      dynamics_model: jerk
+      obs_dropout_lane: 0.0
+      obs_dropout_boundary: 0.0
+      partner_blindness_prob: 0.0
+      partner_blindness_trigger_prob: 0.0
+      phantom_braking_prob: 0.0
+      phantom_braking_trigger_prob: 0.0
+
+  # The 2k policy-generated CARLA cohort: 200 transitions per scenario, so the logs hold
+  # exactly the 20 s window. The pair below differs in nothing but the optimization horizon,
+  # isolating what a 10 s window costs against a 20 s one. scenario_length sits one step
+  # above the horizon so neither guard trips; 201 is the cohort's full length.
+  - name: regents_carla_generated_policy_2k_200_pdm_100
+    seed: 42
+    scenario_count: 1000
+    num_workers: 24
+    horizon_transition_count: 100
+    output_dir: experiments/regents
+    render_replays: false
+    env:
+      map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_2k_200
+      scenario_length: 101
+      resample_frequency: 101
+      sdc_controller: pdm
+
+  - name: regents_carla_generated_policy_2k_200_pdm_200
+    seed: 42
+    scenario_count: 1000
+    num_workers: 24
+    horizon_transition_count: 200
+    output_dir: experiments/regents
+    render_replays: false
+    env:
+      map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_2k_200
+      scenario_length: 201
+      resample_frequency: 201
+      sdc_controller: pdm

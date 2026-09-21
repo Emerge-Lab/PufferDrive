@@ -1,3 +1,5 @@
+import pickle
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -6,6 +8,7 @@ import yaml
 
 from data_utils.generate_carla_policy import (
     DATASET_NAME,
+    PolicyScenarioWriter,
     _append_terminal_frame,
     _episode_infraction_reasons,
     _select_map_cycled_entries,
@@ -63,6 +66,39 @@ def test_episode_infraction_reasons_rejects_any_agent_infraction(
 def test_episode_infraction_reasons_rejects_invalid_metrics(metric_value):
     with pytest.raises(RuntimeError, match="invalid offroad_rate"):
         _episode_infraction_reasons({"offroad_rate": metric_value, "collision_rate": 0.0})
+
+
+def test_policy_writer_rejects_failed_spawn_without_aborting_generation(tmp_path):
+    replay_environment = {
+        "schema": "interactive_replay_environment_v1",
+        "scenario": {
+            "agents": [{"route": None}],
+            "active_agent_indices": [0],
+        },
+    }
+    summary = {
+        "seed": 29,
+        "map_name": "opendrive__Town01.bin",
+        "episode_timestep": 100,
+        "offroad_rate": 0.0,
+        "collision_rate": 0.0,
+        "replay_environment_bundle": zlib.compress(pickle.dumps(replay_environment)),
+    }
+    writer = PolicyScenarioWriter(tmp_path, dt_seconds=0.1, reject_infractions=True)
+
+    writer(summary, episode_idx=0)
+
+    assert writer.entries == []
+    assert writer.rejections == [
+        {
+            "map": "opendrive__Town01.bin",
+            "seed": 29,
+            "termination_timestep": 100,
+            "offroad_rate": 0.0,
+            "collision_rate": 0.0,
+            "reasons": ("spawn_failure",),
+        }
+    ]
 
 
 def test_select_map_cycled_entries_interleaves_maps_and_sorts_each_map_by_seed():

@@ -30,8 +30,6 @@ pufferlib/resources/drive/binaries/*/
 !pufferlib/resources/drive/binaries/lateral/**
 !pufferlib/resources/drive/binaries/longitudinal/
 !pufferlib/resources/drive/binaries/longitudinal/**
-!pufferlib/resources/drive/binaries/nuplan/
-!pufferlib/resources/drive/binaries/nuplan/**
 !pufferlib/resources/drive/binaries/obstacles/
 !pufferlib/resources/drive/binaries/obstacles/**
 !pufferlib/resources/drive/binaries/vru/

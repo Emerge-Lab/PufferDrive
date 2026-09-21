@@ -124,7 +124,7 @@ def test_regents_profile_uses_all_generated_carla_pdm_segments():
     assert generation["env"]["pdm_horizon"] == 4.0
     assert generation["env"]["pdm_planning_dt"] == 0.1
     assert generation["env"]["sdc_controller"] == "pdm"
-    assert generation["env"]["non_sdc_controller"] == "replay"
+    assert generation["env"]["non_sdc_controller"] == "idm"
 
 
 def test_regents_generation_overrides_standard_optimizer_and_filter_values(tmp_path):
