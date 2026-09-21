@@ -5028,6 +5028,13 @@ static void apply_pose_noise(Drive *env, Agent *agent) {
 
 #include "idm.h"
 
+static void update_rollout_masks(Drive *env) {
+    for (int i = 0; i < env->active_agent_count; i++) {
+        Agent *a = &env->agents[env->active_agent_indices[i]];
+        env->masks[i] = !(a->stopped || a->removed || a->is_blind_partner || a->is_phantom_braker);
+    }
+}
+
 void c_reset(Drive *env) {
     if (env->timestep == 0) {
         for (int i = 0; i < env->num_total_agents; i++) {
@@ -5039,6 +5046,7 @@ void c_reset(Drive *env) {
             sample_erratic_flags(env, &env->agents[agent_idx]);
             compute_metrics(env, agent_idx, x);
         }
+        update_rollout_masks(env);
         compute_observations(env);
         return;
     }
@@ -5077,6 +5085,7 @@ void c_reset(Drive *env) {
             generate_reward_coefs(env, agent);
             compute_metrics(env, agent_idx, x);
         }
+        update_rollout_masks(env);
         compute_observations(env);
         return;
     }
@@ -5103,6 +5112,7 @@ void c_reset(Drive *env) {
         }
         compute_metrics(env, agent_idx, x);
     }
+    update_rollout_masks(env);
     compute_observations(env);
 }
 
@@ -5119,16 +5129,7 @@ void c_step(Drive *env) {
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
 
-    // Update masks for stopped/removed agents
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        Agent *a = &env->agents[agent_idx];
-        if (a->stopped || a->removed || a->is_blind_partner || a->is_phantom_braker) {
-            env->masks[i] = 0;
-        } else {
-            env->masks[i] = 1;
-        }
-    }
+    update_rollout_masks(env);
 
     env->timestep++;
 
