@@ -56,7 +56,7 @@ def _load_yaml_mapping(path, label):
     return _require_mapping(value, label)
 
 
-def _resolve_map_indices(map_dir, map_names):
+def resolve_map_indices(map_dir, map_names):
     """Map each logged map name back to its index in the sorted .bin map set."""
     if os.path.isfile(map_dir) and str(map_dir).endswith(".bin"):
         map_files = [map_dir]
@@ -270,7 +270,7 @@ def build_benchmark_args(base_args, benchmark, environment_config, cli_overrides
     )
 
 
-def _plan_benchmark_eval_workers(args, num_scenarios, num_workers, scenario_length, capture_replay=False):
+def plan_benchmark_eval_workers(args, num_scenarios, num_workers, scenario_length, capture_replay=False):
     """One disjoint contiguous map window per worker; together they cover the set once."""
     scenarios_per_worker, remainder = divmod(num_scenarios, num_workers)
     worker_env_kwargs = []
@@ -290,7 +290,7 @@ def _plan_benchmark_eval_workers(args, num_scenarios, num_workers, scenario_leng
     return worker_env_kwargs, max_scenarios_per_worker * scenario_length
 
 
-def _plan_failure_replay_workers(args, map_seed_pairs, num_workers, scenario_length):
+def plan_failure_replay_workers(args, map_seed_pairs, num_workers, scenario_length):
     """Split the (map, seed) pairs across workers; each worker cycles through its
     pairs in fit-aware batches (num_agents from config bounds a batch)."""
     pairs_per_worker, remainder = divmod(len(map_seed_pairs), num_workers)
@@ -347,7 +347,7 @@ def _build_eval_report(episode_summaries, num_scenarios):
     return df, summary
 
 
-def _write_eval_reports(episode_summaries, out_dir, num_scenarios):
+def write_eval_reports(episode_summaries, out_dir, num_scenarios):
     """Write a per-episode metrics CSV and a JSON of metric averages to out_dir."""
     import json
 

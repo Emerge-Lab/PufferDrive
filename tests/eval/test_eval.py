@@ -307,12 +307,12 @@ def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
     environment_config["obs_dropout_boundary"] = args["env"]["obs_dropout_boundary"]
     replay_args = drive_benchmark.build_benchmark_args(args, benchmarks[0], environment_config)
 
-    map_indices = drive_benchmark._resolve_map_indices(
+    map_indices = drive_benchmark.resolve_map_indices(
         replay_args["env"]["map_dir"],
         standard_metrics["map_name"].tolist(),
     )
     map_seed_pairs = [(map_idx, int(seed)) for map_idx, seed in zip(map_indices, standard_metrics["seed"].tolist())]
-    worker_env_kwargs, total_steps = drive_benchmark._plan_failure_replay_workers(
+    worker_env_kwargs, total_steps = drive_benchmark.plan_failure_replay_workers(
         replay_args,
         map_seed_pairs,
         CARLA_WORKER_COUNT,
@@ -331,7 +331,7 @@ def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
         policy=ZeroPolicy(action_count=63),
     )
     replay_output_dir = carla_evaluation["output_root"] / "seed_replay"
-    replay_summary = drive_benchmark._write_eval_reports(
+    replay_summary = drive_benchmark.write_eval_reports(
         replay_summaries,
         replay_output_dir,
         CARLA_SCENARIO_COUNT,
@@ -414,7 +414,7 @@ def _read_replay_float32_chunk(replay_path, chunk_name):
 def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch, capture_observations):
     args = _replay_render_args()
     map_seed_pairs = [(0, 1234), (0, 5678)]
-    worker_env_kwargs, total_steps = drive_benchmark._plan_failure_replay_workers(
+    worker_env_kwargs, total_steps = drive_benchmark.plan_failure_replay_workers(
         args,
         map_seed_pairs,
         num_workers=2,
@@ -482,7 +482,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
         agent_goal_radii = agent_frames[..., header["agent_goal_radius_field"]]
         np.testing.assert_allclose(goal_radius_coefs, agent_goal_radii, atol=1e-6)
 
-    render_dir = Path(drive_eval_replay._render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=True))
+    render_dir = Path(drive_eval_replay.render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=True))
     rendered_pages = sorted(path for path in render_dir.glob("*.html") if path.name != "index.html")
     assert len(rendered_pages) == 2
     assert (render_dir / "index.html").is_file()
@@ -492,7 +492,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
     assert all("ctx.arc(g.x,g.y,g.radius" in html for html in rendered_html)
     assert all(replay_path.is_file() for replay_path in replay_paths)
 
-    drive_eval_replay._render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=False)
+    drive_eval_replay.render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=False)
     assert not replay_output_dir.exists()
     assert (render_dir / "index.html").is_file()
     assert len(sorted(path for path in render_dir.glob("*.html") if path.name != "index.html")) == 2
