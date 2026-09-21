@@ -230,6 +230,7 @@ class Drive(pufferlib.PufferEnv):
         self.capture_avoidability_debug = bool(capture_avoidability_debug) or self.capture_replay
         self.replay_worker_idx = replay_worker_idx
         self._replay_captures = []
+        self._replay_terminal_frames = None
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
@@ -656,6 +657,8 @@ class Drive(pufferlib.PufferEnv):
             if will_resample:
                 # Read this batch's finished episodes before the envs are resampled/closed.
                 if self.eval_mode:
+                    if self.capture_replay:
+                        self._capture_replay_terminal_frames()
                     for summary in binding.vec_per_episode_log(self.c_envs):
                         avoidability_debug = summary.pop("avoidability_debug", None)
                         summary["summary_type"] = "evaluation_episode"
@@ -932,6 +935,26 @@ class Drive(pufferlib.PufferEnv):
                 self._replay_frame_arrays["traffic_i16"][env_idx, :traffic_capacity].copy()
             )
 
+    def _capture_replay_terminal_frames(self):
+        """Snapshot the post-step state without changing frame-aligned policy history."""
+        self.get_obs_html_frame(
+            self._replay_frame_arrays["agent_f32"],
+            self._replay_frame_arrays["agent_i32"],
+            self._replay_frame_arrays["metrics_f32"],
+            self._replay_frame_arrays["puffer_f32"],
+            self._replay_frame_arrays["traffic_i16"],
+        )
+        self._replay_terminal_frames = []
+        for env_idx, capture in enumerate(self._replay_captures):
+            agent_capacity = capture["agent_capacity"]
+            traffic_capacity = max(capture["traffic_capacity"], 1)
+            terminal_frame = {
+                key: self._replay_frame_arrays[key][env_idx, :agent_capacity].copy()
+                for key in ("agent_f32", "agent_i32", "metrics_f32", "puffer_f32")
+            }
+            terminal_frame["traffic_i16"] = self._replay_frame_arrays["traffic_i16"][env_idx, :traffic_capacity].copy()
+            self._replay_terminal_frames.append(terminal_frame)
+
     def _build_replay_environment_bundle(self, summary, avoidability_debug=None):
         env_slot = int(summary["env_slot"])
         if env_slot < 0 or env_slot >= len(self._replay_captures):
@@ -949,6 +972,7 @@ class Drive(pufferlib.PufferEnv):
             )
         metadata = dict(capture["metadata"])
         metadata["episode_length"] = episode_frame_count
+        metadata["episode_timestep"] = int(summary["episode_timestep"])
         replay_environment_bundle = {
             "schema": "interactive_replay_environment_v1",
             "metadata": metadata,
@@ -958,6 +982,11 @@ class Drive(pufferlib.PufferEnv):
                 for key, frame_values in capture["frames"].items()
             },
         }
+        expected_state_sample_count = int(summary["episode_timestep"]) - capture["metadata"]["initial_timestep"] + 1
+        if expected_state_sample_count == captured_frame_count + 1:
+            if self._replay_terminal_frames is None:
+                raise RuntimeError("Replay capture is missing the terminal state frame")
+            replay_environment_bundle["terminal_frame"] = self._replay_terminal_frames[env_slot]
         if avoidability_debug is not None:
             replay_environment_bundle["avoidability_debug"] = avoidability_debug
         return zlib.compress(

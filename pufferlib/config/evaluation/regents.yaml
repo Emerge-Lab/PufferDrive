@@ -59,11 +59,10 @@ optimizer:
     maximum_reconstruction_drift_meters: 1.0
 
 # Shared cost geometry for every generation; a generation's own optimizer.costs
-# overrides these key by key. KING road geometry: sigma 1.0 m (5 px at its 5 px/m)
-# with the +/-32 px crop expressed as 6.4 sigma. Weights stay ReGentS 1/5/20 so
-# this isolates geometry.
+# overrides these key by key. The 0.25 m sigma is selected from the 100-scenario
+# WOD Motion PDM sweep; truncation remains 6.4 sigma.
 costs:
-  gaussian_sigma_meters: 1.0
+  gaussian_sigma_meters: 0.25
   gaussian_truncate_sigma: 6.4
 
 generations:
@@ -100,8 +99,8 @@ generations:
       # reconstruction, so keep the cap above real traffic.
       base_max_speed_mps: 40.0
 
-  # WOD Motion validation against a PDM ego. It keeps the shared settings except for
-  # the 0.25 m Gaussian sigma selected by the 100-scenario sweep. Note this is the profile
+  # WOD Motion validation against a PDM ego. Raster, optimizer, and filter settings come
+  # from the shared defaults above. Note this is the profile
   # that drives PDM's rollout buffer to its limit: base_max_speed_mps 40.0 puts a fast ego at
   # the speed-aware horizon cap of 8 s, which at pdm_planning_dt 0.1 is exactly the 81 steps
   # PDM_MAX_ROLLOUT_STEPS allows. Raising the cap or lowering pdm_planning_dt needs that
@@ -113,9 +112,6 @@ generations:
     horizon_transition_count: 90
     output_dir: experiments/regents
     render_replays: true
-    optimizer:
-      costs:
-        gaussian_sigma_meters: 0.25
     env:
       map_dir: pufferlib/resources/drive/binaries/wod-motion_val
       scenario_length: 91
@@ -135,6 +131,23 @@ generations:
     render_replays: true
     env:
       map_dir: pufferlib/resources/drive/binaries/carla_generated_pdm
+      scenario_length: 101
+      resample_frequency: 101
+      sdc_controller: pdm
+
+  # Policy-generated CARLA rollouts capped at 150 transitions. Candidates with
+  # any controlled-agent collision or off-road event are replaced.
+  # PDM controls the reactive ego; all other vehicles replay their saved policy
+  # trajectories.
+  - name: regents_carla_generated_policy
+    seed: 42
+    scenario_count: 100
+    num_workers: 24
+    horizon_transition_count: 100
+    output_dir: experiments/regents
+    render_replays: true
+    env:
+      map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_clean_1000
       scenario_length: 101
       resample_frequency: 101
       sdc_controller: pdm

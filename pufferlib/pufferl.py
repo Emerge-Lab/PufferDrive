@@ -2394,6 +2394,7 @@ def _run_eval_rollout(
     capture_observations=False,
     episode_id_offset=0,
     evaluation_policy_cache=None,
+    episode_callback=None,
 ):
     """Roll out policy- or environment-controlled workers and gather episode summaries."""
     num_workers = len(worker_env_kwargs)
@@ -2619,6 +2620,8 @@ def _run_eval_rollout(
                 for item in worker_items:
                     if not isinstance(item, dict) or item.get("summary_type") != "evaluation_episode":
                         continue
+                    if episode_callback is not None:
+                        episode_callback(item, len(episode_summaries))
                     if replay_capture is not None:
                         replay_capture.queue_replay(item, len(episode_summaries))
                     else:

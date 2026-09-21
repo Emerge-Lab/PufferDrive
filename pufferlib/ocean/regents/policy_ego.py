@@ -59,6 +59,7 @@ def checkpoint_digest(checkpoint_path):
 def _load_policy(policy_config, drive):
     # Deferred: pufferl imports the generation entry point, so a module-level import cycles.
     from pufferlib.ocean.torch import Drive as DrivePolicy
+    from pufferlib.ocean.torch import TargetDrive
     from pufferlib.pufferl import clean_policy_state_dict
 
     with open(policy_config.config_path) as handle:
@@ -71,9 +72,23 @@ def _load_policy(policy_config, drive):
         raise ValueError("ReGentS policy ego does not support recurrent checkpoints")
 
     device = torch.device(policy_config.device)
-    policy = DrivePolicy(drive, **checkpoint_config["policy"]).to(device)
     state_dict = torch.load(policy_config.checkpoint_path, map_location=device, weights_only=True)
-    policy.load_state_dict(clean_policy_state_dict(state_dict))
+    state_dict = clean_policy_state_dict(state_dict)
+    partner_weight = state_dict.get("actor_backbone.partner_encoder.0.weight")
+    if partner_weight is None or partner_weight.ndim != 2:
+        raise ValueError("Policy ego checkpoint has no recognizable actor partner-encoder input layer")
+    checkpoint_partner_feature_count = int(partner_weight.shape[1])
+    if checkpoint_partner_feature_count == drive.partner_features:
+        policy_class = DrivePolicy
+    elif checkpoint_partner_feature_count == drive.partner_features - 1:
+        policy_class = TargetDrive
+    else:
+        raise ValueError(
+            f"Policy ego checkpoint expects {checkpoint_partner_feature_count} partner features, "
+            f"but Drive exposes {drive.partner_features}"
+        )
+    policy = policy_class(drive, **checkpoint_config["policy"]).to(device)
+    policy.load_state_dict(state_dict)
     policy.eval()
     return policy
 

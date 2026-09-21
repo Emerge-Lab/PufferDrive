@@ -521,14 +521,14 @@ class TargetDrive(Drive):
 
         self.ego_features = env.ego_features
         self.goal_dim = env.goal_dim
-        self.live_num_reward_coefs = env.live_num_reward_coefs
+        self.live_num_reward_coefs = getattr(env, "live_num_reward_coefs", env.num_reward_coefs)
         self.target_num_reward_coefs = env.num_reward_coefs
         self.partner_start = env.ego_features + env.num_reward_coefs + env.goal_dim
         self.obs_slots_partners_n = env.obs_slots_partners_n
         self.partner_features = env.partner_features
         self.register_buffer(
             "fixed_reward_conditioning",
-            torch.tensor(env.fixed_reward_conditioning, dtype=torch.float32),
+            torch.tensor(getattr(env, "fixed_reward_conditioning", ()), dtype=torch.float32),
             persistent=False,
         )
 
