@@ -4447,6 +4447,8 @@ void c_reset(Drive *env) {
             int agent_idx = env->active_agent_indices[x];
             sample_erratic_flags(env, &env->agents[agent_idx]);
             compute_metrics(env, agent_idx, x);
+            Agent *agent = &env->agents[agent_idx];
+            env->masks[x] = !agent->stopped && !agent->removed && !agent->is_blind_partner && !agent->is_phantom_braker;
         }
         compute_observations(env);
         return;
@@ -4485,6 +4487,7 @@ void c_reset(Drive *env) {
             int agent_idx = env->active_agent_indices[x];
             Agent *agent = &env->agents[agent_idx];
             if (agent->removed) {
+                env->masks[x] = 0;
                 continue;
             }
             reset_agent_metrics(env, agent_idx);
@@ -4492,6 +4495,7 @@ void c_reset(Drive *env) {
             sample_erratic_flags(env, agent);
             generate_reward_coefs(env, agent);
             compute_metrics(env, agent_idx, x);
+            env->masks[x] = !agent->stopped && !agent->removed && !agent->is_blind_partner && !agent->is_phantom_braker;
         }
         compute_observations(env);
         return;
@@ -4535,6 +4539,7 @@ void c_reset(Drive *env) {
             generate_new_goals_from_route(env, agent);
         }
         compute_metrics(env, agent_idx, x);
+        env->masks[x] = !agent->stopped && !agent->removed && !agent->is_blind_partner && !agent->is_phantom_braker;
     }
     compute_observations(env);
 }
