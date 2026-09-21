@@ -176,6 +176,7 @@ class Controller(Enum):
     idm = 3
     corridor_idm = 4
     pdm = 5
+    random = 6
 
 
 class NonVehicleController(Enum):
@@ -187,6 +188,7 @@ class NonVehicleController(Enum):
     idm = 3
     corridor_idm = 4
     pdm = 5
+    random = 6
 
 
 class InitMode(Enum):
@@ -254,6 +256,12 @@ class ActionSelection(Enum):
     sample = 0
     mode = 1
     mean = 2
+
+
+class TrafficConditioning(Enum):
+    checkpoint_defaults = 0
+    randomized = 1
+    collision_zero = 2
 
 
 class RenderSelection(Enum):
@@ -493,6 +501,8 @@ class EvaluationConfig:
     render_filter: Any = MISSING
     render_selection: RenderSelection = MISSING
     max_rendered_failures: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    traffic_policy: str | None = None
+    traffic_conditioning: TrafficConditioning = TrafficConditioning.checkpoint_defaults
     failure_replay_csv: str | None = MISSING
     capture_observations: bool = MISSING
     observation_replay_wave_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
@@ -611,6 +621,9 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "load_id", "requires wandb or neptune")
 
     env = config["env"]
+    controller_fields = ("sdc_controller", "non_sdc_controller", "non_vehicle_controller")
+    if env["dynamics_model"] != "jerk" and any(env[field] == "random" for field in controller_fields):
+        _raise_config_error(context, "env.dynamics_model", "random controllers require jerk dynamics")
     if env["min_agents_per_env"] > env["max_agents_per_env"]:
         _raise_config_error(context, "env.min_agents_per_env", "must not exceed env.max_agents_per_env")
     if env["num_agents"] < env["min_agents_per_env"]:
@@ -970,6 +983,10 @@ def validate_puffer_drive_resources(config, context):
         _raise_config_error(context, "train.target_policy", f"checkpoint does not exist: {target_policy_path}")
 
     eval_config = config.get("eval")
+    if eval_config and eval_config.get("traffic_policy") and not os.path.isfile(eval_config["traffic_policy"]):
+        _raise_config_error(
+            context, "eval.traffic_policy", f"checkpoint does not exist: {eval_config['traffic_policy']}"
+        )
     if eval_config and eval_config.get("failure_replay_csv"):
         failure_csv = eval_config["failure_replay_csv"]
         if not os.path.isfile(failure_csv):

@@ -385,6 +385,7 @@ class Drive(pufferlib.PufferEnv):
             "idm": binding.CONTROLLER_IDM,
             "corridor_idm": binding.CONTROLLER_CORRIDOR_IDM,
             "pdm": binding.CONTROLLER_PDM,
+            "random": binding.CONTROLLER_RANDOM,
         }
         if self.non_vehicle_controller_str == "auto":
             if self.non_sdc_controller_str in ("idm", "corridor_idm", "pdm"):
