@@ -449,9 +449,6 @@ class PufferDriveConfig:
     wandb_project: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     wandb_group: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     run_name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
-    neptune: bool = MISSING
-    neptune_name: str = MISSING
-    neptune_project: str = MISSING
     tb: bool = MISSING
     local_rank: int = MISSING
     tag: str | None = MISSING
@@ -540,8 +537,8 @@ def _validate_string_selection(value, context, path, *, allow_none=True):
 
 def _validate_cross_field_constraints(config, context):
     """Validate relationships and context-dependent rules spanning config fields."""
-    if config["load_id"] is not None and not (config["wandb"] or config["neptune"]):
-        _raise_config_error(context, "load_id", "requires wandb or neptune")
+    if config["load_id"] is not None and not config["wandb"]:
+        _raise_config_error(context, "load_id", "requires wandb")
 
     env = config["env"]
     if env["min_agents_per_env"] > env["max_agents_per_env"]:

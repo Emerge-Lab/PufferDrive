@@ -11,43 +11,39 @@ import pandas as pd
 
 warnings.filterwarnings("error", category=RuntimeWarning)
 
-import os
-import sys
-import traceback
 import glob
-import time
+import importlib
+import os
+import platform
 import random
+import shlex
 import shutil
 import subprocess
-import importlib
-import platform
-import shlex
+import sys
+import time
+import traceback
+from collections import defaultdict, deque
 from datetime import datetime
 from threading import Thread
-from collections import defaultdict, deque
-import yaml
-from hydra import compose, initialize_config_dir
-from omegaconf import OmegaConf
 
 import numpy as np
 import psutil
-
+import rich
+import rich.traceback
 import torch
 import torch.distributed
+import yaml
+from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
+from rich.console import Console
+from rich.table import Table
 from torch.distributed.elastic.multiprocessing.errors import record
+from tqdm import tqdm
 
 import pufferlib
-from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
-from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
-import pufferlib.sweep
-import pufferlib.utils
-import pufferlib.vector
-import pufferlib.pytorch
-from pufferlib.config_schema import (
-    normalize_puffer_drive_config,
-    validate_puffer_drive_config,
-    validate_puffer_drive_resources,
-)
+from pufferlib import config_schema, pytorch, utils, vector
+from pufferlib import sweep as sweep_module
+from pufferlib.ocean.evaluation_utils import eval_replay, evaluation_utils
 
 
 try:
@@ -57,19 +53,16 @@ except ImportError:
         "Failed to import C/CUDA advantage kernel. If you have non-default PyTorch, try installing with --no-build-isolation"
     )
 
-import rich
-import rich.traceback
-from rich.table import Table
-from rich.console import Console
-from tqdm import tqdm
 
 rich.traceback.install(show_locals=False)
 
 import signal  # Aggressively exit on ctrl+c
 
+
 signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
 
 from torch.utils.cpp_extension import CUDA_HOME, ROCM_HOME  # noqa: E402
+
 
 # Assume advantage kernel has been built if torch has been compiled with CUDA or HIP support
 # and can find CUDA or HIP in the system
@@ -100,40 +93,6 @@ PROFILE_ACK = b"ack\n\0"
 PROFILE_SIM_STEPS_PER_CYCLE = 16_384
 
 
-def torch_device(device):
-    if isinstance(device, int):
-        return torch.device("cuda", device) if torch.cuda.is_available() else torch.device("cpu")
-    return device
-
-
-def is_cuda_device(device):
-    if isinstance(device, int):
-        return torch.cuda.is_available()
-    device = torch.device(device)
-    return device.type == "cuda"
-
-
-def base_policy(policy):
-    return policy.module if hasattr(policy, "module") else policy
-
-
-def clean_state_key(key):
-    prefixes = ("module.", "_orig_mod.")
-    while key.startswith(prefixes):
-        key = key.split(".", 1)[1]
-    return key
-
-
-def clean_policy_state_dict(state_dict):
-    return {clean_state_key(k): v for k, v in state_dict.items()}
-
-
-def logits_to_float(logits):
-    if isinstance(logits, torch.distributions.Normal):
-        return torch.distributions.Normal(logits.loc.float(), logits.scale.float())
-    return logits.float()
-
-
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None):
         # Backend perf optimization
@@ -154,13 +113,13 @@ class PuffeRL:
         self.env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
         obs_space = vecenv.single_observation_space
         # Custom policy attributes live on the base module, not the DDP/compile wrapper.
-        unwrapped_policy = base_policy(policy)
+        unwrapped_policy = utils.base_policy(policy)
         if self.env_continuous and not unwrapped_policy.is_continuous:
             action_shape = ()
             action_dtype = torch.int32
         else:
             action_shape = vecenv.single_action_space.shape
-            action_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[vecenv.single_action_space.dtype]
+            action_dtype = pytorch.numpy_to_torch_dtype_dict[vecenv.single_action_space.dtype]
         total_agents = vecenv.num_agents
         self.total_agents = total_agents
 
@@ -177,13 +136,13 @@ class PuffeRL:
 
         device = config["device"]
         precision = config["precision"]
-        use_cuda = is_cuda_device(device)
+        use_cuda = utils.is_cuda_device(device)
         if precision == "bfloat16" and use_cuda and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 precision requires a CUDA device with bf16 support")
 
         rollout_dtype = config.get("rollout_dtype", "float32")
         if rollout_dtype == "float32":
-            obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
+            obs_dtype = pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
         elif rollout_dtype == "float16" and np.issubdtype(obs_space.dtype, np.floating):
             obs_dtype = getattr(torch, rollout_dtype)
         else:
@@ -233,7 +192,7 @@ class PuffeRL:
         self.minibatch_segments = self.minibatch_size // horizon
 
         # Torch compile
-        self.uncompiled_policy = base_policy(policy)
+        self.uncompiled_policy = utils.base_policy(policy)
         self.policy = policy
         if config["compile"]:
             compile_kwargs = {
@@ -242,7 +201,7 @@ class PuffeRL:
             }
             self.policy = torch.compile(policy, **compile_kwargs)
             self.policy.forward_eval = torch.compile(self.uncompiled_policy.forward_eval, **compile_kwargs)
-            pufferlib.pytorch.sample_logits = torch.compile(pufferlib.pytorch.sample_logits, **compile_kwargs)
+            pytorch.sample_logits = torch.compile(pytorch.sample_logits, **compile_kwargs)
 
         # Optimizer
         if config["optimizer"] == "adam":
@@ -323,7 +282,7 @@ class PuffeRL:
         self.print_dashboard(clear=True)
 
     def load_training_state(self, path):
-        device = torch_device(self.config["device"])
+        device = utils.torch_device(self.config["device"])
         state = torch.load(path, map_location=device, weights_only=False)
         policy_state = state.get("policy_state_dict")
         if policy_state is None:
@@ -331,7 +290,7 @@ class PuffeRL:
             model_path = os.path.join(os.path.dirname(path), "models", model_name)
             policy_state = torch.load(model_path, map_location=device)
 
-        policy_state = clean_policy_state_dict(policy_state)
+        policy_state = utils.clean_policy_state_dict(policy_state)
         self.uncompiled_policy.load_state_dict(policy_state)
         self.optimizer.load_state_dict(state["optimizer_state_dict"])
 
@@ -343,7 +302,7 @@ class PuffeRL:
         self.last_log_step = self.global_step
         self.best_score = state.get("best_score", self.best_score)
         self.ema_max = state.get("ema_max", self.ema_max)
-        restore_rng_state(state)
+        utils.restore_rng_state(state)
         print(f"Resumed training from {path}: epoch={self.epoch}, global_step={self.global_step}")
 
     @property
@@ -405,20 +364,20 @@ class PuffeRL:
 
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
-                state = dict(
-                    reward=r,
-                    done=done_mask,
-                    env_id=env_id,
-                    mask=mask,
-                )
+                state = {
+                    "reward": r,
+                    "done": done_mask,
+                    "env_id": env_id,
+                    "mask": mask,
+                }
 
                 if config["use_rnn"]:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
                 logits, value = self.policy.forward_eval(o_device, state)
-                logits = logits_to_float(logits)
-                action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(
+                logits = utils.logits_to_float(logits)
+                action, logprob, _, cont_action = pytorch.sample_logits(
                     logits, env_continuous=self.env_continuous, policy=self.uncompiled_policy
                 )
                 if config["normalize_rewards"]:
@@ -441,19 +400,14 @@ class PuffeRL:
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob.float()
-                # Truncation bootstrap hack for auto-reset envs.
-                # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
-                # the value at index `l` is post-reset. We use `values[..., l-1]` as a heuristic
-                # proxy for the pre-reset terminal value (bootstrap term is not clipped).
-                if l > 0 and config["use_value_bootstrapping"]:
+                if config["use_value_bootstrapping"]:
                     trunc_mask = (t > 0) & (d == 0)
-                    r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
+                    r = r + trunc_mask.to(r.dtype) * config["gamma"] * value.flatten().float()
                 self.rewards[batch_rows, l] = r
                 self.terminals[batch_rows, l] = done_mask.bool()
                 self.values[batch_rows, l] = value.flatten().float()
                 self.masks[batch_rows, l] = m
 
-                # Note: We are not yet handling masks in this version
                 self.ep_lengths[env_id] += 1
                 if l + 1 >= config["bptt_horizon"]:
                     num_full = env_id.stop - env_id.start
@@ -488,7 +442,7 @@ class PuffeRL:
         self.ep_indices = torch.arange(self.total_agents, dtype=torch.int32)
         self.ep_lengths.zero_()
         profile.end()
-        return pufferlib.utils.reduce_environment_metrics(self.stats)
+        return utils.reduce_environment_metrics(self.stats)
 
     @record
     def train(self):
@@ -528,14 +482,14 @@ class PuffeRL:
 
     def _ppo_loss(self, mb_obs, mb_actions, mb_logprobs, mb_values, mb_returns, mb_adv, adv_weights=None):
         config = self.config
-        state = dict(action=mb_actions, lstm_h=None, lstm_c=None)
+        state = {"action": mb_actions, "lstm_h": None, "lstm_c": None}
         if self.compress_observations:
             mb_obs = mb_obs.float()
         with self.amp_context:
             logits, newvalue = self.policy(mb_obs, state)
-        logits = logits_to_float(logits)
+        logits = utils.logits_to_float(logits)
         newvalue = newvalue.float()
-        _, newlogprob, entropy, _ = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
+        _, newlogprob, entropy, _ = pytorch.sample_logits(logits, action=mb_actions)
 
         newlogprob = newlogprob.float().view_as(mb_logprobs)
         newvalue = newvalue.view_as(mb_returns)
@@ -628,7 +582,7 @@ class PuffeRL:
         for mb in range(self.total_minibatches):
             profile("train_misc", epoch)
 
-            advantages, returns, masks = self._compute_advantages(
+            advantages, returns, _ = self._compute_advantages(
                 self.ratio,
                 config["vtrace_rho_clip"],
                 config["vtrace_c_clip"],
@@ -813,23 +767,20 @@ class PuffeRL:
 
     def mean_and_log(self):
         config = self.config
-        self.stats = pufferlib.utils.reduce_environment_metrics(self.stats)
+        self.stats = utils.reduce_environment_metrics(self.stats)
 
         device = config["device"]
-        agent_steps = int(dist_sum(self.global_step, device))
+        agent_steps = int(utils.dist_sum(self.global_step, device))
         self.agent_steps = agent_steps
         logs = {
-            "SPS": dist_sum(self.sps, device),
+            "SPS": utils.dist_sum(self.sps, device),
             "agent_steps": agent_steps,
             "uptime": time.time() - self.start_time,
-            "epoch": int(dist_sum(self.epoch, device)),  # VB Why it is a sum ?
+            "epoch": self.epoch,
             "learning_rate": self.optimizer.param_groups[0]["lr"],
             **{f"environment/{k}": v for k, v in self.stats.items()},
             **{f"losses/{k}": v for k, v in self.losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
-            # **{f'environment/{k}': dist_mean(v, device) for k, v in self.stats.items()},
-            # **{f'losses/{k}': dist_mean(v, device) for k, v in self.losses.items()},
-            # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
 
         if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
@@ -888,7 +839,7 @@ class PuffeRL:
             "env": self.config["env"],
             "best_score": self.best_score,
             "ema_max": self.ema_max,
-            "rng_state": capture_rng_state(),
+            "rng_state": utils.capture_rng_state(),
         }
         state_path = os.path.join(path, "trainer_state.pt")
         torch.save(state, state_path + ".tmp")
@@ -906,11 +857,17 @@ class PuffeRL:
         return model_path
 
     def print_dashboard(
-        self, clear=False, idx=[0], c1="[cyan]", c2="[dim default]", b1="[bright_cyan]", b2="[default]"
+        self,
+        clear=False,
+        idx=[0],
+        c1="[cyan]",
+        c2="[dim default]",
+        b1="[bright_cyan]",
+        b2="[default]",
     ):
         config = self.config
-        sps = dist_sum(self.sps, config["device"])
-        agent_steps = dist_sum(self.global_step, config["device"])
+        sps = utils.dist_sum(self.sps, config["device"])
+        agent_steps = utils.dist_sum(self.global_step, config["device"])
         if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
             return
 
@@ -927,7 +884,7 @@ class PuffeRL:
         table.add_column(justify="right", width=13)
 
         table.add_row(
-            f"{b1}PufferLib {b2}3.0 {idx[0] * ' '}:blowfish:",
+            f"{b1}PufferDrive {b2}3.0 {idx[0] * ' '}:car:",
             f"{c1}CPU: {b2}{np.mean(self.utilization.cpu_util):.1f}{c2}%",
             f"{c1}GPU: {b2}{np.mean(self.utilization.gpu_util):.1f}{c2}%",
             f"{c1}DRAM: {b2}{np.mean(self.utilization.cpu_mem):.1f}{c2}%",
@@ -938,16 +895,16 @@ class PuffeRL:
         s = Table(box=None, expand=True)
         remaining = f"{b2}A hair past a freckle{c2}"
         if sps != 0:
-            remaining = duration((config["total_timesteps"] - agent_steps) / sps, b2, c2)
+            remaining = utils.duration((config["total_timesteps"] - agent_steps) / sps, b2, c2)
 
         s.add_column(f"{c1}Summary", justify="left", vertical="top", width=10)
         s.add_column(f"{c1}Value", justify="right", vertical="top", width=14)
         s.add_row(f"{b2}Env", f"{b2}{config['env']}")
-        s.add_row(f"{b2}Params", abbreviate(self.model_size, b2, c2))
-        s.add_row(f"{b2}Steps", abbreviate(agent_steps, b2, c2))
-        s.add_row(f"{b2}SPS", abbreviate(sps, b2, c2))
+        s.add_row(f"{b2}Params", utils.abbreviate(self.model_size, b2, c2))
+        s.add_row(f"{b2}Steps", utils.abbreviate(agent_steps, b2, c2))
+        s.add_row(f"{b2}SPS", utils.abbreviate(sps, b2, c2))
         s.add_row(f"{b2}Epoch", f"{b2}{self.epoch}")
-        s.add_row(f"{b2}Uptime", duration(self.uptime, b2, c2))
+        s.add_row(f"{b2}Uptime", utils.duration(self.uptime, b2, c2))
         s.add_row(f"{b2}Remaining", remaining)
 
         delta = profile.eval["buffer"] + profile.train["buffer"]
@@ -955,16 +912,16 @@ class PuffeRL:
         p.add_column(f"{c1}Performance", justify="left", width=10)
         p.add_column(f"{c1}Time", justify="right", width=8)
         p.add_column(f"{c1}%", justify="right", width=4)
-        p.add_row(*fmt_perf("Evaluate", b1, delta, profile.eval, b2, c2))
-        p.add_row(*fmt_perf("  Forward", b2, delta, profile.eval_forward, b2, c2))
-        p.add_row(*fmt_perf("  Env", b2, delta, profile.env, b2, c2))
-        p.add_row(*fmt_perf("  Copy", b2, delta, profile.eval_copy, b2, c2))
-        p.add_row(*fmt_perf("  Misc", b2, delta, profile.eval_misc, b2, c2))
-        p.add_row(*fmt_perf("Train", b1, delta, profile.train, b2, c2))
-        p.add_row(*fmt_perf("  Forward", b2, delta, profile.train_forward, b2, c2))
-        p.add_row(*fmt_perf("  Learn", b2, delta, profile.learn, b2, c2))
-        p.add_row(*fmt_perf("  Copy", b2, delta, profile.train_copy, b2, c2))
-        p.add_row(*fmt_perf("  Misc", b2, delta, profile.train_misc, b2, c2))
+        p.add_row(*utils.fmt_perf("Evaluate", b1, delta, profile.eval, b2, c2))
+        p.add_row(*utils.fmt_perf("  Forward", b2, delta, profile.eval_forward, b2, c2))
+        p.add_row(*utils.fmt_perf("  Env", b2, delta, profile.env, b2, c2))
+        p.add_row(*utils.fmt_perf("  Copy", b2, delta, profile.eval_copy, b2, c2))
+        p.add_row(*utils.fmt_perf("  Misc", b2, delta, profile.eval_misc, b2, c2))
+        p.add_row(*utils.fmt_perf("Train", b1, delta, profile.train, b2, c2))
+        p.add_row(*utils.fmt_perf("  Forward", b2, delta, profile.train_forward, b2, c2))
+        p.add_row(*utils.fmt_perf("  Learn", b2, delta, profile.learn, b2, c2))
+        p.add_row(*utils.fmt_perf("  Copy", b2, delta, profile.train_copy, b2, c2))
+        p.add_row(*utils.fmt_perf("  Misc", b2, delta, profile.train_misc, b2, c2))
 
         l = Table(
             box=None,
@@ -1018,7 +975,15 @@ class PuffeRL:
 
 
 def compute_puff_advantage(
-    values, rewards, terminals, ratio, advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip
+    values,
+    rewards,
+    terminals,
+    ratio,
+    advantages,
+    gamma,
+    gae_lambda,
+    vtrace_rho_clip,
+    vtrace_c_clip,
 ):
     """CUDA kernel for puffer advantage with automatic CPU fallback. You need
     nvcc (in cuda-dev-tools or in a cuda-dev docker base) for PufferLib to
@@ -1033,80 +998,21 @@ def compute_puff_advantage(
         advantages = advantages.cpu()
 
     torch.ops.pufferlib.compute_puff_advantage(
-        values, rewards, terminals, ratio, advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip
+        values,
+        rewards,
+        terminals,
+        ratio,
+        advantages,
+        gamma,
+        gae_lambda,
+        vtrace_rho_clip,
+        vtrace_c_clip,
     )
 
     if not ADVANTAGE_CUDA:
         return advantages.to(device)
 
     return advantages
-
-
-def abbreviate(num, b2, c2):
-    if num < 1e3:
-        return f"{b2}{num}{c2}"
-    elif num < 1e6:
-        return f"{b2}{num / 1e3:.1f}{c2}K"
-    elif num < 1e9:
-        return f"{b2}{num / 1e6:.1f}{c2}M"
-    elif num < 1e12:
-        return f"{b2}{num / 1e9:.1f}{c2}B"
-    else:
-        return f"{b2}{num / 1e12:.2f}{c2}T"
-
-
-def duration(seconds, b2, c2):
-    if seconds < 0:
-        return f"{b2}0{c2}s"
-    seconds = int(seconds)
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
-    return f"{b2}{h}{c2}h {b2}{m}{c2}m {b2}{s}{c2}s" if h else f"{b2}{m}{c2}m {b2}{s}{c2}s" if m else f"{b2}{s}{c2}s"
-
-
-def fmt_perf(name, color, delta_ref, prof, b2, c2):
-    percent = 0 if delta_ref == 0 else int(100 * prof["buffer"] / delta_ref - 1e-5)
-    return f"{color}{name}", duration(prof["elapsed"], b2, c2), f"{b2}{percent:2d}{c2}%"
-
-
-def dist_sum(value, device):
-    if not torch.distributed.is_initialized():
-        return value
-
-    tensor = torch.tensor(value, device=device)
-    torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM)
-    return tensor.item()
-
-
-def dist_mean(value, device):
-    if not torch.distributed.is_initialized():
-        return value
-
-    return dist_sum(value, device) / torch.distributed.get_world_size()
-
-
-def capture_rng_state():
-    state = {
-        "python": random.getstate(),
-        "numpy": np.random.get_state(),
-        "torch": torch.get_rng_state(),
-    }
-    if torch.cuda.is_available():
-        state["cuda"] = torch.cuda.get_rng_state_all()
-    return state
-
-
-def restore_rng_state(state):
-    rng_state = state.get("rng_state")
-    if not rng_state:
-        return
-
-    random.setstate(rng_state["python"])
-    np.random.set_state(rng_state["numpy"])
-    torch.set_rng_state(rng_state["torch"].cpu())
-    if torch.cuda.is_available() and "cuda" in rng_state:
-        torch.cuda.set_rng_state_all([state.cpu() for state in rng_state["cuda"]])
 
 
 class Profile:
@@ -1197,27 +1103,6 @@ class Utilization(Thread):
         self.stopped = True
 
 
-def downsample(data_list, num_points):
-    if not data_list or num_points <= 0:
-        return []
-    if num_points == 1:
-        return [data_list[-1]]
-    if len(data_list) <= num_points:
-        return data_list
-
-    last = data_list[-1]
-    data_list = data_list[:-1]
-
-    data_np = np.array(data_list)
-    num_points -= 1  # one down for the last one
-
-    n = (len(data_np) // num_points) * num_points
-    data_np = data_np[-n:] if n > 0 else data_np
-    downsampled = data_np.reshape(num_points, -1).mean(axis=1)
-
-    return downsampled.tolist() + [last]
-
-
 class NoLogger:
     def __init__(self, args, run_id=None):
         self.run_id = run_id or args["run_name"]
@@ -1227,48 +1112,6 @@ class NoLogger:
 
     def close(self, model_path, early_stop):
         pass
-
-
-class NeptuneLogger:
-    def __init__(self, args, load_id=None, mode="async"):
-        import neptune as nept
-
-        neptune_name = args["neptune_name"]
-        neptune_project = args["neptune_project"]
-        neptune = nept.init_run(
-            project=f"{neptune_name}/{neptune_project}",
-            capture_hardware_metrics=False,
-            capture_stdout=False,
-            capture_stderr=False,
-            capture_traceback=False,
-            with_id=load_id,
-            # Neptune's resume-by-name key, mirroring the wandb id above.
-            custom_run_id=None if load_id else args["run_name"],
-            mode=mode,
-            tags=[args["tag"]] if args["tag"] is not None else [],
-        )
-        self.run_id = neptune._sys_id
-        self.neptune = neptune
-        for k, v in pufferlib.unroll_nested_dict(args):
-            neptune[k].append(v)
-        self.should_upload_model = not args["no_model_upload"]
-
-    def log(self, logs, step):
-        for k, v in logs.items():
-            self.neptune[k].append(v, step=step)
-
-    def upload_model(self, model_path):
-        self.neptune["model"].track_files(model_path)
-
-    def close(self, model_path, early_stop):
-        self.neptune["early_stop"] = early_stop
-        if self.should_upload_model:
-            self.upload_model(model_path)
-        self.neptune.stop()
-
-    def download(self):
-        self.neptune["model"].download(destination="artifacts")
-        return f"artifacts/{self.run_id}.pt"
 
 
 class WandbLogger:
@@ -1304,7 +1147,7 @@ class WandbLogger:
         artifact = self.wandb.Artifact(self.run_id, type="model")
         artifact.add_file(model_path)
         # Ship the config with the weights; load_checkpoint_architecture reads it off disk.
-        config_path = os.path.join(drive_benchmark.resolve_run_dir(model_path), "config.yaml")
+        config_path = os.path.join(evaluation_utils.resolve_run_dir(model_path), "config.yaml")
         if os.path.isfile(config_path):
             artifact.add_file(config_path)
         self.wandb.run.log_artifact(artifact)
@@ -1344,72 +1187,12 @@ class TensorBoardLogger:
         self.local_writer.close()
 
 
-def _get_git_metadata():
-    git_metadata = {
-        "commit_hash": os.environ.get("GITHUB_SHA") or os.environ.get("COMMIT_SHA"),
-    }
-
-    try:
-        repo_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-        if shutil.which("git") is None:
-            return git_metadata
-
-        subprocess.check_output(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=repo_root,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-
-        if git_metadata["commit_hash"] is None:
-            git_metadata["commit_hash"] = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repo_root,
-                stderr=subprocess.DEVNULL,
-                text=True,
-            ).strip()
-    except (OSError, subprocess.SubprocessError):
-        pass
-
-    return git_metadata
-
-
-def _save_experiment_config(args, path):
-    import yaml
-    import json
-
-    experiment_dir = path
-    os.makedirs(experiment_dir, exist_ok=True)
-
-    # Save config as yaml
-    config_yaml_path = os.path.join(experiment_dir, "config.yaml")
-    with open(config_yaml_path, "w") as f:
-        # Convert defaultdict to dict for cleaner output
-        config = json.loads(json.dumps(args))
-        yaml.dump(config, f)
-
-
-def _global_agent_steps(pufferl):
-    world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
-    return int(pufferl.global_step * world_size)
-
-
-def derive_rank_seeds(vec_seed, train_seed, world_size, global_rank):
-    """Deterministic per-rank (torch_seed, env_seed): DDP ranks share weights, so identical seeds
-    would collect duplicate experience. global_rank is torchrun's global RANK, not LOCAL_RANK."""
-    torch_seed = train_seed * world_size + global_rank
-    env_seed = vec_seed
-    if env_seed is not None:
-        env_seed = int(np.random.SeedSequence([env_seed, train_seed, global_rank]).generate_state(1)[0])
-    return torch_seed, env_seed
-
-
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
 
     # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
     if args["load_model_path"]:
-        experiment_dir = drive_benchmark.resolve_run_dir(args["load_model_path"])
+        experiment_dir = evaluation_utils.resolve_run_dir(args["load_model_path"])
         config_yaml_path = os.path.join(experiment_dir, "config.yaml")
         KEYS_OF_INTEREST = {
             "action_type",
@@ -1458,11 +1241,11 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 "policy/observation architecture instead of the checkpoint's."
             )
 
-    args = normalize_puffer_drive_config(args, "training")
-    validate_puffer_drive_config(args, "training")
+    args = config_schema.normalize_puffer_drive_config(args, "training")
+    config_schema.validate_puffer_drive_config(args, "training")
     if vecenv is None:
-        validate_puffer_drive_resources(args, "training")
-    training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
+        config_schema.validate_puffer_drive_resources(args, "training")
+    training_evaluation_scheduled = evaluation_utils.validate_training_evaluation_config(args)
 
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -1478,7 +1261,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     if train_seed is None:
         train_seed = time.time_ns() & 0xFFFFFFFF
 
-    torch_seed, env_seed = derive_rank_seeds(args["vec"]["seed"], train_seed, world_size, global_rank)
+    torch_seed, env_seed = utils.derive_rank_seeds(args["vec"]["seed"], train_seed, world_size, global_rank)
     torch.manual_seed(torch_seed)
     vecenv = vecenv or load_env(env_name, args, seed=env_seed)
     policy = policy or load_policy(args, vecenv, env_name)
@@ -1496,16 +1279,14 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         policy = model.to(local_rank)
 
     # Set before the logger so the run config the logger uploads carries it too.
-    args["git"] = _get_git_metadata()
+    args["git"] = utils.get_git_metadata()
 
     # Under DDP only rank 0 owns the run logger; other ranks keep logger=None,
     # which PuffeRL wraps in a NoLogger. Without this gate every rank calls
-    # wandb.init()/NeptuneLogger and you get world_size duplicate runs.
+    # wandb.init() and you get world_size duplicate runs.
     is_rank0 = (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0
     if is_rank0:
-        if args["neptune"]:
-            logger = NeptuneLogger(args)
-        elif args["wandb"]:
+        if args["wandb"]:
             logger = WandbLogger(args)
         elif args["tb"]:
             logger = TensorBoardLogger(
@@ -1540,7 +1321,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     # save_checkpoint writes models/model_<env>_<epoch>.pt and trainer_state.pt
     # (sibling of models/) — so trainer_state.pt is one dir above the .pt path.
     if args.get("load_model_path"):
-        trainer_state_path = os.path.join(drive_benchmark.resolve_run_dir(args["load_model_path"]), "trainer_state.pt")
+        trainer_state_path = os.path.join(evaluation_utils.resolve_run_dir(args["load_model_path"]), "trainer_state.pt")
         if os.path.exists(trainer_state_path):
             print(f"Resuming optimizer/step state from {trainer_state_path}")
             # weights_only=False as in load_training_state: the state carries the
@@ -1558,7 +1339,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
     path = args["train"]["data_dir"]
     if is_rank0:
-        _save_experiment_config(args, path)
+        utils.save_experiment_config(args, path)
 
     # Sweep needs data for early stopped runs, so send data when steps > 100M
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
@@ -1566,7 +1347,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     last_training_evaluation_epoch = None
 
     while pufferl.global_step < train_config["total_timesteps"]:
-        if is_cuda_device(train_config["device"]):
+        if utils.is_cuda_device(train_config["device"]):
             torch.compiler.cudagraph_mark_step_begin()
         try:
             pufferl.evaluate()
@@ -1576,7 +1357,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             if torch.distributed.is_initialized():
                 torch.distributed.destroy_process_group()
             raise
-        if is_cuda_device(train_config["device"]):
+        if utils.is_cuda_device(train_config["device"]):
             torch.compiler.cudagraph_mark_step_begin()
         try:
             logs = pufferl.train()
@@ -1596,7 +1377,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                     policy=pufferl.uncompiled_policy,
                     logger=pufferl.logger,
                     epoch=pufferl.epoch,
-                    global_step=_global_agent_steps(pufferl),
+                    global_step=utils.global_agent_steps(pufferl),
                     run_dir=path,
                 )
 
@@ -1618,15 +1399,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 pufferl.logger.close(model_path, early_stop=True)
                 return all_logs
 
-    # Final eval. You can reset the env here, but depending on
-    # your env, this can skew data (i.e. you only collect the shortest
-    # rollouts within a fixed number of epochs)
-    # i = 0
-    # stats = {}
-    # while i < 32 or not stats:
-    #     stats = pufferl.evaluate()
-    #     i += 1
-
     if training_evaluation_scheduled and last_training_evaluation_epoch != pufferl.epoch and is_rank0:
         run_training_evaluation(
             env_name=env_name,
@@ -1634,7 +1406,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             policy=pufferl.uncompiled_policy,
             logger=pufferl.logger,
             epoch=pufferl.epoch,
-            global_step=_global_agent_steps(pufferl),
+            global_step=utils.global_agent_steps(pufferl),
             run_dir=path,
         )
 
@@ -1673,7 +1445,7 @@ def eval(
     eval_training_render = args["env"]["eval_training_render"]
 
     report_to_wandb = bool(args["wandb"]) and not use_training_config
-    environment_config, benchmarks = drive_benchmark.load_benchmark_config(benchmark_config_path, selected_benchmarks)
+    environment_config, benchmarks = evaluation_utils.load_benchmark_config(benchmark_config_path, selected_benchmarks)
     if use_training_config:
         if policy is None:
             raise pufferlib.APIUsageError("Training evaluation requires the live policy")
@@ -1682,14 +1454,14 @@ def eval(
         environment_config["obs_dropout_boundary"] = base_args["env"]["obs_dropout_boundary"]
         checkpoint_config_path = None
     else:
-        base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
+        base_args, checkpoint_config_path = evaluation_utils.load_checkpoint_architecture(args)
     base_args["env"]["eval_training_render"] = eval_training_render
 
     wandb_run_identity = (
-        drive_benchmark.load_checkpoint_run_identity(checkpoint_config_path) if report_to_wandb else None
+        evaluation_utils.load_checkpoint_run_identity(checkpoint_config_path) if report_to_wandb else None
     )
     if eval_output_dir is None:
-        run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
+        run_dir = evaluation_utils.resolve_run_dir(base_args["load_model_path"])
         eval_output_dir = os.path.join(run_dir, eval_config["output_dir_name"])
     if eval_output_subdir is None:
         eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1700,7 +1472,7 @@ def eval(
     benchmark_results = {}
     evaluation_policy_cache = {"policy": policy}
     for benchmark in benchmarks:
-        run_args = drive_benchmark.build_benchmark_args(
+        run_args = evaluation_utils.build_benchmark_args(
             base_args,
             benchmark,
             environment_config,
@@ -1719,7 +1491,7 @@ def eval(
             benchmark_output_dir = os.path.join(benchmark_output_dir, eval_output_subdir)
             os.makedirs(benchmark_output_dir)
             resolved_benchmark_output_dir = benchmark_output_dir
-        drive_benchmark.write_resolved_benchmark_config(
+        evaluation_utils.write_resolved_benchmark_config(
             run_args,
             benchmark,
             benchmark_config_path,
@@ -1744,7 +1516,7 @@ def eval(
 
         num_scenarios = run_args["num_scenarios"]
         num_workers = min(run_args["vec"]["num_envs"], num_scenarios)
-        worker_env_kwargs, total_steps = drive_benchmark._plan_benchmark_eval_workers(
+        worker_env_kwargs, total_steps = evaluation_utils.plan_benchmark_eval_workers(
             run_args,
             num_scenarios,
             num_workers,
@@ -1753,7 +1525,7 @@ def eval(
         )
         print(f"Evaluation {benchmark['name']}: {num_scenarios} scenarios across {num_workers} workers")
         replay_output_dir = (
-            os.path.join(benchmark_output_dir, drive_eval_replay.ZLIB_REPLAY_DIR_NAME) if render_scenarios else None
+            os.path.join(benchmark_output_dir, eval_replay.ZLIB_REPLAY_DIR_NAME) if render_scenarios else None
         )
         summaries = _run_eval_rollout(
             run_args,
@@ -1767,14 +1539,14 @@ def eval(
             capture_observations=render_scenarios and eval_config["capture_observations"],
             evaluation_policy_cache=evaluation_policy_cache,
         )
-        summary = drive_benchmark._write_eval_reports(summaries, benchmark_output_dir, num_scenarios)
+        summary = evaluation_utils.write_eval_reports(summaries, benchmark_output_dir, num_scenarios)
         benchmark_results[benchmark["name"]] = {
             "episodes": summaries,
             "summary": summary,
         }
 
         if render_scenarios:
-            drive_eval_replay._render_eval_replays(summaries, benchmark_output_dir, eval_config["keep_zlib_replays"])
+            eval_replay.render_eval_replays(summaries, benchmark_output_dir, eval_config["keep_zlib_replays"])
         elif render_filter is not None:
             _render_eval_failures(
                 env_name,
@@ -1795,7 +1567,7 @@ def eval(
 
 def report_eval_to_wandb(args, benchmark_results, wandb_run_identity, output_dir_name):
     """Attach standalone eval results to the wandb run that trained the checkpoint."""
-    metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, f"final_{output_dir_name}_")
+    metrics = evaluation_utils.summarize_benchmark_metrics(benchmark_results, f"final_{output_dir_name}_")
     if not metrics:
         print("No evaluation metrics to report to wandb.")
         return
@@ -1813,16 +1585,16 @@ def report_eval_to_wandb(args, benchmark_results, wandb_run_identity, output_dir
 
 def sweep(args=None, env_name=None):
     args = args or load_config(env_name)
-    if not args["wandb"] and not args["neptune"] and not args["tb"]:
-        raise pufferlib.APIUsageError("Sweeps require either wandb, neptune, or tb")
+    if not args["wandb"] and not args["tb"]:
+        raise pufferlib.APIUsageError("Sweeps require either wandb or tb")
 
     method = args["sweep"].pop("method")
     try:
-        sweep_cls = getattr(pufferlib.sweep, method)
+        sweep_cls = getattr(sweep_module, method)
     except:
         raise pufferlib.APIUsageError(f"Invalid sweep method {method}. See pufferlib.sweep")
 
-    sweep = sweep_cls(args["sweep"])
+    sweep_runner = sweep_cls(args["sweep"])
     points_per_run = args["sweep"]["downsample"]
     target_key = f"environment/{args['sweep']['metric']}"
 
@@ -1831,16 +1603,16 @@ def sweep(args=None, env_name=None):
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
-        sweep.suggest(args)
+        sweep_runner.suggest(args)
         total_timesteps = args["train"]["total_timesteps"]
         all_logs = train(env_name, args=args)
         all_logs = [e for e in all_logs if target_key in e]
-        scores = downsample([log[target_key] for log in all_logs], points_per_run)
-        costs = downsample([log["uptime"] for log in all_logs], points_per_run)
-        timesteps = downsample([log["agent_steps"] for log in all_logs], points_per_run)
+        scores = utils.downsample([log[target_key] for log in all_logs], points_per_run)
+        costs = utils.downsample([log["uptime"] for log in all_logs], points_per_run)
+        timesteps = utils.downsample([log["agent_steps"] for log in all_logs], points_per_run)
         for score, cost, timestep in zip(scores, costs, timesteps):
             args["train"]["total_timesteps"] = timestep
-            sweep.observe(args, score, cost)
+            sweep_runner.observe(args, score, cost)
 
         # Prevent logging final eval steps as training steps
         args["train"]["total_timesteps"] = total_timesteps
@@ -1852,8 +1624,8 @@ def controlled_exp(env_name, args=None):
     from copy import deepcopy
 
     args = args or load_config(env_name)
-    if not args["wandb"] and not args["neptune"]:
-        raise pufferlib.APIUsageError("Targeted experiments require either wandb or neptune")
+    if not args["wandb"]:
+        raise pufferlib.APIUsageError("Targeted experiments require wandb")
 
     # Check if controlled_exp config exists
     if "controlled_exp" not in args:
@@ -2004,7 +1776,6 @@ def profile(env_name):
     profile_config = args["profile"]
     profile_mode = profile_config["mode"]
     args["wandb"] = False
-    args["neptune"] = False
     args["tb"] = False
     args["load_id"] = None
     args["env"]["compute_eval_metrics"] = False
@@ -2017,8 +1788,8 @@ def profile(env_name):
     args["train"]["minibatch_size"] = args["env"]["num_agents"] * args["train"]["bptt_horizon"] // 16
     args["train"]["checkpoint_interval"] = profile_config["warmup_cycles"] + profile_config["trace_cycles"] + 1
     validation_context = "simulation profiling" if profile_mode == "sim" else "profiling"
-    validate_puffer_drive_config(args, validation_context)
-    validate_puffer_drive_resources(args, "profiling")
+    config_schema.validate_puffer_drive_config(args, validation_context)
+    config_schema.validate_puffer_drive_resources(args, "profiling")
 
     # Acknowledged FIFO commands make the trace boundaries exact.
     perf_control = open(os.environ[PROFILE_CONTROL_ENV], "w")
@@ -2027,7 +1798,7 @@ def profile(env_name):
     train_seed = args["train"]["seed"]
     if train_seed is None:
         train_seed = time.time_ns() & 0xFFFFFFFF
-    torch_seed, env_seed = derive_rank_seeds(args["vec"]["seed"], train_seed, 1, 0)
+    torch_seed, env_seed = utils.derive_rank_seeds(args["vec"]["seed"], train_seed, 1, 0)
 
     if profile_mode == "sim":
         perf_control.write("enable\n")
@@ -2048,14 +1819,15 @@ def profile(env_name):
             vecenv.recv()
         profiler = contextlib.nullcontext()
     else:
-        from torch.profiler import ProfilerActivity, profile as torch_profile, record_function
+        from torch.profiler import ProfilerActivity, record_function
+        from torch.profiler import profile as torch_profile
 
         torch.manual_seed(torch_seed)
         vecenv = load_env(env_name, args, seed=env_seed)
         policy = load_policy(args, vecenv, env_name)
         train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
         pufferl = PuffeRL(train_config, vecenv, policy)
-        use_cuda = is_cuda_device(train_config["device"])
+        use_cuda = utils.is_cuda_device(train_config["device"])
         profile_rollouts = profile_mode != "training"
         activities = [ProfilerActivity.CPU]
         if use_cuda:
@@ -2123,7 +1895,7 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
     env_module = importlib.import_module(module_name)
     env_name = args["env_name"]
     make_env = env_module.env_creator(env_name)
-    pufferlib.vector.autotune(make_env, batch_size=args["train"]["env_batch_size"])
+    vector.autotune(make_env, batch_size=args["train"]["env_batch_size"])
 
 
 def _require_finite_eval_batch(batch_array, what, num_workers, worker_env_kwargs):
@@ -2160,7 +1932,7 @@ def _run_eval_rollout(
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
     make_env = env_module.env_creator(env_name)
-    vecenv = pufferlib.vector.make(
+    vecenv = vector.make(
         [make_env] * num_workers,
         env_args=[[]] * num_workers,
         env_kwargs=worker_env_kwargs,
@@ -2196,7 +1968,7 @@ def _run_eval_rollout(
         policy.eval()
         if "policy_forward_eval" not in evaluation_policy_cache:
             policy_forward_eval = policy.forward_eval
-            eval_sample_logits = pufferlib.pytorch.sample_logits
+            eval_sample_logits = pytorch.sample_logits
             if args["train"]["compile"]:
                 compile_kwargs = {
                     "mode": args["train"]["compile_mode"],
@@ -2211,11 +1983,11 @@ def _run_eval_rollout(
         # A discrete policy on a continuous env emits a discrete class that the
         # policy's own table maps back to the continuous action the env expects.
         action_selection = args["eval"]["action_selection"]
-        uncompiled_policy = base_policy(policy)
+        uncompiled_policy = utils.base_policy(policy)
         env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
         discrete_policy_on_continuous_env = env_continuous and not uncompiled_policy.is_continuous
-        device = torch_device(args["train"]["device"])
-        use_bfloat16 = args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
+        device = utils.torch_device(args["train"]["device"])
+        use_bfloat16 = args["train"]["precision"] == "bfloat16" and utils.is_cuda_device(device)
         if use_bfloat16 and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
         eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
@@ -2239,7 +2011,7 @@ def _run_eval_rollout(
         capture_batch_steps = worker_env_kwargs[0]["resample_frequency"]
         replay_capture = None
         if replay_output_dir is not None:
-            replay_capture = drive_eval_replay.EvalReplayCapture(
+            replay_capture = eval_replay.EvalReplayCapture(
                 args,
                 policy,
                 replay_output_dir,
@@ -2347,7 +2119,7 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
     eval_output_dir = os.path.join(run_dir, "eval", "training")
     eval_output_subdir = f"epoch_{epoch:06d}_step_{global_step}"
 
-    rng_state = capture_rng_state()
+    rng_state = utils.capture_rng_state()
     policy_was_training = bool(getattr(policy, "training", False))
     try:
         benchmark_results = eval(
@@ -2358,7 +2130,7 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
             eval_output_subdir=eval_output_subdir,
             use_training_config=True,
         )
-        metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, TRAINING_EVAL_KEY_PREFIX)
+        metrics = evaluation_utils.summarize_benchmark_metrics(benchmark_results, TRAINING_EVAL_KEY_PREFIX)
         if metrics:
             logger.log(metrics, global_step)
         return benchmark_results
@@ -2369,7 +2141,7 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
     finally:
         if hasattr(policy, "train"):
             policy.train(policy_was_training)
-        restore_rng_state({"rng_state": rng_state})
+        utils.restore_rng_state({"rng_state": rng_state})
 
 
 def _render_eval_failures(
@@ -2384,7 +2156,7 @@ def _render_eval_failures(
     evaluation_policy_cache=None,
 ):
     configured_render_filter = run_args["eval"]["render_filter"]
-    selected_rows = drive_benchmark.select_render_rows(metrics_path, configured_render_filter)
+    selected_rows = evaluation_utils.select_render_rows(metrics_path, configured_render_filter)
     if max_rendered_failures is not None:
         selected_rows = selected_rows.head(max_rendered_failures).copy()
     failures_dir = os.path.join(benchmark_output_dir, "failures")
@@ -2395,7 +2167,7 @@ def _render_eval_failures(
         print(f"No failures matched for benchmark {benchmark['name']}; wrote {selected_path}")
         return {"episodes": [], "summary": None}
 
-    map_indices = drive_benchmark._resolve_map_indices(
+    map_indices = evaluation_utils.resolve_map_indices(
         run_args["env"]["map_dir"],
         selected_rows["map_name"].tolist(),
     )
@@ -2413,7 +2185,7 @@ def _render_eval_failures(
         )
         replay_agent_capacity = failure_args["env"]["max_agents_per_env"]
         failure_args["env"]["num_agents"] = replay_agent_capacity
-    replay_output_dir = os.path.join(failures_dir, drive_eval_replay.ZLIB_REPLAY_DIR_NAME)
+    replay_output_dir = os.path.join(failures_dir, eval_replay.ZLIB_REPLAY_DIR_NAME)
     os.makedirs(replay_output_dir, exist_ok=True)
     agents_per_batch_values = selected_rows["agents_per_batch"].unique()
     if len(agents_per_batch_values) != 1:
@@ -2425,7 +2197,7 @@ def _render_eval_failures(
         replay_pairs = pairs[replay_pair_start : replay_pair_start + replay_wave_size]
         num_workers = min(configured_worker_count, len(replay_pairs))
         failure_args["vec"]["num_envs"] = num_workers
-        worker_env_kwargs, total_steps = drive_benchmark._plan_failure_replay_workers(
+        worker_env_kwargs, total_steps = evaluation_utils.plan_failure_replay_workers(
             failure_args,
             replay_pairs,
             num_workers,
@@ -2449,8 +2221,8 @@ def _render_eval_failures(
             evaluation_policy_cache=evaluation_policy_cache,
         )
         summaries.extend(wave_summaries)
-    summary = drive_benchmark._write_eval_reports(summaries, failures_dir, len(pairs))
-    drive_eval_replay._render_eval_replays(summaries, failures_dir, run_args["eval"]["keep_zlib_replays"])
+    summary = evaluation_utils.write_eval_reports(summaries, failures_dir, len(pairs))
+    eval_replay.render_eval_replays(summaries, failures_dir, run_args["eval"]["keep_zlib_replays"])
     return {
         "episodes": summaries,
         "summary": summary,
@@ -2465,7 +2237,7 @@ def load_env(env_name, args, seed=None):
     vec_kwargs = dict(args["vec"])
     if seed is not None:
         vec_kwargs["seed"] = seed
-    return pufferlib.vector.make(make_env, env_kwargs=args["env"], **vec_kwargs)
+    return vector.make(make_env, env_kwargs=args["env"], **vec_kwargs)
 
 
 def load_policy(args, vecenv, env_name=""):
@@ -2473,7 +2245,7 @@ def load_policy(args, vecenv, env_name=""):
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
 
-    device = torch_device(args["train"]["device"])
+    device = utils.torch_device(args["train"]["device"])
     policy_cls = getattr(env_module.torch, args["policy_name"])
     policy = policy_cls(vecenv.driver_env, **args["policy"])
 
@@ -2486,13 +2258,10 @@ def load_policy(args, vecenv, env_name=""):
 
     load_id = args["load_id"]
     if load_id is not None:
-        if args["neptune"]:
-            path = NeptuneLogger(args, load_id, mode="read-only").download()
-        elif args["wandb"]:
-            path = WandbLogger(args, load_id).download()
+        path = WandbLogger(args, load_id).download()
 
         state_dict = torch.load(path, map_location=device)
-        policy.load_state_dict(clean_policy_state_dict(state_dict))
+        policy.load_state_dict(utils.clean_policy_state_dict(state_dict))
 
     load_path = args["load_model_path"]
     if load_path == "latest":
@@ -2500,10 +2269,7 @@ def load_policy(args, vecenv, env_name=""):
 
     if load_path is not None:
         state_dict = torch.load(load_path, map_location=device)
-        policy.load_state_dict(clean_policy_state_dict(state_dict))
-        # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
-        # optim_state = torch.load(state_path)['optimizer_state_dict']
-        # pufferl.optimizer.load_state_dict(optim_state)
+        policy.load_state_dict(utils.clean_policy_state_dict(state_dict))
 
     return policy
 
@@ -2527,7 +2293,7 @@ def load_config(env_name, config_dir=None):
 
     args = defaultdict(dict, OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True))
     args["train"]["use_rnn"] = args["rnn_name"] is not None
-    return defaultdict(dict, normalize_puffer_drive_config(args, "load"))
+    return defaultdict(dict, config_schema.normalize_puffer_drive_config(args, "load"))
 
 
 def main():

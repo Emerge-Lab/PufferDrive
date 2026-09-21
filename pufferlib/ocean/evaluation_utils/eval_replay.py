@@ -164,7 +164,7 @@ class EvalReplayCapture:
         self.pending_replays = []
 
 
-def _render_eval_replays(episode_summaries, out_dir, keep_zlib_replays):
+def render_eval_replays(episode_summaries, out_dir, keep_zlib_replays):
     """Render captured eval replays as navigable HTML pages plus an index."""
     render_dir = os.path.join(out_dir, "rendered_replays")
     os.makedirs(render_dir, exist_ok=True)

@@ -8,9 +8,6 @@ wandb_group: debug
 # Unique run identifier. Doubles as the logger run id, so relaunching with the
 # same run_name and train.data_dir resumes that run instead of starting a new one.
 run_name: default_run
-neptune: false
-neptune_name: pufferai
-neptune_project: ablations
 tb: false
 local_rank: 0
 tag: null

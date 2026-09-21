@@ -7,7 +7,6 @@ build
 *.egg-info
 experiments
 wandb
-.neptune
 .pytest_cache
 .ruff_cache
 

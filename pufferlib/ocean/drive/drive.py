@@ -546,6 +546,7 @@ class Drive(pufferlib.PufferEnv):
         else:
             binding.vec_reset(self.c_envs)
         self.tick = 0
+        self._resample_pending = False
         self.truncations[:] = 0
         if self.capture_replay:
             self._initialize_replay_captures()
@@ -560,17 +561,23 @@ class Drive(pufferlib.PufferEnv):
         if self.capture_replay:
             self._capture_replay_step()
         self.actions[:] = actions
-        binding.vec_step(self.c_envs)
-        self.tick += 1
+        if not self._resample_pending:
+            binding.vec_step(self.c_envs)
+            self.tick += 1
         info = []
         # vec_log is the training aggregate; it resets env->log, which eval reads
         # per episode, so it must not run in eval mode.
-        if not self.eval_mode and self.tick % self.report_interval == 0:
+        if not self.eval_mode and not self._resample_pending and self.tick % self.report_interval == 0:
             log = binding.vec_log(self.c_envs, self.num_agents)
             if log:
                 info.append(log)
-                # print(log)
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
+            if not self.eval_mode and not self._resample_pending:
+                self._resample_pending = True
+                self.truncations[:] = 1
+                self.masks[:] = 0
+                return (self.observations, self.rewards, self.terminals, self.truncations, info)
+            self._resample_pending = False
             self.tick = 0
             will_resample = 1
             if will_resample:
@@ -643,8 +650,10 @@ class Drive(pufferlib.PufferEnv):
                 binding.vec_reset(self.c_envs)
                 if self.capture_replay:
                     self._initialize_replay_captures()
-                # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
-                self.truncations[:] = 1
+                self.truncations[:] = self.eval_mode
+                if not self.eval_mode:
+                    self.rewards[:] = 0
+                    self.terminals[:] = 0
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):

@@ -3,7 +3,7 @@
 Under DDP every rank holds identical policy weights; if ranks also shared
 identical torch and env seeds they would collect (near-)duplicate experience
 and multi-node training would degenerate to single-node. train() derives
-per-rank seeds via `pufferl.derive_rank_seeds(vec_seed, train_seed,
+per-rank seeds via `utils.derive_rank_seeds(vec_seed, train_seed,
 world_size, global_rank)`; these tests pin its contract:
 
   - every GPU (rank) gets a distinct torch seed and env seed
@@ -19,14 +19,14 @@ No env/C-sim/GPU needed.
 
 import pytest
 
-from pufferlib.pufferl import derive_rank_seeds
+from pufferlib import utils
 
 VEC_SEED = 42
 TRAIN_SEED = 42
 
 
 def _seeds_for_all_ranks(world_size, vec_seed=VEC_SEED, train_seed=TRAIN_SEED):
-    return [derive_rank_seeds(vec_seed, train_seed, world_size, rank) for rank in range(world_size)]
+    return [utils.derive_rank_seeds(vec_seed, train_seed, world_size, rank) for rank in range(world_size)]
 
 
 @pytest.mark.parametrize("world_size", [2, 4, 8])
@@ -55,7 +55,7 @@ def test_multi_node_ranks_with_same_local_rank_differ():
 def test_single_process_torch_seed_unchanged():
     # Backward compatibility: a non-distributed run must seed torch with the
     # plain train seed, exactly as before the per-rank derivation existed.
-    torch_seed, _ = derive_rank_seeds(VEC_SEED, 123, world_size=1, global_rank=0)
+    torch_seed, _ = utils.derive_rank_seeds(VEC_SEED, 123, world_size=1, global_rank=0)
     assert torch_seed == 123
 
 
@@ -65,21 +65,21 @@ def test_derivation_is_deterministic():
     # runs would not be reproducible. The pinned value guards the mixing
     # scheme itself; update it only on a deliberate scheme change (which
     # breaks scenario-stream comparability with older runs).
-    assert derive_rank_seeds(42, 42, 8, 0) == (336, 1921063561)
-    assert derive_rank_seeds(42, 42, 8, 3) == derive_rank_seeds(42, 42, 8, 3)
+    assert utils.derive_rank_seeds(42, 42, 8, 0) == (336, 1921063561)
+    assert utils.derive_rank_seeds(42, 42, 8, 3) == utils.derive_rank_seeds(42, 42, 8, 3)
 
 
 def test_train_seed_sweep_varies_env_seed():
     # Sweeping train.seed alone must vary the env scenario stream; before the
     # per-rank derivation, sweeps only changed network init and sampling.
-    env_seeds = {derive_rank_seeds(VEC_SEED, train_seed, 1, 0)[1] for train_seed in range(5)}
+    env_seeds = {utils.derive_rank_seeds(VEC_SEED, train_seed, 1, 0)[1] for train_seed in range(5)}
     assert len(env_seeds) == 5
 
 
 def test_unseeded_envs_pass_through():
     # vec.seed=None means "do not seed the envs"; the derivation must not
     # manufacture a seed for them.
-    _, env_seed = derive_rank_seeds(None, TRAIN_SEED, 8, 3)
+    _, env_seed = utils.derive_rank_seeds(None, TRAIN_SEED, 8, 3)
     assert env_seed is None
 
 
@@ -87,5 +87,5 @@ def test_no_env_seed_collisions_across_sweep_by_rank_grid():
     # A realistic experiment grid (5 sweep seeds x 64 ranks) must produce
     # all-distinct env seeds; any collision means two runs/ranks replay the
     # same scenario sequence.
-    grid = [derive_rank_seeds(VEC_SEED, train_seed, 64, rank)[1] for train_seed in range(5) for rank in range(64)]
+    grid = [utils.derive_rank_seeds(VEC_SEED, train_seed, 64, rank)[1] for train_seed in range(5) for rank in range(64)]
     assert len(set(grid)) == len(grid)

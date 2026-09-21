@@ -83,7 +83,6 @@ def _build_config():
         },
     )
     args["wandb"] = False
-    args["neptune"] = False
     args["eval"] = None
     return args
 
