@@ -2927,6 +2927,7 @@ def regents(
 def _parse_regents_cli_args(arguments):
     parser = argparse.ArgumentParser(prog="puffer regents puffer_drive")
     parser.add_argument("generation_name")
+    parser.add_argument("--config-path", default=REGENTS_GENERATION_CONFIG_PATH)
     parser.add_argument("--experiment-name", "--exp-name", dest="experiment_name")
     parser.add_argument("--scenario-count", type=int)
     parser.add_argument(
@@ -2964,6 +2965,7 @@ def main():
         regents_args = _parse_regents_cli_args(sys.argv[1:])
         regents(
             generation_name=regents_args.generation_name,
+            config_path=regents_args.config_path,
             experiment_name=regents_args.experiment_name,
             drivable_area_weight=regents_args.drivable_area_weight,
             gaussian_sigma_meters=regents_args.gaussian_sigma_meters,
