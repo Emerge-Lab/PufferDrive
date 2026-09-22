@@ -165,6 +165,8 @@ env:
   reward_reverse: 0.005
   reward_timestep: 2.5e-05
   reward_overspeed: 0.05
+  # m/s above the lane limit before the overspeed penalty fires
+  overspeed_tolerance_mps: 0.0
   reward_ade: 0.0
   # --- Map ---
   # Path to map used for training

@@ -159,6 +159,7 @@ class DriveEnvConfig:
     reward_reverse: float = MISSING
     reward_timestep: float = MISSING
     reward_overspeed: float = MISSING
+    overspeed_tolerance_mps: float = MISSING
     reward_ade: float = MISSING
     map_dir: str = MISSING
     num_maps: int = MISSING

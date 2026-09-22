@@ -249,6 +249,7 @@ static const int ROAD_OFFSETS[25][2]
 #define TL_EPISODE_DISABLE_PROB 0.20f
 // Junction lanes inherit the min limit over their entry lanes; passes bound chained connectors
 #define SPEED_LIMIT_JUNCTION_INHERIT_PASSES 4
+#define UNKNOWN_LANE_SPEED_LIMIT_MPS 15.0f // lanes without a map limit (nuPlan Boston/Singapore); CaRL's IDM fallback
 #define TL_INDIVIDUAL_REMOVE_PROB 0.20f
 #define TL_ALWAYS_GREEN_PROB 0.05f
 

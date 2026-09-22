@@ -1912,6 +1912,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_stop_line = (float) unpack(kwargs, "reward_stop_line");
     env->reward_timestep = (float) unpack(kwargs, "reward_timestep");
     env->reward_overspeed = (float) unpack(kwargs, "reward_overspeed");
+    env->overspeed_tolerance_mps = (float) unpack(kwargs, "overspeed_tolerance_mps");
+    if (!(env->overspeed_tolerance_mps >= 0.0f) || !isfinite(env->overspeed_tolerance_mps)) {
+        PyErr_SetString(PyExc_ValueError, "overspeed_tolerance_mps must be finite and >= 0");
+        return -1;
+    }
     env->reward_ade = (float) unpack(kwargs, "reward_ade");
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");

@@ -282,6 +282,7 @@ struct Drive {
     float reward_stop_line;
     float reward_timestep;
     float reward_overspeed;
+    float overspeed_tolerance_mps;
     float reward_ade;
     int reward_conditioning;
     int reward_randomization;
@@ -2535,7 +2536,9 @@ static int inherit_junction_speed_limits_pass(Drive *env) {
 // Per-episode: one additive offset per speed zone; lanes without a zone inherit the min over their entries.
 static void sample_zone_speed_limits(Drive *env) {
     for (int i = 0; i < env->num_road_elements; i++) {
-        env->lane_speed_limit_mps[i] = env->road_elements[i].speed_limit;
+        const RoadMapElement *road = &env->road_elements[i];
+        int limit_unknown = is_road_lane(road->type) && road->speed_limit <= 0.0f;
+        env->lane_speed_limit_mps[i] = limit_unknown ? UNKNOWN_LANE_SPEED_LIMIT_MPS : road->speed_limit;
     }
     if (env->speed_limit_random_prob <= 0.0f || env->num_speed_zones <= 0) {
         return;
@@ -4149,13 +4152,12 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     agent_log->avg_speed_per_agent += agent->sim_speed;
 
     // Speed limit metric (CUSTOM)
-    float target_speed = 15.0f; // Default target speed
+    float target_speed = UNKNOWN_LANE_SPEED_LIMIT_MPS;
     int current_lane_idx = agent->current_lane_idx;
     if (current_lane_idx != -1 && env->lane_speed_limit_mps[current_lane_idx] > 0) {
         target_speed = env->lane_speed_limit_mps[current_lane_idx];
     }
-    // Binary overspeed metric, 1.0 if overspeeding by more than 2 m/s
-    agent->metrics_array[SPEED_LIMIT_IDX] = (agent->sim_speed > target_speed + 2.0f) ? 1.0f : 0.0f;
+    agent->metrics_array[SPEED_LIMIT_IDX] = (agent->sim_speed > target_speed + env->overspeed_tolerance_mps) ? 1.0f : 0.0f;
     if (env->compute_eval_metrics) {
         agent_log->speed_violation_sum += fmaxf(agent->sim_speed - target_speed, 0.0f) * env->dt;
     }

@@ -61,6 +61,21 @@ static int test_disabled_keeps_original_limits_and_rng(void) {
     return 0;
 }
 
+static int test_unknown_lane_limit_resolves_to_fallback(void) {
+    SpeedLimitFixture fixture;
+    Drive env = make_env(&fixture, 0.0f, 5.0f, 7);
+    fixture.roads[7].speed_limit = -1.0f;
+    sample_zone_speed_limits(&env);
+    EXPECT_NEAR(env.lane_speed_limit_mps[7], UNKNOWN_LANE_SPEED_LIMIT_MPS, 1e-6f);
+    EXPECT_NEAR(env.lane_speed_limit_mps[5], 0.0f, 1e-6f);
+
+    env = make_env(&fixture, 1.0f, 5.0f, 7);
+    fixture.roads[7].speed_limit = -1.0f;
+    sample_zone_speed_limits(&env);
+    EXPECT_NEAR(env.lane_speed_limit_mps[7], UNKNOWN_LANE_SPEED_LIMIT_MPS, 1e-6f);
+    return 0;
+}
+
 static int test_zone_offsets_apply_and_junctions_inherit(void) {
     SpeedLimitFixture fixture;
     Drive env = make_env(&fixture, 1.0f, 5.0f, 7);
@@ -111,6 +126,7 @@ static int test_same_seed_reproduces_and_other_seed_differs(void) {
 int main(void) {
     int failures = 0;
     RUN_TEST(test_disabled_keeps_original_limits_and_rng);
+    RUN_TEST(test_unknown_lane_limit_resolves_to_fallback);
     RUN_TEST(test_zone_offsets_apply_and_junctions_inherit);
     RUN_TEST(test_clip_bounds_hold_for_large_delta);
     RUN_TEST(test_same_seed_reproduces_and_other_seed_differs);

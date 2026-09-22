@@ -20,6 +20,31 @@ static int test_metric_offroad_outside_grid(void) {
     return 0;
 }
 
+static int test_metric_overspeed_flag_respects_tolerance(void) {
+    srand(5);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 2, 0);
+    int agent_idx = env.active_agent_indices[0];
+    Agent *agent = &env.agents[agent_idx];
+    compute_metrics(&env, agent_idx, 0);
+    float limit = agent->current_lane_idx != -1 ? env.lane_speed_limit_mps[agent->current_lane_idx] : UNKNOWN_LANE_SPEED_LIMIT_MPS;
+    agent->sim_speed = limit + 1.0f;
+
+    env.overspeed_tolerance_mps = 0.0f;
+    compute_metrics(&env, agent_idx, 0);
+    EXPECT_NEAR(agent->metrics_array[SPEED_LIMIT_IDX], 1.0f, 1e-6f);
+
+    env.overspeed_tolerance_mps = 2.0f;
+    compute_metrics(&env, agent_idx, 0);
+    EXPECT_NEAR(agent->metrics_array[SPEED_LIMIT_IDX], 0.0f, 1e-6f);
+
+    agent->sim_speed = limit - 0.5f;
+    env.overspeed_tolerance_mps = 0.0f;
+    compute_metrics(&env, agent_idx, 0);
+    EXPECT_NEAR(agent->metrics_array[SPEED_LIMIT_IDX], 0.0f, 1e-6f);
+    free_allocated(&env);
+    return 0;
+}
+
 static int test_metric_invalid_position_resets(void) {
     Drive env = {0};
     Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
@@ -109,6 +134,7 @@ static int test_metric_final_goal_requires_speed(void) {
 int main(void) {
     int failures = 0;
     RUN_TEST(test_metric_offroad_outside_grid);
+    RUN_TEST(test_metric_overspeed_flag_respects_tolerance);
     RUN_TEST(test_metric_invalid_position_resets);
     RUN_TEST(test_metric_on_road_lane_alignment);
     RUN_TEST(test_metric_final_goal_requires_speed);

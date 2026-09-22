@@ -58,6 +58,12 @@ class TestDriveConfig(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "min <= max"):
             Drive(speed_limit_random_min_mps=20.0, speed_limit_random_max_mps=10.0)
 
+    def test_overspeed_tolerance_validation(self):
+        with self.assertRaisesRegex(ValueError, "overspeed_tolerance_mps"):
+            Drive(overspeed_tolerance_mps=-0.5)
+        with self.assertRaisesRegex(ValueError, "overspeed_tolerance_mps"):
+            Drive(overspeed_tolerance_mps=float("nan"))
+
     def test_conditioning_speed_scale_validation(self):
         with self.assertRaisesRegex(ValueError, "conditioning_speed_scale"):
             Drive(conditioning_speed_scale=0.9)
