@@ -60,8 +60,8 @@ def signed_box_distance(boxes_a, boxes_b):
     values denote penetration. The magnitude inside overlap is the minimum
     translation needed to separate the rectangles.
     """
-    if boxes_a.device != boxes_b.device or boxes_a.dtype != boxes_b.dtype:
-        raise ValueError("boxes_a and boxes_b must share device and dtype")
+    if boxes_a.dtype != boxes_b.dtype:
+        raise ValueError("boxes_a and boxes_b must share dtype")
     try:
         output_shape = torch.broadcast_shapes(boxes_a.shape[:-1], boxes_b.shape[:-1])
     except RuntimeError as error:
@@ -169,8 +169,8 @@ def sample_out_of_bounds_potential(xy_meters, out_of_bounds_raster):
     if not isinstance(out_of_bounds_raster, SmoothedOutOfBoundsRaster):
         raise TypeError("out_of_bounds_raster must be a SmoothedOutOfBoundsRaster")
     potential = out_of_bounds_raster.potential
-    if xy_meters.device != potential.device or xy_meters.dtype != potential.dtype:
-        raise ValueError("Sample points and out-of-bounds raster must share device and dtype")
+    if xy_meters.dtype != potential.dtype:
+        raise ValueError("Sample points and out-of-bounds raster must share dtype")
 
     normalized = out_of_bounds_raster.transform.world_to_normalized_grid(xy_meters)
     flattened_grid = normalized.reshape(1, -1, 1, 2)

@@ -248,8 +248,8 @@ def drivable_area_deviation_cost(boxes, state_valid, candidate_adversary_mask, o
     if not isinstance(out_of_bounds_raster, SmoothedOutOfBoundsRaster):
         raise TypeError("The out-of-bounds raster must be precomputed and smoothed")
     potential = out_of_bounds_raster.potential
-    if potential.device != boxes.device or potential.dtype != boxes.dtype:
-        raise ValueError("The out-of-bounds raster and boxes must share device and dtype")
+    if potential.dtype != boxes.dtype:
+        raise ValueError("The out-of-bounds raster and boxes must share dtype")
     corners = oriented_box_corners(boxes)
     corner_potential = sample_out_of_bounds_potential(corners, out_of_bounds_raster)
     valid = state_valid & candidate_adversary_mask[:, None]

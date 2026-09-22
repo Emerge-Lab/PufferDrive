@@ -437,6 +437,14 @@ class Drive(nn.Module):
         critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, 1), std=1))
         self.critic_head = nn.Sequential(*critic_head_layers)
 
+    def _actions_from_actor_hidden(self, actor_hidden):
+        if not self.is_continuous:
+            return self.actor_head(actor_hidden)
+        params = self.actor_head(actor_hidden)
+        loc, scale = torch.split(params, self.action_dim, dim=1)
+        std = torch.nn.functional.softplus(scale) + 1e-4
+        return torch.distributions.Normal(loc, std)
+
     def forward(self, observations, state=None):
         """
         Forward pass handling both Actor and Critic inference.
@@ -450,19 +458,15 @@ class Drive(nn.Module):
         else:
             critic_hidden = self.critic_backbone(observations, self.ego_dim)
 
-        # Compute actions
-        if self.is_continuous:
-            params = self.actor_head(actor_hidden)
-            loc, scale = torch.split(params, self.action_dim, dim=1)
-            std = torch.nn.functional.softplus(scale) + 1e-4
-            actions = torch.distributions.Normal(loc, std)
-        else:
-            actions = self.actor_head(actor_hidden)
+        return self._actions_from_actor_hidden(actor_hidden), self.critic_head(critic_hidden)
 
-        # Compute value
-        value = self.critic_head(critic_hidden)
+    def actor_logits(self, observations, state=None):
+        """Actor half of `forward` for callers that consume actions and discard the value.
 
-        return actions, value
+        With shared_network=False the critic owns a second backbone, so evaluating it in an
+        inference-only rollout is pure waste.
+        """
+        return self._actions_from_actor_hidden(self.actor_backbone(observations, self.ego_dim))
 
     def forward_train(self, x, state=None):
         return self.forward(x, state)
@@ -569,6 +573,9 @@ class TargetDrive(Drive):
 
     def forward(self, observations, state=None):
         return super().forward(self._prepare_target_observation(observations), state)
+
+    def actor_logits(self, observations, state=None):
+        return super().actor_logits(self._prepare_target_observation(observations), state)
 
     def encode_observations(self, observations, state=None):
         return super().encode_observations(self._prepare_target_observation(observations), state)

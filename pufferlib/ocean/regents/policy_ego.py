@@ -113,7 +113,7 @@ class PolicyEgoActor:
 
     def __call__(self, observations):
         with torch.no_grad():
-            logits, _ = self.policy.forward_eval(torch.as_tensor(observations, device=self.device))
+            logits = self.policy.actor_logits(torch.as_tensor(observations, device=self.device))
             _, _, _, continuous_action = sample_logits(
                 logits,
                 action_selection=self.action_selection,

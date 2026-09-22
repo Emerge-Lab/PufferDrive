@@ -127,8 +127,8 @@ def classic_rollout(initial_state, actions, transition_valid, wheelbase_meters, 
     expected_transition_shape = actions.shape[:-1]
     if not isinstance(transition_valid, torch.Tensor) or transition_valid.shape != expected_transition_shape:
         raise ValueError(f"transition_valid must have shape {expected_transition_shape}")
-    if transition_valid.dtype != torch.bool or transition_valid.device != initial_state.device:
-        raise ValueError("transition_valid must be bool on the state device")
+    if transition_valid.dtype != torch.bool:
+        raise ValueError("transition_valid must be bool")
 
     current_state = initial_state
     rollout_states = [current_state]
