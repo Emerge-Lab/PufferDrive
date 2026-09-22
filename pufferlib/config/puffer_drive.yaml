@@ -57,6 +57,10 @@ env:
   # Spline terminal-boundary planning horizon, seconds. Only meaningful when
   # trajectory_training: true (top-level); placeholder default, tune empirically.
   spline_horizon_seconds: 1.5
+  # How many past spline curves the intent-consistency penalty compares against. 1 reproduces
+  # the original adjacent-pair-only behaviour; deeper lags catch slow drift that adjacent
+  # differences miss. Capped by spline_horizon_seconds/dt and SPLINE_CONSISTENCY_MAX_LAG.
+  spline_consistency_lag_count: 1
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap

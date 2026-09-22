@@ -89,6 +89,7 @@ struct Log {
     float reward_ade;
     float reward_trajectory_consistency;
     float spline_consistency_msd_m2;
+    float spline_consistency_lag1_msd_m2;
 };
 
 struct GridMapEntity {
@@ -196,6 +197,7 @@ struct Drive {
     int dynamics_model;
     int reset_accel_on_stop;
     float spline_horizon_seconds;
+    int spline_consistency_lag_count;   // how many past curves the consistency term compares against
     int spline_consistency_num_samples; // derived once at env-init from spline_horizon_seconds/dt
     // Offset-limit fields below are also derived once at env-init (init_spline_dynamics_fields),
     // from spline_horizon_seconds/base_max_speed_mps/ACCEL_LONG_LIMIT/ACCEL_LAT_LIMIT, not config knobs.
@@ -464,7 +466,8 @@ static void reset_agent_state(Agent *agent) {
     agent->partner_blindness_counter = 0;
     agent->is_blind_partner = 0;
     agent->is_phantom_braker = 0;
-    agent->spline_history_valid = 0;
+    agent->spline_history_count = 0;
+    agent->spline_history_head = 0;
     for (int feature_idx = 0; feature_idx < SPLINE_INTENT_FEATURES; feature_idx++) {
         agent->spline_intent[feature_idx] = 0.0f;
     }
@@ -2249,6 +2252,7 @@ static void add_log(Drive *env) {
         episode_log.reward_ade += env->logs[i].reward_ade;
         episode_log.reward_trajectory_consistency += env->logs[i].reward_trajectory_consistency;
         episode_log.spline_consistency_msd_m2 += env->logs[i].spline_consistency_msd_m2 / safe_timestep;
+        episode_log.spline_consistency_lag1_msd_m2 += env->logs[i].spline_consistency_lag1_msd_m2 / safe_timestep;
         // Comfort and velocity metrics (normalized per timestep)
         episode_log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         episode_log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -3709,30 +3713,45 @@ static float evaluate_quintic_derivative(const float coefs[6], float t, int orde
     }
 }
 
-// Mean squared position difference between two curves' overlap window: prev's curve (solved
-// last step, valid over [0,T] measured from last step) sampled at dt+k*dt, against curr's curve
-// (solved this step, valid over [0,T] measured from this step) sampled at k*dt — both land on the
-// same absolute times, strictly inside both curves' fit domains for k in [0, num_samples]. Reward
-// logic, not dynamics — called from compute_rewards, not move_dynamics.
+// Mean squared position disagreement between this step's curve and the last lag_count curves,
+// aggregated per future slot: slot m holds every past curve still covering absolute time
+// m*dt ahead, meaned, then meaned over slots. Slot 0 is excluded because curr evaluates there
+// to the agent's actual position, making it open-loop tracking error rather than intent.
+// Counts are integer-derived from max_lag: recomputing them from floats drops a sample per lag.
+// Reward logic, not dynamics — called from compute_rewards, not move_dynamics.
 static float compute_spline_consistency_cost(
-    const float *prev_coefs_x,
-    const float *prev_coefs_y,
-    const float *curr_coefs_x,
-    const float *curr_coefs_y,
-    int num_samples,
-    float dt) {
-    float total_cost = 0.0f;
-    for (int k = 0; k <= num_samples; k++) {
-        float prev_t = dt + (float) k * dt;
-        float curr_t = (float) k * dt;
-        float dx = evaluate_quintic_derivative(prev_coefs_x, prev_t, 0)
-            - evaluate_quintic_derivative(curr_coefs_x, curr_t, 0);
-        float dy = evaluate_quintic_derivative(prev_coefs_y, prev_t, 0)
-            - evaluate_quintic_derivative(curr_coefs_y, curr_t, 0);
-        total_cost += dx * dx + dy * dy;
+    const Agent *agent,
+    int lag_count,
+    int max_lag,
+    float dt,
+    float *lag1_msd_out) {
+    float slot_cost_sum = 0.0f;
+    float lag1_cost_sum = 0.0f;
+    for (int slot_idx = 1; slot_idx < max_lag; slot_idx++) {
+        int slot_lag_count = (lag_count < max_lag - slot_idx) ? lag_count : max_lag - slot_idx;
+        if (slot_lag_count > agent->spline_history_count) {
+            slot_lag_count = agent->spline_history_count;
+        }
+        float curr_t = (float) slot_idx * dt;
+        float curr_x = evaluate_quintic_derivative(agent->spline_coefs_x, curr_t, 0);
+        float curr_y = evaluate_quintic_derivative(agent->spline_coefs_y, curr_t, 0);
+        float pair_cost_sum = 0.0f;
+        for (int lag = 1; lag <= slot_lag_count; lag++) {
+            int ring_idx = (agent->spline_history_head - lag + SPLINE_CONSISTENCY_MAX_LAG) % SPLINE_CONSISTENCY_MAX_LAG;
+            float past_t = (float) (lag + slot_idx) * dt;
+            float dx = evaluate_quintic_derivative(agent->spline_history_coefs_x[ring_idx], past_t, 0) - curr_x;
+            float dy = evaluate_quintic_derivative(agent->spline_history_coefs_y[ring_idx], past_t, 0) - curr_y;
+            float pair_cost = dx * dx + dy * dy;
+            pair_cost_sum += pair_cost;
+            if (lag == 1) {
+                lag1_cost_sum += pair_cost;
+            }
+        }
+        slot_cost_sum += pair_cost_sum / (float) slot_lag_count;
     }
-    // Mean, not sum: keeps the coefficient independent of the T/dt sample count.
-    return total_cost / (float) (num_samples + 1);
+    // Means, not sums: keeps the coefficient independent of lag_count and the T/dt slot count.
+    *lag1_msd_out = lag1_cost_sum / (float) (max_lag - 1);
+    return slot_cost_sum / (float) (max_lag - 1);
 }
 
 static void compute_rewards(Drive *env, int i) {
@@ -3852,29 +3871,32 @@ static void compute_rewards(Drive *env, int i) {
     agent_log->avg_displacement_error = current_ade;
 
     // Trajectory-consistency reward (spline mode only): penalizes disagreement between this
-    // step's curve (move_dynamics already solved it earlier this step) and last step's curve,
+    // step's curve (move_dynamics already solved it earlier this step) and the last k curves,
     // over their shared overlap. This is about coherence of *stated intent* across steps, not
     // smoothness of *executed* motion — move_dynamics's jerk clamp already handles that.
-    if (env->action_type == ACTION_TYPE_SPLINE) {
-        if (agent->spline_history_valid) {
+    // Only CONTROLLER_POLICY agents reach move_dynamics, so only they hold a fresh curve.
+    if (env->action_type == ACTION_TYPE_SPLINE && agent->controller == CONTROLLER_POLICY) {
+        // deepest lag sharing >=1 grid point with curr; +1 mirrors num_samples' own derivation
+        int max_lag = env->spline_consistency_num_samples + 1;
+        if (agent->spline_history_count > 0) {
+            float lag1_cost = 0.0f;
             float consistency_cost = compute_spline_consistency_cost(
-                agent->prev_spline_coefs_x,
-                agent->prev_spline_coefs_y,
-                agent->spline_coefs_x,
-                agent->spline_coefs_y,
-                env->spline_consistency_num_samples,
-                env->dt);
+                agent, env->spline_consistency_lag_count, max_lag, env->dt, &lag1_cost);
             float consistency_penalty = -agent->reward_coefs[REWARD_COEF_TRAJECTORY_CONSISTENCY] * consistency_cost;
             env->rewards[i] += consistency_penalty;
             agent_log->reward_trajectory_consistency += consistency_penalty;
             agent_log->spline_consistency_msd_m2 += consistency_cost;
+            agent_log->spline_consistency_lag1_msd_m2 += lag1_cost;
         }
-        // Rotate curr -> prev now that both have been used, for next step's comparison.
+        // Push curr into the ring now that it has been used, for later steps' comparisons.
         for (int k = 0; k < 6; k++) {
-            agent->prev_spline_coefs_x[k] = agent->spline_coefs_x[k];
-            agent->prev_spline_coefs_y[k] = agent->spline_coefs_y[k];
+            agent->spline_history_coefs_x[agent->spline_history_head][k] = agent->spline_coefs_x[k];
+            agent->spline_history_coefs_y[agent->spline_history_head][k] = agent->spline_coefs_y[k];
         }
-        agent->spline_history_valid = 1;
+        agent->spline_history_head = (agent->spline_history_head + 1) % SPLINE_CONSISTENCY_MAX_LAG;
+        if (agent->spline_history_count < SPLINE_CONSISTENCY_MAX_LAG) {
+            agent->spline_history_count++;
+        }
     }
 
     // Update episode return
@@ -4538,8 +4560,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             solve_quintic_coefficients(agent->sim_y, agent->sim_vy, a0_y, p1_y, v1_y, a1_y, T, &c3_y, &c4_y, &c5_y);
 
             // Persist the full curve (c0..c5, not just the derivative we're about to extract) —
-            // compute_rewards compares this against next step's curve for the intent-consistency
-            // reward term. Rotation into prev_spline_coefs_x/y happens there, after it's been used.
+            // compute_rewards compares this against later steps' curves for the intent-consistency
+            // reward term. The push into the history ring happens there, after it's been used.
             agent->spline_coefs_x[0] = agent->sim_x;
             agent->spline_coefs_x[1] = agent->sim_vx;
             agent->spline_coefs_x[2] = 0.5f * a0_x;

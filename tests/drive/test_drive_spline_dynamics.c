@@ -162,30 +162,66 @@ static int test_stopped_agent_spline_action_still_clears_motion(void) {
     return 0;
 }
 
+// Fills the history ring so the entry at lag j is curr shifted back exactly j*dt in x. Every
+// x-comparison then cancels and each lag's y offset reads through as its whole squared cost,
+// which is what lets the tests below pin the weighting to exact fractions.
+static void set_shifted_history(Agent *agent, int lag_count, float dt, const float *y_offset_by_lag) {
+    agent->spline_history_count = lag_count;
+    agent->spline_history_head = lag_count % SPLINE_CONSISTENCY_MAX_LAG;
+    for (int lag = 1; lag <= lag_count; lag++) {
+        int ring_idx = (agent->spline_history_head - lag + SPLINE_CONSISTENCY_MAX_LAG) % SPLINE_CONSISTENCY_MAX_LAG;
+        for (int coef_idx = 0; coef_idx < 6; coef_idx++) {
+            agent->spline_history_coefs_x[ring_idx][coef_idx] = 0.0f;
+            agent->spline_history_coefs_y[ring_idx][coef_idx] = 0.0f;
+        }
+        agent->spline_history_coefs_x[ring_idx][0] = -(float) lag * dt;
+        agent->spline_history_coefs_x[ring_idx][1] = 1.0f;
+        agent->spline_history_coefs_y[ring_idx][0] = y_offset_by_lag[lag - 1];
+    }
+}
+
 static int test_consistency_cost_math(void) {
     float dt = 0.1f;
-    // curr: a straight line x(t) = t (c1=1, everything else 0).
-    float curr_x[6] = {0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    float curr_y[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    // prev: the exact same line, shifted so prev(t) == curr(t - dt): prev_c0 = curr_c0 - c1*dt.
-    float prev_x[6] = {-1.0f * dt, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    float prev_y[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    int max_lag = 5; // slots 1..4 are scored; slot 0 is excluded as execution error
+    Agent agent = {0};
+    agent.spline_coefs_x[1] = 1.0f; // curr: a straight line x(t) = t, y(t) = 0
+    float lag1_msd = -1.0f;
 
-    float cost_aligned = compute_spline_consistency_cost(prev_x, prev_y, curr_x, curr_y, 5, dt);
-    EXPECT_NEAR(cost_aligned, 0.0f, 1e-4f);
+    // Units: the cost is a mean squared displacement in m^2, so a constant 2 m offset on every
+    // lag reads 4.0 whatever lag_count is -- every averaging step is convex.
+    const float offset_every_lag[4] = {2.0f, 2.0f, 2.0f, 2.0f};
+    set_shifted_history(&agent, 4, dt, offset_every_lag);
+    for (int lag_count = 1; lag_count <= 4; lag_count++) {
+        EXPECT_NEAR(compute_spline_consistency_cost(&agent, lag_count, max_lag, dt, &lag1_msd), 4.0f, 1e-4f);
+        EXPECT_NEAR(lag1_msd, 4.0f, 1e-4f);
+    }
+
+    // Exact time-shifts of the same line agree at every shared grid point.
+    const float offset_none[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    set_shifted_history(&agent, 4, dt, offset_none);
+    EXPECT_NEAR(compute_spline_consistency_cost(&agent, 4, max_lag, dt, &lag1_msd), 0.0f, 1e-4f);
+    EXPECT_NEAR(lag1_msd, 0.0f, 1e-4f);
+
+    // Offsetting lag 1 alone pins the per-slot weighting: lag 1 is the only comparison in slot 4
+    // but one of four in slot 1, so deepening lag_count dilutes it slot by slot.
+    const float offset_lag1_only[4] = {2.0f, 0.0f, 0.0f, 0.0f};
+    set_shifted_history(&agent, 4, dt, offset_lag1_only);
+    EXPECT_NEAR(compute_spline_consistency_cost(&agent, 1, max_lag, dt, &lag1_msd), 4.0f, 1e-4f);
+    EXPECT_NEAR(compute_spline_consistency_cost(&agent, 2, max_lag, dt, &lag1_msd), 2.5f, 1e-4f);
+    EXPECT_NEAR(compute_spline_consistency_cost(&agent, 3, max_lag, dt, &lag1_msd), 13.0f / 6.0f, 1e-4f);
+    EXPECT_NEAR(compute_spline_consistency_cost(&agent, 4, max_lag, dt, &lag1_msd), 25.0f / 12.0f, 1e-4f);
+    // The lag-1 diagnostic is scored at every slot regardless, so lag_count never moves it.
+    EXPECT_NEAR(lag1_msd, 4.0f, 1e-4f);
+
+    // Warm-up: fewer curves in history than lag_count normalizes against what actually exists,
+    // so there is no ramp in the denominator over the first steps after a spawn.
+    agent.spline_history_count = 2;
+    EXPECT_NEAR(compute_spline_consistency_cost(&agent, 4, max_lag, dt, &lag1_msd), 2.5f, 1e-4f);
 
     // A curve pointing somewhere unrelated should cost far more.
-    float curr_far_x[6] = {100.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    float cost_far = compute_spline_consistency_cost(prev_x, prev_y, curr_far_x, curr_y, 5, dt);
-    EXPECT_TRUE(cost_far > 100.0f);
-
-    // Units: the cost is a mean squared displacement in m^2, so a constant 2 m
-    // offset reads 4.0 whatever the sample count is.
-    float prev_y_offset[6] = {2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    float cost_few = compute_spline_consistency_cost(prev_x, prev_y_offset, curr_x, curr_y, 2, dt);
-    float cost_many = compute_spline_consistency_cost(prev_x, prev_y_offset, curr_x, curr_y, 9, dt);
-    EXPECT_NEAR(cost_few, 4.0f, 1e-4f);
-    EXPECT_NEAR(cost_many, 4.0f, 1e-4f);
+    agent.spline_history_count = 4;
+    agent.spline_coefs_x[0] = 100.0f;
+    EXPECT_TRUE(compute_spline_consistency_cost(&agent, 4, max_lag, dt, &lag1_msd) > 100.0f);
     return 0;
 }
 
@@ -210,17 +246,20 @@ static int test_consistency_reward_guard_and_rotation(void) {
     env.compute_eval_metrics = 0;
     env.action_type = ACTION_TYPE_SPLINE;
     env.spline_consistency_num_samples = 5;
+    env.spline_consistency_lag_count = 3;
+    // Only CONTROLLER_POLICY agents reach move_dynamics, so only they hold a curve worth scoring.
+    agent.controller = CONTROLLER_POLICY;
     agent.reward_coefs[REWARD_COEF_TRAJECTORY_CONSISTENCY] = 1.0f;
 
     // First call ever for this agent: no previous curve exists yet, so the guard must skip the
     // term entirely, regardless of what spline_coefs_x holds.
     agent.spline_coefs_x[1] = 1.0f; // c1 = 1: a line with some slope
-    agent.spline_history_valid = 0;
     reward[0] = 0.0f;
     compute_rewards(&env, 0);
     EXPECT_NEAR(reward[0], 0.0f, 1e-5f);
-    EXPECT_EQ_INT(agent.spline_history_valid, 1);           // now flips on...
-    EXPECT_NEAR(agent.prev_spline_coefs_x[1], 1.0f, 1e-5f); // ...and curr got rotated into prev
+    EXPECT_EQ_INT(agent.spline_history_count, 1);                     // history now holds one curve...
+    EXPECT_EQ_INT(agent.spline_history_head, 1);                      // ...and head advanced past it
+    EXPECT_NEAR(agent.spline_history_coefs_x[0][1], 1.0f, 1e-5f);     // ...which is curr
 
     // Second call: continue the exact same line one step later -> near-zero penalty.
     agent.spline_coefs_x[0] = 1.0f * env.dt;
@@ -228,6 +267,7 @@ static int test_consistency_reward_guard_and_rotation(void) {
     reward[0] = 0.0f;
     compute_rewards(&env, 0);
     EXPECT_NEAR(reward[0], 0.0f, 1e-3f);
+    EXPECT_EQ_INT(agent.spline_history_count, 2);
 
     // Third call: an abrupt, unrelated target -> a materially large penalty.
     agent.spline_coefs_x[0] = 500.0f;
@@ -235,6 +275,19 @@ static int test_consistency_reward_guard_and_rotation(void) {
     reward[0] = 0.0f;
     compute_rewards(&env, 0);
     EXPECT_TRUE(reward[0] < -10.0f);
+
+    // Six more pushes (nine total) saturate the ring and wrap head rather than running off it.
+    for (int step = 0; step < 6; step++) {
+        compute_rewards(&env, 0);
+    }
+    EXPECT_EQ_INT(agent.spline_history_count, SPLINE_CONSISTENCY_MAX_LAG);
+    EXPECT_EQ_INT(agent.spline_history_head, 9 % SPLINE_CONSISTENCY_MAX_LAG);
+
+    // A non-policy controller never gets a fresh curve, so the term must leave its ring alone.
+    agent.controller = CONTROLLER_IDM;
+    int head_before_idm = agent.spline_history_head;
+    compute_rewards(&env, 0);
+    EXPECT_EQ_INT(agent.spline_history_head, head_before_idm);
     return 0;
 }
 

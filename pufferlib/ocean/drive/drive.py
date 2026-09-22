@@ -60,6 +60,7 @@ class Drive(pufferlib.PufferEnv):
         dynamics_model="classic",
         reset_accel_on_stop=False,
         spline_horizon_seconds=1.5,
+        spline_consistency_lag_count=1,
         simulation_mode="gigaflow",
         termination_mode=False,
         inactive_agent_threshold=0.4,
@@ -191,6 +192,7 @@ class Drive(pufferlib.PufferEnv):
         }[dynamics_model]
         self.reset_accel_on_stop = reset_accel_on_stop
         self.spline_horizon_seconds = spline_horizon_seconds
+        self.spline_consistency_lag_count = spline_consistency_lag_count
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
         self.max_scenarios_per_batch = max_scenarios_per_batch
@@ -428,6 +430,7 @@ class Drive(pufferlib.PufferEnv):
             "dynamics_model": self.dynamics_model_flag,
             "reset_accel_on_stop": self.reset_accel_on_stop,
             "spline_horizon_seconds": self.spline_horizon_seconds,
+            "spline_consistency_lag_count": self.spline_consistency_lag_count,
             "reward_goal": self.reward_goal,
             "reward_collision": self.reward_collision,
             "reward_offroad": self.reward_offroad,

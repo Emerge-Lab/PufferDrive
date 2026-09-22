@@ -1961,6 +1961,15 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->dynamics_model = (int) unpack(kwargs, "dynamics_model");
     env->reset_accel_on_stop = (bool) unpack(kwargs, "reset_accel_on_stop");
     env->spline_horizon_seconds = (float) unpack(kwargs, "spline_horizon_seconds");
+    env->spline_consistency_lag_count = (int) unpack(kwargs, "spline_consistency_lag_count");
+    if (env->spline_consistency_lag_count < 1 || env->spline_consistency_lag_count > SPLINE_CONSISTENCY_MAX_LAG) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "spline_consistency_lag_count must be in [1, %d]. Got: %d",
+            SPLINE_CONSISTENCY_MAX_LAG,
+            env->spline_consistency_lag_count);
+        return -1;
+    }
     env->reward_goal = (float) unpack(kwargs, "reward_goal");
     env->reward_collision = (float) unpack(kwargs, "reward_collision");
     env->reward_offroad = (float) unpack(kwargs, "reward_offroad");
@@ -2158,6 +2167,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/ade", log->reward_ade);
     assign_to_dict(dict, "reward_components/trajectory_consistency", log->reward_trajectory_consistency);
     assign_to_dict(dict, "spline/consistency_msd_m2", log->spline_consistency_msd_m2);
+    assign_to_dict(dict, "spline/consistency_lag1_msd_m2", log->spline_consistency_lag1_msd_m2);
 
     if (env->compute_eval_metrics) {
         // Puffer score components

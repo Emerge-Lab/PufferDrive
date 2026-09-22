@@ -123,14 +123,16 @@ struct Agent {
     float steering_angle;
     float wheelbase;
 
-    // Spline terminal-boundary dynamics (trajectory_training). curr/prev store the full
-    // quintic c0..c5 per global axis, so compute_rewards can compare consecutive curves
-    // over their overlap after move_dynamics has already produced this step's curve.
+    // Spline terminal-boundary dynamics (trajectory_training). curr plus a ring of past
+    // curves store the full quintic c0..c5 per global axis, so compute_rewards can compare
+    // this step's curve against the last k over their overlap.
     float spline_coefs_x[6];
     float spline_coefs_y[6];
-    float prev_spline_coefs_x[6];
-    float prev_spline_coefs_y[6];
-    int spline_history_valid; // 0 until the first spline step after spawn/reset has run
+    float spline_history_coefs_x[SPLINE_CONSISTENCY_MAX_LAG][6];
+    float spline_history_coefs_y[SPLINE_CONSISTENCY_MAX_LAG][6];
+    // ring entry at lag j was solved exactly j steps ago; head is where the next curve goes
+    int spline_history_count;
+    int spline_history_head;
     float spline_intent[SPLINE_INTENT_FEATURES]; // last emitted action, raw [-1, 1], fed back as obs
 
     // Reward conditioning coefficients (per-agent, randomized at spawn)

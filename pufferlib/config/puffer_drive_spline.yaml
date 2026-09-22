@@ -24,3 +24,7 @@ env:
   # accordingly; still measured too large relative to the other reward_components/* terms after
   # that first rescale, so cut by a further 10^4x. Still a placeholder pending real tuning.
   reward_trajectory_consistency: 0.00000003
+  # Compare against the last 3 curves, not just the adjacent one. Simulation of the decode path
+  # put the marginal gain at +12-63% for lag 2 and +7-16% for lag 3, then under 5% for lag 4 --
+  # disagreement saturates once the curves decorrelate, which the bounded terminal offsets force.
+  spline_consistency_lag_count: 3

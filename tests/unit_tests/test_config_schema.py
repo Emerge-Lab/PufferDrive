@@ -375,6 +375,52 @@ class TestConfigSchema(unittest.TestCase):
             validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
 
     @patch("sys.argv", ["pufferl.py"])
+    def test_trajectory_training_requires_horizon_of_at_least_two_steps(self):
+        """A horizon between dt and 2*dt yields max_lag == 1, leaving the consistency term's
+        per-slot mean dividing by zero -- this guard is load-bearing, not defensive."""
+        args = load_config("puffer_drive")
+        args["trajectory_training"] = True
+        args["env"]["dt"] = 0.3
+        args["env"]["spline_horizon_seconds"] = 0.45
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "at least 2"):
+            validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_spline_lag_count_capped_by_horizon(self):
+        """Lag j only reaches slots 1..max_lag-j, so a lag past max_lag-1 lands solely on the
+        excluded slot 0 and would be silently inert rather than rejected."""
+        args = load_config("puffer_drive")
+        args["trajectory_training"] = True
+        args["env"]["dt"] = 0.3
+        args["env"]["spline_horizon_seconds"] = 0.9  # max_lag 3, so lags beyond 2 score nothing
+        args["env"]["spline_consistency_lag_count"] = 3
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "share no scored slot"):
+            validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_spline_lag_count_capped_by_history_ring_depth(self):
+        """Even where the horizon would allow deeper lags, the per-agent ring bounds them."""
+        args = load_config("puffer_drive")
+        args["trajectory_training"] = True
+        args["env"]["dt"] = 0.3
+        args["env"]["spline_horizon_seconds"] = 3.0  # max_lag 10, so the horizon allows up to 9
+        args["env"]["spline_consistency_lag_count"] = binding.SPLINE_CONSISTENCY_MAX_LAG + 1
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "spline_consistency_lag_count"):
+            validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_spline_lag_count_default_is_accepted(self):
+        """The shipping spline config (k=3 at T=1.5/dt=0.3, max_lag 5) must validate cleanly."""
+        args = load_config("puffer_drive")
+        args["trajectory_training"] = True
+        args["env"]["spline_consistency_lag_count"] = 3
+
+        validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
+
+    @patch("sys.argv", ["pufferl.py"])
     def test_spline_env_action_type_requires_matching_policy_action_type(self):
         """env.action_type can be set to 'spline' directly, bypassing trajectory_training
         entirely -- there is no discrete/continuous-style bridging table for spline, so a

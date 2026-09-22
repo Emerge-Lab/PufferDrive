@@ -252,6 +252,7 @@ class DriveEnvConfig:
     dynamics_model: DynamicsModel = MISSING
     reset_accel_on_stop: bool = MISSING
     spline_horizon_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    spline_consistency_lag_count: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     dt: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     base_max_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     spawn_initial_speed: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
@@ -631,8 +632,10 @@ def _validate_cross_field_constraints(config, context):
     if env["action_type"] == "spline":
         if env["dynamics_model"] != "jerk":
             _raise_config_error(context, "env.action_type", "'spline' requires env.dynamics_model to be 'jerk'")
-        if env["spline_horizon_seconds"] <= env["dt"]:
-            _raise_config_error(context, "env.spline_horizon_seconds", "must exceed env.dt")
+        # At least two horizon steps: the consistency term averages over max_lag-1 slots, so a
+        # horizon under 2*dt leaves it dividing by zero.
+        if env["spline_horizon_seconds"] < 2 * env["dt"]:
+            _raise_config_error(context, "env.spline_horizon_seconds", "must be at least 2 * env.dt")
         implied_samples = (env["spline_horizon_seconds"] - env["dt"]) / env["dt"]
         if implied_samples > SPLINE_CONSISTENCY_MAX_SAMPLES:
             _raise_config_error(
@@ -640,6 +643,22 @@ def _validate_cross_field_constraints(config, context):
                 "env.spline_horizon_seconds",
                 f"implies {implied_samples:.0f} consistency-check samples, exceeding the "
                 f"{SPLINE_CONSISTENCY_MAX_SAMPLES} cap; reduce spline_horizon_seconds or increase dt",
+            )
+        if env["spline_consistency_lag_count"] > binding.SPLINE_CONSISTENCY_MAX_LAG:
+            _raise_config_error(
+                context,
+                "env.spline_consistency_lag_count",
+                f"must not exceed {binding.SPLINE_CONSISTENCY_MAX_LAG}",
+            )
+        # Lag j only reaches slots 1..max_lag-j, so lags past max_lag-1 land solely on slot 0,
+        # which the term excludes -- they would be silently inert rather than wrong.
+        implied_max_lag = math.floor(implied_samples) + 1
+        if env["spline_consistency_lag_count"] > implied_max_lag - 1:
+            _raise_config_error(
+                context,
+                "env.spline_consistency_lag_count",
+                f"must not exceed {implied_max_lag - 1} at this spline_horizon_seconds/dt; "
+                "deeper lags share no scored slot with the current curve",
             )
     if config["rnn_name"] is not None:
         if policy["backbone_num_layers"] == 0:
