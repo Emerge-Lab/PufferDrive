@@ -47,7 +47,9 @@ static int test_metric_on_road_lane_alignment(void) {
     compute_metrics(&env, agent_idx, 0);
 
     EXPECT_TRUE(agent->current_lane_idx != -1);
-    EXPECT_TRUE(agent->metrics_array[LANE_ANGLE_IDX] >= -1.0f && agent->metrics_array[LANE_ANGLE_IDX] <= 1.0f);
+    EXPECT_TRUE(
+        agent->metrics_array[LANE_HEADING_COSINE_IDX] >= -1.0f
+        && agent->metrics_array[LANE_HEADING_COSINE_IDX] <= 1.0f);
     EXPECT_NEAR(agent->metrics_array[OFFROAD_IDX], 0.0f, 1e-5f);
 
     free_allocated(&env);
