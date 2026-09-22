@@ -13,7 +13,7 @@
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_scaled_0037_1000
+export RUN_NAME=k_scaled_0038_1000
 echo ${RUN_NAME}
 
 export MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
@@ -37,7 +37,7 @@ fi
 # parallel_eval places one shard per allocated node via srun, so each shard's 64
 # env workers get a full node's cores instead of sharing the batch host.
 .venv/bin/python scripts/parallel_eval.py carla \
-    --total-scenarios 40000 \
+    --total-scenarios 5000 \
     --num-nodes 8 \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     vec.num_envs=64 \
