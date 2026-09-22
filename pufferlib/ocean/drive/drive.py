@@ -42,6 +42,9 @@ class Drive(pufferlib.PufferEnv):
         adversarial_target_genuine_failure_reward=10.0,
         adversarial_target_adversary_forced_reward=1.0,
         adversarial_target_unavoidable_reward=-0.1,
+        adversarial_target_at_fault_reward=0.0,
+        use_at_fault_ablation=False,
+        terminate_hitter_on_collision=False,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
         num_goals=3,
@@ -174,7 +177,6 @@ class Drive(pufferlib.PufferEnv):
         self.compute_eval_metrics = compute_eval_metrics
         self.shared_network = shared_network
         self.render_mode = render_mode
-        self.num_maps = num_maps
         self.report_interval = report_interval
         self.reward_goal = reward_goal
         self.reward_collision = reward_collision
@@ -195,6 +197,9 @@ class Drive(pufferlib.PufferEnv):
         self.adversarial_target_genuine_failure_reward = adversarial_target_genuine_failure_reward
         self.adversarial_target_adversary_forced_reward = adversarial_target_adversary_forced_reward
         self.adversarial_target_unavoidable_reward = adversarial_target_unavoidable_reward
+        self.adversarial_target_at_fault_reward = adversarial_target_at_fault_reward
+        self.use_at_fault_ablation = use_at_fault_ablation
+        self.terminate_hitter_on_collision = terminate_hitter_on_collision
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
@@ -367,6 +372,10 @@ class Drive(pufferlib.PufferEnv):
         else:
             self.map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
 
+        if num_maps == -1:
+            num_maps = len(self.map_files)
+        self.num_maps = num_maps
+
         self.simulation_mode = {
             "gigaflow": binding.SIMULATION_MODE_GIGAFLOW,
             "replay": binding.SIMULATION_MODE_REPLAY,
@@ -509,6 +518,9 @@ class Drive(pufferlib.PufferEnv):
             "adversarial_target_genuine_failure_reward": self.adversarial_target_genuine_failure_reward,
             "adversarial_target_adversary_forced_reward": self.adversarial_target_adversary_forced_reward,
             "adversarial_target_unavoidable_reward": self.adversarial_target_unavoidable_reward,
+            "adversarial_target_at_fault_reward": self.adversarial_target_at_fault_reward,
+            "use_at_fault_ablation": self.use_at_fault_ablation,
+            "terminate_hitter_on_collision": self.terminate_hitter_on_collision,
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,

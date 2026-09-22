@@ -2340,7 +2340,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->goal_radius = goal_radius;
         load_map_binary(map_file, env);
 
-        set_active_agents(env);
+        if (env->num_total_agents > 0 && env->agents[EGO_IDX].route_length != 0) {
+            set_active_agents(env);
+        }
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
@@ -2540,6 +2542,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->adversarial_target_adversary_forced_reward
         = (float) unpack(kwargs, "adversarial_target_adversary_forced_reward");
     env->adversarial_target_unavoidable_reward = (float) unpack(kwargs, "adversarial_target_unavoidable_reward");
+    env->adversarial_target_at_fault_reward = (float) unpack(kwargs, "adversarial_target_at_fault_reward");
+    env->use_at_fault_ablation = (bool) unpack(kwargs, "use_at_fault_ablation");
+    env->terminate_hitter_on_collision = (bool) unpack(kwargs, "terminate_hitter_on_collision");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->capture_avoidability_debug = (bool) unpack(kwargs, "capture_avoidability_debug");
@@ -2915,6 +2920,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         dict,
         "traffic_reward_components/target_unavoidable",
         log->reward_target_unavoidable * traffic_scale);
+    assign_to_dict(dict, "traffic_reward_components/target_at_fault", log->reward_target_at_fault * traffic_scale);
     float target_collision_count = log->sdc_target_collision_count;
     float target_collision_scale = target_collision_count > 0.0f ? 1.0f / target_collision_count : 0.0f;
     float avoidable_collision_count = log->sdc_target_avoidable_collision_count;
@@ -2962,6 +2968,65 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         ASSIGN_SPLIT_METRIC("multi_lane_time", multi_lane_time, sdc_multi_lane_time);
         ASSIGN_SPLIT_METRIC("multi_lane_score", multi_lane_score, sdc_multi_lane_score);
         ASSIGN_SPLIT_METRIC("puffer_score", puffer_score, sdc_puffer_score);
+        assign_to_dict(dict, "hitter_compliance_valid", log->hitter_compliance_valid * sdc_scale);
+        assign_to_dict(dict, "hitter_compliance_compliant", log->hitter_compliance_compliant * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_window_sample_count",
+            log->hitter_compliance_window_sample_count * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_lane_sample_count",
+            log->hitter_compliance_lane_sample_count * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_lane_unavailable_sample_count",
+            log->hitter_compliance_lane_unavailable_sample_count * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_speed_limit_sample_count",
+            log->hitter_compliance_speed_limit_sample_count * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_speed_limit_unavailable_sample_count",
+            log->hitter_compliance_speed_limit_unavailable_sample_count * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_red_light_violation",
+            log->hitter_compliance_red_light_violation * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_wrong_way_violation",
+            log->hitter_compliance_wrong_way_violation * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_solid_line_violation",
+            log->hitter_compliance_solid_line_violation * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_speed_limit_violation",
+            log->hitter_compliance_speed_limit_violation * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_first_red_light_timestep",
+            log->hitter_compliance_first_red_light_timestep * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_first_wrong_way_timestep",
+            log->hitter_compliance_first_wrong_way_timestep * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_first_solid_line_timestep",
+            log->hitter_compliance_first_solid_line_timestep * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_first_speed_limit_timestep",
+            log->hitter_compliance_first_speed_limit_timestep * sdc_scale);
+        assign_to_dict(
+            dict,
+            "hitter_compliance_wrong_way_distance_meters",
+            log->hitter_compliance_wrong_way_distance_meters * sdc_scale);
+        assign_to_dict(dict, "hitter_compliance_max_speed_ratio", log->hitter_compliance_max_speed_ratio * sdc_scale);
     }
 
 #undef ASSIGN_SPLIT_METRIC

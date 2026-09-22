@@ -15,6 +15,73 @@ Activate venv before `python`/`puffer`: `source .venv/bin/activate`
 - **Rebuild C (mandatory after .c/.h change):** `python setup.py build_ext --inplace --force`
 - **Train:** `puffer train puffer_drive [train.learning_rate=0.001 env.num_agents=512]`
 
+## WOMD Adversarial Training
+Use converted WOMD `.bin` scenarios and a frozen target checkpoint. Training uses
+`pufferlib/config/puffer_drive.yaml`; selecting an evaluation benchmark does not
+apply its environment settings to training.
+
+Example matching the `adversarial_womd` benchmark's scene settings. Replace the
+checkpoint path; `num_maps=-1` makes all available training maps eligible:
+
+```bash
+source .venv/bin/activate
+puffer train puffer_drive \
+  env.simulation_mode=replay \
+  env.map_dir=pufferlib/resources/drive/binaries/wod-motion_train \
+  env.num_maps=-1 \
+  env.dt=0.1 \
+  env.scenario_length=91 \
+  env.init_step=0 \
+  env.init_step_spread=false \
+  env.control_mode=control_vehicles \
+  env.init_mode=create_only_controlled \
+  env.sdc_controller=policy \
+  env.non_sdc_controller=policy \
+  env.max_agents_per_env=128 \
+  env.goal_source=route \
+  env.goal_regen_mode=finite \
+  env.min_goal_spacing=30.0 \
+  env.max_goal_spacing=30.0 \
+  env.target_infraction_behavior=remove \
+  env.adversarial_termination_mode=target_inactive \
+  env.target_collision_continuation_seconds=0.0 \
+  env.traffic_light_behavior=ignore \
+  env.resample_frequency=910 \
+  train.target_policy=/path/to/target.pt
+```
+
+- `replay` initializes from recorded trajectories; policy controllers still act
+  freely. Keep `eval_mode` false (the wrapper default), and retain adversarial rewards.
+- The SDC is inserted into active slot 0 and excluded from PPO updates when using
+  the frozen target. Scenarios with no SDC route are rejected during sampling.
+- Use `num_maps=-1` for all available maps, or a positive count no larger than the
+  available file count. Training samples from this pool; it does not guarantee a
+  pass through every scenario. Use a training split; the benchmark points at validation data.
+- `mlops/run.sh` links `pufferlib/resources/drive/binaries/wod-motion_train` to
+  `/gcs/valeo-cp2879-driving-policy/datasets/v1.1/wod-motion_train` on NOA or
+  `/gcs/valeo-cp2386-datasets/pufferdrive/v1.1/wod-motion_train` on DRILAX.
+- `max_agents_per_env=128` is a population choice, not a requirement. Training
+  caps scene population, whereas replay evaluation keeps whole scenes.
+- `resample_frequency=910` is an example (ten full 91-step episodes). Tune it for
+  dataset diversity versus loading cost; ordinary episode resets reuse the same file.
+- Keep `init_step_spread=false`: counting currently uses the fixed initial step,
+  while randomized initialization can select a different population.
+- Proximity-based adversarial termination and targeted spawning are Gigaflow-only.
+  Replay does not enforce `min_agents_per_env`; target-only scenes can be sampled.
+
+### Ground-truth goals
+`env.goal_source=gt` is implemented for replay. It selects `num_goals` evenly
+spaced time indices from the remaining logged trajectory, including its final
+frame, instead of using route-distance spacing. It applies to both the policy
+target and policy adversaries; it does not make their controllers replay logs.
+GT goals are not regenerated after completion. The SDC route requirement remains.
+
+Keep `route` for the recipe above until GT selection is checked: `binding.shared`
+does not receive `goal_source`, so preliminary counting uses route-based eligibility
+while GT initialization can admit route-less non-SDC agents. GT waypoint selection
+also does not filter invalid logged frames. These are existing limitations, not
+reasons to add redundant checks to simulation hot paths.
+
 ## Coding Standards
 - **Naming:** explicit (`active_agent_count`, `closest_lane_idx`); never `n/tmp/val/foo` except tiny local math. Keep units in names: `_seconds/_meters/_mps/_idx/_count`.
 - **Helpers:** add a function only for a major sim concept (`move_expert`, `compute_rewards`). No one-off wrappers hiding 2 lines.

@@ -126,7 +126,7 @@ benchmarks:
       max_scenarios_per_batch: null
       scenario_length: 91
       control_mode: control_vehicles
-      init_mode: create_all_valid
+      init_mode: create_only_controlled
       goal_source: route
       min_goal_spacing: 30.0
       max_goal_spacing: 30.0

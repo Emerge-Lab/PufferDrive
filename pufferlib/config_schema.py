@@ -40,6 +40,7 @@ NONNEGATIVE_NUMBER_CONSTRAINT = 4
 PROBABILITY_CONSTRAINT = 5
 NONEMPTY_STRING_CONSTRAINT = 6
 FINITE_NUMBER_CONSTRAINT = 7
+POSITIVE_INT_OR_ALL_CONSTRAINT = 8
 PDM_MIN_HORIZON_SECONDS = 0.5
 PDM_MAX_HORIZON_SECONDS = 8.0
 PDM_MIN_PLANNING_DT_SECONDS = 0.1
@@ -76,6 +77,9 @@ def _validate_value_constraint(value, constraint_mode, context, path):
     if constraint_mode == POSITIVE_INT_CONSTRAINT:
         valid = not isinstance(value, bool) and isinstance(value, int) and value > 0
         message = "must be a positive integer"
+    elif constraint_mode == POSITIVE_INT_OR_ALL_CONSTRAINT:
+        valid = not isinstance(value, bool) and isinstance(value, int) and (value > 0 or value == -1)
+        message = "must be a positive integer or -1 for all maps"
     elif constraint_mode == NONNEGATIVE_INT_CONSTRAINT:
         valid = not isinstance(value, bool) and isinstance(value, int) and value >= 0
         message = "must be a non-negative integer"
@@ -358,8 +362,11 @@ class DriveEnvConfig:
     adversarial_target_genuine_failure_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     adversarial_target_adversary_forced_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     adversarial_target_unavoidable_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    adversarial_target_at_fault_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    use_at_fault_ablation: bool = False
+    terminate_hitter_on_collision: bool = False
     map_dir: str = MISSING
-    num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    num_maps: int = _constrained_field(POSITIVE_INT_OR_ALL_CONSTRAINT)
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     obs_slots_boundary_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     obs_slots_partners_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)

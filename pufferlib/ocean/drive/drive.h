@@ -125,6 +125,7 @@ struct Log {
     float reward_target_genuine_failure;
     float reward_target_adversary_forced;
     float reward_target_unavoidable;
+    float reward_target_at_fault;
     float traffic_collision_rate;
     float traffic_sdc_collision_rate;
     float traffic_traffic_collision_rate;
@@ -170,6 +171,23 @@ struct Log {
     float sdc_target_collision_adversary_forced_count;
     float sdc_target_avoidable_braking_seconds_sum;
     float sdc_target_avoidable_collision_count;
+    float hitter_compliance_valid;
+    float hitter_compliance_compliant;
+    float hitter_compliance_window_sample_count;
+    float hitter_compliance_lane_sample_count;
+    float hitter_compliance_lane_unavailable_sample_count;
+    float hitter_compliance_speed_limit_sample_count;
+    float hitter_compliance_speed_limit_unavailable_sample_count;
+    float hitter_compliance_red_light_violation;
+    float hitter_compliance_wrong_way_violation;
+    float hitter_compliance_solid_line_violation;
+    float hitter_compliance_speed_limit_violation;
+    float hitter_compliance_first_red_light_timestep;
+    float hitter_compliance_first_wrong_way_timestep;
+    float hitter_compliance_first_solid_line_timestep;
+    float hitter_compliance_first_speed_limit_timestep;
+    float hitter_compliance_wrong_way_distance_meters;
+    float hitter_compliance_max_speed_ratio;
 };
 
 typedef struct {
@@ -212,6 +230,27 @@ typedef struct {
     float lateral_buffer_meters;
     int lateral_buffer_dangerous;
 } AvoidabilityDetectionDebug;
+
+typedef struct {
+    int valid;
+    int compliant;
+    int collision_timestep;
+    int window_sample_count;
+    int lane_sample_count;
+    int lane_unavailable_sample_count;
+    int speed_limit_sample_count;
+    int speed_limit_unavailable_sample_count;
+    int red_light_violation;
+    int wrong_way_violation;
+    int solid_line_violation;
+    int speed_limit_violation;
+    int first_red_light_timestep;
+    int first_wrong_way_timestep;
+    int first_solid_line_timestep;
+    int first_speed_limit_timestep;
+    float wrong_way_distance_meters;
+    float max_speed_ratio;
+} ComplianceDiagnostics;
 
 typedef struct {
     int valid;
@@ -410,6 +449,7 @@ struct Drive {
     float adversarial_target_genuine_failure_reward;
     float adversarial_target_adversary_forced_reward;
     float adversarial_target_unavoidable_reward;
+    float adversarial_target_at_fault_reward;
     int target_hit_this_step;
     int target_hit_hitter_idx_this_step;
     float target_hit_responsibility_this_step;
@@ -419,9 +459,12 @@ struct Drive {
     int target_reaction_window_danger_episode;
     int capture_avoidability_debug;
     AvoidabilityDebug *avoidability_debug;
+    ComplianceDiagnostics compliance_diagnostics;
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
+    int use_at_fault_ablation;
+    int terminate_hitter_on_collision;
     // Goals
     float goal_radius;
     float goal_speed;
@@ -651,6 +694,7 @@ static void reset_agent_state(Agent *agent) {
     agent->is_blind_partner = 0;
     agent->is_phantom_braker = 0;
     agent->trajectory_hist_count = 0;
+    agent->compliance_hist_count = 0;
 }
 
 static void invalidate_agent(Agent *agent) {
@@ -1905,6 +1949,203 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
     return false;
 }
 
+static inline bool is_compliance_solid_line(int road_type) {
+    return road_type == ROAD_LINE_SOLID_SINGLE_WHITE || road_type == ROAD_LINE_SOLID_DOUBLE_WHITE
+        || road_type == ROAD_LINE_SOLID_SINGLE_YELLOW || road_type == ROAD_LINE_SOLID_DOUBLE_YELLOW;
+}
+
+static bool compliance_segments_intersect(
+    float first_start_x,
+    float first_start_y,
+    float first_end_x,
+    float first_end_y,
+    float second_start_x,
+    float second_start_y,
+    float second_end_x,
+    float second_end_y) {
+    float first_dx = first_end_x - first_start_x;
+    float first_dy = first_end_y - first_start_y;
+    float second_dx = second_end_x - second_start_x;
+    float second_dy = second_end_y - second_start_y;
+    float cross = first_dx * second_dy - first_dy * second_dx;
+    if (fabsf(cross) <= 1e-9f) {
+        return false;
+    }
+    float start_dx = second_start_x - first_start_x;
+    float start_dy = second_start_y - first_start_y;
+    float first_fraction = (start_dx * second_dy - start_dy * second_dx) / cross;
+    float second_fraction = (start_dx * first_dy - start_dy * first_dx) / cross;
+    return first_fraction >= 0.0f && first_fraction <= 1.0f && second_fraction >= 0.0f && second_fraction <= 1.0f;
+}
+
+static float compliance_lane_heading(const Agent *agent, const RoadMapElement *lane) {
+    int closest_segment_idx = 0;
+    float closest_distance_squared = INFINITY;
+    for (int segment_idx = 0; segment_idx < lane->segment_size - 1; segment_idx++) {
+        float segment_dx = lane->x[segment_idx + 1] - lane->x[segment_idx];
+        float segment_dy = lane->y[segment_idx + 1] - lane->y[segment_idx];
+        float segment_length_squared = segment_dx * segment_dx + segment_dy * segment_dy;
+        if (segment_length_squared <= 1e-6f) {
+            continue;
+        }
+        float projection
+            = ((agent->sim_x - lane->x[segment_idx]) * segment_dx + (agent->sim_y - lane->y[segment_idx]) * segment_dy)
+            / segment_length_squared;
+        projection = clip(projection, 0.0f, 1.0f);
+        float closest_x = lane->x[segment_idx] + projection * segment_dx;
+        float closest_y = lane->y[segment_idx] + projection * segment_dy;
+        float distance_x = agent->sim_x - closest_x;
+        float distance_y = agent->sim_y - closest_y;
+        float distance_squared = distance_x * distance_x + distance_y * distance_y;
+        if (distance_squared < closest_distance_squared) {
+            closest_distance_squared = distance_squared;
+            closest_segment_idx = segment_idx;
+        }
+    }
+    return lane->headings[closest_segment_idx];
+}
+
+static void record_compliance_sample(
+    Drive *env,
+    Agent *agent,
+    int lane_idx,
+    float lane_heading,
+    bool red_light_violation) {
+    unsigned char flags = 0;
+    float wrong_way_distance_meters = 0.0f;
+    float speed_ratio = 0.0f;
+    bool include_movement = agent->compliance_hist_count > 0;
+    if (lane_idx >= 0) {
+        flags |= COMPLIANCE_FLAG_LANE_AVAILABLE;
+        float lane_velocity_mps = agent->sim_vx * cosf(lane_heading) + agent->sim_vy * sinf(lane_heading);
+        if (include_movement) {
+            wrong_way_distance_meters = fmaxf(0.0f, -lane_velocity_mps) * env->dt;
+        }
+        float speed_limit_mps = env->road_elements[lane_idx].speed_limit;
+        if (speed_limit_mps > 0.0f) {
+            flags |= COMPLIANCE_FLAG_SPEED_LIMIT_AVAILABLE;
+            speed_ratio = agent->sim_speed / speed_limit_mps;
+        }
+    }
+    if (red_light_violation) {
+        flags |= COMPLIANCE_FLAG_RED_LIGHT;
+    }
+    if (include_movement) {
+        for (int road_idx = 0; road_idx < env->num_road_elements; road_idx++) {
+            RoadMapElement *road = &env->road_elements[road_idx];
+            if (!is_compliance_solid_line(road->type)) {
+                continue;
+            }
+            for (int segment_idx = 0; segment_idx < road->segment_size - 1; segment_idx++) {
+                if (fabsf(road->z[segment_idx] - agent->sim_z) > Z_BUFFER
+                    && fabsf(road->z[segment_idx + 1] - agent->sim_z) > Z_BUFFER) {
+                    continue;
+                }
+                if (compliance_segments_intersect(
+                        agent->prev_x,
+                        agent->prev_y,
+                        agent->sim_x,
+                        agent->sim_y,
+                        road->x[segment_idx],
+                        road->y[segment_idx],
+                        road->x[segment_idx + 1],
+                        road->y[segment_idx + 1])) {
+                    flags |= COMPLIANCE_FLAG_SOLID_LINE;
+                    road_idx = env->num_road_elements;
+                    break;
+                }
+            }
+        }
+    }
+
+    int newest_idx = COMPLIANCE_HISTORY_LEN - 1;
+    bool overwrite_current
+        = agent->compliance_hist_count > 0 && agent->compliance_hist_timestep[newest_idx] == env->timestep;
+    if (!overwrite_current) {
+        for (int history_idx = 0; history_idx < COMPLIANCE_HISTORY_LEN - 1; history_idx++) {
+            agent->compliance_hist_timestep[history_idx] = agent->compliance_hist_timestep[history_idx + 1];
+            agent->compliance_hist_flags[history_idx] = agent->compliance_hist_flags[history_idx + 1];
+            agent->compliance_hist_wrong_way_distance_meters[history_idx]
+                = agent->compliance_hist_wrong_way_distance_meters[history_idx + 1];
+            agent->compliance_hist_speed_ratio[history_idx] = agent->compliance_hist_speed_ratio[history_idx + 1];
+        }
+        if (agent->compliance_hist_count < COMPLIANCE_HISTORY_LEN) {
+            agent->compliance_hist_count++;
+        }
+    }
+    agent->compliance_hist_timestep[newest_idx] = env->timestep;
+    agent->compliance_hist_flags[newest_idx] = flags;
+    agent->compliance_hist_wrong_way_distance_meters[newest_idx] = wrong_way_distance_meters;
+    agent->compliance_hist_speed_ratio[newest_idx] = speed_ratio;
+}
+
+static void record_hitter_compliance_diagnostics(Drive *env, int hitter_agent_idx) {
+    if (!env->compute_eval_metrics || env->compliance_diagnostics.valid) {
+        return;
+    }
+    Agent *hitter = &env->agents[hitter_agent_idx];
+    ComplianceDiagnostics *diagnostics = &env->compliance_diagnostics;
+    memset(diagnostics, 0, sizeof(*diagnostics));
+    diagnostics->valid = 1;
+    diagnostics->collision_timestep = env->timestep;
+    diagnostics->first_red_light_timestep = -1;
+    diagnostics->first_wrong_way_timestep = -1;
+    diagnostics->first_solid_line_timestep = -1;
+    diagnostics->first_speed_limit_timestep = -1;
+    int window_start_timestep = env->timestep - (int) ceilf(COMPLIANCE_WINDOW_SECONDS / env->dt);
+    int history_start_idx = COMPLIANCE_HISTORY_LEN - hitter->compliance_hist_count;
+    for (int history_idx = history_start_idx; history_idx < COMPLIANCE_HISTORY_LEN; history_idx++) {
+        int timestep = hitter->compliance_hist_timestep[history_idx];
+        if (timestep < window_start_timestep) {
+            continue;
+        }
+        unsigned char flags = hitter->compliance_hist_flags[history_idx];
+        diagnostics->window_sample_count++;
+        if (flags & COMPLIANCE_FLAG_LANE_AVAILABLE) {
+            diagnostics->lane_sample_count++;
+        } else {
+            diagnostics->lane_unavailable_sample_count++;
+        }
+        if (flags & COMPLIANCE_FLAG_SPEED_LIMIT_AVAILABLE) {
+            diagnostics->speed_limit_sample_count++;
+            float speed_ratio = hitter->compliance_hist_speed_ratio[history_idx];
+            diagnostics->max_speed_ratio = fmaxf(diagnostics->max_speed_ratio, speed_ratio);
+            if (speed_ratio > COMPLIANCE_SPEED_LIMIT_RATIO_THRESHOLD) {
+                diagnostics->speed_limit_violation = 1;
+                if (diagnostics->first_speed_limit_timestep < 0) {
+                    diagnostics->first_speed_limit_timestep = timestep;
+                }
+            }
+        } else {
+            diagnostics->speed_limit_unavailable_sample_count++;
+        }
+        if (flags & COMPLIANCE_FLAG_RED_LIGHT) {
+            diagnostics->red_light_violation = 1;
+            if (diagnostics->first_red_light_timestep < 0) {
+                diagnostics->first_red_light_timestep = timestep;
+            }
+        }
+        if (timestep <= window_start_timestep) {
+            continue;
+        }
+        diagnostics->wrong_way_distance_meters += hitter->compliance_hist_wrong_way_distance_meters[history_idx];
+        if (diagnostics->wrong_way_distance_meters > COMPLIANCE_WRONG_WAY_DISTANCE_THRESHOLD_METERS
+            && diagnostics->first_wrong_way_timestep < 0) {
+            diagnostics->wrong_way_violation = 1;
+            diagnostics->first_wrong_way_timestep = timestep;
+        }
+        if (flags & COMPLIANCE_FLAG_SOLID_LINE) {
+            diagnostics->solid_line_violation = 1;
+            if (diagnostics->first_solid_line_timestep < 0) {
+                diagnostics->first_solid_line_timestep = timestep;
+            }
+        }
+    }
+    diagnostics->compliant
+        = !(diagnostics->red_light_violation || diagnostics->wrong_way_violation || diagnostics->solid_line_violation
+            || diagnostics->speed_limit_violation);
+}
+
 static bool check_obb_collision_with_normal(
     Agent *car1,
     Agent *car2,
@@ -3127,6 +3368,7 @@ static void add_log(Drive *env) {
         episode_log.reward_target_genuine_failure += env->logs[i].reward_target_genuine_failure;
         episode_log.reward_target_adversary_forced += env->logs[i].reward_target_adversary_forced;
         episode_log.reward_target_unavoidable += env->logs[i].reward_target_unavoidable;
+        episode_log.reward_target_at_fault += env->logs[i].reward_target_at_fault;
         // Comfort and velocity metrics (normalized per timestep)
         episode_log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         episode_log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -3225,6 +3467,27 @@ static void add_log(Drive *env) {
             episode_log.sdc_target_avoidable_braking_seconds_sum += braking_seconds;
             episode_log.sdc_target_avoidable_collision_count += 1.0f;
         }
+    }
+    if (env->compliance_diagnostics.valid) {
+        ComplianceDiagnostics *diagnostics = &env->compliance_diagnostics;
+        episode_log.hitter_compliance_valid = 1.0f;
+        episode_log.hitter_compliance_compliant = diagnostics->compliant;
+        episode_log.hitter_compliance_window_sample_count = diagnostics->window_sample_count;
+        episode_log.hitter_compliance_lane_sample_count = diagnostics->lane_sample_count;
+        episode_log.hitter_compliance_lane_unavailable_sample_count = diagnostics->lane_unavailable_sample_count;
+        episode_log.hitter_compliance_speed_limit_sample_count = diagnostics->speed_limit_sample_count;
+        episode_log.hitter_compliance_speed_limit_unavailable_sample_count
+            = diagnostics->speed_limit_unavailable_sample_count;
+        episode_log.hitter_compliance_red_light_violation = diagnostics->red_light_violation;
+        episode_log.hitter_compliance_wrong_way_violation = diagnostics->wrong_way_violation;
+        episode_log.hitter_compliance_solid_line_violation = diagnostics->solid_line_violation;
+        episode_log.hitter_compliance_speed_limit_violation = diagnostics->speed_limit_violation;
+        episode_log.hitter_compliance_first_red_light_timestep = diagnostics->first_red_light_timestep;
+        episode_log.hitter_compliance_first_wrong_way_timestep = diagnostics->first_wrong_way_timestep;
+        episode_log.hitter_compliance_first_solid_line_timestep = diagnostics->first_solid_line_timestep;
+        episode_log.hitter_compliance_first_speed_limit_timestep = diagnostics->first_speed_limit_timestep;
+        episode_log.hitter_compliance_wrong_way_distance_meters = diagnostics->wrong_way_distance_meters;
+        episode_log.hitter_compliance_max_speed_ratio = diagnostics->max_speed_ratio;
     }
     // Log composition counts per agent so vec_log averaging recovers the per-env value
     episode_log.expert_static_car_count += env->expert_static_agent_count;
@@ -4194,8 +4457,14 @@ void set_active_agents(Drive *env) {
     int *static_agent_indices = (int *) malloc(max_agents * sizeof(int));
     int *expert_static_agent_indices = (int *) malloc(max_agents * sizeof(int));
 
+    active_agent_indices[0] = EGO_IDX;
+    env->active_agent_count++;
+    env->num_agents++;
+    env->agents[EGO_IDX].active_agent = 1;
+    env->agents[EGO_IDX].controller = resolve_agent_controller(env, EGO_IDX, 1, 0);
+
     // Iterate through entities to find agents to create and/or control
-    for (int i = 0; i < env->num_total_agents && env->num_agents < max_agents; i++) {
+    for (int i = EGO_IDX + 1; i < env->num_total_agents && env->num_agents < max_agents; i++) {
         Agent *agent = &env->agents[i];
 
         // Skip if not valid at initialization
@@ -4219,17 +4488,17 @@ void set_active_agents(Drive *env) {
             continue;
         }
 
-        env->num_agents++;
-
         // Determine if this agent should be policy-controlled
         bool is_controlled = should_control_agent(env, i);
 
         if (is_controlled) {
+            env->num_agents++;
             active_agent_indices[env->active_agent_count] = i;
             env->active_agent_count++;
             env->agents[i].active_agent = 1;
             env->agents[i].controller = resolve_agent_controller(env, i, 1, 0);
         } else if (is_log_replay || env->init_mode != INIT_MODE_CREATE_ONLY_CONTROLLED) {
+            env->num_agents++;
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++;
             env->agents[i].active_agent = 0;
@@ -4933,6 +5202,12 @@ static void compute_metrics(Drive *env, int agent_idx, Log *agent_log) {
         = (fabsf(agent->jerk_long) > COMFORT_JERK_THRESHOLD || fabsf(agent->jerk_lat) > COMFORT_JERK_THRESHOLD) ? 1 : 0;
     agent->metrics_array[COMFORT_VIOLATION_IDX] = (float) (accel_violation + jerk_violation);
 
+    bool compliance_red_light_violation = false;
+    if (env->compute_eval_metrics) {
+        compliance_red_light_violation = check_red_light_violation(env, agent_idx);
+        record_compliance_sample(env, agent, lane_idx, lane_heading, compliance_red_light_violation);
+    }
+
     // Handle terminal events - NOTE: move it elsewhere?
     // IMPORTANT: early returns after offroad and collision enforce mutual exclusivity of terminal flags.
     // Order matters: offroad > collision > red_light.
@@ -4967,20 +5242,40 @@ static void compute_metrics(Drive *env, int agent_idx, Log *agent_log) {
             && env->target_infraction_behavior != TARGET_INFRACTION_BEHAVIOR_NORMAL;
         if (!ignore_target_collision_for_agent) {
             agent->metrics_array[COLLISION_IDX] = 1.0f;
-            if (env->compute_eval_metrics && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
+            if ((env->compute_eval_metrics
+                 || (agent_idx == target_agent_idx && env->adversarial_target_at_fault_reward != 0.0f))
+                && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
                 agent_log->at_fault_collision_rate = 1.0f;
                 agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;
             }
         }
         int target_involved_collision = agent_idx == target_agent_idx || car_collided_with_index == target_agent_idx;
         if (target_involved_collision) {
+            int collision_adversary_idx = agent_idx == target_agent_idx ? car_collided_with_index : agent_idx;
+            Agent *collision_adversary = &env->agents[collision_adversary_idx];
+            if (env->compute_eval_metrics && is_adversarial_agent(env, collision_adversary_idx)
+                && (collision_adversary->compliance_hist_count == 0
+                    || collision_adversary->compliance_hist_timestep[COMPLIANCE_HISTORY_LEN - 1] != env->timestep)) {
+                int collision_lane_idx = collision_adversary->current_lane_idx;
+                float collision_lane_heading = 0.0f;
+                if (collision_lane_idx >= 0) {
+                    collision_lane_heading
+                        = compliance_lane_heading(collision_adversary, &env->road_elements[collision_lane_idx]);
+                }
+                bool collision_red_light_violation = check_red_light_violation(env, collision_adversary_idx);
+                record_compliance_sample(
+                    env,
+                    collision_adversary,
+                    collision_lane_idx,
+                    collision_lane_heading,
+                    collision_red_light_violation);
+            }
             record_target_hit_responsibility(
                 env,
                 agent_idx,
                 car_collided_with_index,
                 collision_normal_x,
                 collision_normal_y);
-            int collision_adversary_idx = agent_idx == target_agent_idx ? car_collided_with_index : agent_idx;
             record_target_collision_analysis(env, target_agent_idx, collision_adversary_idx);
         }
         apply_collision_behavior(env, agent_idx, car_collided_with_index);
@@ -4988,7 +5283,8 @@ static void compute_metrics(Drive *env, int agent_idx, Log *agent_log) {
     }
 
     // Priority 3: Handle red light violation
-    if (env->obs_slots_traffic_controls_n && check_red_light_violation(env, agent_idx)) {
+    if (env->obs_slots_traffic_controls_n
+        && (env->compute_eval_metrics ? compliance_red_light_violation : check_red_light_violation(env, agent_idx))) {
         agent->metrics_array[RED_LIGHT_IDX] = 1.0f;
         apply_infraction_behavior(agent, env->traffic_light_behavior);
         return;
@@ -5987,11 +6283,13 @@ void c_reset(Drive *env) {
     env->target_collision_responsibility_episode = 0.0f;
     env->target_last_avoidable_braking_seconds_before_collision = AVOIDABLE_BRAKING_TIME_UNSET_SECONDS;
     env->target_reaction_window_danger_episode = 0;
+    memset(&env->compliance_diagnostics, 0, sizeof(env->compliance_diagnostics));
     if (env->avoidability_debug != NULL) {
         memset(env->avoidability_debug, 0, sizeof(*env->avoidability_debug));
     }
     for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
         env->agents[agent_idx].trajectory_hist_count = 0;
+        env->agents[agent_idx].compliance_hist_count = 0;
     }
     if (env->timestep == 0) {
         for (int i = 0; i < env->num_total_agents; i++) {
@@ -6187,6 +6485,7 @@ void c_step(Drive *env) {
 
     // -> 2. Compute metrics and rewards
     bool target_collided_this_step = false;
+    bool target_at_fault_collision_this_step = false;
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         if (env->agents[agent_idx].stopped || env->agents[agent_idx].removed) {
@@ -6195,6 +6494,7 @@ void c_step(Drive *env) {
         compute_metrics(env, agent_idx, &env->logs[i]);
         if (i == EGO_IDX && env->agents[agent_idx].metrics_array[COLLISION_IDX] > 0.0f) {
             target_collided_this_step = true;
+            target_at_fault_collision_this_step = env->agents[agent_idx].metrics_array[AT_FAULT_COLLISION_IDX] > 0.0f;
         }
         compute_rewards(env, i);
     }
@@ -6215,27 +6515,52 @@ void c_step(Drive *env) {
             = (int) ceilf(env->target_collision_continuation_seconds / env->dt);
     }
 
+    bool target_collision_unavoidable_this_step = env->target_hit_this_step
+        && env->target_last_avoidable_braking_seconds_before_collision == NO_AVOIDABLE_BRAKING_TIME_SECONDS;
     if (env->target_hit_this_step) {
-        float target_collision_reward;
+        record_hitter_compliance_diagnostics(env, env->target_hit_hitter_idx_this_step);
+        float target_collision_reward = 0.0f;
         float genuine_failure_reward = 0.0f;
         float adversary_forced_reward = 0.0f;
         float unavoidable_reward = 0.0f;
-        if (env->target_last_avoidable_braking_seconds_before_collision == NO_AVOIDABLE_BRAKING_TIME_SECONDS) {
-            target_collision_reward = env->adversarial_target_unavoidable_reward;
-            unavoidable_reward = target_collision_reward;
-        } else if (env->target_reaction_window_danger_episode) {
-            target_collision_reward = env->adversarial_target_genuine_failure_reward;
-            genuine_failure_reward = target_collision_reward;
+        float at_fault_reward = 0.0f;
+
+        if (env->use_at_fault_ablation) {
+            if (target_collision_unavoidable_this_step && env->adversarial_target_unavoidable_reward != 0.0f) {
+                target_collision_reward = env->adversarial_target_unavoidable_reward;
+                unavoidable_reward = target_collision_reward;
+            } else if (target_at_fault_collision_this_step) {
+                target_collision_reward = env->adversarial_target_at_fault_reward;
+                at_fault_reward = target_collision_reward;
+            }
         } else {
-            target_collision_reward = env->adversarial_target_adversary_forced_reward;
-            adversary_forced_reward = target_collision_reward;
+            if (target_collision_unavoidable_this_step) {
+                target_collision_reward = env->adversarial_target_unavoidable_reward;
+                unavoidable_reward = target_collision_reward;
+            } else if (env->target_reaction_window_danger_episode) {
+                target_collision_reward = env->adversarial_target_genuine_failure_reward;
+                genuine_failure_reward = target_collision_reward;
+            } else {
+                target_collision_reward = env->adversarial_target_adversary_forced_reward;
+                adversary_forced_reward = target_collision_reward;
+            }
         }
+
         for (int i = EGO_IDX + 1; i < env->active_agent_count; i++) {
             env->rewards[i] += target_collision_reward;
             env->logs[i].episode_return += target_collision_reward;
             env->logs[i].reward_target_genuine_failure += genuine_failure_reward;
             env->logs[i].reward_target_adversary_forced += adversary_forced_reward;
             env->logs[i].reward_target_unavoidable += unavoidable_reward;
+            env->logs[i].reward_target_at_fault += at_fault_reward;
+        }
+    }
+
+    if (!env->use_at_fault_ablation && target_at_fault_collision_this_step && !target_collision_unavoidable_this_step) {
+        for (int i = EGO_IDX + 1; i < env->active_agent_count; i++) {
+            env->rewards[i] += env->adversarial_target_at_fault_reward;
+            env->logs[i].episode_return += env->adversarial_target_at_fault_reward;
+            env->logs[i].reward_target_at_fault += env->adversarial_target_at_fault_reward;
         }
     }
 
@@ -6335,8 +6660,16 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->timestep == env->scenario_length || early_reset || adversarial_early_reset) {
+    int hitter_collision_early_reset = env->terminate_hitter_on_collision && target_collided_this_step;
+    if (env->timestep == env->scenario_length || early_reset || adversarial_early_reset
+        || hitter_collision_early_reset) {
         for (int i = 0; i < env->active_agent_count; i++) {
+            if (hitter_collision_early_reset) {
+                env->terminals[i]
+                    |= i == EGO_IDX || env->active_agent_indices[i] == env->target_hit_hitter_idx_this_step;
+                env->truncations[i] = !env->terminals[i];
+                continue;
+            }
             if (target_collision_continuation_active && env->terminals[i]) {
                 continue;
             }
