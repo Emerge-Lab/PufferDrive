@@ -220,7 +220,7 @@ def test_export_rasterizes_lanes_and_rejects_unsupported_modes(drive_and_payload
         ("_action_type_flag", binding.ACTION_TYPE_DISCRETE, "action_type='continuous'"),
         ("dynamics_model_flag", -1, "dynamics_model='classic' or 'jerk'"),
         ("init_step_spread", True, "fixed init_step"),
-        ("reward_conditioning", True, "conditioning and randomization"),
+        ("reward_randomization", True, "reward randomization"),
     )
     for attribute, value, message in unsupported_modes:
         original = getattr(drive, attribute)
@@ -230,6 +230,13 @@ def test_export_rasterizes_lanes_and_rejects_unsupported_modes(drive_and_payload
                 export_drive_scenarios(drive, payload=payload, raster_resolution_meters=2.0)
         finally:
             setattr(drive, attribute, original)
+
+    drive.reward_conditioning = True
+    try:
+        conditioned = export_drive_scenarios(drive, payload=payload, raster_resolution_meters=2.0)
+        assert conditioned.scenario_id == rounded.scenario_id
+    finally:
+        drive.reward_conditioning = False
 
     # A jerk env is admissible: it governs the ego controller only, while injected
     # adversaries always integrate the classic bicycle model.

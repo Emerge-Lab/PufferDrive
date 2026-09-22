@@ -80,8 +80,10 @@ def _validate_drive_contract(drive):
         raise ValueError("ReGentS requires dynamics_model='classic' or 'jerk'")
     if drive.init_step_spread:
         raise ValueError("ReGentS Stage 1 requires a fixed init_step (init_step_spread=False)")
-    if drive.reward_conditioning or drive.reward_randomization:
-        raise ValueError("ReGentS Stage 1 requires reward conditioning and randomization to be disabled")
+    # A conditioned policy needs the deterministic reward target in its observation.
+    # Randomization remains forbidden because it would change that target across resets.
+    if drive.reward_randomization:
+        raise ValueError("ReGentS Stage 1 requires reward randomization to be disabled")
     if not math.isfinite(drive.dt) or drive.dt <= 0:
         raise ValueError(f"Drive dt must be finite and positive, got {drive.dt}")
     if not math.isfinite(drive.base_max_speed_mps) or drive.base_max_speed_mps <= 0:

@@ -68,23 +68,7 @@ costs:
   gaussian_truncate_sigma: 6.4
 
 generations:
-  # The Stage 3 audit scenarios: the first 16 local NuPlan maps with seeds 42..57.
-  - name: regents_nuplan
-    seed: 42
-    scenario_count: 100
-    num_workers: 24
-    horizon_transition_count: 100
-    raster_resolution_meters: 0.5
-    output_dir: experiments/regents
-    render_replays: true
-    env:
-      scenario_length: 101
-      resample_frequency: 101
-      sdc_controller: replay
-
-  # WOD Motion validation logs contain 91 states, hence a full 90-transition
-  # horizon. Keep the default cohort bounded to the first 250 sorted binaries.
-  - name: regents_wod_motion_val
+  - name: regents_wod_motion_val_idm
     seed: 42
     scenario_count: 100
     num_workers: 24
@@ -96,17 +80,8 @@ generations:
       scenario_length: 91
       resample_frequency: 91
       sdc_controller: idm
-      # WOD candidate tracks reach 25 m/s at p99 and the cohort holds a few
-      # implausible >40 m/s tracks; clamping a logged speed corrupts its
-      # reconstruction, so keep the cap above real traffic.
       base_max_speed_mps: 40.0
 
-  # WOD Motion validation against a PDM ego. Raster, optimizer, and filter settings come
-  # from the shared defaults above. Note this is the profile
-  # that drives PDM's rollout buffer to its limit: base_max_speed_mps 40.0 puts a fast ego at
-  # the speed-aware horizon cap of 8 s, which at pdm_planning_dt 0.1 is exactly the 81 steps
-  # PDM_MAX_ROLLOUT_STEPS allows. Raising the cap or lowering pdm_planning_dt needs that
-  # constant raised with it.
   - name: regents_wod_motion_val_pdm
     seed: 42
     scenario_count: 100
@@ -121,26 +96,6 @@ generations:
       sdc_controller: pdm
       base_max_speed_mps: 40.0
 
-  # Ten continuous 100-transition segments from one 1000-transition PDM rollout
-  # for each CARLA town. Agent 0 is the PDM ego; the other 149 vehicles are reactive
-  # IDM traffic, so they no longer follow the PDM trajectories saved in the logs.
-  - name: regents_carla_generated_pdm
-    seed: 42
-    scenario_count: 80
-    num_workers: 24
-    horizon_transition_count: 100
-    output_dir: experiments/regents
-    render_replays: true
-    env:
-      map_dir: pufferlib/resources/drive/binaries/carla_generated_pdm
-      scenario_length: 101
-      resample_frequency: 101
-      sdc_controller: pdm
-
-  # Policy-generated CARLA rollouts capped at 150 transitions. Candidates with
-  # any controlled-agent collision or off-road event are replaced.
-  # PDM controls the reactive ego; all other vehicles are reactive IDM traffic
-  # rather than replays of their saved policy trajectories.
   - name: regents_carla_generated_policy
     seed: 42
     scenario_count: 100
@@ -154,26 +109,6 @@ generations:
       resample_frequency: 101
       sdc_controller: pdm
 
-  # CARLA validation logs contain 201 states (200 transitions). Use the standard
-  # 10 s ReGentS window and run a PDM ego while all other vehicles replay their
-  # logged trajectories. A few candidate tracks exceed 20 m/s, so leave enough
-  # speed headroom to reconstruct them without clamping.
-  - name: regents_carla_val_pdm
-    seed: 42
-    scenario_count: 100
-    num_workers: 24
-    horizon_transition_count: 200
-    output_dir: experiments/regents
-    render_replays: true
-    env:
-      map_dir: pufferlib/resources/drive/binaries/carla_val
-      scenario_length: 201
-      resample_frequency: 201
-      sdc_controller: pdm
-      base_max_speed_mps: 40.0
-
-  # WOD Motion validation against the learned ego. Horizon, raster, learning rate,
-  # filters, and speed cap follow regents_wod_motion_val; only the ego differs.
   - name: regents_wod_motion_val_policy
     seed: 42
     scenario_count: 100
@@ -204,123 +139,6 @@ generations:
       phantom_braking_prob: 0.0
       phantom_braking_trigger_prob: 0.0
 
-  # Full 20 s NuPlan window: 200 transitions at dt=0.1. scenario_length and
-  # resample_frequency sit one step above the horizon so neither guard trips.
-  - name: regents_nuplan_20s
-    seed: 42
-    scenario_count: 16
-    num_workers: 16
-    horizon_transition_count: 200
-    raster_resolution_meters: 0.5
-    output_dir: experiments/regents
-    render_replays: true
-    env:
-      scenario_length: 201
-      resample_frequency: 201
-
-  # Adversaries targeted at a learned ego. The env dynamics model is jerk because that is
-  # what the checkpoint's 12-class action head was trained on; injected adversaries still
-  # integrate the classic bicycle model, so C/Torch parity is unchanged. The erratic-driver
-  # and observation-dropout knobs are zeroed here only: they default non-zero for training,
-  # and an ego that reads observations must be deterministic and on-distribution.
-  - name: regents_nuplan_policy
-    seed: 42
-    scenario_count: 100
-    num_workers: 24
-    horizon_transition_count: 100
-    raster_resolution_meters: 0.5
-    output_dir: experiments/regents
-    render_replays: true
-    ego_policy:
-      checkpoint_path: experiments/3_0_no_conditionning_target.pt
-      config_path: experiments/3_0_no_conditionning_target_config.yaml
-      action_selection: mean
-      device: cpu
-    env:
-      scenario_length: 101
-      resample_frequency: 101
-      sdc_controller: policy
-      dynamics_model: jerk
-      obs_dropout_lane: 0.0
-      obs_dropout_boundary: 0.0
-      partner_blindness_prob: 0.0
-      partner_blindness_trigger_prob: 0.0
-      phantom_braking_prob: 0.0
-      phantom_braking_trigger_prob: 0.0
-
-  # NuPlan against a corridor-IDM ego. Same cost profile as the IDM ego (one corridor
-  # leader scan per step), so the ego answers every iterate.
-  - name: regents_nuplan_corridor_idm
-    seed: 42
-    scenario_count: 100
-    num_workers: 24
-    horizon_transition_count: 100
-    raster_resolution_meters: 0.5
-    output_dir: experiments/regents
-    render_replays: true
-    env:
-      scenario_length: 101
-      resample_frequency: 101
-      sdc_controller: corridor_idm
-
-  # NuPlan against a PDM ego, re-rolled on every update so the adversary is always optimized
-  # against an ego that has answered it. PDM scores 15 candidate manoeuvres per agent per step,
-  # so this is the most expensive profile here by a wide margin; drop the interval if the cost
-  # outweighs the reactivity. Expect a lower success rate than the IDM profiles: PDM brakes and
-  # offsets to evade, so some scenes legitimately end in iteration_limit rather than a collision.
-  - name: regents_nuplan_pdm
-    seed: 42
-    scenario_count: 100
-    num_workers: 24
-    horizon_transition_count: 100
-    raster_resolution_meters: 0.5
-    output_dir: experiments/regents
-    render_replays: true
-    env:
-      scenario_length: 101
-      resample_frequency: 101
-      sdc_controller: pdm
-
-  - name: regents_nuplan_smoke
-    seed: 42
-    scenario_count: 2
-    num_workers: 1
-    horizon_transition_count: 50
-    raster_resolution_meters: 0.5
-    output_dir: experiments/regents
-    render_replays: true
-
-  # The 10k policy-generated CARLA cohort: 500 transitions per scenario, agent 0 is the
-  # ex-gigaflow target and becomes the ego. Background vehicles are reactive IDM from the
-  # shared env block; a ReGentS plan overrides only the selected adversary. The three
-  # profiles below differ in nothing but the ego, so their success rates are comparable.
-  # scenario_length is the 10 s ReGentS window, not the 50 s the logs hold: raise it and
-  # resample_frequency to 501 to optimize over the full episode.
-  - name: regents_carla_generated_policy_10k_idm
-    seed: 42
-    scenario_count: 10000
-    num_workers: 24
-    horizon_transition_count: 100
-    output_dir: experiments/regents
-    render_replays: false
-    env:
-      map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_500
-      scenario_length: 101
-      resample_frequency: 101
-      sdc_controller: idm
-
-  - name: regents_carla_generated_policy_10k_pdm
-    seed: 42
-    scenario_count: 10000
-    num_workers: 24
-    horizon_transition_count: 100
-    output_dir: experiments/regents
-    render_replays: false
-    env:
-      map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_500
-      scenario_length: 101
-      resample_frequency: 101
-      sdc_controller: pdm
 
   # The ego is the checkpoint that generated the cohort, so this attacks the policy on its
   # own clean driving. dynamics_model is jerk because that is what the 12-class action head
@@ -340,7 +158,7 @@ generations:
       action_selection: mean
       device: cpu
     env:
-      map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_500
+      map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_100_seed_4
       scenario_length: 101
       resample_frequency: 101
       sdc_controller: policy
@@ -351,33 +169,3 @@ generations:
       partner_blindness_trigger_prob: 0.0
       phantom_braking_prob: 0.0
       phantom_braking_trigger_prob: 0.0
-
-  # The 2k policy-generated CARLA cohort: 200 transitions per scenario, so the logs hold
-  # exactly the 20 s window. The pair below differs in nothing but the optimization horizon,
-  # isolating what a 10 s window costs against a 20 s one. scenario_length sits one step
-  # above the horizon so neither guard trips; 201 is the cohort's full length.
-  - name: regents_carla_generated_policy_2k_200_pdm_100
-    seed: 42
-    scenario_count: 1000
-    num_workers: 24
-    horizon_transition_count: 100
-    output_dir: experiments/regents
-    render_replays: false
-    env:
-      map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_2k_200
-      scenario_length: 101
-      resample_frequency: 101
-      sdc_controller: pdm
-
-  - name: regents_carla_generated_policy_2k_200_pdm_200
-    seed: 42
-    scenario_count: 1000
-    num_workers: 24
-    horizon_transition_count: 200
-    output_dir: experiments/regents
-    render_replays: false
-    env:
-      map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_2k_200
-      scenario_length: 201
-      resample_frequency: 201
-      sdc_controller: pdm
