@@ -98,12 +98,24 @@ def _validate_experiment_name(experiment_name):
     return experiment_name
 
 
+def _validate_num_workers(num_workers):
+    """Accept the worker pool size as the literal "auto" or a positive integer."""
+    if num_workers is None or num_workers == "auto":
+        return num_workers
+    if isinstance(num_workers, str):
+        if not re.fullmatch(r"[0-9]+", num_workers):
+            raise ValueError('ReGentS num_workers must be "auto" or a positive integer')
+        num_workers = int(num_workers)
+    return _require_positive_int(num_workers, "num_workers")
+
+
 def _apply_generation_overrides(
     generation,
     experiment_name,
     drivable_area_weight,
     gaussian_sigma_meters=None,
     scenario_count=None,
+    num_workers=None,
 ):
     """Apply validated CLI overrides to the configuration persisted in artifacts."""
     resolved = dict(generation)
@@ -111,6 +123,8 @@ def _apply_generation_overrides(
     if scenario_count is not None:
         resolved["scenario_count"] = _require_positive_int(scenario_count, "scenario_count")
         resolved["env"] = {**resolved["env"], "num_maps": scenario_count}
+    if num_workers is not None:
+        resolved["num_workers"] = _validate_num_workers(num_workers)
     if drivable_area_weight is None and gaussian_sigma_meters is None:
         return resolved
     optimizer = dict(resolved["optimizer"])
@@ -589,6 +603,7 @@ def generate_regents_scenarios(
     drivable_area_weight=None,
     gaussian_sigma_meters=None,
     scenario_count=None,
+    num_workers=None,
 ):
     """Generate, C-verify, and save one artifact per scenario in the configured range."""
     overall_start = time.perf_counter()
@@ -599,6 +614,7 @@ def generate_regents_scenarios(
         drivable_area_weight,
         gaussian_sigma_meters,
         scenario_count,
+        num_workers,
     )
     destination = Path(output_dir) if output_dir is not None else Path(generation["output_dir"]) / generation_name
     if generation["experiment_name"] is not None:

@@ -2944,6 +2944,7 @@ def regents(
     drivable_area_weight=None,
     gaussian_sigma_meters=None,
     scenario_count=None,
+    num_workers=None,
 ):
     """Generate ReGentS adversarial scenarios offline, without any training machinery."""
     config_path = config_path or REGENTS_GENERATION_CONFIG_PATH
@@ -2955,6 +2956,7 @@ def regents(
         drivable_area_weight=drivable_area_weight,
         gaussian_sigma_meters=gaussian_sigma_meters,
         scenario_count=scenario_count,
+        num_workers=num_workers,
     )
     run_name = generation_name if experiment_name is None else f"{generation_name}/{experiment_name}"
     print(f"[REGENTS] {run_name}: {report.scenario_count} scenarios -> {report.output_dir}")
@@ -3016,6 +3018,8 @@ def _parse_regents_cli_args(arguments):
     parser.add_argument("--config-path", default=REGENTS_GENERATION_CONFIG_PATH)
     parser.add_argument("--experiment-name", "--exp-name", dest="experiment_name")
     parser.add_argument("--scenario-count", type=int)
+    # Left as a string so the config's supported "auto" pool size stays reachable.
+    parser.add_argument("--num-workers", dest="num_workers")
     parser.add_argument(
         "--road-weight",
         "--drivable-area-weight",
@@ -3056,6 +3060,7 @@ def main():
             drivable_area_weight=regents_args.drivable_area_weight,
             gaussian_sigma_meters=regents_args.gaussian_sigma_meters,
             scenario_count=regents_args.scenario_count,
+            num_workers=regents_args.num_workers,
         )
     elif mode == "sweep":
         sweep(env_name=env_name)

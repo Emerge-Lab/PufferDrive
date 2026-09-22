@@ -1,4 +1,5 @@
-# Final matched ReGentS ego-controller matrix over the seed-29 10k CARLA cohort.
+# Final matched ReGentS ego-controller matrix over the seed-4 10k CARLA cohort,
+# with optimizer.use_regents=false.
 env:
   map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_100_seed_4
   simulation_mode: replay
