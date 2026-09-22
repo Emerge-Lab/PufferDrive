@@ -138,6 +138,7 @@ class Drive(pufferlib.PufferEnv):
         obs_boundary_stride=1,
         obs_slots_partners_n=16,
         obs_partner_relative_velocity=False,
+        obs_lane_heading_signed=False,
         obs_slots_traffic_controls_n=4,
         traffic_control_scope=0,
         starting_map=0,
@@ -354,6 +355,7 @@ class Drive(pufferlib.PufferEnv):
         self.obs_boundary_stride = obs_boundary_stride
         self.obs_slots_partners_n = obs_slots_partners_n
         self.obs_partner_relative_velocity = int(bool(obs_partner_relative_velocity))
+        self.obs_lane_heading_signed = int(bool(obs_lane_heading_signed))
         self.traffic_control_scope = traffic_control_scope
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
         self.obs_norm_speed_mps = float(obs_norm_speed_mps)
@@ -673,6 +675,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_boundary_stride": self.obs_boundary_stride,
             "obs_slots_partners_n": self.obs_slots_partners_n,
             "obs_partner_relative_velocity": self.obs_partner_relative_velocity,
+            "obs_lane_heading_signed": self.obs_lane_heading_signed,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
@@ -950,15 +953,6 @@ class Drive(pufferlib.PufferEnv):
             np.ascontiguousarray(idx, dtype=np.int32),
             np.ascontiguousarray(length, dtype=np.float32),
             np.ascontiguousarray(width, dtype=np.float32),
-        )
-
-    def set_agent_speed_caps(self, idx, cap_mps):
-        """cap the forward speed of agents at global indices `idx` (m/s, 0 = no cap); the jerk dynamics
-        ramp the accel down before the cap instead of clipping the speed."""
-        binding.vec_set_agent_speed_caps(
-            self.c_envs,
-            np.ascontiguousarray(idx, dtype=np.int32),
-            np.ascontiguousarray(cap_mps, dtype=np.float32),
         )
 
     def recompute_observations(self):

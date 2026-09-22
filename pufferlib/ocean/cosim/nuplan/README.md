@@ -30,11 +30,7 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   change only where the lane graph forces one), so multi-lane roads stop
   pulling the ego toward the road centre. All come from the challenge's route
   roadblock ids only; the planner
-  never reads the logged ego. Eval hack `lane_speed_cap_below_mps` (env
-  `LANE_SPEED_CAP_BELOW_MPS`): inside lanes whose nuPlan limit is below the
-  threshold the shadow ego's speed is capped at limit + margin through a
-  jerk-limited accel envelope in the C dynamics; the policy is not told. Off by
-  default, script 9 sets 8.33 m/s (30 km/h). Eval hack `pedestrian_min_size_m` (env
+  never reads the logged ego. Eval hack `pedestrian_min_size_m` (env
   `PEDESTRIAN_MIN_SIZE_M`): pedestrian and bicycle partner boxes are grown to at least
   this size in the policy's observation (training spawns nothing below 0.8 x 0.8 m,
   nuPlan pedestrians are 0.4-0.8 m); nuPlan still scores the true boxes. Off by

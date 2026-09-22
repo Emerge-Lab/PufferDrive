@@ -167,6 +167,7 @@ class DriveEnvConfig:
     obs_slots_boundary_n: int = MISSING
     obs_slots_partners_n: int = MISSING
     obs_partner_relative_velocity: bool = MISSING
+    obs_lane_heading_signed: bool = MISSING
     obs_slots_traffic_controls_n: int = MISSING
     obs_dropout_lane: float = MISSING
     obs_dropout_boundary: float = MISSING

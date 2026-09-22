@@ -306,6 +306,7 @@ struct Drive {
     int obs_slots_lane_n;
     int obs_slots_partners_n;
     int obs_partner_relative_velocity;
+    int obs_lane_heading_signed;
     int obs_slots_traffic_controls_n;
     int traffic_control_scope;
     int obs_lane_stride;
@@ -546,10 +547,10 @@ static void reset_agent_state(Agent *agent) {
     agent->jerk_long = 0.0f;
     agent->jerk_lat = 0.0f;
     agent->steering_angle = 0.0f;
-    agent->external_speed_cap_mps = 0.0f;
     agent->distance_since_spawn = 0.0f;
     agent->seconds_stopped = 0.0f;
     agent->lane_curvature = 0.0f;
+    agent->lane_heading_error_rad = 0.0f;
     agent->comfort_violation_last_window_idx = -1;
     agent->phantom_braking_counter = 0;
     agent->partner_blindness_counter = 0;
@@ -3815,6 +3816,7 @@ static void refresh_lane_association(Drive *env, Agent *agent) {
         agent->current_lane_idx = -1;
         agent->metrics_array[LANE_DIST_IDX] = LANE_DISTANCE_NORMALIZATION;
         agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;
+        agent->lane_heading_error_rad = 0.0f;
         agent->lane_curvature = 0.0f;
         return;
     }
@@ -3829,6 +3831,7 @@ static void refresh_lane_association(Drive *env, Agent *agent) {
         agent->current_lane_idx = -1;
         agent->metrics_array[LANE_DIST_IDX] = LANE_DISTANCE_NORMALIZATION;
         agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;
+        agent->lane_heading_error_rad = 0.0f;
         agent->lane_curvature = 0.0f;
         return;
     }
@@ -3838,6 +3841,7 @@ static void refresh_lane_association(Drive *env, Agent *agent) {
     agent->metrics_array[LANE_DIST_IDX] = signed_lane_distance;
     float theta_f = compute_heading_diff(agent->sim_heading, lane_heading);
     agent->metrics_array[LANE_ANGLE_IDX] = cosf(theta_f);
+    agent->lane_heading_error_rad = theta_f;
     agent->lane_curvature = compute_lane_curvature(&env->road_elements[lane_idx], lane_seg_idx);
 }
 
@@ -3923,20 +3927,6 @@ int c_set_agent_sizes(Drive *env, int count, const int *idx, const float *length
         agent->sim_width = width[k];
         update_agent_radius(agent); // collision broad-phase uses this; stale radius under/over-detects hits
         agent->wheelbase = 0.6f * agent->sim_length; // matches spawn/log-replay sizing (see move_expert)
-    }
-    return 0;
-}
-
-int c_set_agent_speed_caps(Drive *env, int count, const int *idx, const float *cap_mps) {
-    for (int k = 0; k < count; k++) {
-        int agent_idx = idx[k];
-        if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
-            return -1;
-        }
-        if (!(cap_mps[k] >= 0.0f)) {
-            return -1;
-        }
-        env->agents[agent_idx].external_speed_cap_mps = cap_mps[k];
     }
     return 0;
 }
@@ -4142,6 +4132,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         // theta_f = angle relative to lane heading
         float theta_f = compute_heading_diff(agent->sim_heading, lane_heading);
         agent->metrics_array[LANE_ANGLE_IDX] = cosf(theta_f); // Store cos(θ_f)
+        agent->lane_heading_error_rad = theta_f;
         agent->lane_curvature = compute_lane_curvature(&env->road_elements[lane_idx], lane_seg_idx);
     } else {
         // Agent not on any lane
@@ -4149,6 +4140,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         agent->current_lane_idx = -1;
         agent->metrics_array[LANE_DIST_IDX] = LANE_DISTANCE_NORMALIZATION; // Max distance (far from lane)
         agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;                       // Perpendicular (no alignment)
+        agent->lane_heading_error_rad = 0.0f;
         agent->lane_curvature = 0.0f;
     }
 
@@ -4432,7 +4424,8 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     obs[obs_idx++] = ego->accel_long / fabsf(ACCEL_LONG_LIMIT[0]);
     obs[obs_idx++] = ego->accel_lat / ACCEL_LAT_LIMIT[1];
     obs[obs_idx++] = fmaxf(-1.0f, fminf(1.0f, ego->metrics_array[LANE_DIST_IDX] / LANE_DISTANCE_NORMALIZATION));
-    obs[obs_idx++] = ego->metrics_array[LANE_ANGLE_IDX];
+    obs[obs_idx++] = env->obs_lane_heading_signed ? ego->lane_heading_error_rad / (float) M_PI
+                                                  : ego->metrics_array[LANE_ANGLE_IDX];
     float current_lane_speed_limit
         = (ego->current_lane_idx != -1) ? env->lane_speed_limit_mps[ego->current_lane_idx] : -1.0f;
     obs[obs_idx++] = current_lane_speed_limit / env->obs_norm_speed_mps;
@@ -4860,19 +4853,6 @@ static void compute_observations(Drive *env) {
     }
 }
 
-// Longitudinal accel allowed under the external speed cap: below the cap a jerk-limited approach
-// (a = sqrt(2 j h) reaches 0 exactly at the cap), above it a bounded brake; the cut from the current
-// accel is itself limited to the approach jerk.
-static float speed_cap_accel(const Agent *agent, float a_long_new, float signed_speed, float dt) {
-    float headroom = agent->external_speed_cap_mps - signed_speed;
-    float a_allowed = headroom > 0.0f ? sqrtf(2.0f * SPEED_CAP_APPROACH_JERK_MPS3 * headroom)
-                                      : fmaxf(-SPEED_CAP_BRAKE_MPS2, headroom / dt);
-    if (a_long_new <= a_allowed) {
-        return a_long_new;
-    }
-    return fminf(a_long_new, fmaxf(a_allowed, agent->accel_long - SPEED_CAP_APPROACH_JERK_MPS3 * dt));
-}
-
 static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     copy_pose_to_prev(agent);
@@ -5048,9 +5028,6 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         // Calculate new velocity using trapezoidal integration
         float v_dot_heading = agent->sim_vx * heading_x + agent->sim_vy * heading_y;
         float signed_v = copysignf(sqrtf(agent->sim_vx * agent->sim_vx + agent->sim_vy * agent->sim_vy), v_dot_heading);
-        if (agent->external_speed_cap_mps > 0.0f) {
-            a_long_new = speed_cap_accel(agent, a_long_new, signed_v, env->dt);
-        }
         float v_new = signed_v + 0.5f * (a_long_new + agent->accel_long) * env->dt;
 
         // Zero-crossing: snap to 0 when crossing zero

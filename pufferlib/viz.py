@@ -1179,7 +1179,7 @@ __PAYLOAD_CHUNKS__
         const METRIC_LABELS = __METRIC_LABELS__;
         const VEHICLE_COLORS = __VEHICLE_COLORS__;
         // Order must match the Log fields written in env_binding.h vec_get_obs_html_frame (15 values).
-        const EGO_OBS_LABELS = ["speed","width","length","steer","accel lon","accel lat","lane dist","lane angle cos","speed limit","stopped","lane curvature"];
+        const EGO_OBS_LABELS = ["speed","width","length","steer","accel lon","accel lat","lane dist","lane angle (cos | err/pi)","speed limit","stopped","lane curvature"];
         const REWARD_LABELS = ["collision","offroad","red light","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed","ADE"];
         const EGO_COND_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","C_throttle","C_steer","C_acc","C_vel"];
         const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];

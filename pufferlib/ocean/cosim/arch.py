@@ -42,8 +42,11 @@ CLEAN_EVAL_OVERRIDES = {
     "reward_lane_center": 0.0075,  # training-range max (REWARD_BOUNDS), not the paper's 0.0038
     "reward_timestep": 0.000025,
     "reward_reverse": 0.005,
+    "spawn_lateral_offset_max_frac": 0.0,
+    "spawn_heading_max_deg": 0.0,
     "pose_noise_xy_m": 0.0,
     "pose_noise_yaw_deg": 0.0,
+    "speed_limit_random_prob": 0.0,
 }
 
 

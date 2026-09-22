@@ -125,6 +125,18 @@ static int init_grid_map(Drive *env) {
             env->grid_map->cell_entities_count[grid_index]++;
         }
     }
+    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
+        int count = env->grid_map->cell_entities_count[grid_index];
+        if (count > MAX_ENTITIES_PER_CELL) {
+            fprintf(
+                stderr,
+                "[ERROR] -> Grid cell %d holds %d road entities, exceeding MAX_ENTITIES_PER_CELL %d\n",
+                grid_index,
+                count,
+                MAX_ENTITIES_PER_CELL);
+            return 1;
+        }
+    }
     // Allocate grid cells based on counts
     int *cell_entities_insert_index = (int *) calloc(grid_cell_count, sizeof(int));
     for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {

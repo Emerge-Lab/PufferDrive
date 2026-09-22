@@ -110,6 +110,7 @@ struct Agent {
     float distance_since_spawn;
     float seconds_stopped;
     float lane_curvature; // 1/m at the closest segment of current lane, positive = left turn
+    float lane_heading_error_rad; // agent heading minus lane heading, positive = agent points left of lane
     int comfort_violation_last_window_idx;
 
     // Goal positions
@@ -136,7 +137,6 @@ struct Agent {
     float jerk_lat;
     float steering_angle;
     float wheelbase;
-    float external_speed_cap_mps; // co-sim eval: >0 caps forward speed with a jerk-limited approach, 0 = off
 
     // Reward conditioning coefficients (per-agent, randomized at spawn)
     float reward_coefs[NUM_REWARD_COEFS];

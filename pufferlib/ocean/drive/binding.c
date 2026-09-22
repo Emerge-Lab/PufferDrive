@@ -1950,6 +1950,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
     env->obs_partner_relative_velocity = (int) unpack(kwargs, "obs_partner_relative_velocity");
+    env->obs_lane_heading_signed = (int) unpack(kwargs, "obs_lane_heading_signed");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
     env->traffic_control_scope = (int) unpack(kwargs, "traffic_control_scope");
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");

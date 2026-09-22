@@ -118,6 +118,26 @@ class TestShadowEnvKwargs(unittest.TestCase):
                 "the same clean-eval profile as the repo's own evaluations.",
             )
 
+    def test_every_benchmark_randomization_pin_is_mirrored(self):
+        """A training-time randomization the benchmark profile pins off must be pinned off in the
+        co-sim mirror too, or the shadow env silently adopts the checkpoint's training value (or
+        aborts: speed_limit_random_prob > 0 rejects maps without speed zones, e.g. nuPlan/CARLA
+        co-sim bins)."""
+        from pufferlib.ocean.cosim.arch import CLEAN_EVAL_OVERRIDES as cosim_overrides
+
+        benchmark_yaml = REPO_ROOT / "pufferlib" / "config" / "evaluation" / "benchmark.yaml"
+        bench_env = yaml.safe_load(benchmark_yaml.read_text())["env"]
+        randomization_markers = ("random", "noise", "dropout", "blindness", "phantom", "spawn_")
+        for key in bench_env:
+            if not any(marker in key for marker in randomization_markers):
+                continue
+            self.assertIn(
+                key,
+                cosim_overrides,
+                f"benchmark.yaml pins '{key}' but cosim/arch.py CLEAN_EVAL_OVERRIDES does not mirror it; "
+                "the co-sim shadow env would adopt the checkpoint's training value.",
+            )
+
     def test_clean_eval_overrides_beat_checkpoint_config(self):
         """A checkpoint trained WITH observation noise must still evaluate
         clean: every CLEAN_EVAL_OVERRIDES key wins over the config's value."""
