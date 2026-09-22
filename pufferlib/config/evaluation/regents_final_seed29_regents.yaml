@@ -101,8 +101,8 @@ generations:
       phantom_braking_prob: 0.0
       phantom_braking_trigger_prob: 0.0
 
-  # Evaluate the 500B conditioned policy at the nominal reward target from its training
-  # config. Randomization stays off so input + config + seed remains deterministic.
+  # Evaluate the conditioned policy at the benchmark's nominal reward target.
+  # Randomization stays off so input + config + seed remains deterministic.
   - name: regents_rl_cond
     scenario_count: 10000
     num_workers: 60
@@ -110,8 +110,8 @@ generations:
     output_dir: experiments/regents
     render_replays: true
     ego_policy:
-      checkpoint_path: experiments/conditinning_500B.pt
-      config_path: experiments/conditinning_500B_config.yaml
+      checkpoint_path: experiments/3_0_conditionning_target.pt
+      config_path: experiments/3_0_conditionning_target_config.yaml
       action_selection: mean
       device: cpu
     env:
