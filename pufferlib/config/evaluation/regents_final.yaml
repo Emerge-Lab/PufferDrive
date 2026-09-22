@@ -1,6 +1,6 @@
 # Final matched ReGentS ego-controller matrix over the seed-29 10k CARLA cohort.
 env:
-  map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_100_seed_29
+  map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_100_seed_99
   simulation_mode: replay
   eval_mode: true
   compute_eval_metrics: true
@@ -33,7 +33,7 @@ env:
   use_map_cache: 0
   capture_avoidability_debug: true
 
-seed: 42
+seed: 99
 raster_resolution_meters: 1.0
 optimizer:
   # Disable rear exclusion and divergent steering cancellation for the comparison mode.
@@ -52,28 +52,28 @@ costs:
 generations:
   - name: regents_idm
     scenario_count: 10000
-    num_workers: 24
+    num_workers: 80
     horizon_transition_count: 100
     output_dir: experiments/regents
-    render_replays: false
+    render_replays: true
     env:
       sdc_controller: idm
 
   - name: regents_corridor_idm
     scenario_count: 10000
-    num_workers: 24
+    num_workers: 80
     horizon_transition_count: 100
     output_dir: experiments/regents
-    render_replays: false
+    render_replays: true
     env:
       sdc_controller: corridor_idm
 
   - name: regents_pdm
     scenario_count: 10000
-    num_workers: 24
+    num_workers: 80
     horizon_transition_count: 100
     output_dir: experiments/regents
-    render_replays: false
+    render_replays: true
     env:
       sdc_controller: pdm
 
@@ -81,10 +81,10 @@ generations:
   # integrates the selected adversary with its classic differentiable bicycle model.
   - name: regents_rl_nocond
     scenario_count: 10000
-    num_workers: 24
+    num_workers: 80
     horizon_transition_count: 100
     output_dir: experiments/regents
-    render_replays: false
+    render_replays: true
     ego_policy:
       checkpoint_path: experiments/3_0_no_conditionning_target.pt
       config_path: experiments/3_0_no_conditionning_target_config.yaml
@@ -104,10 +104,10 @@ generations:
   # config. Randomization stays off so input + config + seed remains deterministic.
   - name: regents_rl_cond
     scenario_count: 10000
-    num_workers: 24
+    num_workers: 80
     horizon_transition_count: 100
     output_dir: experiments/regents
-    render_replays: false
+    render_replays: true
     ego_policy:
       checkpoint_path: experiments/conditinning_500B.pt
       config_path: experiments/conditinning_500B_config.yaml
