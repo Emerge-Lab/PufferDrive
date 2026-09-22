@@ -46,6 +46,40 @@ static int test_nuplan_replay_load_step_log(void) {
     return run_case("nuplan-replay", drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1);
 }
 
+static int test_short_early_reset_flags_and_logs(void) {
+    const float max_spawn_attempts = 30.0f;
+    srand(7);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
+    EXPECT_TRUE(env.active_agent_count >= 4);
+    env.termination_mode = 1;
+    env.inactive_agent_threshold = 0.4f;
+
+    int removed_target = env.active_agent_count / 2 + 1;
+    for (int i = 0; i < removed_target; i++) {
+        Agent *agent = &env.agents[env.active_agent_indices[i]];
+        invalidate_agent(agent);
+        agent->removed = 1;
+    }
+    drive_set_neutral_actions(&env);
+    c_step(&env);
+
+    EXPECT_TRUE(env.log.n > 0.0f);
+    EXPECT_NEAR(env.log.early_reset_short, env.log.n, 1e-5f);
+    EXPECT_EQ_INT(env.short_reset_print_count, 1);
+    for (int x = 0; x < env.active_agent_count; x++) {
+        Log *agent_log = &env.logs[x];
+        float rejects = agent_log->spawn_reject_collision + agent_log->spawn_reject_offroad
+            + agent_log->spawn_reject_stop_line + agent_log->spawn_reject_empty_cell;
+        EXPECT_TRUE(rejects <= max_spawn_attempts);
+        EXPECT_TRUE(agent_log->spawn_failed == 0.0f || agent_log->spawn_failed == 1.0f);
+        Agent *agent = &env.agents[env.active_agent_indices[x]];
+        EXPECT_EQ_INT(agent->removed, (int) agent_log->spawn_failed);
+        EXPECT_EQ_INT(agent->stopped, (int) agent_log->stopped_at_reset);
+    }
+    free_allocated(&env);
+    return 0;
+}
+
 static int test_truncation_and_episode_log(void) {
     srand(11);
     Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 8, 0);
@@ -73,5 +107,6 @@ int main(void) {
     RUN_TEST(test_nuplan_gigaflow_load_step_log);
     RUN_TEST(test_nuplan_replay_load_step_log);
     RUN_TEST(test_truncation_and_episode_log);
+    RUN_TEST(test_short_early_reset_flags_and_logs);
     return test_summary(failures);
 }

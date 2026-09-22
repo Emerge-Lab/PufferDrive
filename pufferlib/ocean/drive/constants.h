@@ -177,6 +177,13 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define COLLISION_SKIP_DISP_M 0.1f
 #define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
 #define SPAWN_CLEARANCE_M 1.5f       // Min box-to-box gap between agents at spawn
+#define SPAWN_REJECT_COLLISION 0
+#define SPAWN_REJECT_OFFROAD 1
+#define SPAWN_REJECT_STOP_LINE 2
+#define SPAWN_REJECT_EMPTY_CELL 3
+#define SPAWN_REJECT_REASON_COUNT 4
+#define EARLY_RESET_SHORT_TIMESTEPS 2 // early reset this soon after c_reset means the reset itself failed
+#define SHORT_RESET_MAX_PRINTS 3
 #define COSIM_PARTNER_DEFAULT_LENGTH_M 4.5f // co-sim partner slot box until the external sim sets sizes
 #define COSIM_PARTNER_DEFAULT_WIDTH_M 2.0f
 #define COSIM_PARTNER_DEFAULT_HEIGHT_M 1.5f
@@ -206,7 +213,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define MAX_GRID_CELL_COUNT 100000000
 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution)
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
-#define MAX_ENTITIES_PER_CELL 30
+#define MAX_ENTITIES_PER_CELL 64
 #define ROAD_QUERY_ENTITY_COUNT (MAX_ENTITIES_PER_CELL * 25) // 5x5 cell neighborhood
 
 // 5x5 cell neighborhood swept by a road query, centered on the agent's cell

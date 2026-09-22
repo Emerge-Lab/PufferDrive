@@ -2114,6 +2114,14 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     float avg_distance_per_infraction = total_distance_travelled / fmaxf(1.0f, total_infractions);
 
     assign_to_dict(dict, "n", log->n);
+    assign_to_dict(dict, "spawn_failed", log->spawn_failed);
+    assign_to_dict(dict, "spawn_reject_collision", log->spawn_reject_collision);
+    assign_to_dict(dict, "spawn_reject_offroad", log->spawn_reject_offroad);
+    assign_to_dict(dict, "spawn_reject_stop_line", log->spawn_reject_stop_line);
+    assign_to_dict(dict, "spawn_reject_empty_cell", log->spawn_reject_empty_cell);
+    assign_to_dict(dict, "spawn_failed_goal", log->spawn_failed_goal);
+    assign_to_dict(dict, "stopped_at_reset", log->stopped_at_reset);
+    assign_to_dict(dict, "early_reset_short", log->early_reset_short);
     assign_to_dict(dict, "offroad_rate", log->offroad_rate);
     assign_to_dict(dict, "episode_length", log->episode_length);
     assign_to_dict(dict, "collision_rate", log->collision_rate);
