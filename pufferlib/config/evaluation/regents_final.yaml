@@ -1,6 +1,6 @@
 # Final matched ReGentS ego-controller matrix over the seed-29 10k CARLA cohort.
 env:
-  map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_100_seed_99
+  map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_100_seed_4
   simulation_mode: replay
   eval_mode: true
   compute_eval_metrics: true
@@ -33,11 +33,11 @@ env:
   use_map_cache: 0
   capture_avoidability_debug: true
 
-seed: 99
+seed: 4
 raster_resolution_meters: 1.0
 optimizer:
   # Disable rear exclusion and divergent steering cancellation for the comparison mode.
-  use_regents: true
+  use_regents: false
   learning_rate: 0.001
   iteration_count: 500
   ego_refresh_interval: 1
@@ -52,7 +52,7 @@ costs:
 generations:
   - name: regents_idm
     scenario_count: 10000
-    num_workers: 80
+    num_workers: 60
     horizon_transition_count: 100
     output_dir: experiments/regents
     render_replays: true
@@ -61,7 +61,7 @@ generations:
 
   - name: regents_corridor_idm
     scenario_count: 10000
-    num_workers: 80
+    num_workers: 60
     horizon_transition_count: 100
     output_dir: experiments/regents
     render_replays: true
@@ -70,7 +70,7 @@ generations:
 
   - name: regents_pdm
     scenario_count: 10000
-    num_workers: 80
+    num_workers: 60
     horizon_transition_count: 100
     output_dir: experiments/regents
     render_replays: true
@@ -81,7 +81,7 @@ generations:
   # integrates the selected adversary with its classic differentiable bicycle model.
   - name: regents_rl_nocond
     scenario_count: 10000
-    num_workers: 80
+    num_workers: 60
     horizon_transition_count: 100
     output_dir: experiments/regents
     render_replays: true
@@ -104,7 +104,7 @@ generations:
   # config. Randomization stays off so input + config + seed remains deterministic.
   - name: regents_rl_cond
     scenario_count: 10000
-    num_workers: 80
+    num_workers: 60
     horizon_transition_count: 100
     output_dir: experiments/regents
     render_replays: true
