@@ -1,4 +1,4 @@
-"""Replay saved seed 29 collisions and add hitter compliance to their summary."""
+"""Replay all saved seed 29 scenarios and add hitter compliance to their metrics."""
 
 import argparse
 import csv
@@ -16,7 +16,7 @@ METRIC_FIELDS = (
     "hitter_compliance_solid_line_violation",
     "hitter_compliance_speed_limit_violation",
 )
-SCENARIO_FIELDS = ("generation", "scenario_index", "scenario_id", *METRIC_FIELDS)
+SCENARIO_FIELDS = ("generation", "scenario_index", "scenario_id", "target_collision", *METRIC_FIELDS)
 
 
 def replay_collision(task):
@@ -63,10 +63,13 @@ def replay_collision(task):
         raise ValueError(
             f"Scenario {scenario_index} target collision changed: {expected_collision} to {actual_collision}"
         )
+    if int(episode_log["hitter_compliance_valid"]) != int(expected_collision):
+        raise ValueError(f"Scenario {scenario_index} hitter compliance validity disagrees with target collision")
     return {
         "generation": generation,
         "scenario_index": scenario_index,
         "scenario_id": scenario_id,
+        "target_collision": int(expected_collision),
         **{field: int(episode_log[field]) for field in METRIC_FIELDS},
     }
 
@@ -74,20 +77,25 @@ def replay_collision(task):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workers", type=int, default=8)
-    parser.add_argument("--limit", type=int, default=0, help="Replay only this many collisions for a smoke check")
+    parser.add_argument("--limit", type=int, default=0, help="Replay only this many scenarios for a smoke check")
     args = parser.parse_args()
     if args.workers <= 0 or args.limit < 0:
         parser.error("workers must be positive and limit must be nonnegative")
 
     experiment_root = Path(__file__).resolve().parents[1] / "experiments/regents"
     tasks = []
+    generation_rows = {}
+    generation_fieldnames = {}
     target_collision_counts = {}
     for generation in GENERATIONS:
         run_dir = experiment_root / generation / "seed_29"
         with (run_dir / "generation_metrics.csv").open(newline="") as metrics_file:
-            rows = list(csv.DictReader(metrics_file))
+            metrics_reader = csv.DictReader(metrics_file)
+            generation_fieldnames[generation] = list(metrics_reader.fieldnames)
+            rows = list(metrics_reader)
         if len(rows) != SCENARIOS_PER_GENERATION:
             raise ValueError(f"{generation} has {len(rows)} scenarios, expected {SCENARIOS_PER_GENERATION}")
+        generation_rows[generation] = rows
         target_collision_counts[generation] = 0
         for expected_index, row in enumerate(rows):
             scenario_index = int(row["scenario_index"])
@@ -96,9 +104,7 @@ def main():
             target_collision = float(row["eval_sdc_target_collision_rate"])
             if target_collision not in (0.0, 1.0):
                 raise ValueError(f"{generation} scenario {scenario_index} has an invalid target collision value")
-            if target_collision == 0.0:
-                continue
-            target_collision_counts[generation] += 1
+            target_collision_counts[generation] += int(target_collision)
             tasks.append(
                 (
                     generation,
@@ -114,21 +120,27 @@ def main():
     results_path = experiment_root / "seed_29_hitter_compliance_scenarios.csv"
     results_temp_path = results_path.with_suffix(".csv.tmp")
     counts = {generation: {"valid": 0, "compliant": 0} for generation in GENERATIONS}
+    scenario_results = {generation: {} for generation in GENERATIONS}
     with results_temp_path.open("w", newline="") as results_file:
         writer = csv.DictWriter(results_file, fieldnames=SCENARIO_FIELDS, lineterminator="\n")
         writer.writeheader()
         with ProcessPoolExecutor(max_workers=args.workers) as executor:
             for result_index, result in enumerate(executor.map(replay_collision, tasks), start=1):
                 writer.writerow(result)
+                scenario_results[result["generation"]][result["scenario_index"]] = result
                 counts[result["generation"]]["valid"] += result["hitter_compliance_valid"]
                 counts[result["generation"]]["compliant"] += result["hitter_compliance_compliant"]
                 if result_index % 1000 == 0:
                     results_file.flush()
-                    print(f"Replayed {result_index}/{len(tasks)} collisions", flush=True)
+                    print(f"Replayed {result_index}/{len(tasks)} scenarios", flush=True)
     if args.limit:
-        print(f"Smoke check passed for {len(tasks)} collisions; summary was not changed")
+        print(f"Smoke check passed for {len(tasks)} scenarios; output files were not changed")
         results_temp_path.unlink()
         return
+
+    for generation in GENERATIONS:
+        if len(scenario_results[generation]) != SCENARIOS_PER_GENERATION:
+            raise ValueError(f"{generation} has missing hitter compliance results")
 
     summary_path = experiment_root / "seed_29_collision_summary.csv"
     with summary_path.open(newline="") as summary_file:
@@ -151,11 +163,13 @@ def main():
         row["hitter_compliance_pct_of_valid_collisions"] = (
             f"{100 * compliant_count / valid_count:.2f}%" if valid_count else ""
         )
+        row["hitter_compliant_pct_of_scenarios"] = f"{100 * compliant_count / SCENARIOS_PER_GENERATION:.2f}%"
     added_fieldnames = (
         "hitter_compliance_valid_count",
         "hitter_compliant_count",
         "hitter_compliance_pct_of_target_collisions",
         "hitter_compliance_pct_of_valid_collisions",
+        "hitter_compliant_pct_of_scenarios",
     )
     fieldnames.extend(field for field in added_fieldnames if field not in fieldnames)
     summary_temp_path = summary_path.with_suffix(".csv.tmp")
@@ -163,8 +177,26 @@ def main():
         writer = csv.DictWriter(summary_file, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         writer.writerows(summary_rows)
+    generation_temp_paths = {}
+    for generation in GENERATIONS:
+        metrics_path = experiment_root / generation / "seed_29/generation_metrics.csv"
+        metrics_temp_path = metrics_path.with_suffix(".csv.tmp")
+        metric_fieldnames = [f"eval_{field}" for field in METRIC_FIELDS]
+        metrics_fieldnames = generation_fieldnames[generation]
+        metrics_fieldnames.extend(field for field in metric_fieldnames if field not in metrics_fieldnames)
+        with metrics_temp_path.open("w", newline="") as metrics_file:
+            writer = csv.DictWriter(metrics_file, fieldnames=metrics_fieldnames, lineterminator="\n")
+            writer.writeheader()
+            for scenario_index, row in enumerate(generation_rows[generation]):
+                result = scenario_results[generation][scenario_index]
+                for field in METRIC_FIELDS:
+                    row[f"eval_{field}"] = result[field]
+                writer.writerow(row)
+        generation_temp_paths[generation] = (metrics_temp_path, metrics_path)
     results_temp_path.replace(results_path)
     summary_temp_path.replace(summary_path)
+    for metrics_temp_path, metrics_path in generation_temp_paths.values():
+        metrics_temp_path.replace(metrics_path)
     print(f"Updated {summary_path}")
 
 
