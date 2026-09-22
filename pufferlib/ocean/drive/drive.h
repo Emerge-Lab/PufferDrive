@@ -4550,6 +4550,9 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             float p1_x, p1_y, v1_x, v1_y, a1_x, a1_y, a0_x, a0_y;
             project_point_from_ego_frame(agent, p1_fwd, p1_left, &p1_x, &p1_y);
             project_vector_from_ego_frame(agent, v1_fwd, v1_left, &v1_x, &v1_y);
+            // v1's limits are accel*T, so it is an offset: project_point_from_ego_frame translates p1, v1 needs it here.
+            v1_x += agent->sim_vx;
+            v1_y += agent->sim_vy;
             project_vector_from_ego_frame(agent, a1_fwd, a1_left, &a1_x, &a1_y);
             // accel_long/accel_lat are already ego-frame (local_x, local_y)-convention values.
             project_vector_from_ego_frame(agent, agent->accel_long, agent->accel_lat, &a0_x, &a0_y);
