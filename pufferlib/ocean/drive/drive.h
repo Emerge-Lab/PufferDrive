@@ -2598,14 +2598,14 @@ static void generate_traffic_light_states(Drive *env) {
     }
 }
 
-static bool check_spawn_collision(Drive *env, int num_existing_agents, Agent *tmp_agent) {
+static bool check_spawn_collision(Drive *env, Agent *tmp_agent) {
     // Inflate the candidate box so agents keep SPAWN_CLEARANCE_M of gap to every neighbor
     Agent inflated = *tmp_agent;
     inflated.sim_length += 2.0f * SPAWN_CLEARANCE_M;
     inflated.sim_width += 2.0f * SPAWN_CLEARANCE_M;
     float min_safe_dist_sq = (inflated.sim_length + 5.0f) * (inflated.sim_length + 5.0f);
 
-    for (int i = 0; i < num_existing_agents; i++) {
+    for (int i = 0; i < env->num_total_agents; i++) {
         Agent *other = &env->agents[i];
 
         if (other->sim_x == INVALID_POSITION || other->sim_valid != 1) {
@@ -2764,7 +2764,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
         update_agent_radius(&tmp_agent);
         tmp_agent.current_lane_idx = start_lane_idx;
 
-        if (check_spawn_collision(env, num_agents, &tmp_agent)) {
+        if (check_spawn_collision(env, &tmp_agent)) {
             continue;
         }
 
@@ -3082,6 +3082,7 @@ void set_active_agents(Drive *env) {
 
         // Initialize agents for GIGAFLOW mode
         env->agents = (Agent *) calloc(num_agents_to_create + partner_slots, sizeof(Agent));
+        env->num_total_agents = num_agents_to_create + partner_slots;
         int *active_agent_indices = (int *) malloc(num_agents_to_create * sizeof(int));
 
         int successfully_created = 0;
@@ -3096,7 +3097,6 @@ void set_active_agents(Drive *env) {
             }
         }
 
-        env->num_total_agents = num_agents_to_create + partner_slots;
         env->active_agent_indices = (int *) malloc(successfully_created * sizeof(int));
         env->static_agent_indices = partner_slots > 0 ? (int *) malloc(partner_slots * sizeof(int)) : NULL;
         env->expert_static_agent_indices = NULL;
@@ -4289,7 +4289,7 @@ static void compute_rewards(Drive *env, int i) {
     float lane_center_reward
         = -agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt * ((cos_theta > 0.5f) * adjusted_dist - exp_decay);
     env->rewards[i] += lane_center_reward;
-    agent_log->lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f;
+    agent_log->lane_center_rate += adjusted_dist < 0.5f ? 1.0f : 0.0f;
     agent_log->reward_lane_center += lane_center_reward;
 
     // Comfort reward
@@ -4413,16 +4413,17 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
 
 static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     if (env->reward_conditioning) {
+        const RewardBound *bounds = env->reward_log_sampling ? REWARD_BOUNDS_LOG : REWARD_BOUNDS;
         for (int coef_idx = 0; coef_idx < NUM_REWARD_COEFS; coef_idx++) {
-            float lo = REWARD_BOUNDS[coef_idx].min_val;
-            float hi = REWARD_BOUNDS[coef_idx].max_val;
+            float lo = bounds[coef_idx].min_val;
+            float hi = bounds[coef_idx].max_val;
             if (coef_idx == REWARD_COEF_SPEED) {
                 lo = 1.0f / env->conditioning_speed_scale;
                 hi = env->conditioning_speed_scale;
             }
             float coef = ego->reward_coefs[coef_idx];
             float normalized_coef;
-            if (REWARD_BOUNDS[coef_idx].log_scale) {
+            if (bounds[coef_idx].log_scale) {
                 // Match the log-uniform sampling so the conditioning signal stays even across [-1, 1].
                 float clamped = fmaxf(lo, fminf(hi, coef));
                 normalized_coef = (logf(clamped) - logf(lo)) / (logf(hi) - logf(lo));
@@ -5142,6 +5143,10 @@ void c_reset(Drive *env) {
     sample_zone_speed_limits(env);
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         generate_traffic_light_states(env);
+        // stale poses must neither block nor escape the spawn overlap check
+        for (int x = 0; x < env->active_agent_count; x++) {
+            invalidate_agent(&env->agents[env->active_agent_indices[x]]);
+        }
         int num_reset = 0;
         for (int x = 0; x < env->active_agent_count; x++) {
             int agent_idx = env->active_agent_indices[x];
