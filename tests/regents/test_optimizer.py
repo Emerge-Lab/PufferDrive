@@ -8,6 +8,8 @@ import torch
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.regents import classic_step
+from pufferlib.ocean.regents.generation import _optimization_config as generation_optimization_config
+from pufferlib.ocean.regents.generation import load_generation_config
 from pufferlib.ocean.regents.filters import ReGentSFilterConfig, select_adversary_candidates
 from pufferlib.ocean.regents.inverse_dynamics import estimate_expert_actions
 from pufferlib.ocean.regents.geometry import signed_box_distance
@@ -117,7 +119,10 @@ def _optimization_config(**overrides):
 def test_optimizer_configuration_and_gradient_masking_contracts(real_scenarios):
     """Parameterization defaults, range checks, gradient masking, and conversion metadata."""
     default_config = ReGentSOptimizationConfig()
+    assert default_config.use_regents is True
     assert default_config.steering_update_scale == 0.5
+    with pytest.raises(TypeError, match="use_regents"):
+        ReGentSOptimizationConfig(use_regents="false")
     with pytest.raises(ValueError, match="steering_update_scale"):
         ReGentSOptimizationConfig(steering_update_scale=-1.0)
 
@@ -143,6 +148,66 @@ def test_optimizer_configuration_and_gradient_masking_contracts(real_scenarios):
             torch.ones((*scenario.ego_mask.shape, 4), dtype=torch.bool),
             scenario.ego_mask.device,
         )
+
+
+def test_generation_config_switch_resolves_shared_and_per_generation_values(tmp_path):
+    config_path = tmp_path / "comparison.yaml"
+    config_path.write_text(
+        "env: {}\n"
+        "optimizer:\n  use_regents: true\n"
+        "generations:\n"
+        "  - name: regents\n    seed: 1\n    scenario_count: 1\n    horizon_transition_count: 1\n"
+        "  - name: king\n    seed: 1\n    scenario_count: 1\n    horizon_transition_count: 1\n"
+        "    optimizer:\n      use_regents: false\n",
+        encoding="utf-8",
+    )
+    regents = load_generation_config(config_path, "regents")
+    king_comparison = load_generation_config(config_path, "king")
+    assert generation_optimization_config(regents["optimizer"]).use_regents is True
+    assert generation_optimization_config(king_comparison["optimizer"]).use_regents is False
+
+
+def test_divergence_switch_retains_half_sized_steering_updates(monkeypatch):
+    scenario = _scenario(torch.stack((_straight_track(0.0, 0.0, 4.0, 16), _straight_track(8.0, 4.0, 3.0, 16))))
+    optimizer_kwargs = {"iteration_count": 1, "early_stop_on_collision": False}
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "pufferlib.ocean.regents.optimizer.front_divergence_mask",
+            lambda states, valid, ego, candidates, **kwargs: candidates,
+        )
+        regents = optimize_frozen_ego_scenario(
+            scenario, config=_optimization_config(**optimizer_kwargs), deterministic_seed=23, show_progress=False
+        )
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "pufferlib.ocean.regents.optimizer.front_divergence_mask",
+            lambda *args, **kwargs: pytest.fail("divergence check ran with use_regents=False"),
+        )
+        king_comparison = optimize_frozen_ego_scenario(
+            scenario,
+            config=_optimization_config(use_regents=False, **optimizer_kwargs),
+            deterministic_seed=23,
+            show_progress=False,
+        )
+        full_step = optimize_frozen_ego_scenario(
+            scenario,
+            config=_optimization_config(use_regents=False, steering_update_scale=1.0, **optimizer_kwargs),
+            deterministic_seed=23,
+            show_progress=False,
+        )
+
+    assert regents.use_regents is True
+    assert king_comparison.use_regents is False
+    torch.testing.assert_close(regents.optimized_actions[..., 1], regents.initial_actions[..., 1])
+    torch.testing.assert_close(regents.optimized_actions[..., 0], king_comparison.optimized_actions[..., 0])
+    wheelbase_over_time, _ = steering_conversion_metadata(
+        scenario, king_comparison.optimized_action_mask, king_comparison.optimized_actions.device
+    )
+    baseline_curvature = parameter_from_drive_actions(king_comparison.initial_actions, wheelbase_over_time)[..., 1]
+    half_step = parameter_from_drive_actions(king_comparison.optimized_actions, wheelbase_over_time)[..., 1]
+    full_step_curvature = parameter_from_drive_actions(full_step.optimized_actions, wheelbase_over_time)[..., 1]
+    assert (half_step - baseline_curvature).abs().sum() > 0
+    torch.testing.assert_close(half_step - baseline_curvature, 0.5 * (full_step_curvature - baseline_curvature))
 
 
 def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions(monkeypatch):

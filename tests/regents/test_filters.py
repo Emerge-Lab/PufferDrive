@@ -76,6 +76,30 @@ def _linear_track(x_start, y, speed, time_count=6, heading=0.0, dt=0.1):
     return state
 
 
+def test_rear_exclusion_switch_keeps_other_candidate_filters():
+    scenario = make_scenario(
+        torch.stack(
+            (
+                _linear_track(0.0, 0.0, 2.0),
+                _linear_track(-10.0, 0.0, 2.0),
+                _linear_track(20.0, 0.0, 0.0),
+            )
+        )
+    )
+    regents = select_adversary_candidates(scenario, use_regents=True)
+    king_comparison = select_adversary_candidates(scenario, use_regents=False)
+
+    assert regents.candidate_mask.tolist() == [False, False, False]
+    assert king_comparison.candidate_mask.tolist() == [False, True, False]
+    assert "rear_sector" in regents.reasons_for(1)
+    assert "rear_sector" not in king_comparison.reasons_for(1)
+    assert "static" in regents.reasons_for(2)
+    assert "static" in king_comparison.reasons_for(2)
+    assert regents.rear_sector_fraction[1] == king_comparison.rear_sector_fraction[1]
+    with pytest.raises(TypeError, match="use_regents"):
+        select_adversary_candidates(scenario, use_regents=1)
+
+
 def test_candidate_selection_records_every_reason_and_its_boundaries():
     """Per-agent reason bits, ego-only original collisions, and the strict rear sector."""
     assert ReGentSFilterConfig().static_speed_threshold_mps == 0.2

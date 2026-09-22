@@ -217,7 +217,7 @@ def load_generation_config(config_path, generation_name):
 
     resolved = {
         "name": generation_name,
-        "seed": _require_positive_int(selected.get("seed"), "seed"),
+        "seed": _require_positive_int(selected.get("seed", config.get("seed")), "seed"),
         "scenario_count": _require_positive_int(selected.get("scenario_count"), "scenario_count"),
         "num_workers": num_workers,
         "horizon_transition_count": _require_positive_int(

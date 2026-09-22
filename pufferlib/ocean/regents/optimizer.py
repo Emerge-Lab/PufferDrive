@@ -92,6 +92,7 @@ class FrozenEgoTrajectory:
 class ReGentSOptimizationConfig:
     filter: ReGentSFilterConfig = field(default_factory=ReGentSFilterConfig)
     costs: ReGentSCostConfig = field(default_factory=ReGentSCostConfig)
+    use_regents: bool = True
     learning_rate: float = DEFAULT_LEARNING_RATE
     iteration_count: int = DEFAULT_ITERATION_COUNT
     adam_beta1: float = DEFAULT_ADAM_BETA1
@@ -110,6 +111,8 @@ class ReGentSOptimizationConfig:
             raise TypeError("filter must be a ReGentSFilterConfig")
         if not isinstance(self.costs, ReGentSCostConfig):
             raise TypeError("costs must be a ReGentSCostConfig")
+        if not isinstance(self.use_regents, bool):
+            raise TypeError("use_regents must be a boolean")
         for name in ("learning_rate", "adam_epsilon"):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0.0:
@@ -174,6 +177,7 @@ class ReGentSOptimizationResult:
     optimized_states: torch.Tensor
     state_valid: torch.Tensor
     selection: CandidateSelection
+    use_regents: bool
     initial_costs: CostSnapshot | None
     final_costs: CostSnapshot | None
     selected_adversary_idx: int
@@ -513,6 +517,7 @@ def optimize_frozen_ego_scenario(
     selection = select_adversary_candidates(
         scenario,
         config.filter,
+        use_regents=config.use_regents,
         horizon_transition_count=horizon_transition_count,
         inverse_dynamics=inverse,
         reconstruction_drift_meters=reconstruction_drift,
@@ -707,16 +712,16 @@ def optimize_frozen_ego_scenario(
             failure_reason = "nonfinite_gradient"
             break
 
-        divergent = front_divergence_mask(
-            states.detach(),
-            state_valid,
-            scenario.ego_mask,
-            candidate_mask,
-            tau_front=config.tau_front,
-            applicability_half_angle_radians=config.front_applicability_half_angle_radians,
-            yaw_half_angle_radians=config.front_yaw_half_angle_radians,
-        )
-        # Divergence cancels the post-Adam update, not the gradient or moments.
+        if config.use_regents:
+            divergent = front_divergence_mask(
+                states.detach(),
+                state_valid,
+                scenario.ego_mask,
+                candidate_mask,
+                tau_front=config.tau_front,
+                applicability_half_angle_radians=config.front_applicability_half_angle_radians,
+                yaw_half_angle_radians=config.front_yaw_half_angle_radians,
+            )
         masked_gradient = torch.where(
             selection.optimized_action_mask[..., None], action_parameter.grad, torch.zeros_like(action_parameter.grad)
         )
@@ -732,9 +737,13 @@ def optimize_frozen_ego_scenario(
             damped_steering = previous_steering + config.steering_update_scale * (
                 action_parameter[..., ACTION_TARGET_STEERING] - previous_steering
             )
-            action_parameter[..., ACTION_TARGET_STEERING] = torch.where(
-                divergent[..., None], previous_steering, damped_steering
-            )
+            if config.use_regents:
+                # Divergence cancels the applied steering update, not Adam's moments.
+                action_parameter[..., ACTION_TARGET_STEERING] = torch.where(
+                    divergent[..., None], previous_steering, damped_steering
+                )
+            else:
+                action_parameter[..., ACTION_TARGET_STEERING] = damped_steering
             # A scale above one extrapolates past the Adam step and can leave the box.
             _project_parameter(action_parameter, steering_parameter_limit)
 
@@ -776,6 +785,7 @@ def optimize_frozen_ego_scenario(
         optimized_states=current_states,
         state_valid=state_valid,
         selection=selection,
+        use_regents=config.use_regents,
         initial_costs=initial_costs,
         final_costs=current_costs if current_costs is not None else initial_costs,
         selected_adversary_idx=selected_idx,

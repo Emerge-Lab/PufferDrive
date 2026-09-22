@@ -3,6 +3,7 @@ import math
 import struct
 import sys
 import zlib
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -334,6 +335,9 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
     assert len(metadata["source_configuration_hash"]) == 64
     assert metadata["optimization"]["background_collision_loss_scope"] == "candidate_pairs"
     assert metadata["optimization"]["result_selection_policy"] == "current_iterate"
+    assert metadata["optimization"]["use_regents"] is True
+    assert "rear_sector" in metadata["optimization"]["candidate_filter_policy"]
+    assert metadata["optimization"]["divergence_update_policy"] == "post_adam_cancel_preserve_moments"
     assert metadata["optimization"]["infractions_are_acceptance_gates"] is False
     assert (
         metadata["optimization"]["ego_collision_loss_adversary_id"]
@@ -343,6 +347,13 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
     assert initial_costs is None
     assert metadata["optimization"]["baseline_background_collision_pair_count"] >= 0
     assert metadata["optimization"]["background_collision_rejection_count"] >= 0
+    comparison_result = replace(result, optimization=replace(result.optimization, use_regents=False))
+    comparison_metadata = save_generation_artifact(
+        tmp_path / "comparison.npz", comparison_result, {"fixture": "comparison"}, str(map_path)
+    )
+    assert comparison_metadata["optimization"]["use_regents"] is False
+    assert "rear_sector" not in comparison_metadata["optimization"]["candidate_filter_policy"]
+    assert comparison_metadata["optimization"]["divergence_update_policy"] == "disabled"
     assert np.array_equal(arrays["optimized_actions"], result.optimization.optimized_actions.detach().numpy())
     assert np.array_equal(arrays["c_states"], result.replay.states.numpy())
     assert arrays["original_states"].shape[0] == result.scenario.max_agent_count

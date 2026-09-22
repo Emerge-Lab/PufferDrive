@@ -49,6 +49,8 @@ env:
 # values, matching the base-env then benchmark-env precedence used by `puffer eval`.
 raster_resolution_meters: 1.0
 optimizer:
+  # Disable rear exclusion and divergent steering cancellation for the comparison mode.
+  use_regents: true
   # Adam displaces a parameter by about the learning rate per iteration, so their
   # product is the action-space budget.
   learning_rate: 0.001

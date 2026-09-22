@@ -63,13 +63,20 @@ def save_generation_artifact(path, result, source_configuration, map_path):
         "ego_refresh_count": result.ego_refresh_count,
         "optimization": {
             "result_selection_policy": "current_iterate",
-            "candidate_filter_policy": "state_validity_displacement_speed_rear_sector_reconstruction_fidelity_off_road_start",
+            "use_regents": optimization.use_regents,
+            "candidate_filter_policy": (
+                "state_validity_displacement_speed_rear_sector_reconstruction_fidelity_off_road_start"
+                if optimization.use_regents
+                else "state_validity_displacement_speed_reconstruction_fidelity_off_road_start"
+            ),
             "collision_loss_metric": "signed_oriented_box_distance_meters",
             "road_loss_reduction": "mean_timesteps_sum_valid_agents_and_corners",
             "road_loss_kernel": "unit_mass_truncated_grid_convolution",
             "road_loss_baseline_subtracted": False,
             "steering_parameterization": "curvature",
-            "divergence_update_policy": "post_adam_cancel_preserve_moments",
+            "divergence_update_policy": (
+                "post_adam_cancel_preserve_moments" if optimization.use_regents else "disabled"
+            ),
             "infractions_are_acceptance_gates": False,
             "background_collision_loss_scope": BACKGROUND_COLLISION_LOSS_SCOPE,
             "success": optimization.success,

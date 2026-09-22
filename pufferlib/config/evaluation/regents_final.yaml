@@ -1,5 +1,6 @@
 # Final matched ReGentS ego-controller matrix over the seed-29 10k CARLA cohort.
 env:
+  map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_100_seed_29
   simulation_mode: replay
   eval_mode: true
   compute_eval_metrics: true
@@ -28,13 +29,15 @@ env:
   goal_source: route
   pdm_horizon: 4.0
   pdm_planning_dt: 0.1
-  map_dir: pufferlib/resources/drive/binaries/carla_generated_policy_10k_100_seed_29
   use_neighbor_cache: 0
   use_map_cache: 0
   capture_avoidability_debug: true
 
+seed: 42
 raster_resolution_meters: 1.0
 optimizer:
+  # Disable rear exclusion and divergent steering cancellation for the comparison mode.
+  use_regents: true
   learning_rate: 0.001
   iteration_count: 500
   ego_refresh_interval: 1
@@ -47,9 +50,8 @@ costs:
   gaussian_truncate_sigma: 6.4
 
 generations:
-  - name: regents_carla_generated_policy_10k_100_seed_29_idm
-    seed: 42
-    scenario_count: 1000
+  - name: regents_idm
+    scenario_count: 10000
     num_workers: 24
     horizon_transition_count: 100
     output_dir: experiments/regents
@@ -57,9 +59,8 @@ generations:
     env:
       sdc_controller: idm
 
-  - name: regents_carla_generated_policy_10k_100_seed_29_corridor_idm
-    seed: 42
-    scenario_count: 1000
+  - name: regents_corridor_idm
+    scenario_count: 10000
     num_workers: 24
     horizon_transition_count: 100
     output_dir: experiments/regents
@@ -67,9 +68,8 @@ generations:
     env:
       sdc_controller: corridor_idm
 
-  - name: regents_carla_generated_policy_10k_100_seed_29_pdm
-    seed: 42
-    scenario_count: 1000
+  - name: regents_pdm
+    scenario_count: 10000
     num_workers: 24
     horizon_transition_count: 100
     output_dir: experiments/regents
@@ -79,9 +79,8 @@ generations:
 
   # The unconditioned target checkpoint uses a jerk-dynamics action head. ReGentS still
   # integrates the selected adversary with its classic differentiable bicycle model.
-  - name: regents_carla_generated_policy_10k_100_seed_29_rl_nocond
-    seed: 42
-    scenario_count: 1000
+  - name: regents_rl_nocond
+    scenario_count: 10000
     num_workers: 24
     horizon_transition_count: 100
     output_dir: experiments/regents
@@ -103,9 +102,8 @@ generations:
 
   # Evaluate the 500B conditioned policy at the nominal reward target from its training
   # config. Randomization stays off so input + config + seed remains deterministic.
-  - name: regents_carla_generated_policy_10k_100_seed_29_rl_cond
-    seed: 42
-    scenario_count: 1000
+  - name: regents_rl_cond
+    scenario_count: 10000
     num_workers: 24
     horizon_transition_count: 100
     output_dir: experiments/regents

@@ -229,6 +229,7 @@ def select_adversary_candidates(
     scenario,
     config=None,
     *,
+    use_regents=True,
     horizon_transition_count=None,
     inverse_dynamics=None,
     reconstruction_drift_meters=None,
@@ -243,6 +244,8 @@ def select_adversary_candidates(
     """
     if config is None:
         config = ReGentSFilterConfig()
+    if not isinstance(use_regents, bool):
+        raise TypeError("use_regents must be a boolean")
     horizon_transition_count = _resolve_selection_horizon(
         scenario, config, horizon_transition_count, inverse_dynamics, reconstruction_drift_meters
     )
@@ -271,12 +274,13 @@ def select_adversary_candidates(
     start_off_road = _start_off_road_flags(scenario)
     static = displacement < config.static_displacement_threshold_meters
     static |= maximum_speed < config.static_speed_threshold_mps
+    rear_excluded = rear_fraction > config.rear_sector_fraction if use_regents else torch.zeros_like(scenario.ego_mask)
     rejected_by = (
         (CandidateFilterReason.EGO, scenario.ego_mask),
         (CandidateFilterReason.NON_VEHICLE, ~scenario.vehicle_mask),
         (CandidateFilterReason.INSUFFICIENT_VALID_STATES, valid_state_fraction < config.minimum_valid_state_fraction),
         (CandidateFilterReason.STATIC, static),
-        (CandidateFilterReason.REAR_SECTOR, rear_fraction > config.rear_sector_fraction),
+        (CandidateFilterReason.REAR_SECTOR, rear_excluded),
         (
             CandidateFilterReason.RECONSTRUCTION_FIDELITY,
             reconstruction_drift_meters > config.maximum_reconstruction_drift_meters,
