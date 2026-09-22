@@ -102,6 +102,8 @@ def _write_benchmark_config(
                     "termination_mode": False,
                     "obs_dropout_lane": 0.0,
                     "obs_dropout_boundary": 0.0,
+                    "partner_blindness_prob": 0.0,
+                    "phantom_braking_prob": 0.0,
                 },
                 "benchmarks": [
                     {

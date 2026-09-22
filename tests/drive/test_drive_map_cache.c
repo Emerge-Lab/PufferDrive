@@ -28,8 +28,8 @@ static int test_all_cache_modes_produce_identical_step_outputs(void) {
     const int steps = 20;
     srand(12345);
     Drive baseline = create_test_env_with_cache_modes(0, 0, 32);
-    int obs_count = baseline.active_agent_count * compute_observation_size(&baseline);
-    int agent_count = baseline.active_agent_count;
+    int obs_count = baseline.num_agents * compute_observation_size(&baseline);
+    int agent_count = baseline.num_agents;
     float *obs_log = (float *) malloc(steps * obs_count * sizeof(float));
     float *rew_log = (float *) malloc(steps * agent_count * sizeof(float));
     unsigned char *term_log = (unsigned char *) malloc(steps * agent_count * sizeof(unsigned char));
@@ -53,8 +53,8 @@ static int test_all_cache_modes_produce_identical_step_outputs(void) {
             drive_map_cache_clear();
             srand(12345);
             Drive env = create_test_env_with_cache_modes(use_map_cache, use_neighbor_cache, 32);
-            EXPECT_EQ_INT(env.active_agent_count, agent_count);
-            EXPECT_EQ_INT(env.active_agent_count * compute_observation_size(&env), obs_count);
+            EXPECT_EQ_INT(env.num_agents, agent_count);
+            EXPECT_EQ_INT(env.num_agents * compute_observation_size(&env), obs_count);
             for (int timestep = 0; timestep < steps; timestep++) {
                 drive_set_neutral_actions(&env);
                 c_step(&env);

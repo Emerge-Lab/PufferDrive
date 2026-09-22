@@ -13,7 +13,7 @@ Activate venv before `python`/`puffer`: `source .venv/bin/activate`
 - **Train:** `puffer train puffer_drive [train.learning_rate=0.001 env.num_agents=512]`
 
 ## Coding Standards
-- **Naming:** explicit (`active_agent_count`, `closest_lane_idx`); never `n/tmp/val/foo` except tiny local math. Keep units in names: `_seconds/_meters/_mps/_idx/_count`.
+- **Naming:** explicit (`num_agents`, `closest_lane_idx`); never `n/tmp/val/foo` except tiny local math. Keep units in names: `_seconds/_meters/_mps/_idx/_count`.
 - **Helpers:** add a function only for a major sim concept (`move_expert`, `compute_rewards`). No one-off wrappers hiding 2 lines.
 - **One function mutates one subsystem.** Don't update dynamics+rewards+metrics+logs together.
 - **Control flow:** max 2 nesting levels (flatten via `continue`/`return`; deeper → extract a major helper). No recursion. No function pointers (use `if`/`switch` on mode constants).

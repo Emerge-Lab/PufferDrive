@@ -15,20 +15,20 @@ static int test_simulator_raw_perf(void) {
     const float threshold = 0.8f * (float) baseline_sps;
     srand(17);
     Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
-    EXPECT_EQ_INT(env.active_agent_count, 32);
+    EXPECT_EQ_INT(env.num_agents, 32);
 
     int tick = 0;
     double start = now_seconds();
     while (now_seconds() - start < timeout) {
         int *actions = (int *) env.actions;
-        for (int i = 0; i < env.active_agent_count; i++) {
+        for (int i = 0; i < env.num_agents; i++) {
             actions[i] = rand() % (7 * 9);
         }
         c_step(&env);
         tick++;
     }
     double elapsed = now_seconds() - start;
-    float sps = (float) env.active_agent_count * (float) tick / (float) elapsed;
+    float sps = (float) env.num_agents * (float) tick / (float) elapsed;
     printf("Steps per second (SPS): %.1f\n", sps);
     printf("Ticks: %d elapsed: %.3f\n", tick, elapsed);
 
