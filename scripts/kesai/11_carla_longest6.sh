@@ -24,7 +24,8 @@
 # criteria attach a collision sensor); 1: chase-cam video, telemetry, world log and the HTML report per
 # route), OBS_HTML (1 = also the interactive obs replay per route, large; needs LOGGING=1), REPORT (0 = skip
 # the HTML report),
-# MAX_ATTEMPTS, CARLA_ROOT, CARL_WORK_DIR, PY, PD.
+# MAX_ATTEMPTS, CARLA_ROOT, CARL_WORK_DIR, PY, PD, COSIM_MAX_SPEED_MPS (ego speed cap, default 30),
+# COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: partners' stopped-time obs held at 0; 0 = real stopped times).
 set -u
 
 export PD=${PD:-/home/bjaeger/PufferDrive}
@@ -65,6 +66,8 @@ cd "$PD" || exit 1
 export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 NUMEXPR_NUM_THREADS=4
 export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
 export COSIM_DYNAMICS_SOURCE=pufferdrive
+export COSIM_MAX_SPEED_MPS=${COSIM_MAX_SPEED_MPS:-30}
+export COSIM_ZERO_PARTNER_STOPPED_TIME=${COSIM_ZERO_PARTNER_STOPPED_TIME:-1}
 export COSIM_OBS_HTML_MAX_STEPS=${COSIM_OBS_HTML_MAX_STEPS:-20000}
 
 TAG=longest6$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")

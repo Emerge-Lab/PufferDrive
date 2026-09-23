@@ -31,6 +31,17 @@ Environment variables:
                                env's target (speed, yaw) into throttle/brake/
                                steer and CARLA's own vehicle physics moves the
                                ego (subject to dynamics-mismatch tracking lag).
+  COSIM_MAX_SPEED_MPS=20       ego speed cap; sets the shadow env's C_vel =
+                               cap / base_max_speed_mps. Default: the
+                               checkpoint's base_max_speed_mps (C_vel = 1).
+                               Must lie in the trained range
+                               base * [1/conditioning_speed_scale, scale]
+                               (0036: 13.3-30 m/s, 0038+: 10-40 m/s).
+  COSIM_ZERO_PARTNER_STOPPED_TIME=0
+                               1: every partner's seconds_stopped observation
+                               feature is held at 0 (the ego's own counter is
+                               untouched). Ablates the stopped-time cue behind
+                               parked-car / red-light-queue avoidance.
   COSIM_DEBUG_CARLA_VIEW=/dir  write a CARLA chase-camera mp4 per route (native
                                tick rate, streamed to disk frame-by-frame)
   COSIM_RECORD_INFRACTIONS=/dir  write a short chase-cam clip (last ~5 s) per
@@ -77,6 +88,8 @@ RED_LIGHT_CHECK_DISTANCE_M = 30.0  # matches CaRL RunRedLight's own distance_lig
 
 FAR_AWAY = 1.0e6  # park unused shadow-env agent slots out of observation range
 PARTNER_MAX_ABS_DZ_M = 20.0  # CARLA actors farther above/below the ego are hidden scenario props, not traffic
+DEFAULT_BASE_MAX_SPEED_MPS = 20.0  # Drive() defaults, for checkpoints whose config predates the keys
+DEFAULT_CONDITIONING_SPEED_SCALE = 1.5
 ROAD_RAY_HALF_SPAN_M = 5.0  # vertical ray around the waypoint z; the ego roof and underpass roads are filtered by label/nearest
 ROAD_RAY_LABELS = (carla.CityObjectLabel.Roads, carla.CityObjectLabel.RoadLines, carla.CityObjectLabel.Bridge)
 MAX_POLICY_STEPS = 100_000  # shadow-env episode cap (~1.4 h at the 0.05 s CARLA tick); sizes the light state buffers
@@ -148,6 +161,24 @@ def road_aligned_attitude(road_up, yaw_deg):
     return pitch_deg, roll_deg, forward
 
 
+def cosim_max_speed_mps(env_cfg):
+    """COSIM_MAX_SPEED_MPS as a float inside the checkpoint's trained C_vel range, or None when unset."""
+    raw = os.environ.get("COSIM_MAX_SPEED_MPS")
+    if raw is None:
+        return None
+    max_speed_mps = float(raw)
+    base_max_speed_mps = float(env_cfg.get("base_max_speed_mps") or DEFAULT_BASE_MAX_SPEED_MPS)
+    scale = float(env_cfg.get("conditioning_speed_scale") or DEFAULT_CONDITIONING_SPEED_SCALE)
+    low_mps, high_mps = base_max_speed_mps / scale, base_max_speed_mps * scale
+    if not (low_mps <= max_speed_mps <= high_mps):
+        raise ValueError(
+            f"COSIM_MAX_SPEED_MPS={max_speed_mps} is outside the trained C_vel range "
+            f"[{low_mps:.1f}, {high_mps:.1f}] m/s (base_max_speed_mps={base_max_speed_mps}, "
+            f"conditioning_speed_scale={scale})"
+        )
+    return max_speed_mps
+
+
 def plan_xyz(plan):
     """[(carla.Transform, RoadOption)] -> (N, 3) CARLA-frame positions."""
     return np.array([[t.location.x, t.location.y, t.location.z] for t, _ in plan], dtype=np.float64).reshape(-1, 3)
@@ -172,6 +203,11 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         if self.dynamics_source not in ("carla", "pufferdrive"):
             raise ValueError(f"COSIM_DYNAMICS_SOURCE must be 'carla' or 'pufferdrive', got {self.dynamics_source!r}")
         env_cfg = self.cfg["env"]
+        self.max_speed_mps = cosim_max_speed_mps(env_cfg)
+        zero_stopped_raw = os.environ.get("COSIM_ZERO_PARTNER_STOPPED_TIME", "0")
+        if zero_stopped_raw not in ("0", "1"):
+            raise ValueError(f"COSIM_ZERO_PARTNER_STOPPED_TIME must be '0' or '1', got {zero_stopped_raw!r}")
+        self.zero_partner_stopped_time = zero_stopped_raw == "1"
         # Shadow agent pool == the training per-env cap
         self.num_agents = int(env_cfg["max_agents_per_env"])
 
@@ -245,6 +281,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                 collision_behavior="ignore",
                 offroad_behavior="ignore",
                 traffic_light_behavior="ignore",
+                **({} if self.max_speed_mps is None else {"max_speed_mps": self.max_speed_mps}),
             ),
         )
         self.dynamics_model = arch.get("dynamics_model", "classic")
@@ -390,7 +427,11 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         if self.telemetry_dir or self.record_infractions_dir:
             self._init_carla_infraction_detectors()
 
-        print(f"[puffer_agent] town={town} tick_dt={self.tick_dt} dt={self.dt} route_goals={len(self.route_goals)}")
+        print(
+            f"[puffer_agent] town={town} tick_dt={self.tick_dt} dt={self.dt} route_goals={len(self.route_goals)} "
+            f"max_speed_mps={self.env.max_speed_mps:.1f} (C_vel={self.env.max_speed_mps / self.env.base_max_speed_mps:.2f}) "
+            f"zero_partner_stopped_time={int(self.zero_partner_stopped_time)}"
+        )
         self.initialized = True
 
     # --- shadow-env sync (read-only w.r.t. CARLA) --------------------------
@@ -428,6 +469,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             stopped_by_id[a.id] = self._partner_stopped_s.get(a.id, 0.0) + self.dt if is_stopped else 0.0
             stopped_s.append(stopped_by_id[a.id])
         self._partner_stopped_s = stopped_by_id
+        if self.zero_partner_stopped_time:
+            stopped_s = [0.0] * len(actors)
         return (
             np.array(idx, np.int32),
             np.array(x, np.float32),
