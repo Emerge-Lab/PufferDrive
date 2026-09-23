@@ -34,9 +34,15 @@ ADDED_SUMMARY_FIELDS = (
 
 def replay_collision(task):
     cohort, generation, scenario_index, scenario_id, artifact_path, expected_collision, allow_mismatch = task
+    import torch
+
     from pufferlib.ocean.drive.drive import Drive
     from pufferlib.ocean.regents.artifacts import load_generation_artifact
+    from pufferlib.ocean.regents.policy_ego import PolicyEgoActor, ReGentSPolicyEgoConfig, checkpoint_digest
     from pufferlib.ocean.regents.rollout import capture_plan_pair
+
+    # Generation workers ran single-threaded (generation.py worker_torch_thread_count).
+    torch.set_num_threads(1)
 
     metadata, arrays = load_generation_artifact(artifact_path)
     if metadata["scenario_id"] != scenario_id:
@@ -48,6 +54,18 @@ def replay_collision(task):
     env_config["collision_behavior"] = "stop"
     env_config["offroad_behavior"] = "stop"
     scenario_seed = source["seed"] + scenario_index
+    policy_settings = source.get("ego_policy")
+    ego_policy_config = None
+    if policy_settings is not None:
+        expected_digest = policy_settings.get("checkpoint_sha256")
+        resolved = {key: value for key, value in policy_settings.items() if key != "checkpoint_sha256"}
+        resolved["checkpoint_path"] = str(repository_root / resolved["checkpoint_path"])
+        resolved["config_path"] = str(repository_root / resolved["config_path"])
+        if expected_digest is not None and checkpoint_digest(resolved["checkpoint_path"]) != expected_digest:
+            raise ValueError(
+                f"{cohort}/{generation} ego checkpoint {resolved['checkpoint_path']} does not match the artifact digest"
+            )
+        ego_policy_config = ReGentSPolicyEgoConfig(**resolved)
     drive = Drive(
         **env_config,
         eval_map_indices=[scenario_index],
@@ -64,6 +82,7 @@ def replay_collision(task):
             expected_scenario_id=scenario_id,
             agent_count=arrays["agent_id"].size,
             seed=scenario_seed,
+            ego_action_fn=None if ego_policy_config is None else PolicyEgoActor(ego_policy_config, drive),
         )
     finally:
         drive.close()
@@ -124,6 +143,8 @@ def scan_runs(results_root, only_cohort, only_generation):
             rows = list(csv.DictReader(metrics_file))
         if len(rows) != SCENARIOS_PER_GENERATION:
             raise ValueError(f"{metrics_path} has {len(rows)} scenarios, expected {SCENARIOS_PER_GENERATION}")
+        if "eval_hitter_compliance_valid" in rows[0]:
+            continue
         target_collision_count = 0
         scenarios = []
         for expected_index, row in enumerate(rows):
@@ -163,14 +184,19 @@ def main():
     results_root = Path(args.results_root)
     if not results_root.is_dir():
         parser.error(f"{results_root} is not a directory")
+    all_runs = scan_runs(results_root, "", "")
     runs = scan_runs(results_root, args.cohort, args.generation)
     if not runs:
         parser.error(f"no runs found under {results_root}")
 
     results_path = results_root / "hitter_compliance_scenarios.csv"
     mismatch_path = results_root / "collision_mismatches.csv"
-    kept_scenarios = {} if args.recompute_all else read_existing(results_path, SCENARIO_FIELDS)
-    kept_mismatches = {} if args.recompute_all else read_existing(mismatch_path, MISMATCH_FIELDS)
+    kept_scenarios = read_existing(results_path, SCENARIO_FIELDS)
+    kept_mismatches = read_existing(mismatch_path, MISMATCH_FIELDS)
+    if args.recompute_all:
+        for key in runs:
+            kept_scenarios.pop(key, None)
+            kept_mismatches.pop(key, None)
 
     replay_keys = []
     for key in runs:
@@ -183,7 +209,7 @@ def main():
         replay_keys.append(key)
     reused_keys = [key for key in runs if key not in replay_keys]
     for key in list(kept_scenarios) + list(kept_mismatches):
-        if key not in runs:
+        if key not in all_runs:
             kept_scenarios.pop(key, None)
             kept_mismatches.pop(key, None)
 
@@ -233,9 +259,16 @@ def main():
         covered = len(scenarios_by_run.get(key, [])) + len(mismatches_by_run.get(key, []))
         if covered != SCENARIOS_PER_GENERATION:
             raise ValueError(f"{key[0]}/{key[1]} has {covered} results, expected {SCENARIOS_PER_GENERATION}")
+    complete_keys = {
+        key
+        for key in all_runs
+        if len(scenarios_by_run.get(key, [])) + len(mismatches_by_run.get(key, [])) == SCENARIOS_PER_GENERATION
+    }
 
     counts = {}
     for key, rows in scenarios_by_run.items():
+        if key not in complete_keys:
+            continue
         counts[key] = Counter()
         for row in rows:
             counts[key]["valid"] += int(row["hitter_compliance_valid"])
@@ -267,11 +300,11 @@ def main():
         key = (row["cohort"], row["generation"])
         if key not in counts:
             continue
-        if int(row["target_collision_count"]) != runs[key]["target_collision_count"]:
+        if int(row["target_collision_count"]) != all_runs[key]["target_collision_count"]:
             raise ValueError(f"{key} target collision count changed")
         valid_count = counts[key]["valid"]
         compliant_count = counts[key]["compliant"]
-        target_count = runs[key]["target_collision_count"]
+        target_count = all_runs[key]["target_collision_count"]
         row["hitter_compliance_valid_count"] = valid_count
         row["hitter_compliant_count"] = compliant_count
         row["hitter_compliance_pct_of_target_collisions"] = (

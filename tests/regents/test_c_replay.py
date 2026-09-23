@@ -10,12 +10,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
+import yaml
 
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.regents.adapter import export_drive_scenarios
 from pufferlib.ocean.regents.artifacts import load_generation_artifact, save_generation_artifact
 from pufferlib.ocean.regents.generation import (
+    PUFFER_DRIVE_CONFIG_PATH,
     RENDER_DIR_NAME,
     _full_env_config,
     generate_regents_scenarios,
@@ -559,6 +561,63 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
     assert sum(report.rejection_reasons.values()) == report.scenario_count - int(
         report.generation_success_rate * report.scenario_count
     )
+
+
+def test_policy_generation_inherits_checkpoint_observation_environment(tmp_path):
+    checkpoint_path = tmp_path / "policy.pt"
+    checkpoint_path.write_bytes(b"checkpoint identity")
+    policy_config_path = tmp_path / "policy_config.yaml"
+    policy_config_path.write_text(
+        """\
+policy: {}
+policy_name: Drive
+rnn_name: null
+env:
+  dt: 0.3
+  obs_slots_lane_n: 70
+  obs_slots_boundary_n: 50
+  obs_lane_stride: 2
+  obs_goal_lane_distance: true
+  obs_norm_xy_offset_m: 200.0
+  obs_norm_goal_offset_m: 200.0
+  obs_range_partner_m: 200.0
+""",
+        encoding="utf-8",
+    )
+    generation_config_path = tmp_path / "regents.yaml"
+    generation_config_path.write_text(
+        f"""\
+env:
+  scenario_length: 91
+  resample_frequency: 91
+  obs_slots_boundary_n: 60
+generations:
+  - name: policy
+    seed: 1
+    scenario_count: 1
+    horizon_transition_count: 90
+    ego_policy:
+      checkpoint_path: {checkpoint_path}
+      config_path: {policy_config_path}
+    env:
+      sdc_controller: policy
+      obs_lane_stride: 3
+""",
+        encoding="utf-8",
+    )
+
+    generation = load_generation_config(generation_config_path, "policy")
+
+    assert generation["env"]["obs_slots_lane_n"] == 70
+    assert generation["env"]["obs_slots_boundary_n"] == 60
+    assert generation["env"]["obs_lane_stride"] == 3
+    assert generation["env"]["obs_goal_lane_distance"] is True
+    assert generation["env"]["obs_norm_xy_offset_m"] == 200.0
+    assert generation["env"]["obs_norm_goal_offset_m"] == 200.0
+    assert generation["env"]["obs_range_partner_m"] == 200.0
+    assert generation["env"]["dt"] == 0.3
+    puffer_drive_environment = yaml.safe_load(PUFFER_DRIVE_CONFIG_PATH.read_text(encoding="utf-8"))["env"]
+    assert generation["env"]["target_obs_range_partner_m"] == puffer_drive_environment["target_obs_range_partner_m"]
 
 
 def test_pufferl_regents_prints_success(tmp_path, capsys, monkeypatch):

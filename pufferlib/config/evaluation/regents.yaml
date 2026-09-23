@@ -11,10 +11,17 @@ env:
   non_sdc_controller: idm
   non_vehicle_controller: replay
   collision_behavior: ignore
+  # Pinned because a policy ego inherits its checkpoint env: a C agent frozen offroad or
+  # at a red light would diverge from the Torch rollout the optimizer differentiates.
+  offroad_behavior: ignore
+  traffic_light_behavior: ignore
   # ReGentS scenes have no adv3.0 "adversary", so the default
   # target_inactive_or_no_nearby_adversary mode ends the episode on the first step and
   # freezes the C replay it verifies against.
   adversarial_termination_mode: disabled
+  # A policy ego inherits the checkpoint env, whose training termination_mode would reset
+  # the episode once the single ego stops; benchmark.yaml turns it off for `puffer eval` too.
+  termination_mode: false
   # The adv3.0 default removes the target on its first infraction, so an ego that clips a
   # kerb disappears before the adversary can reach it and no ego collision is ever recorded.
   target_infraction_behavior: normal

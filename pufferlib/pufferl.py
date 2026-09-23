@@ -3016,6 +3016,7 @@ def _parse_regents_cli_args(arguments):
     parser = argparse.ArgumentParser(prog="puffer regents puffer_drive")
     parser.add_argument("generation_name")
     parser.add_argument("--config-path", default=REGENTS_GENERATION_CONFIG_PATH)
+    parser.add_argument("--output-dir")
     parser.add_argument("--experiment-name", "--exp-name", dest="experiment_name")
     parser.add_argument("--scenario-count", type=int)
     # Left as a string so the config's supported "auto" pool size stays reachable.
@@ -3056,6 +3057,7 @@ def main():
         regents(
             generation_name=regents_args.generation_name,
             config_path=regents_args.config_path,
+            output_dir=regents_args.output_dir,
             experiment_name=regents_args.experiment_name,
             drivable_area_weight=regents_args.drivable_area_weight,
             gaussian_sigma_meters=regents_args.gaussian_sigma_meters,

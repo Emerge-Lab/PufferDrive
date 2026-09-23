@@ -15,6 +15,7 @@ import yaml
 
 from tqdm import tqdm
 
+from pufferlib.config_schema import puffer_drive_constructor_keys
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.regents.adapter import DEFAULT_RASTER_RESOLUTION_METERS
@@ -43,6 +44,7 @@ TARGET_COLLISION_CLASS_FIELDS = (
     ("adversary_forced", "sdc_target_collision_adversary_forced_rate"),
     ("unavoidable", "sdc_target_collision_unavoidable_rate"),
 )
+PUFFER_DRIVE_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "puffer_drive.yaml"
 
 
 @dataclass(frozen=True)
@@ -168,6 +170,23 @@ def _resolve_ego_policy(ego_policy, environment, generation_name):
     return resolved
 
 
+def _load_policy_base_environment(policy_config, generation_name):
+    """Resolve the env `puffer eval` builds for a checkpoint: puffer_drive.yaml, then the checkpoint env."""
+    drive_keys = puffer_drive_constructor_keys()
+    with PUFFER_DRIVE_CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+        puffer_drive_config = _require_mapping(yaml.safe_load(config_file), "puffer_drive.yaml")
+    puffer_drive_environment = _require_mapping(puffer_drive_config.get("env"), "puffer_drive.yaml env")
+    with Path(policy_config["config_path"]).open("r", encoding="utf-8") as config_file:
+        checkpoint_config = yaml.safe_load(config_file)
+    checkpoint_config = _require_mapping(checkpoint_config, f"Generation {generation_name} policy checkpoint config")
+    checkpoint_environment = _require_mapping(
+        checkpoint_config.get("env"), f"Generation {generation_name} policy checkpoint config env"
+    )
+    environment = {key: value for key, value in puffer_drive_environment.items() if key in drive_keys}
+    environment.update({key: value for key, value in checkpoint_environment.items() if key in drive_keys})
+    return environment
+
+
 def load_generation_config(config_path, generation_name):
     """Validate the untrusted generation config and resolve one named entry."""
     with Path(config_path).open("r", encoding="utf-8") as config_file:
@@ -204,11 +223,18 @@ def load_generation_config(config_path, generation_name):
     if selected is None:
         raise ValueError(f"Unknown ReGentS generation: {generation_name}")
 
-    environment = dict(shared_env)
-    environment.update(_require_mapping(selected.get("env", {}), f"Generation {generation_name} env"))
-    unknown_keys = set(environment) - (set(inspect.signature(Drive.__init__).parameters) - {"self"})
+    environment_overrides = dict(shared_env)
+    environment_overrides.update(_require_mapping(selected.get("env", {}), f"Generation {generation_name} env"))
+    drive_keys = set(inspect.signature(Drive.__init__).parameters) - {"self"}
+    unknown_keys = set(environment_overrides) - drive_keys
     if unknown_keys:
         raise ValueError(f"ReGentS generation config has unsupported env keys: {', '.join(sorted(unknown_keys))}")
+
+    ego_policy = _resolve_ego_policy(selected.get("ego_policy"), environment_overrides, generation_name)
+    environment = {}
+    if ego_policy is not None:
+        environment.update(_load_policy_base_environment(ego_policy, generation_name))
+    environment.update(environment_overrides)
 
     selected_optimizer = _require_mapping(selected.get("optimizer", {}), f"Generation {generation_name} optimizer")
     optimizer = dict(shared_optimizer)
@@ -224,7 +250,6 @@ def load_generation_config(config_path, generation_name):
     costs.update(_require_mapping(optimizer.get("costs", {}), f"Generation {generation_name} optimizer costs"))
     if costs:
         optimizer["costs"] = costs
-    ego_policy = _resolve_ego_policy(selected.get("ego_policy"), environment, generation_name)
     num_workers = selected.get("num_workers", 1)
     if num_workers != "auto":
         _require_positive_int(num_workers, "num_workers")

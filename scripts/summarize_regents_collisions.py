@@ -14,10 +14,14 @@ SCENARIOS_PER_GENERATION = 10000
 GENERATION_ORDER = ("regents_idm", "regents_corridor_idm", "regents_pdm", "regents_rl_nocond", "regents_rl_cond")
 MAP_COHORT_PATTERN = re.compile(r"carla_generated_policy_10k_100_(seed_\d+)")
 
+NATIVE_VALID = "eval_hitter_compliance_valid"
+NATIVE_COMPLIANT = "eval_hitter_compliance_compliant"
+
 SUMMARY_FIELDS = (
     "cohort",
     "generation",
     "map_cohort",
+    "hitter_source",
     "genuine_failure_pct_of_scenarios",
     "unavoidable_pct_of_scenarios",
     "adversary_forced_pct_of_scenarios",
@@ -31,6 +35,12 @@ SUMMARY_FIELDS = (
     "successful_genuine_failure_count",
     "successful_unavoidable_count",
     "successful_adversary_forced_count",
+    "hitter_compliance_valid_count",
+    "hitter_compliant_count",
+    "hitter_compliance_pct_of_target_collisions",
+    "hitter_compliance_pct_of_valid_collisions",
+    "hitter_compliant_pct_of_scenarios",
+    "collision_mismatch_count",
 )
 
 
@@ -83,8 +93,28 @@ def summarize_run(metrics_path):
     if outcome_total != counts["target_collision_count"]:
         raise ValueError(f"{metrics_path} outcomes {outcome_total} do not partition {counts['target_collision_count']}")
 
+    native = {}
+    if NATIVE_VALID in rows[0]:
+        valid_count = sum(int(float(row[NATIVE_VALID])) for row in rows)
+        compliant_count = sum(int(float(row[NATIVE_COMPLIANT])) for row in rows)
+        target_count = counts["target_collision_count"]
+        native = {
+            "hitter_source": "native",
+            "hitter_compliance_valid_count": valid_count,
+            "hitter_compliant_count": compliant_count,
+            "hitter_compliance_pct_of_target_collisions": (
+                f"{100 * compliant_count / target_count:.2f}%" if target_count else ""
+            ),
+            "hitter_compliance_pct_of_valid_collisions": (
+                f"{100 * compliant_count / valid_count:.2f}%" if valid_count else ""
+            ),
+            "hitter_compliant_pct_of_scenarios": f"{100 * compliant_count / SCENARIOS_PER_GENERATION:.2f}%",
+            "collision_mismatch_count": 0,
+        }
+
     percent = lambda count: f"{100 * count / SCENARIOS_PER_GENERATION:.2f}%"
     return {
+        **native,
         "map_cohort": map_cohorts.pop(),
         "scenario_count": SCENARIOS_PER_GENERATION,
         "genuine_failure_pct_of_scenarios": percent(counts["genuine_failure_count"]),

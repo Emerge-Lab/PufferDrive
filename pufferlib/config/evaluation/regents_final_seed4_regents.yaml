@@ -10,7 +10,10 @@ env:
   non_sdc_controller: idm
   non_vehicle_controller: replay
   collision_behavior: ignore
+  offroad_behavior: ignore
+  traffic_light_behavior: ignore
   adversarial_termination_mode: disabled
+  termination_mode: false
   target_infraction_behavior: normal
   action_type: continuous
   dynamics_model: classic
