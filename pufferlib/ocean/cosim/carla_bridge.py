@@ -85,6 +85,80 @@ def town_offset(bin_path: str):
     return TOWN_OFFSETS[town]
 
 
+OFFSET_CALIBRATION_MAX_RESIDUAL_M = (
+    1.0  # median lane-normal residual left after calibration: larger = wrong bin for this map
+)
+OFFSET_CALIBRATION_SPACING_M = 10.0
+OFFSET_CALIBRATION_MATCH_MAX_M = 2.0  # waypoint-to-bin-lane residuals beyond this are mismatches, not offset
+
+
+def calibrate_town_offset(carla_map, transform, town_bin):
+    """(tx, ty) refined so the bin's lane polylines coincide with CARLA's lane centres.
+
+    The exported bins sit a constant fraction of a metre off the CARLA frame (measured 2026-09-23 with
+    the stored offsets: Town01 0.27 m, Town02 0.6 m), and the ego plus every streamed actor inherited it,
+    driving 0.44 m right of CARLA's lane centre on Town02 and clipping curbs the shadow env could not see.
+    Least squares of the translation over the lane-normal residuals of CARLA's driving waypoints against
+    the nearest bin lane segment, two passes (re-matched after the first shift), mismatches beyond
+    OFFSET_CALIBRATION_MATCH_MAX_M dropped. Returns (offset, residual_before_m, residual_after_m)."""
+    data = _mbin.read_bin(Path(town_bin))
+    seg_start, seg_end = [], []
+    for road in data["roads"]:
+        if not (0 <= road["type"] <= 9) or len(road["x"]) < 2:
+            continue
+        pts = np.column_stack([road["x"], road["y"]])
+        seg_start.append(pts[:-1])
+        seg_end.append(pts[1:])
+    seg_start = np.vstack(seg_start)
+    seg_end = np.vstack(seg_end)
+    seg_dir = seg_end - seg_start
+    seg_len_sq = np.maximum((seg_dir**2).sum(1), 1e-9)
+    points, normals = [], []
+    for wp in carla_map.generate_waypoints(OFFSET_CALIBRATION_SPACING_M):
+        if wp.is_junction or str(wp.lane_type) != "Driving":
+            continue
+        loc, right = wp.transform.location, wp.transform.get_right_vector()
+        points.append(transform.loc_to_bin(loc.x, loc.y))
+        normals.append((right.x, -right.y))  # y flips into the bin frame
+    points = np.array(points, dtype=np.float64).reshape(-1, 2)
+    normals = np.array(normals, dtype=np.float64).reshape(-1, 2)
+    normals /= np.maximum(np.hypot(normals[:, 0], normals[:, 1]), 1e-9)[:, None]
+
+    def normal_residuals(shift):
+        residuals = np.empty(len(points))
+        for start in range(0, len(points), 256):
+            chunk = points[start : start + 256] - shift
+            t = (
+                (chunk[:, None, 0] - seg_start[None, :, 0]) * seg_dir[None, :, 0]
+                + (chunk[:, None, 1] - seg_start[None, :, 1]) * seg_dir[None, :, 1]
+            ) / seg_len_sq[None, :]
+            t = np.clip(t, 0.0, 1.0)
+            foot_x = seg_start[None, :, 0] + t * seg_dir[None, :, 0]
+            foot_y = seg_start[None, :, 1] + t * seg_dir[None, :, 1]
+            dist = np.hypot(chunk[:, None, 0] - foot_x, chunk[:, None, 1] - foot_y)
+            nearest = np.argmin(dist, axis=1)
+            rows = np.arange(len(chunk))
+            delta = np.column_stack([foot_x[rows, nearest], foot_y[rows, nearest]]) - chunk
+            residuals[start : start + 256] = (delta * normals[start : start + 256]).sum(1)
+        return residuals
+
+    shift = np.zeros(2)  # bin lanes = CARLA lanes + shift  ->  loc_to_bin must add shift
+    residual_before = float(np.median(np.abs(normal_residuals(shift))))
+    for _ in range(2):
+        residuals = normal_residuals(-shift)
+        keep = np.abs(residuals) <= OFFSET_CALIBRATION_MATCH_MAX_M
+        n = normals[keep]
+        # residual_i = n_i . v  ->  (N^T N) v = N^T r
+        shift += np.linalg.lstsq(n, residuals[keep], rcond=None)[0]
+    residual_after = float(np.median(np.abs(normal_residuals(-shift))))
+    if residual_after > OFFSET_CALIBRATION_MAX_RESIDUAL_M:
+        raise RuntimeError(
+            f"{Path(town_bin).name}: bin lanes do not match this CARLA map (median lane residual "
+            f"{residual_after:.2f} m after offset calibration)"
+        )
+    return (transform.tx + float(shift[0]), transform.ty + float(shift[1])), residual_before, residual_after
+
+
 class CarlaTransform:
     """Bidirectional CARLA <-> PufferDrive-bin-frame transform for one town."""
 

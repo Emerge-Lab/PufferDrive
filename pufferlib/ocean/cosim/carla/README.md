@@ -54,7 +54,11 @@ lane_dist/lane_angle drift within ~1s of a sustained turn).
 `COSIM_DYNAMICS_SOURCE=pufferdrive` skips the controller entirely: PufferDrive's
 own dynamics (the ones the policy was trained on) move the ego, and the CARLA
 actor is teleported to the post-step pose every tick, where the next tick's
-observation reads it. Physics is left ON — disabling
+observation reads it. The teleport keeps the body flat on CARLA's road plane
+(pitch/roll from the waypoint's up vector rotated into the policy's heading,
+velocity along the pitched forward vector): a yaw-only pose on Town03/04
+grades of 5-15 deg buried the wheels in the mesh and logged 20-30
+`static.road` collisions per route. Physics is left ON — disabling
 it on this already-active, leaderboard-managed hero actor segfaults the UE4
 engine (tried at several points in the agent's init sequence, same crash every
 time) — but `set_transform()` overrides it every step regardless, so the net
@@ -66,6 +70,15 @@ the actual motion. This removes the dynamics-mismatch tracking lag at the cost
 of the ego no longer being a physically-simulated CARLA vehicle; the
 leaderboard's route/collision/infraction criteria still see it correctly since
 they only read its pose.
+
+### Bin frame calibration
+
+The exported bins sit a constant fraction of a metre off the CARLA frame (2026-09-23, stored
+offsets: Town01 0.28 m, Town02 0.62 m, Town06 1.2 m along x), so the ego and every streamed
+actor drove that far right of CARLA's lane centre and clipped curbs the shadow env could not
+see. `carla_bridge.calibrate_town_offset` fits the translation against CARLA's driving
+waypoints at init (median lane residual -> 0.00 m on Town01-06) and refuses a bin whose lanes do
+not match the loaded map; the agent logs the applied shift.
 
 ### HTML report (nuPlan-style)
 

@@ -123,6 +123,19 @@ def resolve_checkpoint(path_to_conf_file):
     return str(ckpt), cfg
 
 
+def road_aligned_attitude(road_up, yaw_deg):
+    """(pitch_deg, roll_deg, unit forward) of a body heading yaw_deg that lies flat on the road plane with normal road_up."""
+    normal = np.array([road_up.x, road_up.y, road_up.z], dtype=np.float64)
+    yaw_rad = math.radians(yaw_deg)
+    forward = np.array([math.cos(yaw_rad), math.sin(yaw_rad), 0.0])
+    forward -= normal * float(forward @ normal)
+    forward /= np.linalg.norm(forward)
+    right = np.cross(normal, forward)  # CARLA is left-handed: right = up x forward
+    pitch_deg = math.degrees(math.asin(forward[2]))
+    roll_deg = math.degrees(math.asin(-right[2]))  # positive roll = right side down
+    return pitch_deg, roll_deg, forward
+
+
 def plan_xyz(plan):
     """[(carla.Transform, RoadOption)] -> (N, 3) CARLA-frame positions."""
     return np.array([[t.location.x, t.location.y, t.location.z] for t, _ in plan], dtype=np.float64).reshape(-1, 3)
@@ -274,6 +287,13 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         self._load_policy_and_env(self.town_bin)
 
         self.transform = cb.CarlaTransform(town, offset=cb.town_offset(self.town_bin))
+        offset, residual_before, residual_after = cb.calibrate_town_offset(self.cmap, self.transform, self.town_bin)
+        print(
+            f"[puffer_agent] bin offset calibrated against CARLA lanes: shift "
+            f"({offset[0] - self.transform.tx:+.2f}, {offset[1] - self.transform.ty:+.2f}) m, "
+            f"median lane residual {residual_before:.2f} -> {residual_after:.2f} m"
+        )
+        self.transform = cb.CarlaTransform(town, offset=offset)
         if self.dynamics_source == "pufferdrive":
             self._sync_ego_from_carla(zero_velocity=True)
         ego_loc = self.vehicle.get_location()
@@ -561,15 +581,18 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         # road collisions per Town03/04 route). sim_z only off the drivable network.
         wp = self.cmap.get_waypoint(carla.Location(x=x, y=y))
         z = wp.transform.location.z if wp is not None else sim_z
+        road_up = wp.transform.rotation.get_up_vector() if wp is not None else carla.Vector3D(x=0.0, y=0.0, z=1.0)
+        pitch_deg, roll_deg, forward = road_aligned_attitude(road_up, yaw_deg)
         # Zero momentum before the teleport: CARLA's collision resolver reacts violently to a
         # physics body carrying velocity into a new pose (carla issue #8076).
         zero = carla.Vector3D(x=0.0, y=0.0, z=0.0)
         self.vehicle.set_target_velocity(zero)
         self.vehicle.set_target_angular_velocity(zero)
-        self.vehicle.set_transform(carla.Transform(carla.Location(x=x, y=y, z=z), carla.Rotation(yaw=yaw_deg)))
-        yaw_rad = math.radians(yaw_deg)
+        self.vehicle.set_transform(
+            carla.Transform(carla.Location(x=x, y=y, z=z), carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=roll_deg))
+        )
         self.vehicle.set_target_velocity(
-            carla.Vector3D(x=speed * math.cos(yaw_rad), y=speed * math.sin(yaw_rad), z=0.0)
+            carla.Vector3D(x=speed * forward[0], y=speed * forward[1], z=speed * forward[2])
         )
         self.vehicle.set_target_angular_velocity(carla.Vector3D(x=0.0, y=0.0, z=yaw_delta_deg / self.dt))
 
