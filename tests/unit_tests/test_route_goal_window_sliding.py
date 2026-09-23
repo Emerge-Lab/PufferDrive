@@ -7,7 +7,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from pufferlib.ocean.cosim.goals import RouteGoalWindow, route_goals_from_xy
+from pufferlib.ocean.cosim.goals import RouteGoalWindow, route_goals_from_target_points, route_goals_from_xy
 
 NUM_GOALS = 3
 GOAL_RADIUS_M = 10.0
@@ -44,6 +44,20 @@ def test_route_goals_first_direction_comes_from_origin():
     np.testing.assert_allclose(with_origin[0, 3:5], [10.0, 40.0])
     np.testing.assert_allclose(with_origin[1, 3:5], [0.0, 40.0])
     np.testing.assert_allclose(with_origin[:, :2], goals)
+
+
+def test_target_points_become_route_goals_with_dense_route_direction():
+    # CARLA frame: straight east 0..100, then a left turn north (CARLA y down -> north is -y)
+    dense = [(x, 0.0, 0.0) for x in range(101)] + [(100.0, -y, 0.0) for y in range(1, 41)]
+    targets = [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, -40.0, 0.0)]  # start, junction entry, route end
+    to_bin = lambda x, y: (x + 5.0, -y)  # the CARLA->bin transform flips y
+    goals = route_goals_from_target_points(targets, dense, to_bin, to_bin(0.0, 0.0), skip_radius=10.0)
+    assert goals.shape == (2, 5)  # the start point under the ego is dropped
+    np.testing.assert_allclose(goals[:, :2], [[105.0, 0.0], [105.0, 40.0]])
+    np.testing.assert_allclose(goals[0, 3:5], [1.0, 0.0])  # arriving at the entry: heading east
+    np.testing.assert_allclose(goals[1, 3:5], [0.0, 1.0])  # at the end: heading north in the bin frame
+    kept = route_goals_from_target_points(targets, dense, to_bin, to_bin(50.0, 0.0), skip_radius=10.0)
+    assert kept.shape == (3, 5)  # nothing near the ego: every target point kept
 
 
 def test_batch_window_replaces_only_when_exhausted():

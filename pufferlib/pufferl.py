@@ -335,6 +335,7 @@ class PuffeRL:
         self.utilization = Utilization()
         self.profile = Profile()
         self.stats = defaultdict(list)
+        self.env_metric_sums = {}
         self.last_stats = defaultdict(list)
         self.losses = {}
         self.best_score = -float("inf")
@@ -481,13 +482,10 @@ class PuffeRL:
 
             profile("eval_misc", epoch)
             for i in info:
+                # every completed episode counts once: weight each env log by its episode count
+                weight = float(i.get(pufferlib.utils.EPISODE_COUNT_KEY, 1.0)) if isinstance(i, dict) else 1.0
                 for k, v in pufferlib.unroll_nested_dict(i):
-                    if isinstance(v, np.ndarray):
-                        v = v.tolist()
-                    elif isinstance(v, (list, tuple)):
-                        self.stats[k].extend(v)
-                    else:
-                        self.stats[k].append(v)
+                    pufferlib.utils.accumulate_environment_metric(self.env_metric_sums, k, v, weight)
 
             profile("env", epoch)
 
@@ -505,7 +503,7 @@ class PuffeRL:
         self.ep_indices = torch.arange(self.total_agents, dtype=torch.int32)
         self.ep_lengths.zero_()
         profile.end()
-        return pufferlib.utils.reduce_environment_metrics(self.stats)
+        return pufferlib.utils.finalize_environment_metrics(self.collect_environment_metric_sums())
 
     @record
     def train(self):
@@ -539,6 +537,7 @@ class PuffeRL:
             logs = self.mean_and_log()
             self.print_dashboard()
             self.stats = defaultdict(list)
+            self.env_metric_sums = {}
             self.last_log_time = time.time()
             self.last_log_step = self.global_step
             profile.clear()
@@ -858,9 +857,12 @@ class PuffeRL:
             float("nan") if var_y == 0 else (1 - (y_true - y_pred).var(unbiased=False) / var_y).item()
         )
 
+    def collect_environment_metric_sums(self):
+        return {**pufferlib.utils.environment_metric_sums(self.stats), **self.env_metric_sums}
+
     def mean_and_log(self):
         config = self.config
-        env_metric_sums = pufferlib.utils.environment_metric_sums(self.stats)
+        env_metric_sums = self.collect_environment_metric_sums()
         losses = {k: float(v) for k, v in self.losses.items()}
         if torch.distributed.is_initialized():
             world_size = torch.distributed.get_world_size()

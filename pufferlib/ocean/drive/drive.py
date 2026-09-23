@@ -7,6 +7,8 @@ from importlib.resources import files as package_files
 import pufferlib
 from pufferlib.ocean.drive import binding
 
+LOG_MIN_AGENT_EPISODES = 1  # emit env logs as soon as any episode completed; the trainer weights them by n
+
 
 def map_dir_missing_message(map_dir):
     """Error text for a nonexistent map_dir. When its basename is a dataset
@@ -802,7 +804,7 @@ class Drive(pufferlib.PufferEnv):
         # vec_log is the training aggregate; it resets env->log, which eval reads
         # per episode, so it must not run in eval mode.
         if not self.eval_mode and self.tick % self.report_interval == 0:
-            log = binding.vec_log(self.c_envs, self.num_agents)
+            log = binding.vec_log(self.c_envs, LOG_MIN_AGENT_EPISODES)
             if log:
                 info.append(log)
                 # print(log)

@@ -129,6 +129,9 @@ class CarlaTransform:
 
 # CARLA traffic-light state -> PufferDrive enum (datatypes.h:61-67)
 #   UNKNOWN=0 RED=1 YELLOW=2 GREEN=3 OFF=4
+TRAFFIC_LIGHT_STATE_OFF = 4
+
+
 def carla_light_to_puffer(state) -> int:
     import carla
 

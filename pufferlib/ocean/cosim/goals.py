@@ -63,7 +63,9 @@ class RouteGoalWindow:
         pts = self.goals[:, :2].astype(np.float64)
         last_goal = len(pts) - 1 if last_goal is None else min(last_goal, len(pts) - 1)
         if last_goal <= first_goal:
-            return float(self.arc_length[first_goal]), float(np.hypot(pts[first_goal, 0] - ego_x, pts[first_goal, 1] - ego_y))
+            return float(self.arc_length[first_goal]), float(
+                np.hypot(pts[first_goal, 0] - ego_x, pts[first_goal, 1] - ego_y)
+            )
         a, b = pts[first_goal:last_goal], pts[first_goal + 1 : last_goal + 1]
         d = b - a
         length_sq = np.maximum((d * d).sum(axis=1), 1e-9)
@@ -89,7 +91,9 @@ class RouteGoalWindow:
             progress, lateral = self.route_progress(
                 ego_x, ego_y, max(self.current_index - 1, 0), self.current_index + self.num_goals
             )
-            passed = lateral <= ROUTE_MAX_LATERAL_M and progress > self.arc_length[self.current_index] + self.goal_radius
+            passed = (
+                lateral <= ROUTE_MAX_LATERAL_M and progress > self.arc_length[self.current_index] + self.goal_radius
+            )
             next_start = int(np.searchsorted(self.arc_length, progress, side="right")) if passed else self.window_start
             if self.sliding and not passed:
                 next_start = self.current_index
@@ -116,3 +120,24 @@ def route_goals_from_xy(goals_xy, goals_z=None, origin_xy=None):
     first_prev = xy[:1] if origin_xy is None else np.asarray(origin_xy, dtype=np.float64).reshape(1, 2)
     prev = np.vstack([first_prev, xy[:-1]])
     return np.column_stack([xy, z, xy - prev]).astype(np.float32)
+
+
+def route_goals_from_target_points(target_points_xyz, dense_route_xyz, to_bin, start_xy_bin, skip_radius):
+    """Leaderboard target points (junction entries/exits, lane changes, every 200 m) -> (N, 5) route
+    goals in the bin frame. Each target point is a point of the dense route; its direction is the dense
+    route's local direction there. Leading points within skip_radius of start_xy_bin are dropped (the
+    route starts under the ego, and a goal there would be consumed on the first step)."""
+    targets = np.asarray(target_points_xyz, dtype=np.float64).reshape(-1, 3)
+    dense = np.asarray(dense_route_xyz, dtype=np.float64).reshape(-1, 3)
+    if len(targets) == 0 or len(dense) < 2:
+        raise ValueError("route_goals_from_target_points needs target points and a dense route of >= 2 points")
+    dense_bin = np.array([to_bin(x, y) for x, y, _ in dense], dtype=np.float64)
+    goals = np.zeros((len(targets), ROUTE_GOAL_COLUMNS), dtype=np.float64)
+    for goal_idx, (tx, ty, tz) in enumerate(targets):
+        k = max(int(np.argmin(np.hypot(dense[:, 0] - tx, dense[:, 1] - ty))), 1)
+        bx, by = to_bin(tx, ty)
+        goals[goal_idx] = (bx, by, tz, *(dense_bin[k] - dense_bin[k - 1]))
+    first = 0
+    while first < len(goals) - 1 and math.hypot(*(goals[first, :2] - start_xy_bin)) < skip_radius:
+        first += 1
+    return goals[first:].astype(np.float32)

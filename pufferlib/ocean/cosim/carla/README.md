@@ -9,7 +9,7 @@ Evaluate a PufferDrive-trained policy with **CaRL's unmodified `original_leaderb
 Zero changes to CaRL. The leaderboard imports any agent file via `--agent`, so the whole integration is this package:
 
 - `leaderboard_agent.py` — `AutonomousAgent` subclass (entry point `PufferAgent`).
-  Loads a PufferDrive checkpoint, builds the shadow `Drive` env from the checkpoint's config, and every `dt / tick_dt` ticks: overwrites ALL shadow agents (ego included) from CARLA ground truth (ego pose/velocity, nearest vehicles+walkers with true bounding boxes, traffic-light states, route goals from the leaderboard's dense global plan), recomputes observations, runs the policy, integrates one dt to produce a target (speed, yaw), and returns a `carla.VehicleControl` every tick. Get `sensor.camera.rgb` chase cam via `sensors()` — the leaderboard's own standard sensor mechanism, so this doesn't touch the read-only-w.r.t.-CARLA contract; frames stream straight to an mp4 writer. `COSIM_OBS_HTML` records the interactive observation replay (exact policy input/outputs).
+  Loads a PufferDrive checkpoint, builds the shadow `Drive` env from the checkpoint's config, and every CARLA tick (the shadow env runs at the 0.05 s tick, no action repeat): overwrites ALL shadow agents (ego included) from CARLA ground truth (ego pose/velocity, nearest vehicles+walkers with true bounding boxes, traffic-light states, route goals from the leaderboard's dense global plan), recomputes observations, runs the policy, integrates one dt to produce a target (speed, yaw), and returns a `carla.VehicleControl` every tick. Get `sensor.camera.rgb` chase cam via `sensors()` — the leaderboard's own standard sensor mechanism, so this doesn't touch the read-only-w.r.t.-CARLA contract; frames stream straight to an mp4 writer. `COSIM_OBS_HTML` records the interactive observation replay (exact policy input/outputs).
 - `controller.py` — `TrackingController`:
   convert that shadow-env kinematic target into actual throttle/brake/steer at CARLA's native tick rate
 
@@ -38,7 +38,7 @@ srun --jobid=$JOBID --overlap \
 ```
 
 Optional env vars (see `leaderboard_agent.py` docstring): `COSIM_DEVICE`,
-`COSIM_DYNAMICS_SOURCE`, `COSIM_DT`, `COSIM_NUM_AGENTS`, `COSIM_GOAL_SPACING`,
+`COSIM_DYNAMICS_SOURCE`, `COSIM_NUM_AGENTS`,
 `COSIM_OBS_HTML`, `COSIM_DEBUG_CARLA_VIEW`, `COSIM_RECORD_INFRACTIONS`.
 
 ### Ego dynamics source
@@ -53,7 +53,8 @@ lane_dist/lane_angle drift within ~1s of a sustained turn).
 
 `COSIM_DYNAMICS_SOURCE=pufferdrive` skips the controller entirely: PufferDrive's
 own dynamics (the ones the policy was trained on) move the ego, and the CARLA
-actor is teleported to match every policy step. Physics is left ON — disabling
+actor is teleported to the post-step pose every tick, where the next tick's
+observation reads it. Physics is left ON — disabling
 it on this already-active, leaderboard-managed hero actor segfaults the UE4
 engine (tried at several points in the agent's init sequence, same crash every
 time) — but `set_transform()` overrides it every step regardless, so the net
@@ -66,6 +67,16 @@ of the ego no longer being a physically-simulated CARLA vehicle; the
 leaderboard's route/collision/infraction criteria still see it correctly since
 they only read its pose.
 
+### HTML report (nuPlan-style)
+
+`COSIM_WORLD_LOG=/dir` makes the agent write one `.npz` per route with the bin-frame world
+state at every policy step (ego pose/speed, every streamed partner, light states, route goals,
+dense route). `scripts/eval/analyze_carla_cosim.py <run_dir> [...] <report_dir>` then builds
+the same report as `analyze_nuplan_cosim.py`: score table worst first, failure categories,
+per-route diagnosis (standstills with the ego's own light state, infractions located in time),
+six-frame top-down strips over the bin map, speed plots and the chase-cam / top-down videos.
+`<run_dir>` is the directory holding `result.json`, `world_log/`, `telemetry/` and `carla_view/`.
+
 ### Infraction clips
 
 `COSIM_RECORD_INFRACTIONS=/dir` keeps a rolling ~5 s chase-cam buffer and dumps
@@ -77,18 +88,19 @@ infraction ledger; use it for debugging, not scoring.
 
 ### Route goals and the GPS lane-distance feature
 
-Goals are cut from the leaderboard's dense global plan (`set_global_plan`'s
-`dense_global_plan_world_coord`, ~1 m spacing, already lane-centered) every
-`COSIM_GOAL_SPACING` meters (default 20). On the C side, `set_agent_goals`
-snaps each externally-set goal to its nearest direction-matched drivable lane
+Goals are the leaderboard's own target points (`set_global_plan`'s sparse
+`_global_plan_world_coord`: junction entries/exits, lane changes and one point
+every 200 m, the same list every leaderboard sensor agent gets). The ego always
+sees the next `num_goals` of them as a sliding window, refilled after every
+consumed point, so the window shrinks to 2 and then 1 only at the route end
+(the shadow env's speed-gated window-final goal is then the true end). The
+route's first point sits under the ego and is skipped. Each goal's direction
+is the dense plan's local direction there; on the C side `set_agent_goals`
+snaps each goal to its nearest direction-matched drivable lane
 (`find_goal_lane` in drive.h), so the GPS lane-distance observation columns
 (`obs_goal_lane_distance`) are live, matching how `goal_source=map` training
-goals always carry a lane. Because inter-goal navigation is led by those GPS
-features (lane-graph distance to the goal's lane, not the euclidean direction
-to the goal), larger spacings — training samples
-`min_goal_spacing`..`max_goal_spacing`, e.g. 20–200 m — are in-distribution
-and do not cause wrong turns at forks. Requires the town bin to carry a lane
-graph (all `carla/opendrive__Town*.bin` do).
+goals always carry a lane. Requires the town bin to carry a lane graph (all
+`carla/opendrive__Town*.bin` do).
 
 ## Slurm launch (verified 2026-08-06)
 

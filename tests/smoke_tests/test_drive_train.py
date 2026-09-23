@@ -57,7 +57,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pufferlib.pufferl import PuffeRL, load_config, load_env, load_policy
-from pufferlib.utils import reduce_environment_metrics
+from pufferlib.utils import finalize_environment_metrics
 
 SEED = 42
 EPOCHS = 2  # small: CI emulates the CPU under QEMU where torch is ~30x slower
@@ -195,14 +195,14 @@ def _finalize_train_config(args, total_agents):
 
 
 def _capture_metrics(pufferl):
-    from collections import defaultdict
-
-    env_acc = defaultdict(list)
+    env_acc = {}
     for _ in range(EPOCHS):
         pufferl.evaluate()
         # Snapshot env stats BEFORE train()'s mean_and_log() resets them.
-        for k, v in pufferl.stats.items():
-            env_acc[k].extend(v if isinstance(v, list) else [v])
+        for k, (value_sum, weight_sum) in pufferl.collect_environment_metric_sums().items():
+            entry = env_acc.setdefault(k, [0.0, 0.0])
+            entry[0] += value_sum
+            entry[1] += weight_sum
         # Force logging this epoch so self.losses is set deterministically
         # (otherwise it only updates on a wall-clock interval -> flaky).
         pufferl.last_log_time = 0.0
@@ -210,7 +210,7 @@ def _capture_metrics(pufferl):
 
     losses = {k: float(v) for k, v in pufferl.losses.items() if _is_number(v)}
 
-    env_means = reduce_environment_metrics(env_acc)
+    env_means = finalize_environment_metrics(env_acc)
 
     return losses, env_means
 
