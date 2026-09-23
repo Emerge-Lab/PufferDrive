@@ -77,6 +77,8 @@ RED_LIGHT_CHECK_DISTANCE_M = 30.0  # matches CaRL RunRedLight's own distance_lig
 
 FAR_AWAY = 1.0e6  # park unused shadow-env agent slots out of observation range
 PARTNER_MAX_ABS_DZ_M = 20.0  # CARLA actors farther above/below the ego are hidden scenario props, not traffic
+ROAD_RAY_HALF_SPAN_M = 5.0  # vertical ray around the waypoint z; the ego roof and underpass roads are filtered by label/nearest
+ROAD_RAY_LABELS = (carla.CityObjectLabel.Roads, carla.CityObjectLabel.RoadLines, carla.CityObjectLabel.Bridge)
 MAX_POLICY_STEPS = 100_000  # shadow-env episode cap (~1.4 h at the 0.05 s CARLA tick); sizes the light state buffers
 SCENARIO_LENGTH_MARGIN_STEPS = 2
 # Shadow-env metrics_array indices (datatypes.h): collision/offroad/red-light flags.
@@ -121,6 +123,16 @@ def resolve_checkpoint(path_to_conf_file):
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
     return str(ckpt), cfg
+
+
+def road_mesh_z(world, x, y, reference_z):
+    """Height of the road mesh at (x, y) from a vertical ray, the road hit nearest reference_z; None when none is hit."""
+    top = carla.Location(x=x, y=y, z=reference_z + ROAD_RAY_HALF_SPAN_M)
+    bottom = carla.Location(x=x, y=y, z=reference_z - ROAD_RAY_HALF_SPAN_M)
+    road_z = [hit.location.z for hit in world.cast_ray(top, bottom) if hit.label in ROAD_RAY_LABELS]
+    if not road_z:
+        return None
+    return min(road_z, key=lambda hit_z: abs(hit_z - reference_z))
 
 
 def road_aligned_attitude(road_up, yaw_deg):
@@ -338,6 +350,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         self.last_light_states = np.zeros(self.num_traffic, np.int32)
 
         wheelbase, max_steer = read_vehicle_geometry(self.vehicle)
+        self.wheelbase_m = wheelbase
         self.controller = TrackingController(wheelbase_m=wheelbase, max_steer_rad=max_steer, horizon_s=self.dt)
 
         if self.obs_html_dir:
@@ -583,6 +596,14 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         z = wp.transform.location.z if wp is not None else sim_z
         road_up = wp.transform.rotation.get_up_vector() if wp is not None else carla.Vector3D(x=0.0, y=0.0, z=1.0)
         pitch_deg, roll_deg, forward = road_aligned_attitude(road_up, yaw_deg)
+        # Waypoint z is quantised in ~0.5 m steps on steep grades (measured 0.32 m low at a Town03
+        # descent); the mesh raycast is exact and the axle chord follows crests the waypoint pitch misses.
+        surface = self._road_surface(x, y, z, yaw_deg)
+        if surface is not None:
+            z, pitch_deg = surface
+            pitch_rad = math.radians(pitch_deg)
+            yaw_rad = math.radians(yaw_deg)
+            forward = (math.cos(yaw_rad) * math.cos(pitch_rad), math.sin(yaw_rad) * math.cos(pitch_rad), math.sin(pitch_rad))
         # Zero momentum before the teleport: CARLA's collision resolver reacts violently to a
         # physics body carrying velocity into a new pose (carla issue #8076).
         zero = carla.Vector3D(x=0.0, y=0.0, z=0.0)
@@ -595,6 +616,18 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             carla.Vector3D(x=speed * forward[0], y=speed * forward[1], z=speed * forward[2])
         )
         self.vehicle.set_target_angular_velocity(carla.Vector3D(x=0.0, y=0.0, z=yaw_delta_deg / self.dt))
+
+    def _road_surface(self, x, y, reference_z, yaw_deg):
+        """(z, pitch_deg) of the road mesh under the ego: centre height plus the front-to-rear axle chord, None off the mesh."""
+        yaw_rad = math.radians(yaw_deg)
+        half_wheelbase = 0.5 * self.wheelbase_m
+        dx, dy = half_wheelbase * math.cos(yaw_rad), half_wheelbase * math.sin(yaw_rad)
+        z_centre = road_mesh_z(self.world, x, y, reference_z)
+        z_front = road_mesh_z(self.world, x + dx, y + dy, reference_z)
+        z_rear = road_mesh_z(self.world, x - dx, y - dy, reference_z)
+        if z_centre is None or z_front is None or z_rear is None:
+            return None
+        return z_centre, math.degrees(math.atan2(z_front - z_rear, self.wheelbase_m))
 
     def _ego_speed(self):
         return float(np.asarray(self.env.observations)[0][0]) * self._max_speed()
