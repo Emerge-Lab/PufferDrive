@@ -140,9 +140,14 @@ static int init_grid_map(Drive *env) {
     // Allocate grid cells based on counts
     int *cell_entities_insert_index = (int *) calloc(grid_cell_count, sizeof(int));
     for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
+        env->grid_map->total_entities += env->grid_map->cell_entities_count[grid_index];
+    }
+    env->grid_map->entity_pool = (GridMapEntity *) calloc(env->grid_map->total_entities + 1, sizeof(GridMapEntity));
+    int pool_offset = 0;
+    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
         int count = env->grid_map->cell_entities_count[grid_index];
-        env->grid_map->total_entities += count;
-        env->grid_map->cells[grid_index] = (GridMapEntity *) calloc(count, sizeof(GridMapEntity));
+        env->grid_map->cells[grid_index] = count > 0 ? &env->grid_map->entity_pool[pool_offset] : NULL;
+        pool_offset += count;
     }
     // Track which grid cells have drivable lanes
     bool *drivable_grid_seen = (bool *) calloc(grid_cell_count, sizeof(bool));
@@ -229,60 +234,55 @@ static void init_neighbor_offsets(Drive *env) {
     }
 }
 
-static void cache_neighbor_offsets(Drive *env) {
+// Spiral-order entity_pool indices of one cell's vision window; dest NULL only counts.
+static int collect_neighbor_pool_indices(Drive *env, int cell_idx, uint16_t *dest) {
+    GridMap *grid = env->grid_map;
+    int cell_x = cell_idx % grid->grid_cols;
+    int cell_y = cell_idx / grid->grid_cols;
+    int window_size = grid->vision_range * grid->vision_range;
     int count = 0;
-    int cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
-    env->grid_map->neighbor_cache_entities = (GridMapEntity **) calloc(cell_count, sizeof(GridMapEntity *));
-    env->grid_map->neighbor_cache_count = (int *) calloc(cell_count + 1, sizeof(int));
-    for (int i = 0; i < cell_count; i++) {
-        int cell_x = i % env->grid_map->grid_cols; // Convert to 2D coordinates
-        int cell_y = i / env->grid_map->grid_cols;
-        int current_cell_neighbor_count = 0;
-        for (int j = 0; j < env->grid_map->vision_range * env->grid_map->vision_range; j++) {
-            int x = cell_x + env->neighbor_offsets[j * 2];
-            int y = cell_y + env->neighbor_offsets[j * 2 + 1];
-            int grid_index = env->grid_map->grid_cols * y + x;
-            if (x < 0 || x >= env->grid_map->grid_cols || y < 0 || y >= env->grid_map->grid_rows) {
-                continue;
-            }
-            int grid_count = env->grid_map->cell_entities_count[grid_index];
-            current_cell_neighbor_count += grid_count;
-        }
-        env->grid_map->neighbor_cache_count[i] = current_cell_neighbor_count;
-        count += current_cell_neighbor_count;
-        if (current_cell_neighbor_count == 0) {
-            env->grid_map->neighbor_cache_entities[i] = NULL;
+    for (int j = 0; j < window_size; j++) {
+        int x = cell_x + env->neighbor_offsets[j * 2];
+        int y = cell_y + env->neighbor_offsets[j * 2 + 1];
+        if (x < 0 || x >= grid->grid_cols || y < 0 || y >= grid->grid_rows) {
             continue;
         }
-        env->grid_map->neighbor_cache_entities[i]
-            = (GridMapEntity *) calloc(current_cell_neighbor_count, sizeof(GridMapEntity));
-    }
-
-    env->grid_map->neighbor_cache_count[cell_count] = count;
-    for (int i = 0; i < cell_count; i++) {
-        int cell_x = i % env->grid_map->grid_cols;
-        int cell_y = i / env->grid_map->grid_cols;
-        int base_index = 0;
-        for (int j = 0; j < env->grid_map->vision_range * env->grid_map->vision_range; j++) {
-            int x = cell_x + env->neighbor_offsets[j * 2];
-            int y = cell_y + env->neighbor_offsets[j * 2 + 1];
-            int grid_index = env->grid_map->grid_cols * y + x;
-            if (x < 0 || x >= env->grid_map->grid_cols || y < 0 || y >= env->grid_map->grid_rows) {
-                continue;
-            }
-            int grid_count = env->grid_map->cell_entities_count[grid_index];
-            // Skip if no entities or source is NULL
-            if (grid_count == 0 || env->grid_map->cells[grid_index] == NULL) {
-                continue;
-            }
-            // Copy grid_count pairs (entity_idx, geometry_idx) at once
-            memcpy(
-                &env->grid_map->neighbor_cache_entities[i][base_index],
-                env->grid_map->cells[grid_index],
-                grid_count * sizeof(GridMapEntity));
-            base_index += grid_count;
+        int grid_index = grid->grid_cols * y + x;
+        int cell_entity_count = grid->cell_entities_count[grid_index];
+        if (dest == NULL) {
+            count += cell_entity_count;
+            continue;
+        }
+        int first_pool_idx = (int) (grid->cells[grid_index] - grid->entity_pool);
+        for (int e = 0; e < cell_entity_count; e++) {
+            dest[count++] = (uint16_t) (first_pool_idx + e);
         }
     }
+    return count;
+}
+
+static void cache_neighbor_offsets(Drive *env) {
+    GridMap *grid = env->grid_map;
+    int cell_count = grid->grid_cols * grid->grid_rows;
+    if (grid->total_entities > UINT16_MAX) {
+        raise_error_with_message(
+            ERROR_INVALID_ARGUMENT, "%d grid entities exceed the uint16 neighbor cache index", grid->total_entities);
+    }
+    grid->neighbor_cache_pool_idx = (uint16_t **) calloc(cell_count, sizeof(uint16_t *));
+    grid->neighbor_cache_count = (int *) calloc(cell_count + 1, sizeof(int));
+    int total_count = 0;
+    for (int i = 0; i < cell_count; i++) {
+        int neighbor_count = collect_neighbor_pool_indices(env, i, NULL);
+        grid->neighbor_cache_count[i] = neighbor_count;
+        total_count += neighbor_count;
+        if (neighbor_count == 0) {
+            grid->neighbor_cache_pool_idx[i] = NULL;
+            continue;
+        }
+        grid->neighbor_cache_pool_idx[i] = (uint16_t *) malloc(neighbor_count * sizeof(uint16_t));
+        collect_neighbor_pool_indices(env, i, grid->neighbor_cache_pool_idx[i]);
+    }
+    grid->neighbor_cache_count[cell_count] = total_count;
 }
 
 static int get_neighbors_entities(
@@ -318,6 +318,48 @@ static int get_neighbors_entities(
         }
     }
     return entity_list_count;
+}
+
+// Walks the spiral neighborhood of a query point: cached pool indices, or the scratch list.
+typedef struct NeighborCursor {
+    const GridMapEntity *entities;
+    const uint16_t *pool_indices;
+    int count;
+    int pos;
+} NeighborCursor;
+
+static NeighborCursor neighbor_cursor_begin(Drive *env, float x, float y) {
+    NeighborCursor cursor = {0};
+    int grid_idx = get_grid_index(env, x, y);
+    if (grid_idx < 0 || grid_idx >= env->grid_map->grid_cols * env->grid_map->grid_rows) {
+        return cursor;
+    }
+    if (env->use_neighbor_cache) {
+        cursor.pool_indices = env->grid_map->neighbor_cache_pool_idx[grid_idx];
+        cursor.count = env->grid_map->neighbor_cache_count[grid_idx];
+        return cursor;
+    }
+    cursor.entities = env->obs_neighbor_scratch;
+    cursor.count = get_neighbors_entities(
+        env,
+        x,
+        y,
+        env->obs_neighbor_scratch,
+        env->grid_map->total_entities,
+        (const int (*)[2]) env->neighbor_offsets,
+        env->grid_map->vision_range * env->grid_map->vision_range);
+    return cursor;
+}
+
+static inline const GridMapEntity *neighbor_cursor_next(Drive *env, NeighborCursor *cursor) {
+    if (cursor->pos >= cursor->count) {
+        return NULL;
+    }
+    int k = cursor->pos++;
+    if (cursor->pool_indices != NULL) {
+        return &env->grid_map->entity_pool[cursor->pool_indices[k]];
+    }
+    return &cursor->entities[k];
 }
 
 // ========================================
@@ -910,18 +952,16 @@ static void free_grid_map(GridMap *grid_map) {
         return;
     }
     int grid_cell_count = grid_map->grid_cols * grid_map->grid_rows;
-    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
-        free(grid_map->cells[grid_index]);
-    }
+    free(grid_map->entity_pool);
     free(grid_map->cells);
     free(grid_map->cell_entities_count);
     free(grid_map->grid_index_drivable);
-    if (grid_map->neighbor_cache_entities != NULL) {
+    if (grid_map->neighbor_cache_pool_idx != NULL) {
         for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
-            free(grid_map->neighbor_cache_entities[grid_index]);
+            free(grid_map->neighbor_cache_pool_idx[grid_index]);
         }
     }
-    free(grid_map->neighbor_cache_entities);
+    free(grid_map->neighbor_cache_pool_idx);
     free(grid_map->neighbor_cache_count);
     free(grid_map);
 }

@@ -13,13 +13,13 @@ static Drive create_test_env_with_cache_modes(int use_map_cache, int use_neighbo
 }
 
 static size_t compute_neighbor_cache_bytes(GridMap *grid_map) {
-    if (grid_map->neighbor_cache_entities == NULL) {
+    if (grid_map->neighbor_cache_pool_idx == NULL) {
         return 0;
     }
     int grid_cell_count = grid_map->grid_cols * grid_map->grid_rows;
-    size_t bytes = grid_cell_count * sizeof(GridMapEntity *) + (grid_cell_count + 1) * sizeof(int);
+    size_t bytes = grid_cell_count * sizeof(uint16_t *) + (grid_cell_count + 1) * sizeof(int);
     for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
-        bytes += grid_map->neighbor_cache_count[grid_index] * sizeof(GridMapEntity);
+        bytes += grid_map->neighbor_cache_count[grid_index] * sizeof(uint16_t);
     }
     return bytes;
 }
@@ -107,13 +107,13 @@ static int test_cache_mode_matrix_has_expected_map_and_neighbor_allocations(void
                 EXPECT_TRUE(first_neighbor_cache_bytes > 0);
                 EXPECT_TRUE(first_neighbor_cache_bytes == second_neighbor_cache_bytes);
                 size_t unique_neighbor_cache_bytes = first_neighbor_cache_bytes;
-                if (first.grid_map->neighbor_cache_entities != second.grid_map->neighbor_cache_entities) {
+                if (first.grid_map->neighbor_cache_pool_idx != second.grid_map->neighbor_cache_pool_idx) {
                     unique_neighbor_cache_bytes += second_neighbor_cache_bytes;
                 }
                 EXPECT_TRUE(unique_neighbor_cache_bytes == first_neighbor_cache_bytes * (use_map_cache ? 1 : 2));
             } else {
-                EXPECT_TRUE(first.grid_map->neighbor_cache_entities == NULL);
-                EXPECT_TRUE(second.grid_map->neighbor_cache_entities == NULL);
+                EXPECT_TRUE(first.grid_map->neighbor_cache_pool_idx == NULL);
+                EXPECT_TRUE(second.grid_map->neighbor_cache_pool_idx == NULL);
                 EXPECT_TRUE(first.obs_neighbor_scratch != NULL);
                 EXPECT_TRUE(second.obs_neighbor_scratch != NULL);
                 EXPECT_TRUE(first.obs_neighbor_scratch != second.obs_neighbor_scratch);
@@ -149,7 +149,7 @@ static int test_mixed_neighbor_modes_share_map_and_populate_neighbor_cache(void)
         EXPECT_TRUE(first.shared_map == second.shared_map);
         EXPECT_TRUE(first.grid_map == second.grid_map);
         EXPECT_EQ_INT(first.shared_map->ref_count, 2);
-        EXPECT_TRUE(first.grid_map->neighbor_cache_entities != NULL);
+        EXPECT_TRUE(first.grid_map->neighbor_cache_pool_idx != NULL);
         EXPECT_TRUE(first.grid_map->neighbor_cache_count != NULL);
         EXPECT_TRUE(compute_neighbor_cache_bytes(first.grid_map) > 0);
         Drive *env_without_neighbor_cache = first_env_uses_neighbor_cache ? &second : &first;

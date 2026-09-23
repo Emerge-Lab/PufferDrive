@@ -149,8 +149,9 @@ struct GridMap {
     int *grid_index_drivable;
     int num_drivable_grid_cell;
     int total_entities;
+    GridMapEntity *entity_pool; // one block; cells[i] point into it
     GridMapEntity **cells;
-    GridMapEntity **neighbor_cache_entities;
+    uint16_t **neighbor_cache_pool_idx; // per cell: entity_pool indices of its spiral neighborhood
 };
 
 // Static, read-only map geometry shared across envs loading the same map file
@@ -3438,7 +3439,7 @@ void init(Drive *env) {
         fprintf(stderr, "[ERROR] -> Replay map %s has invalid log_dt %f\n", env->map_name, (double) env->log_dt);
         return;
     }
-    if (env->use_neighbor_cache && env->grid_map->neighbor_cache_entities == NULL) {
+    if (env->use_neighbor_cache && env->grid_map->neighbor_cache_pool_idx == NULL) {
         cache_neighbor_offsets(env);
     }
     if (!env->use_neighbor_cache) {
@@ -4584,26 +4585,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
 }
 
 static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *lane_count, int *boundary_count) {
-    int grid_idx = get_grid_index(env, ego->sim_x, ego->sim_y);
-    int neighbor_count = 0;
-    const GridMapEntity *neighbor_entities = NULL;
-    if (!(grid_idx < 0 || grid_idx >= (env->grid_map->grid_cols * env->grid_map->grid_rows))) {
-        if (env->use_neighbor_cache) {
-            neighbor_count = env->grid_map->neighbor_cache_count[grid_idx];
-            neighbor_entities = env->grid_map->neighbor_cache_entities[grid_idx];
-        } else {
-            // Same spiral order as the cache build, so obs are bit-identical to the cached path.
-            neighbor_count = get_neighbors_entities(
-                env,
-                ego->sim_x,
-                ego->sim_y,
-                env->obs_neighbor_scratch,
-                env->grid_map->total_entities,
-                (const int (*)[2]) env->neighbor_offsets,
-                env->grid_map->vision_range * env->grid_map->vision_range);
-            neighbor_entities = env->obs_neighbor_scratch;
-        }
-    }
+    NeighborCursor neighbor_cursor = neighbor_cursor_begin(env, ego->sim_x, ego->sim_y);
 
     // GPS lane-distance features
     int goal_graph_idx = -1;
@@ -4639,15 +4621,16 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     int lanes_found = 0;
     int boundaries_found = 0;
 
-    for (int k = 0; k < neighbor_count; k++) {
+    for (const GridMapEntity *entity = neighbor_cursor_next(env, &neighbor_cursor); entity != NULL;
+         entity = neighbor_cursor_next(env, &neighbor_cursor)) {
         if (lanes_found >= env->obs_slots_lane_n && boundaries_found >= env->obs_slots_boundary_n) {
             break;
         }
-        if (!neighbor_entities[k].valid_for_obs) {
+        if (!entity->valid_for_obs) {
             continue;
         }
-        int entity_idx = neighbor_entities[k].entity_idx;
-        int geometry_idx = neighbor_entities[k].geometry_idx;
+        int entity_idx = entity->entity_idx;
+        int geometry_idx = entity->geometry_idx;
         RoadMapElement *road_element = &env->road_elements[entity_idx];
         int is_lane = is_road_lane(road_element->type);
         int is_edge = is_road_edge(road_element->type);
