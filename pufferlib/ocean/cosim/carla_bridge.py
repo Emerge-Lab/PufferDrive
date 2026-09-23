@@ -145,6 +145,12 @@ def carla_light_to_puffer(state) -> int:
 
 
 LIGHT_LANE_MATCH_MAX_DIST_M = 12.0  # measured Town01 controlled-lane stub distance (see below)
+LIGHT_LANE_FORWARD_MATCH_MAX_DIST_M = (
+    3.0  # forward fallback lands ON the connector; a lane width away is the neighbour's
+)
+LIGHT_LANE_ALIGN_COS_MIN = (
+    0.5  # forward fallback: the lane must run along the waypoint's heading (no crossing connectors)
+)
 JUNCTION_CLUSTER_M = 60.0  # stop lines this close are treated as one junction (outlier repair, see below)
 # An assigned light farther from its junction cluster-mates' lights than this
 # multiple of the cluster-mates' own spread is a wrong-junction match.
@@ -225,6 +231,12 @@ def map_lights_to_bin(lights, transform, town_bin):
     CARLA's stop waypoints sit at the junction ENTRY, up to ~10 m past the
     bin's controlled-lane stub, so each waypoint is walked backward along its
     own lane until a controlled lane resolves (0/36 raw matches without this).
+    Where the bin element only lists the junction connectors (Town01: 3 of 36,
+    Town02: 4 of 24 approaches, connectors starting 12-15 m past the waypoint),
+    the backward walk finds nothing; a fallback then probes forward into the
+    junction for a lane within LIGHT_LANE_FORWARD_MATCH_MAX_DIST_M that runs
+    along the waypoint's heading (tight radius + alignment: on multi-lane
+    approaches the neighbour lane's connector is only a lane width away).
 
     A second pass then repairs occasional wrong-junction matches: the walk-back
     above resolves per light independently, and for a small number of lights
@@ -263,13 +275,21 @@ def map_lights_to_bin(lights, transform, town_bin):
         for lane_id in t.get("controlled_lanes", ()):
             element_of_lane.setdefault(int(lane_id), []).append(element_idx)
 
-    def controlling_elements_near(px, py):
+    seg_dir = seg_end - seg_start
+    seg_dir = seg_dir / np.maximum(np.hypot(seg_dir[:, 0], seg_dir[:, 1]), 1e-9)[:, None]
+
+    def controlling_elements_near(px, py, max_dist_m, heading=None):
         d = seg_end - seg_start
         length_sq = np.maximum((d**2).sum(1), 1e-9)
         t = np.clip(((px - seg_start[:, 0]) * d[:, 0] + (py - seg_start[:, 1]) * d[:, 1]) / length_sq, 0.0, 1.0)
         dist = np.hypot(px - (seg_start[:, 0] + t * d[:, 0]), py - (seg_start[:, 1] + t * d[:, 1]))
+        candidate = dist <= max_dist_m
+        if heading is not None:
+            candidate &= (
+                seg_dir[:, 0] * math.cos(heading) + seg_dir[:, 1] * math.sin(heading) >= LIGHT_LANE_ALIGN_COS_MIN
+            )
         lane_best = {}
-        for j in np.nonzero(dist <= LIGHT_LANE_MATCH_MAX_DIST_M)[0]:
+        for j in np.nonzero(candidate)[0]:
             lane_id = int(seg_lane[j])
             if dist[j] < lane_best.get(lane_id, np.inf):
                 lane_best[lane_id] = float(dist[j])
@@ -279,7 +299,7 @@ def map_lights_to_bin(lights, transform, town_bin):
                 return controlling
         return []
 
-    walk_back_steps_m = (0.0, 3.0, 6.0, 10.0, 15.0)
+    probe_steps_m = (0.0, 3.0, 6.0, 10.0, 15.0)
     mapping = []
     for lt in lights:
         element_indices = []
@@ -287,15 +307,18 @@ def map_lights_to_bin(lights, transform, town_bin):
             if not len(seg_lane):
                 continue
             controlling = []
-            for back_m in walk_back_steps_m:
-                probe = wp
-                if back_m > 0.0:
-                    prev = wp.previous(back_m)
-                    if not prev:
-                        continue
-                    probe = prev[0]
-                bx, by = transform.loc_to_bin(probe.transform.location.x, probe.transform.location.y)
-                controlling = controlling_elements_near(bx, by)
+            for step_m in probe_steps_m:
+                probes = [wp] if step_m == 0.0 else wp.previous(step_m)
+                for probe in probes[:1]:
+                    bx, by = transform.loc_to_bin(probe.transform.location.x, probe.transform.location.y)
+                    controlling = controlling_elements_near(bx, by, LIGHT_LANE_MATCH_MAX_DIST_M)
+                if controlling:
+                    break
+            for step_m in probe_steps_m[1:] if not controlling else ():  # fallback: forward into the junction
+                for probe in (wp.next(step_m) or [])[:1]:
+                    bx, by = transform.loc_to_bin(probe.transform.location.x, probe.transform.location.y)
+                    heading = transform.yaw_to_bin(probe.transform.rotation.yaw)
+                    controlling = controlling_elements_near(bx, by, LIGHT_LANE_FORWARD_MATCH_MAX_DIST_M, heading)
                 if controlling:
                     break
             element_indices.extend(controlling)

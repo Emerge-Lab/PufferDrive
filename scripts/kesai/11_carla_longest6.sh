@@ -20,8 +20,10 @@
 # Overridable env: RUN_DIR, ROUTES, SCENARIOS (0 = pufferlib's scenario-free longest6), REPETITIONS,
 # ROUTE_SUBSET ("0 5 17": only these route ids), NUM_GPUS, PORT_BASE (CARLA rpc port of gpu 0; gpu w uses
 # PORT_BASE+50w, TM PORT_BASE+6000+50w), LOGGING (0, default: scores only, CARLA runs without rendering
-# (-nullrhi); 1: chase-cam video, telemetry, world log and the HTML report per route), OBS_HTML (1 = also the
-# interactive obs replay per route, large; needs LOGGING=1), REPORT (0 = skip the HTML report),
+# (-nullrhi, which segfaults as soon as any sensor is requested, so no camera and no telemetry, whose CaRL
+# criteria attach a collision sensor); 1: chase-cam video, telemetry, world log and the HTML report per
+# route), OBS_HTML (1 = also the interactive obs replay per route, large; needs LOGGING=1), REPORT (0 = skip
+# the HTML report),
 # MAX_ATTEMPTS, CARLA_ROOT, CARL_WORK_DIR, PY, PD.
 set -u
 
