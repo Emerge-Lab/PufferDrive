@@ -254,7 +254,7 @@ class PufferDrivePlanner(AbstractPlanner):
         return nb.NuPlanTransform(t[0], t[1])
 
     def _resolve_map_bin(self):
-        """-> (bin_path, NuPlanTransform, stop_line_centers, num_traffic)."""
+        """-> (bin_path, NuPlanTransform, bin geometry dict from read_bin_geometry)."""
         city_bin = self._find_city_bin()
         geo = _bin_geometry_cache.get(str(city_bin))
         if geo is None:
@@ -265,11 +265,11 @@ class PufferDrivePlanner(AbstractPlanner):
             if geo["origin"] is not None
             else self._city_bin_origin(city_bin, geo["stop_line_centers"])
         )
-        return city_bin, tf, geo["stop_line_centers"], geo["num_traffic"]
+        return city_bin, tf, geo
 
-    def _match_traffic_lights(self, stop_line_centers: np.ndarray, ex: float, ey: float) -> Dict[str, int]:
+    def _match_traffic_lights(self, geo: dict, ex: float, ey: float) -> Dict[str, int]:
         """Signalized lane connectors within map_radius -> bin traffic elements,
-        matched by entry-point proximity (no sidecar file needed)."""
+        matched by entry pose to co-directional stop lines (no sidecar file needed)."""
         from nuplan.common.actor_state.state_representation import Point2D
         from nuplan.common.maps.maps_datatypes import SemanticMapLayer
 
@@ -280,8 +280,10 @@ class PufferDrivePlanner(AbstractPlanner):
         for e in objs[SemanticMapLayer.LANE_CONNECTOR]:
             if e.has_traffic_lights():
                 p0 = e.baseline_path.discrete_path[0]
-                entries[str(e.id)] = (float(p0.x), float(p0.y))
-        return nb.match_connectors_to_stop_lines(entries, self._transform, stop_line_centers)
+                entries[str(e.id)] = (float(p0.x), float(p0.y), float(p0.heading))
+        return nb.match_connectors_to_stop_lines(
+            entries, self._transform, geo["stop_lines"], geo["stop_line_headings"], geo["traffic_types"]
+        )
 
     def _resolve_arch(self, cfg: Dict, bin_path: Path) -> Dict:
         """Shadow-env Drive kwargs: the checkpoint's training env section
@@ -348,8 +350,9 @@ class PufferDrivePlanner(AbstractPlanner):
             else yaml.safe_load(open(checkpoint_config_path(self._checkpoint_path)))
         )
 
-        bin_path, self._transform, stop_centers, self._num_traffic = self._resolve_map_bin()
-        self._connector_map = self._match_traffic_lights(stop_centers, ex, ey)
+        bin_path, self._transform, geo = self._resolve_map_bin()
+        self._num_traffic = geo["num_traffic"]
+        self._connector_map = self._match_traffic_lights(geo, ex, ey)
 
         self._arch = self._resolve_arch(cfg, bin_path)
         self._env = Drive(**self._arch)

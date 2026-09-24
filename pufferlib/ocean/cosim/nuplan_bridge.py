@@ -374,7 +374,10 @@ def read_bin_geometry(bin_path: Path) -> dict:
                         (nuPlan map coords are ~1e5-1e6 m, so a (0, 0)/missing
                         centroid means "not stored", never a real origin)
       stop_line_centers (K, 2) bin-frame stop-line midpoints of all traffic
-                        elements, for geometric light matching
+                        elements, for origin registration
+      stop_lines        (K, 4) bin-frame stop-line endpoints [x1, y1, x2, y2]
+      stop_line_headings (K,) travel direction each stop line faces [rad]
+      traffic_types     (K,) element type (TRAFFIC_TYPE_LIGHT = traffic light)
       num_traffic       K, the size set_traffic_light_states expects
       ego_t0            (x, y, heading) of agent 0 at its first valid log step,
                         or None if the bin has no agents — fallback origin
@@ -390,13 +393,13 @@ def read_bin_geometry(bin_path: Path) -> dict:
     if centroid is not None and (abs(centroid[0]) > 1.0 or abs(centroid[1]) > 1.0):
         origin = (float(centroid[0]), float(centroid[1]))
 
-    centers = np.array(
-        [
-            [0.5 * (t["stop_line"][0] + t["stop_line"][3]), 0.5 * (t["stop_line"][1] + t["stop_line"][4])]
-            for t in data["traffic"]
-        ],
+    stop_lines = np.array(
+        [[t["stop_line"][0], t["stop_line"][1], t["stop_line"][3], t["stop_line"][4]] for t in data["traffic"]],
         dtype=np.float64,
-    ).reshape(-1, 2)
+    ).reshape(-1, 4)
+    centers = 0.5 * (stop_lines[:, 0:2] + stop_lines[:, 2:4])
+    stop_line_headings = np.array([t["heading"] for t in data["traffic"]], dtype=np.float64)
+    traffic_types = np.array([t["type"] for t in data["traffic"]], dtype=np.int32)
 
     ego_t0, ego_traj = None, None
     if data["agents"]:
@@ -412,6 +415,9 @@ def read_bin_geometry(bin_path: Path) -> dict:
     return {
         "origin": origin,
         "stop_line_centers": centers,
+        "stop_lines": stop_lines,
+        "stop_line_headings": stop_line_headings,
+        "traffic_types": traffic_types,
         "num_traffic": len(centers),
         "ego_t0": ego_t0,
         "ego_traj": ego_traj,
@@ -502,22 +508,49 @@ def coarse_translation_vote(src: np.ndarray, ref: np.ndarray, grid: float = 5.0)
     return np.median(near, axis=0)
 
 
+LIGHT_MATCH_MAX_DIST_M = 10.0
+LIGHT_MATCH_MAX_HEADING_DIFF_RAD = np.radians(75.0)  # keeps skewed stop lines, rejects cross-street (90) and oncoming (180)
+
+
+def point_to_segment_distance(px: float, py: float, segments: np.ndarray) -> np.ndarray:
+    """Distance from (px, py) to each segment of a (K, 4) [x1, y1, x2, y2] array."""
+    ax, ay, bx, by = segments[:, 0], segments[:, 1], segments[:, 2], segments[:, 3]
+    dx, dy = bx - ax, by - ay
+    length_sq = np.maximum(dx * dx + dy * dy, 1e-9)
+    t = np.clip(((px - ax) * dx + (py - ay) * dy) / length_sq, 0.0, 1.0)
+    return np.hypot(ax + t * dx - px, ay + t * dy - py)
+
+
 def match_connectors_to_stop_lines(
-    connector_entries: dict, transform: NuPlanTransform, stop_line_centers: np.ndarray, max_dist_m: float = 10.0
+    connector_entries: dict,
+    transform: NuPlanTransform,
+    stop_lines: np.ndarray,
+    stop_line_headings: np.ndarray,
+    traffic_types: np.ndarray,
+    max_dist_m: float = LIGHT_MATCH_MAX_DIST_M,
+    max_heading_diff_rad: float = LIGHT_MATCH_MAX_HEADING_DIFF_RAD,
 ) -> dict:
     """Geometric traffic-light mapping, the runtime replacement for the
     `.tl.json` sidecar (works for any bin source). `connector_entries` maps
-    lane_connector_id(str) -> (x, y) entry point in nuPlan map coordinates.
-    Returns {lane_connector_id: bin traffic-element idx}, skipping connectors
-    with no stop line within max_dist_m."""
+    lane_connector_id(str) -> (x, y, heading) entry pose in nuPlan map
+    coordinates. Each connector takes the nearest traffic light whose stop
+    line faces its travel direction, measured to the line segment (a multi-lane
+    stop line's midpoint can sit >10 m from the outer lanes). Returns
+    {lane_connector_id: bin traffic-element idx}, skipping connectors with no
+    such stop line within max_dist_m."""
     mapping = {}
-    if not len(stop_line_centers):
+    if not len(stop_lines):
         return mapping
-    for cid, (x, y) in connector_entries.items():
+    is_light = traffic_types == TRAFFIC_TYPE_LIGHT
+    for cid, (x, y, heading) in connector_entries.items():
         bx, by = transform.loc_to_bin(x, y)
-        d2 = (stop_line_centers[:, 0] - bx) ** 2 + (stop_line_centers[:, 1] - by) ** 2
-        j = int(d2.argmin())
-        if d2[j] <= max_dist_m**2:
+        heading_diff = np.abs((stop_line_headings - heading + np.pi) % (2.0 * np.pi) - np.pi)
+        candidate = is_light & (heading_diff <= max_heading_diff_rad)
+        if not candidate.any():
+            continue
+        dist = np.where(candidate, point_to_segment_distance(bx, by, stop_lines), np.inf)
+        j = int(dist.argmin())
+        if dist[j] <= max_dist_m:
             mapping[str(cid)] = j
     return mapping
 
