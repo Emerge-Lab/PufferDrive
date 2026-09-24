@@ -1,0 +1,145 @@
+# Final matched ReGentS ego-controller matrix over the first 10k WOD Motion validation
+# scenarios, seed 42, with optimizer.use_regents=true. WOMD logs are 91 steps.
+env:
+  map_dir: pufferlib/resources/drive/binaries/wod-motion_val
+  simulation_mode: replay
+  eval_mode: true
+  compute_eval_metrics: true
+  control_mode: control_sdc_only
+  sdc_controller: idm
+  non_sdc_controller: idm
+  non_vehicle_controller: replay
+  collision_behavior: ignore
+  offroad_behavior: ignore
+  traffic_light_behavior: ignore
+  adversarial_termination_mode: disabled
+  termination_mode: false
+  target_infraction_behavior: normal
+  action_type: continuous
+  dynamics_model: classic
+  dt: 0.1
+  scenario_length: 91
+  resample_frequency: 91
+  num_agents: 1
+  min_agents_per_env: 1
+  max_agents_per_env: 1
+  num_eval_scenarios: 1
+  max_scenarios_per_batch: 1
+  init_step: 0
+  init_step_spread: false
+  reward_conditioning: false
+  reward_randomization: false
+  terminate_on_goal: false
+  goal_source: route
+  pdm_horizon: 4.0
+  pdm_planning_dt: 0.1
+  use_neighbor_cache: 0
+  use_map_cache: 0
+  capture_avoidability_debug: true
+
+seed: 42
+raster_resolution_meters: 1.0
+optimizer:
+  # ReGentS mode: rear exclusion and divergent steering cancellation enabled.
+  use_regents: true
+  learning_rate: 0.001
+  iteration_count: 500
+  ego_refresh_interval: 1
+  filter:
+    static_speed_threshold_mps: 0.2
+    maximum_reconstruction_drift_meters: 1.0
+
+costs:
+  gaussian_sigma_meters: 0.25
+  gaussian_truncate_sigma: 6.4
+
+generations:
+  - name: regents_idm
+    scenario_count: 10000
+    num_workers: 60
+    horizon_transition_count: 90
+    output_dir: experiments/regents
+    render_replays: true
+    env:
+      sdc_controller: idm
+
+  - name: regents_corridor_idm
+    scenario_count: 10000
+    num_workers: 60
+    horizon_transition_count: 90
+    output_dir: experiments/regents
+    render_replays: true
+    env:
+      sdc_controller: corridor_idm
+
+  - name: regents_pdm
+    scenario_count: 10000
+    num_workers: 60
+    horizon_transition_count: 90
+    output_dir: experiments/regents
+    render_replays: true
+    env:
+      sdc_controller: pdm
+
+  # The unconditioned target checkpoint uses a jerk-dynamics action head. ReGentS still
+  # integrates the selected adversary with its classic differentiable bicycle model.
+  - name: regents_rl_nocond
+    scenario_count: 10000
+    num_workers: 60
+    horizon_transition_count: 90
+    output_dir: experiments/regents
+    render_replays: true
+    ego_policy:
+      checkpoint_path: experiments/3_0_no_conditionning_target.pt
+      config_path: experiments/3_0_no_conditionning_target_config.yaml
+      action_selection: mean
+      device: cpu
+    env:
+      sdc_controller: policy
+      dynamics_model: jerk
+      obs_dropout_lane: 0.0
+      obs_dropout_boundary: 0.0
+      partner_blindness_prob: 0.0
+      partner_blindness_trigger_prob: 0.0
+      phantom_braking_prob: 0.0
+      phantom_braking_trigger_prob: 0.0
+
+  # Evaluate the conditioned policy at the benchmark's nominal reward target.
+  # Randomization stays off so input + config + seed remains deterministic.
+  - name: regents_rl_cond
+    scenario_count: 10000
+    num_workers: 60
+    horizon_transition_count: 90
+    output_dir: experiments/regents
+    render_replays: true
+    ego_policy:
+      checkpoint_path: experiments/3_0_conditionning_target.pt
+      config_path: experiments/3_0_conditionning_target_config.yaml
+      action_selection: mean
+      device: cpu
+    env:
+      sdc_controller: policy
+      dynamics_model: jerk
+      goal_radius: 2.0
+      goal_speed: 20.0
+      reward_collision: 3.0
+      reward_offroad: 3.0
+      reward_comfort: 0.05
+      reward_lane_align: 0.025
+      reward_vel_align: 1.0
+      reward_lane_center: 0.0038
+      reward_center_bias: 0.0
+      reward_velocity: 0.0025
+      reward_reverse: 0.005
+      reward_stop_line: 1.0
+      reward_timestep: 0.000025
+      reward_overspeed: 0.05
+      reward_conditioning: true
+      reward_randomization: false
+      reward_log_sampling: false
+      obs_dropout_lane: 0.0
+      obs_dropout_boundary: 0.0
+      partner_blindness_prob: 0.0
+      partner_blindness_trigger_prob: 0.0
+      phantom_braking_prob: 0.0
+      phantom_braking_trigger_prob: 0.0

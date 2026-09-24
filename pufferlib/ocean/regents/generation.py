@@ -23,7 +23,7 @@ from pufferlib.ocean.regents.dynamics import (
     BRAKING_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
     FORWARD_ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
 )
-from pufferlib.ocean.regents.artifacts import cost_row, save_generation_artifact
+from pufferlib.ocean.regents.artifacts import save_generation_artifact
 from pufferlib.ocean.regents.filters import ReGentSFilterConfig
 from pufferlib.ocean.regents.losses import ReGentSCostConfig
 from pufferlib.ocean.regents.optimizer import ReGentSOptimizationConfig
@@ -235,6 +235,14 @@ def load_generation_config(config_path, generation_name):
     if ego_policy is not None:
         environment.update(_load_policy_base_environment(ego_policy, generation_name))
     environment.update(environment_overrides)
+    termination_mode = environment.get("termination_mode", False)
+    if termination_mode is not False:
+        raise ValueError(
+            f"Generation {generation_name} requires env.termination_mode=false; "
+            "early episode termination poisons repeated C verification replays"
+        )
+    # Persist the invariant explicitly even when Drive's default supplied it.
+    environment["termination_mode"] = False
 
     selected_optimizer = _require_mapping(selected.get("optimizer", {}), f"Generation {generation_name} optimizer")
     optimizer = dict(shared_optimizer)
@@ -323,27 +331,6 @@ def _replay_bundle(env_config, frames, ego_actions):
             raise ValueError("Captured ReGentS observations must have shape [frame, one active ego, feature]")
         bundle["obs"] = observations
     return bundle
-
-
-def save_loss_history_csv(destination, scenario_idx, result):
-    """Write the optimization loss history to a CSV file per scenario/map.
-
-    The columns are the cost snapshot's own fields, so the loss history and the
-    artifact metadata always describe an iterate the same way.
-    """
-    cost_history = result.optimization.cost_history
-    if not cost_history:
-        return
-    losses_dir = Path(destination) / "losses"
-    losses_dir.mkdir(parents=True, exist_ok=True)
-    rows = [
-        {"iteration": iteration, **cost_row(snapshot, result.scenario)}
-        for iteration, snapshot in enumerate(cost_history)
-    ]
-    with (losses_dir / f"scenario_{scenario_idx:05d}.losses.csv").open("w", newline="", encoding="utf-8") as loss_file:
-        writer = csv.DictWriter(loss_file, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
 
 
 def candidate_plan(actions, candidate_rows, transition_count):
@@ -526,7 +513,6 @@ def _generate_scenario(task):
         npz_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = npz_dir / f"scenario_{scenario_idx:05d}.npz"
         save_generation_artifact(artifact_path, result, generation, str(task.map_path))
-        save_loss_history_csv(destination, scenario_idx, result)
         row = _metric_row(
             scenario_idx,
             seed,

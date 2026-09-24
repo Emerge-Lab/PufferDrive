@@ -23,7 +23,6 @@ from pufferlib.ocean.regents.generation import (
     generate_regents_scenarios,
     load_generation_config,
     render_scenario_replays,
-    save_loss_history_csv,
 )
 from pufferlib.ocean.regents.filters import ReGentSFilterConfig
 from pufferlib.ocean.regents.policy_ego import PolicyEgoActor, ReGentSPolicyEgoConfig
@@ -368,10 +367,7 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
     assert result.replay.baseline_frames["agent_f32"].shape == frames["agent_f32"].shape
     assert result.replay.scenario_payload["scenario_id"] == result.scenario.scenario_id
 
-    # No candidate ever entered the window, so there is no cost history to write.
     assert result.optimization.cost_history == ()
-    save_loss_history_csv(tmp_path, 8, result)
-    assert not (tmp_path / "losses").exists()
 
     observation_drive = _drive(8, 50, "idm")
     try:
@@ -544,9 +540,7 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
     assert "torch_collision" in metrics_header
     assert "torch_collision_timestep" in metrics_header
     assert "baseline_ego_collision" in metrics_header
-    loss_header = (tmp_path / "losses/scenario_00000.losses.csv").read_text(encoding="utf-8").splitlines()[0]
-    assert "background_collision_first_agent_id" in loss_header
-    assert "background_collision_signed_distance_meters" in loss_header
+    assert not (tmp_path / "losses").exists()
     assert report.maximum_c_torch_trajectory_error <= C_REPLAY_TOLERANCE
     assert 0.0 <= report.generation_success_rate <= 1.0
     assert 0.0 <= report.candidate_success_rate <= 1.0
@@ -561,6 +555,19 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
     assert sum(report.rejection_reasons.values()) == report.scenario_count - int(
         report.generation_success_rate * report.scenario_count
     )
+
+
+def test_generation_config_rejects_early_termination(tmp_path):
+    config = tmp_path / "regents.yaml"
+    config.write_text(
+        "env:\n  termination_mode: true\ngenerations:\n"
+        "  - name: broken\n    seed: 1\n    scenario_count: 1\n"
+        "    horizon_transition_count: 1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="requires env.termination_mode=false"):
+        load_generation_config(config, "broken")
 
 
 def test_policy_generation_inherits_checkpoint_observation_environment(tmp_path):

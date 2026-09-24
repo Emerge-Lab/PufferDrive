@@ -20,6 +20,11 @@ COHORT_MODE_SEED = {
     "seed_29_king_rlcond_v2": ("king", 29),
     "seed_4_king_rlcond_v2": ("king", 4),
     "seed_99_king_rlcond_v2": ("king", 99),
+    "seed_29_regents_n1": ("regents", 29),
+    "seed_4_regents_n1": ("regents", 4),
+    "seed_99_regents_n1": ("regents", 99),
+    "seed_29_king_n1": ("king", 29),
+    "seed_99_king_n1": ("king", 99),
 }
 METRICS = (
     ("collisions_pct", lambda row: 100 * int(row["target_collision_count"]) / SCENARIOS_PER_GENERATION),
