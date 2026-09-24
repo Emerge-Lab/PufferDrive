@@ -235,6 +235,7 @@ struct Drive {
     int *tracks_to_predict;
     // Simulation
     int timestep;
+    int autoreset_pending;
     int init_step;
     float dt;
     float base_max_speed_mps;
@@ -5385,6 +5386,7 @@ static void update_rollout_masks(Drive *env) {
 }
 
 void c_reset(Drive *env) {
+    env->autoreset_pending = 0;
     if (env->timestep == 0) {
         for (int i = 0; i < env->num_total_agents; i++) {
             copy_pose_to_prev(&env->agents[i]);
@@ -5537,8 +5539,10 @@ void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
-
-    update_rollout_masks(env);
+    if (env->autoreset_pending) {
+        c_reset(env);
+        return;
+    }
 
     env->timestep++;
 
@@ -5596,12 +5600,12 @@ void c_step(Drive *env) {
         compute_rewards(env, i);
     }
 
-    // Mark terminals for stopped or removed agents
+    // Masks describe the next action's eligibility; terminal rewards belong to the previous action.
+    update_rollout_masks(env);
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         if (env->agents[agent_idx].stopped || env->agents[agent_idx].removed) {
             env->terminals[i] = 1;
-            env->masks[i] = 0;
         }
     }
 
@@ -5643,7 +5647,10 @@ void c_step(Drive *env) {
             env->eval_episode_done = 1;
             return;
         }
-        c_reset(env);
+        // Expose the terminal state for the value bootstrap; the next c_step resets without applying its action.
+        compute_observations(env);
+        memset(env->masks, 0, env->active_agent_count * sizeof(unsigned char));
+        env->autoreset_pending = 1;
         return;
     }
 
@@ -5686,6 +5693,8 @@ void c_step(Drive *env) {
         if (!regen_ok) {
             invalidate_agent(agent);
             agent->removed = 1;
+            env->masks[i] = 0;
+            env->terminals[i] = 1;
         }
     }
 }

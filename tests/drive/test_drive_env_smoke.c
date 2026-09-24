@@ -66,6 +66,12 @@ static int test_short_early_reset_flags_and_logs(void) {
     EXPECT_TRUE(env.log.n > 0.0f);
     EXPECT_NEAR(env.log.early_reset_short, env.log.n, 1e-5f);
     EXPECT_EQ_INT(env.short_reset_print_count, 1);
+    EXPECT_EQ_INT(env.autoreset_pending, 1);
+
+    drive_set_neutral_actions(&env);
+    c_step(&env);
+    EXPECT_EQ_INT(env.autoreset_pending, 0);
+    EXPECT_EQ_INT(env.short_reset_print_count, 1);
     for (int x = 0; x < env.active_agent_count; x++) {
         Log *agent_log = &env.logs[x];
         float rejects = agent_log->spawn_reject_collision + agent_log->spawn_reject_offroad
@@ -93,8 +99,24 @@ static int test_truncation_and_episode_log(void) {
     }
 
     EXPECT_TRUE(env.log.n > 0.0f);
+    EXPECT_EQ_INT(env.timestep, 3);
+    EXPECT_EQ_INT(env.autoreset_pending, 1);
     for (int i = 0; i < env.active_agent_count; i++) {
         EXPECT_EQ_INT(env.truncations[i], 1);
+        EXPECT_EQ_INT(env.masks[i], 0);
+    }
+
+    drive_set_neutral_actions(&env);
+    c_step(&env);
+    EXPECT_EQ_INT(env.autoreset_pending, 0);
+    EXPECT_EQ_INT(env.timestep, env.init_step);
+    for (int i = 0; i < env.active_agent_count; i++) {
+        Agent *agent = &env.agents[env.active_agent_indices[i]];
+        int expected_mask = !(agent->stopped || agent->removed || agent->is_blind_partner || agent->is_phantom_braker);
+        EXPECT_EQ_INT(env.truncations[i], 0);
+        EXPECT_EQ_INT(env.terminals[i], 0);
+        EXPECT_TRUE(env.rewards[i] == 0.0f);
+        EXPECT_EQ_INT(env.masks[i], expected_mask);
     }
 
     free_allocated(&env);

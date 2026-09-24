@@ -664,7 +664,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         # CARLA's live road-mesh height, not the shadow env's lane-averaged sim_z: on graded
         # multi-level roads the average can land the body mid-structure (measured: 20-100+
         # road collisions per Town03/04 route). sim_z only off the drivable network.
-        wp = self.cmap.get_waypoint(carla.Location(x=x, y=y))
+        # get_waypoint is nearest-in-3D: without sim_z the z=0 default snaps an overpass ego to the road beneath
+        wp = self.cmap.get_waypoint(carla.Location(x=x, y=y, z=sim_z))
         z = wp.transform.location.z if wp is not None else sim_z
         road_up = wp.transform.rotation.get_up_vector() if wp is not None else carla.Vector3D(x=0.0, y=0.0, z=1.0)
         pitch_deg, roll_deg, forward = road_aligned_attitude(road_up, yaw_deg)
