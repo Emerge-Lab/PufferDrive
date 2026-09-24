@@ -25,6 +25,7 @@ pufferdrive_planner:
   pedestrian_min_size_m: 0.0
   env_overrides:
     obs_slots_partners_n: 40 # GIGAFLOW eval value (Table A4); slots are max-pooled, so any checkpoint transfers
+    traffic_control_scope: traffic_lights # nuPlan city bins export TURN_STOP zones as stop signs; keep them out of the obs
   # Write the interactive pufferlib.viz observation replay (exact policy input/outputs) per scenario
   obs_html_dir: null
   obs_html_max_steps: 800

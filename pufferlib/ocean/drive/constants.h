@@ -201,6 +201,15 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define RED_LIGHT_LATERAL_EXTENSION_M 15.0f // Beyond each stop line endpoint, so the line cannot be driven around
 #define RED_LIGHT_ENTER_HEADING_THRESHOLD (M_PI / 2.0f)
 
+// Stop sign violation detection (CaRL RunStopSign2 semantics, trigger box centred on the stop line)
+#define STOP_SIGN_PROXIMITY_DIST_SQ (20.0f * 20.0f)
+#define STOP_SIGN_TRIGGER_HALF_DEPTH_M 1.7f // CARLA traffic.stop trigger volume half extent along the lane
+#define STOP_SIGN_AFFECTED_BOX_SCALE 1.2f
+#define STOP_SIGN_STOP_SPEED_MPS 0.1f
+#define STOP_SIGN_REVERSING_SPEED_MPS 0.17f
+#define STOP_SIGN_APPROACH_HEADING_THRESHOLD (M_PI / 4.0f)
+#define STOP_SIGN_LATERAL_EXTENSION_M 17.5f // Five lane widths beyond each endpoint, cannot be driven around
+
 #define BEHIND_COS_THRESHOLD -0.8660254f // cos(150 degrees)
 
 // =====================================================================================
@@ -354,6 +363,6 @@ static const int ROAD_OFFSETS[25][2]
 #define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
 #define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
 #define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
-#define REWARD_F32_FIELDS 13           // Log fields: episode_return + reward_collision .. reward_ade (cumulative)
+#define REWARD_F32_FIELDS 14           // Log fields: episode_return, reward_collision .. reward_ade, reward_stop_sign
 
 #endif

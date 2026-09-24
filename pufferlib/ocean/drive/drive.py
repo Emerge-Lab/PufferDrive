@@ -143,7 +143,7 @@ class Drive(pufferlib.PufferEnv):
         obs_partner_relative_velocity=False,
         obs_lane_heading_signed=False,
         obs_slots_traffic_controls_n=4,
-        traffic_control_scope=0,
+        traffic_control_scope="traffic_lights",
         starting_map=0,
         obs_norm_speed_mps=60.0,
         obs_norm_goal_offset_m=100.0,
@@ -362,6 +362,19 @@ class Drive(pufferlib.PufferEnv):
         self.obs_slots_partners_n = obs_slots_partners_n
         self.obs_partner_relative_velocity = int(bool(obs_partner_relative_velocity))
         self.obs_lane_heading_signed = int(bool(obs_lane_heading_signed))
+        traffic_control_scope_values = {
+            "traffic_lights": binding.TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS,
+            "traffic_lights_stop_sign": binding.TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN,
+            "all": binding.TRAFFIC_CONTROL_SCOPE_ALL,
+        }
+        if isinstance(traffic_control_scope, str):
+            if traffic_control_scope not in traffic_control_scope_values:
+                raise ValueError(
+                    f"traffic_control_scope must be one of {list(traffic_control_scope_values)}. Got: {traffic_control_scope}"
+                )
+            traffic_control_scope = traffic_control_scope_values[traffic_control_scope]
+        if traffic_control_scope not in traffic_control_scope_values.values():
+            raise ValueError(f"traffic_control_scope must be 0, 1, or 2. Got: {traffic_control_scope}")
         self.traffic_control_scope = traffic_control_scope
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
         self.obs_norm_speed_mps = float(obs_norm_speed_mps)

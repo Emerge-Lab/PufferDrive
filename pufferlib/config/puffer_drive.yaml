@@ -184,6 +184,9 @@ env:
   # Ego lane-angle slot: true = signed heading error theta_f / pi (GIGAFLOW B.1), false = cos(theta_f)
   obs_lane_heading_signed: false
   obs_slots_traffic_controls_n: 4
+  # Traffic controls observed and enforced: traffic_lights, traffic_lights_stop_sign (stop-sign runs detected as in
+  # CaRL's RunStopSign2 and penalised with reward_stop_line), all (additionally observes yield signs)
+  traffic_control_scope: traffic_lights
   # Fraction of segment observation slots to drop (reduces obs size)
   obs_dropout_lane: 0.5
   obs_dropout_boundary: 0.4

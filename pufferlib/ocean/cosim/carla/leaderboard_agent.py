@@ -53,6 +53,9 @@ Environment variables:
                                both infraction sources above as columns
   COSIM_OBS_HTML=/dir          write an interactive pufferlib.viz replay per
                                route (the exact obs + policy outputs the ego saw)
+  COSIM_OBS_HTML_RENDER=1      0: save only the compact .replay.zlib per route;
+                               scripts/eval/render_carla_obs_html.py renders the
+                               pages of a whole run into one gallery afterwards
   COSIM_DUMP_OBS=/dir          write the raw ego obs + action per policy step
                                per route (.npz: step, obs, action)
   COSIM_WORLD_LOG=/dir         write the bin-frame world state per policy step
@@ -226,6 +229,10 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
 
         self._partner_stopped_speed_threshold = float(binding.AGENT_STOPPED_SPEED_THRESHOLD)
         self.obs_html_max_steps = int(os.environ.get("COSIM_OBS_HTML_MAX_STEPS", "12000"))
+        obs_html_render_raw = os.environ.get("COSIM_OBS_HTML_RENDER", "1")
+        if obs_html_render_raw not in ("0", "1"):
+            raise ValueError(f"COSIM_OBS_HTML_RENDER must be '0' or '1', got {obs_html_render_raw!r}")
+        self.obs_html_render = obs_html_render_raw == "1"
         self._obs_html = None
         # Per-policy-step CSV of the ego's current goal vs the lane
         # find_goal_lane snapped it to (goal_lane_idx from env.get_state()):
@@ -984,8 +991,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         if self._goal_lane_debug_file is not None:
             self._goal_lane_debug_file.close()
         if self._obs_html is not None:
-            html = self._obs_html.write()
-            print(f"[puffer_agent] wrote obs_html viewer ({len(self._obs_html)} frames) -> {html}")
+            written = self._obs_html.write(render_html=self.obs_html_render)
+            print(f"[puffer_agent] wrote obs replay ({len(self._obs_html)} frames) -> {written}")
         if self.world_log_dir and self._world_log["ego"]:
             self._write_world_log()
         if self.obs_dump_dir and self._obs_dump:

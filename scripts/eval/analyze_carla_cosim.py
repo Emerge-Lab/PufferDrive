@@ -4,15 +4,19 @@ Same report shape as analyze_nuplan_cosim.py: score table worst first, failure-c
 per-route diagnosis, six-frame top-down strip + speed plot + chase-cam / top-down video.
 
 usage: python scripts/eval/analyze_carla_cosim.py <run_dir> [<run_dir> ...] <report_dir> [--max-inline N] [--no-video]
+       [--obs-html-dir D]
 
 <run_dir> holds result.json (leaderboard_evaluator --checkpoint), world_log/*.npz, telemetry/*.csv and
-carla_view/*.mp4; routes of one run pair with the per-route files in timestamp order.
+carla_view/*.mp4; the records of one run pair with the newest per-route files in timestamp order (retried
+routes leave the files of crashed attempts behind). --obs-html-dir: the run's obs replay gallery
+(scripts/eval/render_carla_obs_html.py), linked per route.
 """
 
 import argparse
 import glob
 import json
 import math
+import os
 import re
 import shutil
 import sys
@@ -30,6 +34,9 @@ from matplotlib.patches import Polygon
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from render_carla_obs_html import page_name
+
 import data_utils.mirror_map_bin as mbin
 from pufferlib.ocean.cosim.carla_cosim import write_mp4
 
@@ -315,15 +322,18 @@ def render_route(record, log, chase_mp4, report_dir, tag, make_video):
         "diagnosis": "; ".join(reasons),
         "has_chase": chase_mp4 is not None,
         "has_topdown": make_video,
+        "obs_page": page_name(record, log.meta["town"]),
     }
 
 
-def route_section(r, inline):
+def route_section(r, inline, obs_href_dir):
     tag = r["route"]
     html = [
         f"<h3 id='{tag}'>{tag} &middot; {r['town']} &middot; DS {r['driving_score']:.1f} &middot; RC {r['route_completion']:.0f}% &middot; {r['status']}</h3>",
         f"<p><b>{r['categories']}</b>: {r['diagnosis']}</p>",
     ]
+    if obs_href_dir:
+        html.append(f"<p><a href='{obs_href_dir}/{r['obs_page']}'>obs replay (what the policy saw)</a></p>")
     if inline:
         html.append(f"<img src='strips/{tag}.png' style='max-width:100%'><br><img src='speed/{tag}.png'><br>")
         if r["has_chase"]:
@@ -342,8 +352,10 @@ def collect_routes(run_dir):
     videos = sorted(glob.glob(str(run_dir / "carla_view" / "*.mp4")))
     if len(logs) != len(records):
         print(
-            f"[{run_dir.name}] {len(records)} route records but {len(logs)} world logs; pairing the first {min(len(logs), len(records))}"
+            f"[{run_dir.name}] {len(records)} route records but {len(logs)} world logs; pairing the newest {min(len(logs), len(records))}"
         )
+    count = min(len(records), len(logs))
+    records, logs, videos = records[-count:], logs[-count:], videos[-count:]
     out = []
     for k, (record, log_path) in enumerate(zip(records, logs)):
         tag = f"{run_dir.name}_{record.get('route_id', k)}"
@@ -356,8 +368,10 @@ def main():
     parser.add_argument("paths", nargs="+", help="run dirs followed by the report dir")
     parser.add_argument("--max-inline", type=int, default=12)
     parser.add_argument("--no-video", action="store_true")
+    parser.add_argument("--obs-html-dir", help="the run's obs replay gallery dir, linked per route")
     args = parser.parse_args()
     run_dirs, report_dir = args.paths[:-1], Path(args.paths[-1])
+    obs_href_dir = os.path.relpath(args.obs_html_dir, report_dir) if args.obs_html_dir else ""
     for sub in ("strips", "speed", "videos"):
         (report_dir / sub).mkdir(parents=True, exist_ok=True)
     rows = []
@@ -402,7 +416,7 @@ def main():
         f"<h2>Worst {min(args.max_inline, len(df))} routes</h2>",
     ]
     for k, (_, r) in enumerate(df.iterrows()):
-        html.append(route_section(r, inline=k < args.max_inline))
+        html.append(route_section(r, k < args.max_inline, obs_href_dir))
     html.append("</body></html>")
     (report_dir / "index.html").write_text("\n".join(html))
     print("failure categories:", category_counts.to_dict())

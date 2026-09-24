@@ -15,15 +15,16 @@
 # One CARLA server + one evaluator per GPU (1-8: whatever the allocation holds, e.g. `sbatch --gres gpu:2`);
 # the 36 routes are dealt round-robin over the GPUs, every route gets its own server (restarted per route,
 # CaRL's own recipe), crashed routes are retried, and the per-route result jsons are aggregated at the end
-# with CaRL's tools/result_parser.py (results.csv) plus the nuPlan-style HTML report.
+# with CaRL's tools/result_parser.py (results.csv) plus the nuPlan-style HTML report ($OUT/report/index.html)
+# and the obs replay gallery of all routes ($OUT/obs_html/index.html, as in 9_nuPlan.sh).
 #
 # Overridable env: RUN_DIR, ROUTES, SCENARIOS (0 = pufferlib's scenario-free longest6), REPETITIONS,
 # ROUTE_SUBSET ("0 5 17": only these route ids), NUM_GPUS, PORT_BASE (CARLA rpc port of gpu 0; gpu w uses
 # PORT_BASE+50w, TM PORT_BASE+6000+50w), LOGGING (0, default: scores only, CARLA runs without rendering
 # (-nullrhi, which segfaults as soon as any sensor is requested, so no camera and no telemetry, whose CaRL
 # criteria attach a collision sensor); 1: chase-cam video, telemetry, world log and the HTML report per
-# route), OBS_HTML (1 = also the interactive obs replay per route, large; needs LOGGING=1), REPORT (0 = skip
-# the HTML report),
+# route), OBS_HTML (1 = also the interactive obs replay per route, rendered into the one gallery folder
+# $OUT/obs_html at the end, large; needs LOGGING=1), REPORT (0 = skip the HTML report),
 # MAX_ATTEMPTS, CARLA_ROOT, CARL_WORK_DIR, PY, PD, COSIM_MAX_SPEED_MPS (ego speed cap, default 30),
 # COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: partners' stopped-time obs held at 0; 0 = real stopped times).
 set -u
@@ -72,6 +73,7 @@ export COSIM_DYNAMICS_SOURCE=pufferdrive
 export COSIM_MAX_SPEED_MPS=${COSIM_MAX_SPEED_MPS:-30}
 export COSIM_ZERO_PARTNER_STOPPED_TIME=${COSIM_ZERO_PARTNER_STOPPED_TIME:-1}
 export COSIM_OBS_HTML_MAX_STEPS=${COSIM_OBS_HTML_MAX_STEPS:-20000}
+export COSIM_OBS_HTML_RENDER=0  # routes save the compact replay only; render_carla_obs_html.py renders all pages into $OUT/obs_html
 
 TAG=longest6$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
@@ -195,7 +197,15 @@ if rows:
     print(f"mean DS {sum(r[2] for r in rows)/n:.2f}  RC {sum(r[3] for r in rows)/n:.2f}  IP {sum(r[4] for r in rows)/n:.3f}")
 EOF
 
+REPORT_ARGS=()
+[ "$OBS_HTML" = "1" ] && REPORT_ARGS+=(--obs-html-dir "$OUT/obs_html")
 if [ "$REPORT" = "1" ] && [ "$LOGGING" = "1" ]; then
-    "$PY" "$PD/scripts/eval/analyze_carla_cosim.py" "$OUT"/routes/route_* "$OUT/report" || echo "HTML report failed (results above are unaffected)"
+    "$PY" "$PD/scripts/eval/analyze_carla_cosim.py" "$OUT"/routes/route_* "$OUT/report" "${REPORT_ARGS[@]}" || echo "HTML report failed (results above are unaffected)"
 fi
+# after the report: the gallery links to it when it exists
+if [ "$OBS_HTML" = "1" ] && [ "$LOGGING" = "1" ]; then
+    "$PY" "$PD/scripts/eval/render_carla_obs_html.py" "$OUT" --routes "$ROUTES" || echo "obs replay gallery failed (results above are unaffected)"
+fi
+[ -f "$OUT/report/index.html" ] && echo "report -> $OUT/report/index.html"
+[ -f "$OUT/obs_html/index.html" ] && echo "obs replays -> $OUT/obs_html/index.html"
 echo "Done -> $OUT"

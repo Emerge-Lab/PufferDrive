@@ -19,6 +19,7 @@ FAILURE_RENDER_FILTER_COLUMNS = (
     "at_fault_collision_rate",
     "offroad_rate",
     "red_light_violation_rate",
+    "stop_sign_violation_rate",
 )
 
 

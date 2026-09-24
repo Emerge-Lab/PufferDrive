@@ -130,6 +130,9 @@ struct Agent {
     int stopped; // 0/1 -> freeze if set
     int removed; // 0/1 -> remove from sim if set
     int first_collision_partner_idx; // agent index of the first collision partner this episode, -1 if none
+    int stop_sign_target_idx;        // traffic element being approached, -1 if none
+    int stop_sign_stop_completed;    // 0/1 -> stood still inside the target's trigger box
+    int stop_sign_last_failed_idx;   // element run without stopping, not re-targeted until 20 m away
 
     // Jerk dynamics
     float accel_long;

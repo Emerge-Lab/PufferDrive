@@ -1180,7 +1180,7 @@ __PAYLOAD_CHUNKS__
         const VEHICLE_COLORS = __VEHICLE_COLORS__;
         // Order must match the Log fields written in env_binding.h vec_get_obs_html_frame (15 values).
         const EGO_OBS_LABELS = ["speed","width","length","steer","accel lon","accel lat","lane dist","lane angle (cos | err/pi)","speed limit","stopped","lane curvature"];
-        const REWARD_LABELS = ["collision","offroad","red light","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed","ADE"];
+        const REWARD_LABELS = ["collision","offroad","red light","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed","ADE","stop sign"];
         const EGO_COND_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","C_throttle","C_steer","C_acc","C_vel"];
         const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];
         const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
@@ -1763,12 +1763,13 @@ def set_replay_ghost(replay_path, ghost_f32):
         replay_file.write(_pack_replay_binary(header, chunks))
 
 
-def build_gallery_index(folder_path=".", file_metrics=None):
+def build_gallery_index(folder_path=".", file_metrics=None, links=None):
     """Build an index.html navigator for per-episode replay HTMLs in folder_path.
 
     If `file_metrics` is a dict mapping `<html basename> -> {metric_name: value}`,
     the index exposes a filter for each supported infraction present in the
     metrics. Previous/next navigation follows the active filtered list.
+    `links` ([(label, href), ...]) are shown under the title, e.g. a run's report.
     """
     files = [f for f in os.listdir(folder_path) if f != "index.html" and f.endswith(".html")]
 
@@ -1911,6 +1912,16 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             font-size: 20px;
             font-weight: 700;
         }
+
+        .brand-link {
+            margin-top: 2px;
+            color: var(--accent);
+            font-size: 12px;
+            font-weight: 600;
+            text-decoration: none;
+        }
+
+        .brand-link:hover { text-decoration: underline; }
 
         .top-section {
             min-width: 0;
@@ -2253,6 +2264,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             <div class="brand">
                 <span class="brand-kicker">PufferDrive</span>
                 <span class="brand-title">Replay index</span>
+                __BRAND_LINKS__
             </div>
             __CATEGORY_FILTER_UI__
             <section class="top-section browse-section">
@@ -2403,10 +2415,12 @@ def build_gallery_index(folder_path=".", file_metrics=None):
 </html>
     """
 
+    links_html = "".join(f'<a class="brand-link" href="{href}">{label}</a>' for label, href in (links or []))
     final_html = (
         html_content.replace("__OPTIONS__", options_html)
         .replace("__FIRST__", files[0])
         .replace("__CATEGORY_FILTER_UI__", category_filter_ui)
+        .replace("__BRAND_LINKS__", links_html)
     )
 
     index_path = os.path.join(folder_path, "index.html")

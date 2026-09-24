@@ -72,6 +72,7 @@ struct Log {
     float offroad_rate;
     float collision_rate;
     float red_light_violation_rate;
+    float stop_sign_violation_rate;
     float num_goals_reached;
     float comfort_violation_count;
     float comfort_violation_window_count;
@@ -111,6 +112,7 @@ struct Log {
     float reward_collision;
     float reward_offroad;
     float reward_red_light;
+    float reward_stop_sign;
     float reward_goal;
     float reward_lane_align;
     float reward_lane_center;
@@ -542,6 +544,9 @@ static void reset_agent_state(Agent *agent) {
     agent->stopped = 0;
     agent->removed = 0;
     agent->first_collision_partner_idx = -1;
+    agent->stop_sign_target_idx = -1;
+    agent->stop_sign_stop_completed = 0;
+    agent->stop_sign_last_failed_idx = -1;
     agent->current_lane_idx = -1;
     agent->previous_lane_idx = -1;
     agent->current_route_idx = 0;
@@ -1760,6 +1765,25 @@ static bool check_agent_on_stop_line(Drive *env, Agent *agent, bool include_yell
     return false;
 }
 
+static bool check_corner_boxes_overlap(float corners_a[4][2], float corners_b[4][2], float axes[4][2]) {
+    for (int i = 0; i < 4; i++) {
+        float min_a = INFINITY, max_a = -INFINITY;
+        float min_b = INFINITY, max_b = -INFINITY;
+        for (int j = 0; j < 4; j++) {
+            float proj_a = corners_a[j][0] * axes[i][0] + corners_a[j][1] * axes[i][1];
+            min_a = fminf(min_a, proj_a);
+            max_a = fmaxf(max_a, proj_a);
+            float proj_b = corners_b[j][0] * axes[i][0] + corners_b[j][1] * axes[i][1];
+            min_b = fminf(min_b, proj_b);
+            max_b = fmaxf(max_b, proj_b);
+        }
+        if (max_a < min_b || min_a > max_b) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool check_red_light_violation(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     // Vehicle center crosses on red; the laterally extended line cannot be driven
@@ -1824,6 +1848,156 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
     return false;
 }
 
+typedef struct {
+    float mid_x;
+    float mid_y;
+    float along_x; // unit travel direction, normal to the stop line
+    float along_y;
+    float half_len;
+} StopLineFrame;
+
+static bool compute_stop_line_frame(TrafficControlElement *tc, StopLineFrame *frame) {
+    float line_dx = tc->stop_line[3] - tc->stop_line[0];
+    float line_dy = tc->stop_line[4] - tc->stop_line[1];
+    float line_len = sqrtf(line_dx * line_dx + line_dy * line_dy);
+    if (line_len <= 0.0f) {
+        return false;
+    }
+    float along_x = -line_dy / line_len;
+    float along_y = line_dx / line_len;
+    if (along_x * cosf(tc->heading) + along_y * sinf(tc->heading) < 0.0f) {
+        along_x = -along_x;
+        along_y = -along_y;
+    }
+    frame->mid_x = (tc->stop_line[0] + tc->stop_line[3]) * 0.5f;
+    frame->mid_y = (tc->stop_line[1] + tc->stop_line[4]) * 0.5f;
+    frame->along_x = along_x;
+    frame->along_y = along_y;
+    frame->half_len = 0.5f * line_len;
+    return true;
+}
+
+// RunStopSign2 acquisition: the path ahead reaches the scaled trigger box within 20 m, never while reversing
+static int find_stop_sign_target(Drive *env, Agent *agent) {
+    if (agent->sim_speed_signed < -STOP_SIGN_REVERSING_SPEED_MPS) {
+        return -1;
+    }
+    int target_idx = -1;
+    float target_dist_sq = STOP_SIGN_PROXIMITY_DIST_SQ;
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *tc = &env->traffic_elements[i];
+        if (tc->type != TRAFFIC_CONTROL_TYPE_STOP_SIGN || i == agent->stop_sign_last_failed_idx) {
+            continue;
+        }
+        float mid_z = (tc->stop_line[2] + tc->stop_line[5]) * 0.5f;
+        if (fabsf(agent->sim_z - mid_z) > Z_BUFFER) {
+            continue;
+        }
+        StopLineFrame frame;
+        if (!compute_stop_line_frame(tc, &frame)) {
+            continue;
+        }
+        float dx = agent->sim_x - frame.mid_x;
+        float dy = agent->sim_y - frame.mid_y;
+        float dist_sq = dx * dx + dy * dy;
+        if (dist_sq >= target_dist_sq) {
+            continue;
+        }
+        if (fabsf(compute_heading_diff(agent->sim_heading, tc->heading)) > STOP_SIGN_APPROACH_HEADING_THRESHOLD) {
+            continue;
+        }
+        float along = dx * frame.along_x + dy * frame.along_y;
+        float across = dx * frame.along_y - dy * frame.along_x;
+        if (along > STOP_SIGN_AFFECTED_BOX_SCALE * STOP_SIGN_TRIGGER_HALF_DEPTH_M
+            || fabsf(across) > STOP_SIGN_AFFECTED_BOX_SCALE * frame.half_len) {
+            continue;
+        }
+        target_idx = i;
+        target_dist_sq = dist_sq;
+    }
+    return target_idx;
+}
+
+static bool check_agent_in_stop_sign_box(Agent *agent, StopLineFrame *frame) {
+    float agent_corners[4][2];
+    compute_bounding_box_corners(
+        agent->sim_x,
+        agent->sim_y,
+        agent->cos_heading,
+        agent->sin_heading,
+        agent->sim_length / 2.0f,
+        agent->sim_width / 2.0f,
+        agent_corners);
+    float box_corners[4][2];
+    compute_bounding_box_corners(
+        frame->mid_x,
+        frame->mid_y,
+        frame->along_x,
+        frame->along_y,
+        STOP_SIGN_TRIGGER_HALF_DEPTH_M,
+        frame->half_len,
+        box_corners);
+    float axes[4][2]
+        = {{agent->cos_heading, agent->sin_heading},
+           {-agent->sin_heading, agent->cos_heading},
+           {frame->along_x, frame->along_y},
+           {-frame->along_y, frame->along_x}};
+    return check_corner_boxes_overlap(agent_corners, box_corners, axes);
+}
+
+// True on the step the centre crosses the target's stop line without a completed stop.
+static bool update_stop_sign_state(Drive *env, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    StopLineFrame frame = {0};
+    if (agent->stop_sign_last_failed_idx >= 0) {
+        compute_stop_line_frame(&env->traffic_elements[agent->stop_sign_last_failed_idx], &frame);
+        float dx = agent->sim_x - frame.mid_x;
+        float dy = agent->sim_y - frame.mid_y;
+        if (dx * dx + dy * dy > STOP_SIGN_PROXIMITY_DIST_SQ) {
+            agent->stop_sign_last_failed_idx = -1;
+        }
+    }
+    if (agent->stop_sign_target_idx >= 0) {
+        compute_stop_line_frame(&env->traffic_elements[agent->stop_sign_target_idx], &frame);
+        float dx = agent->sim_x - frame.mid_x;
+        float dy = agent->sim_y - frame.mid_y;
+        if (dx * dx + dy * dy > STOP_SIGN_PROXIMITY_DIST_SQ) {
+            agent->stop_sign_target_idx = -1;
+            agent->stop_sign_stop_completed = 0;
+        }
+    }
+    if (agent->stop_sign_target_idx < 0) {
+        agent->stop_sign_target_idx = find_stop_sign_target(env, agent);
+        agent->stop_sign_stop_completed = 0;
+        if (agent->stop_sign_target_idx < 0) {
+            return false;
+        }
+        compute_stop_line_frame(&env->traffic_elements[agent->stop_sign_target_idx], &frame);
+    }
+    if (!agent->stop_sign_stop_completed && agent->sim_speed < STOP_SIGN_STOP_SPEED_MPS
+        && check_agent_in_stop_sign_box(agent, &frame)) {
+        agent->stop_sign_stop_completed = 1;
+    }
+    if (agent->stop_sign_stop_completed) {
+        return false;
+    }
+    float s_prev = (agent->prev_x - frame.mid_x) * frame.along_x + (agent->prev_y - frame.mid_y) * frame.along_y;
+    float s_cur = (agent->sim_x - frame.mid_x) * frame.along_x + (agent->sim_y - frame.mid_y) * frame.along_y;
+    if (!(s_prev < 0.0f && s_cur >= 0.0f)) {
+        return false;
+    }
+    float crossing_frac = s_prev / (s_prev - s_cur);
+    float cross_x = agent->prev_x + crossing_frac * (agent->sim_x - agent->prev_x);
+    float cross_y = agent->prev_y + crossing_frac * (agent->sim_y - agent->prev_y);
+    float lateral = (cross_x - frame.mid_x) * frame.along_y - (cross_y - frame.mid_y) * frame.along_x;
+    if (fabsf(lateral) > frame.half_len + STOP_SIGN_LATERAL_EXTENSION_M) {
+        return false;
+    }
+    agent->stop_sign_last_failed_idx = agent->stop_sign_target_idx;
+    agent->stop_sign_target_idx = -1;
+    return true;
+}
+
 static bool check_obb_collision(Agent *car1, Agent *car2) {
     // OBB collision via SAT (Separating Axis Theorem).
     // Projects both boxes onto 4 axes (2 per car) and checks for overlap on all axes.
@@ -1860,23 +2034,7 @@ static bool check_obb_collision(Agent *car1, Agent *car2) {
            {-car1->sin_heading, car1->cos_heading},
            {car2->cos_heading, car2->sin_heading},
            {-car2->sin_heading, car2->cos_heading}};
-
-    for (int i = 0; i < 4; i++) {
-        float min1 = INFINITY, max1 = -INFINITY;
-        float min2 = INFINITY, max2 = -INFINITY;
-        for (int j = 0; j < 4; j++) {
-            float proj1 = car1_corners[j][0] * axes[i][0] + car1_corners[j][1] * axes[i][1];
-            min1 = fminf(min1, proj1);
-            max1 = fmaxf(max1, proj1);
-            float proj2 = car2_corners[j][0] * axes[i][0] + car2_corners[j][1] * axes[i][1];
-            min2 = fminf(min2, proj2);
-            max2 = fmaxf(max2, proj2);
-        }
-        if (max1 < min2 || min1 > max2) {
-            return false;
-        }
-    }
-    return true;
+    return check_corner_boxes_overlap(car1_corners, car2_corners, axes);
 }
 
 static bool check_moving_obb_collision(Agent *a, Agent *b, float a_disp, float b_disp) {
@@ -2284,11 +2442,13 @@ static void add_log(Drive *env) {
         episode_log.collision_rate += collided;
         int red_light_violations = env->logs[i].red_light_violation_rate;
         episode_log.red_light_violation_rate += red_light_violations;
+        int stop_sign_violations = env->logs[i].stop_sign_violation_rate;
+        episode_log.stop_sign_violation_rate += stop_sign_violations;
         float collision_share = collided ? 1.0f : 0.0f;
         if (collided && is_shared_policy_collision(env, i)) {
             collision_share = 0.5f;
         }
-        float infraction_count = offroad + red_light_violations + collision_share;
+        float infraction_count = offroad + red_light_violations + stop_sign_violations + collision_share;
         float avg_speed_per_agent = env->logs[i].avg_speed_per_agent;
         episode_log.avg_speed_per_agent += avg_speed_per_agent / safe_timestep;
         int num_goals_reached = env->logs[i].num_goals_reached;
@@ -2297,7 +2457,7 @@ static void add_log(Drive *env) {
         if (num_goals_reached >= env->num_goals && !agent->removed && !agent->stopped) {
             episode_log.score += 1.0f;
         }
-        if (!offroad && !collided && !red_light_violations && num_goals_reached < 1) {
+        if (!offroad && !collided && !red_light_violations && !stop_sign_violations && num_goals_reached < 1) {
             episode_log.dnf_rate += 1.0f;
         }
         episode_log.total_distance_travelled += agent->distance_since_spawn;
@@ -2318,6 +2478,7 @@ static void add_log(Drive *env) {
         episode_log.reward_collision += env->logs[i].reward_collision;
         episode_log.reward_offroad += env->logs[i].reward_offroad;
         episode_log.reward_red_light += env->logs[i].reward_red_light;
+        episode_log.reward_stop_sign += env->logs[i].reward_stop_sign;
         episode_log.reward_goal += env->logs[i].reward_goal;
         episode_log.reward_lane_align += env->logs[i].reward_lane_align;
         episode_log.reward_lane_center += env->logs[i].reward_lane_center;
@@ -4217,7 +4378,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
 
     // Handle terminal events - NOTE: move it elsewhere?
     // IMPORTANT: early returns after offroad and collision enforce mutual exclusivity of terminal flags.
-    // Order matters: offroad > collision > red_light.
+    // Order matters: offroad > collision > red_light > stop_sign.
 
     // Priority 1: Handle offroad
     if (is_offroad) {
@@ -4245,6 +4406,15 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     if (env->obs_slots_traffic_controls_n && !env->disable_red_light_infractions
         && check_red_light_violation(env, agent_idx)) {
         agent->metrics_array[RED_LIGHT_IDX] = 1.0f;
+        apply_infraction_behavior(agent, env->traffic_light_behavior);
+        return;
+    }
+
+    // Priority 4: Handle stop sign violation
+    if (env->obs_slots_traffic_controls_n
+        && traffic_control_in_scope(TRAFFIC_CONTROL_TYPE_STOP_SIGN, env->traffic_control_scope)
+        && update_stop_sign_state(env, agent_idx)) {
+        agent->metrics_array[STOP_SIGN_IDX] = 1.0f;
         apply_infraction_behavior(agent, env->traffic_light_behavior);
         return;
     }
@@ -4315,6 +4485,14 @@ static void compute_rewards(Drive *env, int i) {
         env->rewards[i] += reward_red_light;
         agent_log->red_light_violation_rate = 1.0f;
         agent_log->reward_red_light += reward_red_light;
+    }
+
+    // Stop sign violation reward
+    if (agent->metrics_array[STOP_SIGN_IDX] > 0.0f) {
+        float reward_stop_sign = -agent->reward_coefs[REWARD_COEF_STOP_LINE];
+        env->rewards[i] += reward_stop_sign;
+        agent_log->stop_sign_violation_rate = 1.0f;
+        agent_log->reward_stop_sign += reward_stop_sign;
     }
 
     // Goal reward
@@ -4829,6 +5007,9 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
             light_state = (env->timestep >= 0 && env->timestep < tc->state_size && tc->states != NULL)
                 ? tc->states[env->timestep]
                 : TRAFFIC_CONTROL_STATE_OFF;
+        } else if (tc->type == TRAFFIC_CONTROL_TYPE_STOP_SIGN && visible_controls[j].idx == ego->stop_sign_target_idx) {
+            // the ego's own stop sign reads red until it stood still in the trigger box, then green
+            light_state = ego->stop_sign_stop_completed ? TRAFFIC_CONTROL_STATE_GREEN : TRAFFIC_CONTROL_STATE_RED;
         }
 
         obs[obs_idx++] = rel_x1 / env->obs_norm_xy_offset_m;

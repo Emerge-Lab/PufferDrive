@@ -191,7 +191,9 @@ class CarlaTransform:
         yaw_rate = -math.radians(av.z)  # mirrored y flips rotation sense, like yaw_to_bin's negation
         accel_x, accel_y = acc.x, -acc.y  # mirror y, like vel_to_bin
         accel_long = accel_x * math.cos(heading) + accel_y * math.sin(heading)
-        return (bx, by, tf.location.z, heading, v.x, -v.y, yaw_rate, accel_long)
+        box = actor.bounding_box  # pivot differs per asset (vehicles: ground, walkers: capsule centre); bin z = ground
+        ground_z = tf.location.z + box.location.z - box.extent.z
+        return (bx, by, ground_z, heading, v.x, -v.y, yaw_rate, accel_long)
 
     # --- bin frame -> CARLA (to teleport the ego back into CARLA) ---
     def bin_to_loc(self, bx, by):

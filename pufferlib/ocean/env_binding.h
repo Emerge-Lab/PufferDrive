@@ -931,6 +931,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
                 rewards_f32[reward_base + 10] = log->reward_reverse;
                 rewards_f32[reward_base + 11] = log->reward_overspeed;
                 rewards_f32[reward_base + 12] = log->reward_ade;
+                rewards_f32[reward_base + 13] = log->reward_stop_sign;
             }
         }
 
@@ -1646,6 +1647,12 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_STATE_YELLOW", TRAFFIC_CONTROL_STATE_YELLOW);
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_STATE_GREEN", TRAFFIC_CONTROL_STATE_GREEN);
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_STATE_OFF", TRAFFIC_CONTROL_STATE_OFF);
+    PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS", TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS);
+    PyModule_AddIntConstant(
+        m,
+        "TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN",
+        TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN);
+    PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_SCOPE_ALL", TRAFFIC_CONTROL_SCOPE_ALL);
     PyModule_AddIntConstant(m, "EGO_FEATURES", EGO_FEATURES);
     PyModule_AddIntConstant(m, "GOAL_FEATURES", GOAL_FEATURES);
     PyModule_AddIntConstant(m, "MAX_GOALS", MAX_GOALS);

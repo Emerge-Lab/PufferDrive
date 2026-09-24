@@ -44,6 +44,12 @@ class InfractionBehavior(Enum):
     remove = 2
 
 
+class TrafficControlScope(Enum):
+    traffic_lights = 0
+    traffic_lights_stop_sign = 1
+    all = 2
+
+
 class ControlMode(Enum):
     control_vehicles = 0
     control_agents = 1
@@ -170,6 +176,7 @@ class DriveEnvConfig:
     obs_partner_relative_velocity: bool = MISSING
     obs_lane_heading_signed: bool = MISSING
     obs_slots_traffic_controls_n: int = MISSING
+    traffic_control_scope: TrafficControlScope = MISSING
     obs_dropout_lane: float = MISSING
     obs_dropout_boundary: float = MISSING
     obs_lane_stride: int = MISSING
