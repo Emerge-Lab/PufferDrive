@@ -45,11 +45,18 @@ export STARTUP_ACCEL_JERK_CAP=2
 export STARTUP_BRAKE_JERK_CAP=2
 # pedestrian/bicycle partner boxes grown to the training minimum agent size in the policy's obs (0 = off)
 export PEDESTRIAN_MIN_SIZE_M=0.8
+# Shadow-env obs overrides: partner slots (training 20, GIGAFLOW eval 40; 40 real partners max-pooled is OOD in
+# sidewalk crowds) and the ego perceived-size margin [m per side] (0.2 = native eval; nuPlan's 2.3 x 5.2 m ego
+# reads as 2.7 x 5.6 m). Unset = planner yaml / arch.py defaults (40 / 0.2).
+export OBS_SLOTS_PARTNERS_N=20
+export EVAL_PERCEIVED_SIZE_MARGIN_M=0
 ABLATION_TAG=""
 [ "$SLIDING_GOAL_WINDOW" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_slide"
 [ "$STARTUP_ACCEL_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
 [ "$STARTUP_BRAKE_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jbrk${STARTUP_BRAKE_JERK_CAP}"
 [ "$PEDESTRIAN_MIN_SIZE_M" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_ped${PEDESTRIAN_MIN_SIZE_M}m"
+[ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && ABLATION_TAG="${ABLATION_TAG}_slots${OBS_SLOTS_PARTNERS_N}"
+[ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && ABLATION_TAG="${ABLATION_TAG}_margin${EVAL_PERCEIVED_SIZE_MARGIN_M}"
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 export GROUP=$RUN_DIR/eval/nuplan_val14_${GOAL_SOURCE}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 

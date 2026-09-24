@@ -40,8 +40,9 @@ def test_skewed_stop_line_is_kept_within_the_heading_tolerance():
 
 
 def test_max_distance_and_empty_map():
-    assert match({"c": (1.5, 12.0, SOUTH)}) == {}
-    assert match({"c": (1.5, 12.0, SOUTH)}, max_dist_m=14.0) == {"c": 0}
+    assert match({"c": (1.5, 14.0, SOUTH)}) == {"c": 0}
+    assert match({"c": (1.5, 17.0, SOUTH)}) == {}
+    assert match({"c": (1.5, 17.0, SOUTH)}, max_dist_m=19.0) == {"c": 0}
     assert nb.match_connectors_to_stop_lines({"c": (0.0, 0.0, 0.0)}, IDENTITY, STOP_LINES[:0], HEADINGS[:0], TYPES[:0]) == {}
 
 

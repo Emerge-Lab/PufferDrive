@@ -508,7 +508,7 @@ def coarse_translation_vote(src: np.ndarray, ref: np.ndarray, grid: float = 5.0)
     return np.median(near, axis=0)
 
 
-LIGHT_MATCH_MAX_DIST_M = 10.0
+LIGHT_MATCH_MAX_DIST_M = 15.0  # nuPlan connector entries sit up to 14 m before/after the bin stop line
 LIGHT_MATCH_MAX_HEADING_DIFF_RAD = np.radians(75.0)  # keeps skewed stop lines, rejects cross-street (90) and oncoming (180)
 
 
@@ -535,7 +535,8 @@ def match_connectors_to_stop_lines(
     lane_connector_id(str) -> (x, y, heading) entry pose in nuPlan map
     coordinates. Each connector takes the nearest traffic light whose stop
     line faces its travel direction, measured to the line segment (a multi-lane
-    stop line's midpoint can sit >10 m from the outer lanes). Returns
+    stop line's midpoint can sit >10 m from the outer lanes; matching every
+    lane of a line matters, or the route rule cannot override neighbours). Returns
     {lane_connector_id: bin traffic-element idx}, skipping connectors with no
     such stop line within max_dist_m."""
     mapping = {}
