@@ -26,7 +26,8 @@
 # route), OBS_HTML (1 = also the interactive obs replay per route, rendered into the one gallery folder
 # $OUT/obs_html at the end, large; needs LOGGING=1), REPORT (0 = skip the HTML report),
 # MAX_ATTEMPTS, CARLA_ROOT, CARL_WORK_DIR, PY, PD, COSIM_MAX_SPEED_MPS (ego speed cap, default 30),
-# COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: partners' stopped-time obs held at 0; 0 = real stopped times).
+# COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: partners' stopped-time obs held at 0; 0 = real stopped times),
+# COSIM_PEDESTRIAN_MIN_SIZE_M (default 0: true CARLA walker boxes; 0.8 = the training spawn floor).
 set -u
 
 export PD=${PD:-/home/bjaeger/PufferDrive}
@@ -72,6 +73,7 @@ export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
 export COSIM_DYNAMICS_SOURCE=pufferdrive
 export COSIM_MAX_SPEED_MPS=${COSIM_MAX_SPEED_MPS:-30}
 export COSIM_ZERO_PARTNER_STOPPED_TIME=${COSIM_ZERO_PARTNER_STOPPED_TIME:-1}
+export COSIM_PEDESTRIAN_MIN_SIZE_M=${COSIM_PEDESTRIAN_MIN_SIZE_M:-0}
 export COSIM_OBS_HTML_MAX_STEPS=${COSIM_OBS_HTML_MAX_STEPS:-20000}
 export COSIM_OBS_HTML_RENDER=0  # routes save the compact replay only; render_carla_obs_html.py renders all pages into $OUT/obs_html
 

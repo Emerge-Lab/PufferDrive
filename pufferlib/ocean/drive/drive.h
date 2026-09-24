@@ -4148,6 +4148,62 @@ int c_set_traffic_light_states(Drive *env, const int *states) {
     return 0;
 }
 
+// Co-sim: retire the map's stop signs in place (light indices stay valid) and append the external sim's own,
+// lines = count x [x1, y1, z1, x2, y2, z2] in world coordinates, headings = travel direction across each line.
+int c_set_stop_signs(Drive *env, int count, const float *lines, const float *headings) {
+    if (count < 0 || (count > 0 && (lines == NULL || headings == NULL))) {
+        return -1;
+    }
+    for (int v = 0; v < count * 6; v++) {
+        if (!isfinite(lines[v])) {
+            return -1;
+        }
+    }
+    for (int k = 0; k < count; k++) {
+        float line_dx = lines[k * 6 + 3] - lines[k * 6];
+        float line_dy = lines[k * 6 + 4] - lines[k * 6 + 1];
+        if (!isfinite(headings[k]) || line_dx * line_dx + line_dy * line_dy <= 0.0f) {
+            return -1;
+        }
+    }
+    int old_count = env->num_traffic_elements;
+    int new_count = old_count + count;
+    if (new_count > 0) {
+        TrafficControlElement *elements
+            = (TrafficControlElement *) realloc(env->traffic_elements, new_count * sizeof(TrafficControlElement));
+        if (elements == NULL) {
+            return -1;
+        }
+        env->traffic_elements = elements;
+    }
+    for (int i = 0; i < old_count; i++) {
+        if (env->traffic_elements[i].type == TRAFFIC_CONTROL_TYPE_STOP_SIGN) {
+            env->traffic_elements[i].type = TRAFFIC_CONTROL_TYPE_NONE;
+        }
+    }
+    for (int k = 0; k < count; k++) {
+        TrafficControlElement *tc = &env->traffic_elements[old_count + k];
+        memset(tc, 0, sizeof(TrafficControlElement));
+        tc->type = TRAFFIC_CONTROL_TYPE_STOP_SIGN;
+        tc->stop_line[0] = lines[k * 6] - env->world_mean_x;
+        tc->stop_line[1] = lines[k * 6 + 1] - env->world_mean_y;
+        tc->stop_line[2] = lines[k * 6 + 2];
+        tc->stop_line[3] = lines[k * 6 + 3] - env->world_mean_x;
+        tc->stop_line[4] = lines[k * 6 + 4] - env->world_mean_y;
+        tc->stop_line[5] = lines[k * 6 + 5];
+        tc->heading = headings[k];
+        tc->junction_id = -1;
+        tc->phase_idx = -1;
+    }
+    env->num_traffic_elements = new_count;
+    for (int i = 0; i < env->num_total_agents; i++) {
+        env->agents[i].stop_sign_target_idx = -1;
+        env->agents[i].stop_sign_stop_completed = 0;
+        env->agents[i].stop_sign_last_failed_idx = -1;
+    }
+    return 0;
+}
+
 void c_get_agent_goal_progress(Drive *env, int agent_idx, int *current_goal_idx_out, int *goal_count_out) {
     Agent *agent = &env->agents[agent_idx];
     *current_goal_idx_out = agent->current_goal_idx;

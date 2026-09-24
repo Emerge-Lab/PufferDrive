@@ -48,8 +48,8 @@ export PEDESTRIAN_MIN_SIZE_M=0.8
 # Shadow-env obs overrides: partner slots (training 20, GIGAFLOW eval 40; 40 real partners max-pooled is OOD in
 # sidewalk crowds) and the ego perceived-size margin [m per side] (0.2 = native eval; nuPlan's 2.3 x 5.2 m ego
 # reads as 2.7 x 5.6 m). Unset = planner yaml / arch.py defaults (40 / 0.2).
-export OBS_SLOTS_PARTNERS_N=20
-export EVAL_PERCEIVED_SIZE_MARGIN_M=0
+export OBS_SLOTS_PARTNERS_N=40
+export EVAL_PERCEIVED_SIZE_MARGIN_M=0.2
 ABLATION_TAG=""
 [ "$SLIDING_GOAL_WINDOW" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_slide"
 [ "$STARTUP_ACCEL_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"

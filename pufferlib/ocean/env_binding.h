@@ -1223,6 +1223,36 @@ static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_set_stop_signs(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_stop_signs requires 3 arguments (vec_env, lines, headings)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    PyObject *lines_arr = PyTuple_GetItem(args, 1);
+    PyObject *headings_arr = PyTuple_GetItem(args, 2);
+    if (!PyArray_Check(lines_arr) || !PyArray_Check(headings_arr)) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_stop_signs: lines and headings must be NumPy arrays");
+        return NULL;
+    }
+    int count = (int) PyArray_SIZE((PyArrayObject *) headings_arr);
+    if ((int) PyArray_SIZE((PyArrayObject *) lines_arr) != count * 6) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_stop_signs: lines must hold 6 floats per heading");
+        return NULL;
+    }
+    Drive *drive = (Drive *) vec->envs[0];
+    const float *lines = (const float *) PyArray_DATA((PyArrayObject *) lines_arr);
+    const float *headings = (const float *) PyArray_DATA((PyArrayObject *) headings_arr);
+    if (c_set_stop_signs(drive, count, lines, headings) != 0) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_stop_signs: non-finite value or zero-length stop line");
+        return NULL;
+    }
+    return PyLong_FromLong(drive->num_traffic_elements);
+}
+
 static PyObject *vec_get_agent_goal_progress(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 2) {
         PyErr_SetString(PyExc_TypeError, "vec_get_agent_goal_progress requires 2 arguments");
@@ -1573,6 +1603,10 @@ static PyMethodDef methods[]
         vec_set_traffic_light_states,
         METH_VARARGS,
         "Override traffic light states (co-sim)"},
+       {"vec_set_stop_signs",
+        vec_set_stop_signs,
+        METH_VARARGS,
+        "Replace the stop signs with the external sim's own (co-sim)"},
        {"vec_set_agent_goals", vec_set_agent_goals, METH_VARARGS, "Set an agent's goal waypoints (co-sim)"},
        {"vec_get_agent_goal_progress",
         vec_get_agent_goal_progress,

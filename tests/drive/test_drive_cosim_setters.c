@@ -257,12 +257,84 @@ static int test_set_agent_goals_rejects_out_of_range_agent_idx(void) {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// c_set_stop_signs
+// ---------------------------------------------------------------------------
+
+static int test_set_stop_signs_retires_map_signs_and_appends_external_ones(void) {
+    // The map's stop signs become TRAFFIC_CONTROL_TYPE_NONE in place (light indices must survive for
+    // c_set_traffic_light_states), the external lines are appended shifted by world_mean like every other
+    // setter input, and every agent's stop-sign latch resets because element indices changed.
+    int light_states[3] = {1, 1, 1};
+    TrafficControlElement *elements = (TrafficControlElement *) calloc(2, sizeof(TrafficControlElement));
+    elements[0] = make_traffic_element(TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT, 3, light_states);
+    elements[1] = make_traffic_element(TRAFFIC_CONTROL_TYPE_STOP_SIGN, 0, NULL);
+    Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
+    agent.stop_sign_target_idx = 1;
+    agent.stop_sign_stop_completed = 1;
+    agent.stop_sign_last_failed_idx = 1;
+    Drive env = {0};
+    env.traffic_elements = elements;
+    env.num_traffic_elements = 2;
+    env.agents = &agent;
+    env.num_total_agents = 1;
+    env.world_mean_x = 100.0f;
+    env.world_mean_y = -50.0f;
+
+    float lines[12] = {110.0f, -52.0f, 0.5f, 110.0f, -48.0f, 0.5f, 130.0f, -60.0f, 0.0f, 134.0f, -60.0f, 0.0f};
+    float headings[2] = {0.0f, 1.5f};
+    EXPECT_EQ_INT(c_set_stop_signs(&env, 2, lines, headings), 0);
+    EXPECT_EQ_INT(env.num_traffic_elements, 4);
+    EXPECT_EQ_INT(env.traffic_elements[0].type, TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT);
+    EXPECT_EQ_INT(env.traffic_elements[0].states[1], 1);
+    EXPECT_EQ_INT(env.traffic_elements[1].type, TRAFFIC_CONTROL_TYPE_NONE);
+    EXPECT_EQ_INT(env.traffic_elements[2].type, TRAFFIC_CONTROL_TYPE_STOP_SIGN);
+    EXPECT_NEAR(env.traffic_elements[2].stop_line[0], 10.0f, 1e-6f);
+    EXPECT_NEAR(env.traffic_elements[2].stop_line[2], 0.5f, 1e-6f);
+    EXPECT_NEAR(env.traffic_elements[2].stop_line[4], 2.0f, 1e-6f);
+    EXPECT_NEAR(env.traffic_elements[3].heading, 1.5f, 1e-6f);
+    EXPECT_EQ_INT(env.traffic_elements[3].state_size, 0);
+    EXPECT_EQ_INT(env.traffic_elements[3].num_controlled_lanes, 0);
+    EXPECT_EQ_INT(env.traffic_elements[3].junction_id, -1);
+    EXPECT_EQ_INT(agent.stop_sign_target_idx, -1);
+    EXPECT_EQ_INT(agent.stop_sign_stop_completed, 0);
+    EXPECT_EQ_INT(agent.stop_sign_last_failed_idx, -1);
+    free(env.traffic_elements);
+    return 0;
+}
+
+static int test_set_stop_signs_rejects_bad_input_untouched(void) {
+    // A negative count, a non-finite coordinate or a zero-length line fails the whole call (-1) and
+    // leaves the element list as it was; zero external signs still retires the map's.
+    TrafficControlElement *elements = (TrafficControlElement *) calloc(1, sizeof(TrafficControlElement));
+    elements[0] = make_traffic_element(TRAFFIC_CONTROL_TYPE_STOP_SIGN, 0, NULL);
+    Drive env = {0};
+    env.traffic_elements = elements;
+    env.num_traffic_elements = 1;
+
+    float degenerate[6] = {1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f};
+    float nan_line[6] = {0.0f, NAN, 0.0f, 0.0f, 4.0f, 0.0f};
+    float heading[1] = {0.0f};
+    EXPECT_EQ_INT(c_set_stop_signs(&env, -1, degenerate, heading), -1);
+    EXPECT_EQ_INT(c_set_stop_signs(&env, 1, degenerate, heading), -1);
+    EXPECT_EQ_INT(c_set_stop_signs(&env, 1, nan_line, heading), -1);
+    EXPECT_EQ_INT(env.num_traffic_elements, 1);
+    EXPECT_EQ_INT(env.traffic_elements[0].type, TRAFFIC_CONTROL_TYPE_STOP_SIGN);
+    EXPECT_EQ_INT(c_set_stop_signs(&env, 0, NULL, NULL), 0);
+    EXPECT_EQ_INT(env.num_traffic_elements, 1);
+    EXPECT_EQ_INT(env.traffic_elements[0].type, TRAFFIC_CONTROL_TYPE_NONE);
+    free(env.traffic_elements);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_set_agent_sizes_updates_dimensions_radius_and_wheelbase);
     RUN_TEST(test_set_agent_sizes_rejects_out_of_range_index_and_bad_size);
     RUN_TEST(test_set_traffic_light_states_writes_current_timestep_for_lights_only);
     RUN_TEST(test_set_traffic_light_states_rejects_out_of_range_timestep_and_state);
+    RUN_TEST(test_set_stop_signs_retires_map_signs_and_appends_external_ones);
+    RUN_TEST(test_set_stop_signs_rejects_bad_input_untouched);
     RUN_TEST(test_set_agent_states_teleport_resets_prev_pose);
     RUN_TEST(test_set_agent_states_seconds_stopped_injects_or_preserves);
     RUN_TEST(test_set_agent_goals_sets_positions_lane_and_count);

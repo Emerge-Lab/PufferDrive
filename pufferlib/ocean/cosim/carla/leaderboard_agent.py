@@ -42,10 +42,15 @@ Environment variables:
                                feature is held at 0 (the ego's own counter is
                                untouched). Ablates the stopped-time cue behind
                                parked-car / red-light-queue avoidance.
+  COSIM_PEDESTRIAN_MIN_SIZE_M=0.0
+                               walker partner boxes below this on either axis
+                               grow to it (nuPlan's pedestrian_min_size_m; the
+                               training spawn floor is 0.8 m, CARLA walkers
+                               are 0.4-0.5 m)
   COSIM_DEBUG_CARLA_VIEW=/dir  write a CARLA chase-camera mp4 per route (native
                                tick rate, streamed to disk frame-by-frame)
   COSIM_RECORD_INFRACTIONS=/dir  write a short chase-cam clip (last ~5 s) per
-                               ego infraction (collision/offroad/red-light),
+                               ego infraction (collision/offroad/red-light/stop-sign),
                                from either the shadow pufferdrive env's own
                                model (_ego_infractions) or real CARLA ground
                                truth (_carla_infractions)
@@ -98,7 +103,7 @@ ROAD_RAY_LABELS = (carla.CityObjectLabel.Roads, carla.CityObjectLabel.RoadLines,
 MAX_POLICY_STEPS = 100_000  # shadow-env episode cap (~1.4 h at the 0.05 s CARLA tick); sizes the light state buffers
 SCENARIO_LENGTH_MARGIN_STEPS = 2
 # Shadow-env metrics_array indices (datatypes.h): collision/offroad/red-light flags.
-EGO_INFRACTION_METRICS = {"collision": 0, "offroad": 1, "red_light": 2}
+EGO_INFRACTION_METRICS = {"collision": 0, "offroad": 1, "red_light": 2, "stop_sign": 3}
 
 CARLA_VIEW_SENSOR_ID = "puffer_chase_cam"
 CARLA_VIEW_WIDTH, CARLA_VIEW_HEIGHT, CARLA_VIEW_FOV = 960, 540, 90
@@ -211,6 +216,9 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         if zero_stopped_raw not in ("0", "1"):
             raise ValueError(f"COSIM_ZERO_PARTNER_STOPPED_TIME must be '0' or '1', got {zero_stopped_raw!r}")
         self.zero_partner_stopped_time = zero_stopped_raw == "1"
+        self.pedestrian_min_size_m = float(os.environ.get("COSIM_PEDESTRIAN_MIN_SIZE_M", "0.0"))
+        if not (self.pedestrian_min_size_m >= 0.0):
+            raise ValueError(f"COSIM_PEDESTRIAN_MIN_SIZE_M must be >= 0, got {self.pedestrian_min_size_m}")
         # Shadow agent pool == the training per-env cap
         self.num_agents = int(env_cfg["max_agents_per_env"])
 
@@ -252,6 +260,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         # (x, y, yaw_deg, speed) of the shadow ego before and after the current policy step, CARLA frame
         self._motion = None
         self._carla_collision = None  # set by _init_carla_infraction_detectors when needed
+        self._carla_stop_sign = None
+        self._stop_sign_lines = np.zeros((0, 6), np.float32)  # CARLA trigger volumes as bin-frame stop lines
 
     def sensors(self):
         if not self.debug_carla_view_dir and not self.record_infractions_dir:
@@ -385,7 +395,14 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             )
 
         self.lights = list(self.world.get_actors().filter("traffic.traffic_light"))
-        light_map, self.num_traffic = cb.map_lights_to_bin(self.lights, self.transform, self.town_bin)
+        light_map, bin_num_traffic = cb.map_lights_to_bin(self.lights, self.transform, self.town_bin)
+        # the shadow env runs on CARLA's trigger volumes: the bin's exported stop lines sit up to 9 m off and miss a few
+        self._stop_sign_lines, stop_sign_headings = cb.stop_signs_from_carla(self.world, self.cmap, self.transform)
+        self.num_traffic = self.env.set_stop_signs(self._stop_sign_lines, stop_sign_headings)
+        print(
+            f"[puffer_agent] stop signs: {len(stop_sign_headings)} CARLA trigger volumes replace the bin's "
+            f"(traffic elements {bin_num_traffic} -> {self.num_traffic})"
+        )
         # One id -> bin-indices table, reused by both passes in
         # _read_light_states, so they can't disagree on which bin element a
         # given light maps to (a prior independent geometric lookup for the
@@ -395,6 +412,9 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
 
         wheelbase, max_steer = read_vehicle_geometry(self.vehicle)
         self.wheelbase_m = wheelbase
+        body = self.vehicle.bounding_box
+        self.body_front_m = body.location.x + body.extent.x
+        self.body_rear_m = body.location.x - body.extent.x
         self.controller = TrackingController(wheelbase_m=wheelbase, max_steer_rad=max_steer, horizon_s=self.dt)
 
         if self.obs_html_dir:
@@ -418,8 +438,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             self.telemetry_file.write(
                 "step,current_speed,target_speed,ego_action,goal_cursor,goal_dist_m,"
                 "near_light_dist_m,near_light_state,"
-                "pd_infr_collision,pd_infr_offroad,pd_infr_red,"
-                "carla_infr_collision,carla_infr_offroad,carla_infr_red\n"
+                "pd_infr_collision,pd_infr_offroad,pd_infr_red,pd_infr_stop,"
+                "carla_infr_collision,carla_infr_offroad,carla_infr_red,carla_infr_stop\n"
             )
 
         if self.record_infractions_dir:
@@ -437,7 +457,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         print(
             f"[puffer_agent] town={town} tick_dt={self.tick_dt} dt={self.dt} route_goals={len(self.route_goals)} "
             f"max_speed_mps={self.env.max_speed_mps:.1f} (C_vel={self.env.max_speed_mps / self.env.base_max_speed_mps:.2f}) "
-            f"zero_partner_stopped_time={int(self.zero_partner_stopped_time)}"
+            f"zero_partner_stopped_time={int(self.zero_partner_stopped_time)} "
+            f"pedestrian_min_size_m={self.pedestrian_min_size_m:g}"
         )
         self.initialized = True
 
@@ -496,8 +517,9 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         for j, a in enumerate(actors):
             idx.append(1 + j)
             ext = a.bounding_box.extent
-            length.append(max(2.0 * ext.x, 0.1))
-            width.append(max(2.0 * ext.y, 0.1))
+            walker_floor_m = self.pedestrian_min_size_m if "walker" in a.type_id else 0.0
+            length.append(max(2.0 * ext.x, 0.1, walker_floor_m))
+            width.append(max(2.0 * ext.y, 0.1, walker_floor_m))
         return (np.array(idx, np.int32), np.array(length, np.float32), np.array(width, np.float32))
 
     def _read_light_states(self):
@@ -647,7 +669,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         road_up = wp.transform.rotation.get_up_vector() if wp is not None else carla.Vector3D(x=0.0, y=0.0, z=1.0)
         pitch_deg, roll_deg, forward = road_aligned_attitude(road_up, yaw_deg)
         # Waypoint z is quantised in ~0.5 m steps on steep grades (measured 0.32 m low at a Town03
-        # descent); the mesh raycast is exact and the axle chord follows crests the waypoint pitch misses.
+        # descent); the mesh raycast is exact and resting the body on its bumper chord keeps the overhangs out of sags.
         surface = self._road_surface(x, y, z, yaw_deg)
         if surface is not None:
             z, pitch_deg = surface
@@ -668,16 +690,17 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         self.vehicle.set_target_angular_velocity(carla.Vector3D(x=0.0, y=0.0, z=yaw_delta_deg / self.dt))
 
     def _road_surface(self, x, y, reference_z, yaw_deg):
-        """(z, pitch_deg) of the road mesh under the ego: centre height plus the front-to-rear axle chord, None off the mesh."""
+        """(z, pitch_deg) resting the body on the road mesh: bumper-to-bumper chord, lifted until no sample is below the mesh; None off the mesh."""
         yaw_rad = math.radians(yaw_deg)
+        cos_yaw, sin_yaw = math.cos(yaw_rad), math.sin(yaw_rad)
         half_wheelbase = 0.5 * self.wheelbase_m
-        dx, dy = half_wheelbase * math.cos(yaw_rad), half_wheelbase * math.sin(yaw_rad)
-        z_centre = road_mesh_z(self.world, x, y, reference_z)
-        z_front = road_mesh_z(self.world, x + dx, y + dy, reference_z)
-        z_rear = road_mesh_z(self.world, x - dx, y - dy, reference_z)
-        if z_centre is None or z_front is None or z_rear is None:
+        sample_offsets_m = (self.body_rear_m, -half_wheelbase, 0.0, half_wheelbase, self.body_front_m)
+        sample_z = [road_mesh_z(self.world, x + s * cos_yaw, y + s * sin_yaw, reference_z) for s in sample_offsets_m]
+        if any(z is None for z in sample_z):
             return None
-        return z_centre, math.degrees(math.atan2(z_front - z_rear, self.wheelbase_m))
+        slope = (sample_z[-1] - sample_z[0]) / (self.body_front_m - self.body_rear_m)
+        z = max(z_i - slope * s_i for z_i, s_i in zip(sample_z, sample_offsets_m))
+        return z, math.degrees(math.atan(slope))
 
     def _ego_speed(self):
         return float(np.asarray(self.env.observations)[0][0]) * self._max_speed()
@@ -691,7 +714,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         return binding.ACCEL_LONG_NORM
 
     def _ego_infractions(self):
-        """{'collision': f, 'offroad': f, 'red_light': f} from the shadow
+        """{'collision': f, 'offroad': f, 'red_light': f, 'stop_sign': f} from the shadow
         pufferdrive env's own model of the ego (compute_metrics, refreshed by
         the last integrate()) -- what the policy would have caused according
         to PufferDrive's own dynamics, not necessarily what the real CARLA
@@ -707,7 +730,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         }
 
     def _init_carla_infraction_detectors(self):
-        """Real CARLA ground truth for collision/offroad/red-light, reusing
+        """Real CARLA ground truth for collision/offroad/red-light/stop-sign, reusing
         CaRL's own standalone criteria (CARL_WORK_DIR/team_code/reward).
         RunRedLight uses _get_traffic_light_waypoints and do
         RunRedLight's rear-bumper-crossing check in _poll_carla_red_light."""
@@ -721,11 +744,14 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             sys.path.insert(0, team_code_dir)
         from reward.criteria.collision import Collision
         from reward.criteria.outside_route_lanes import OutsideRouteLanesTest
+        from reward.criteria.run_stop_sign2 import RunStopSign2
         from birds_eye_view.traffic_light import _get_traffic_light_waypoints
 
         self._carla_collision = Collision(self.vehicle, self.world)
         self._carla_collision_pending = False
         self._carla_offroad_test = OutsideRouteLanesTest(self.vehicle, self.cmap)
+        self._carla_stop_sign = RunStopSign2(self.world, self.cmap)  # the training-side definition, on CARLA's actors
+        self._ran_stop_sign_pending = False
 
         self._red_light_geometry = {}
         for lt in self.lights:
@@ -770,15 +796,28 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                     self._ran_red_light_pending = True
                     return
 
+    def _poll_carla_stop_sign(self):
+        """Real CARLA ground truth for 'ran a stop sign' (RunStopSign2: the centre crossed the trigger
+        volume's line without a standstill inside the volume first)."""
+        info = self._carla_stop_sign.tick(self.vehicle)
+        if info is not None and info["event"] == "run":
+            self._ran_stop_sign_pending = True
+
     def _carla_infractions(self):
-        """{'collision': f, 'offroad': f, 'red_light': f} from real CARLA
+        """{'collision': f, 'offroad': f, 'red_light': f, 'stop_sign': f} from real CARLA
         ground truth (_init_carla_infraction_detectors) -- contrast with
         _ego_infractions, which is the shadow env's model of the ego."""
         collision, self._carla_collision_pending = self._carla_collision_pending, False
         red_light, self._ran_red_light_pending = self._ran_red_light_pending, False
+        stop_sign, self._ran_stop_sign_pending = self._ran_stop_sign_pending, False
         self._carla_offroad_test.update()
         offroad = self._carla_offroad_test.outside_lane_active or self._carla_offroad_test.wrong_lane_active
-        return {"collision": float(collision), "offroad": float(offroad), "red_light": float(red_light)}
+        return {
+            "collision": float(collision),
+            "offroad": float(offroad),
+            "red_light": float(red_light),
+            "stop_sign": float(stop_sign),
+        }
 
     # --- policy + capture ---------------------------------------------------
 
@@ -870,6 +909,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             partners=np.concatenate(partners) if partners else np.zeros((0, 8), np.float32),
             lights=np.stack(self._world_log["lights"]) if self._world_log["lights"] else np.zeros((0, 0), np.int8),
             route_goals=self.route_goals,
+            stop_signs=self._stop_sign_lines,
             dense_route=dense,
             meta=json.dumps(
                 {
@@ -904,12 +944,14 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             f"{self.step},{current_speed:.3f},{self.target[0]:.3f},"
             f"{ego_action},{self.goal_window.current_index},{goal_dist:.1f},{near_dist:.1f},{near_state},"
             f"{pd_flags['collision']:.0f},{pd_flags['offroad']:.0f},{pd_flags['red_light']:.0f},"
-            f"{carla_flags['collision']:.0f},{carla_flags['offroad']:.0f},{carla_flags['red_light']:.0f}\n"
+            f"{pd_flags['stop_sign']:.0f},"
+            f"{carla_flags['collision']:.0f},{carla_flags['offroad']:.0f},{carla_flags['red_light']:.0f},"
+            f"{carla_flags['stop_sign']:.0f}\n"
         )
 
     def _maybe_save_infraction_clip(self, pd_flags, carla_flags):
         """Dump the rolling chase-cam buffer as one mp4 when either infraction
-        source flags an ego infraction (collision/offroad/red-light), at most
+        source flags an ego infraction (collision/offroad/red-light/stop-sign), at most
         once per INFRACTION_MIN_SEPARATION_M of ego travel (CaRL eval_agent-
         style)."""
         fired = [f"pd_{name}" for name, value in pd_flags.items() if value > 0.0]
@@ -946,6 +988,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         if self._carla_collision is not None:
             self._poll_carla_collision()
             self._poll_carla_red_light()  # filters single-tick get_traffic_light() noise
+            self._poll_carla_stop_sign()
 
         obs = self._sync_carla()  # shadow env <- CARLA ground truth
         actions, aux = self._policy_actions(obs)

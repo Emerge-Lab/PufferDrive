@@ -410,3 +410,32 @@ def map_lights_to_bin(lights, transform, town_bin):
         mapping[light_idx].remove(element_idx)
 
     return mapping, len(data["traffic"])
+
+
+def stop_signs_from_carla(world, carla_map, transform):
+    """(lines (K, 6), headings (K,)) in the bin frame, one per CARLA `traffic.stop` actor: the trigger
+    volume's centre projected onto its driving lane, spanning the trigger's width across that lane, with
+    the lane's travel direction as heading. Feed to Drive.set_stop_signs so the shadow env runs on the
+    volumes the leaderboard scores against instead of the bin's exported stop lines (which sit up to
+    9 m away on a few Town03/05 approaches and miss four signs)."""
+    import carla
+
+    lines, headings = [], []
+    for actor in world.get_actors().filter("traffic.stop"):
+        actor_transform = actor.get_transform()
+        trigger = actor.trigger_volume
+        center = actor_transform.transform(trigger.location)
+        waypoint = carla_map.get_waypoint(center, project_to_road=True, lane_type=carla.LaneType.Driving)
+        if waypoint is None:
+            continue
+        forward = waypoint.transform.get_forward_vector()
+        lane_yaw = math.atan2(forward.y, forward.x)
+        box_yaw = math.radians(actor_transform.rotation.yaw)
+        box_x_along_lane = abs(math.cos(box_yaw - lane_yaw)) >= math.cos(math.pi / 4.0)
+        half_width = trigger.extent.y if box_x_along_lane else trigger.extent.x
+        across_x, across_y = -math.sin(lane_yaw), math.cos(lane_yaw)
+        left = transform.loc_to_bin(center.x - half_width * across_x, center.y - half_width * across_y)
+        right = transform.loc_to_bin(center.x + half_width * across_x, center.y + half_width * across_y)
+        lines.append([left[0], left[1], center.z, right[0], right[1], center.z])
+        headings.append(transform.yaw_to_bin(math.degrees(lane_yaw)))
+    return np.array(lines, np.float32).reshape(-1, 6), np.array(headings, np.float32)

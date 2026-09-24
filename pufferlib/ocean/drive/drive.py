@@ -986,6 +986,16 @@ class Drive(pufferlib.PufferEnv):
         timestep (states length == num_traffic_elements)."""
         binding.vec_set_traffic_light_states(self.c_envs, np.ascontiguousarray(states, dtype=np.int32))
 
+    def set_stop_signs(self, lines, headings):
+        """replace every stop-sign element with the external sim's own (co-sim):
+        lines (K, 6) world-frame endpoints [x1, y1, z1, x2, y2, z2], headings (K,)
+        travel direction across each line. The map's stop signs are retired in
+        place, so light element indices stay valid; returns the new element
+        count (the length set_traffic_light_states expects from now on)."""
+        lines = np.ascontiguousarray(np.asarray(lines, dtype=np.float32).reshape(-1, 6))
+        headings = np.ascontiguousarray(np.asarray(headings, dtype=np.float32).reshape(-1))
+        return int(binding.vec_set_stop_signs(self.c_envs, lines, headings))
+
     def set_agent_goals(self, agent_idx, gx, gy, gz, gdir_x=None, gdir_y=None):
         """set an agent's goal waypoints (e.g. the ego's route) in world
         coords (C subtracts world_mean). Each waypoint is snapped to its
