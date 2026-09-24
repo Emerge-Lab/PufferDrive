@@ -129,6 +129,7 @@ struct Agent {
 
     int stopped; // 0/1 -> freeze if set
     int removed; // 0/1 -> remove from sim if set
+    int first_collision_partner_idx; // agent index of the first collision partner this episode, -1 if none
 
     // Jerk dynamics
     float accel_long;

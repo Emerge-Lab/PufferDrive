@@ -541,6 +541,7 @@ static void reset_agent_state(Agent *agent) {
     agent->displacement_sample_count = 0;
     agent->stopped = 0;
     agent->removed = 0;
+    agent->first_collision_partner_idx = -1;
     agent->current_lane_idx = -1;
     agent->previous_lane_idx = -1;
     agent->current_route_idx = 0;
@@ -2236,6 +2237,26 @@ static float calculate_puffer_score(Log *agent_log, float duration_steps, float 
     return agent_log->puffer_score;
 }
 
+// True when the first collisions of logged policy agent i and its partner are with each other.
+static bool is_shared_policy_collision(Drive *env, int log_idx) {
+    int agent_idx = env->active_agent_indices[log_idx];
+    int partner_idx = env->agents[agent_idx].first_collision_partner_idx;
+    if (partner_idx == -1 || env->agents[partner_idx].first_collision_partner_idx != agent_idx) {
+        return false;
+    }
+    for (int j = 0; j < env->active_agent_count; j++) {
+        if (env->active_agent_indices[j] != partner_idx) {
+            continue;
+        }
+        Agent *partner = &env->agents[partner_idx];
+        if (partner->is_blind_partner || partner->is_phantom_braker) {
+            return false;
+        }
+        return env->logs[j].collision_rate > 0.0f;
+    }
+    return false;
+}
+
 static void add_log(Drive *env) {
     int safe_timestep = (env->timestep > 0) ? env->timestep : 1;
     Log episode_log = {0};
@@ -2255,7 +2276,11 @@ static void add_log(Drive *env) {
         episode_log.collision_rate += collided;
         int red_light_violations = env->logs[i].red_light_violation_rate;
         episode_log.red_light_violation_rate += red_light_violations;
-        int total_infractions = (offroad || collided || red_light_violations) ? 1 : 0;
+        float collision_share = collided ? 1.0f : 0.0f;
+        if (collided && is_shared_policy_collision(env, i)) {
+            collision_share = 0.5f;
+        }
+        float infraction_count = offroad + red_light_violations + collision_share;
         float avg_speed_per_agent = env->logs[i].avg_speed_per_agent;
         episode_log.avg_speed_per_agent += avg_speed_per_agent / safe_timestep;
         int num_goals_reached = env->logs[i].num_goals_reached;
@@ -2268,9 +2293,7 @@ static void add_log(Drive *env) {
             episode_log.dnf_rate += 1.0f;
         }
         episode_log.total_distance_travelled += agent->distance_since_spawn;
-        if (total_infractions > 0) {
-            episode_log.total_infractions += 1.0f;
-        }
+        episode_log.total_infractions += infraction_count;
         float displacement_error = env->logs[i].avg_displacement_error;
         episode_log.avg_displacement_error += displacement_error;
         episode_log.episode_length += env->logs[i].episode_length;
@@ -4199,6 +4222,9 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     int car_collided_with_index = collision_check(env, agent_idx);
     if (car_collided_with_index != -1) {
         agent->metrics_array[COLLISION_IDX] = 1.0f;
+        if (agent->first_collision_partner_idx == -1) {
+            agent->first_collision_partner_idx = car_collided_with_index;
+        }
         if (env->compute_eval_metrics && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
             agent_log->at_fault_collision_rate = 1.0f;
             agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;

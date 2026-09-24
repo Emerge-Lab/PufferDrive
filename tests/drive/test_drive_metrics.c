@@ -131,6 +131,67 @@ static int test_metric_final_goal_requires_speed(void) {
     return 0;
 }
 
+static void overlap_agent_with(Drive *env, int agent_idx, int target_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    Agent *target = &env->agents[target_idx];
+    agent->sim_x = target->sim_x;
+    agent->sim_y = target->sim_y;
+    agent->sim_z = target->sim_z;
+    agent->sim_heading = target->sim_heading;
+    agent->cos_heading = target->cos_heading;
+    agent->sin_heading = target->sin_heading;
+    copy_pose_to_prev(agent);
+}
+
+static int test_metric_mutual_collision_counts_one_infraction(void) {
+    srand(13);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 2, 0);
+    EXPECT_EQ_INT(env.active_agent_count, 2);
+    int first_idx = env.active_agent_indices[0];
+    int second_idx = env.active_agent_indices[1];
+    overlap_agent_with(&env, second_idx, first_idx);
+
+    for (int slot = 0; slot < env.active_agent_count; slot++) {
+        compute_metrics(&env, env.active_agent_indices[slot], slot);
+        compute_rewards(&env, slot);
+    }
+    EXPECT_EQ_INT(env.agents[first_idx].first_collision_partner_idx, second_idx);
+    EXPECT_EQ_INT(env.agents[second_idx].first_collision_partner_idx, first_idx);
+
+    add_log(&env);
+    EXPECT_NEAR(env.log.collision_rate, 2.0f, 1e-6f);
+    EXPECT_NEAR(env.log.total_infractions, 1.0f, 1e-6f);
+
+    free_allocated(&env);
+    return 0;
+}
+
+static int test_metric_non_mutual_collision_counts_per_agent(void) {
+    srand(13);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 3, 0);
+    EXPECT_EQ_INT(env.active_agent_count, 3);
+    int first_idx = env.active_agent_indices[0];
+    int second_idx = env.active_agent_indices[1];
+    int third_idx = env.active_agent_indices[2];
+    overlap_agent_with(&env, second_idx, first_idx);
+    // Second agent already collided with the third earlier this episode.
+    env.agents[second_idx].first_collision_partner_idx = third_idx;
+
+    for (int slot = 0; slot < env.active_agent_count; slot++) {
+        compute_metrics(&env, env.active_agent_indices[slot], slot);
+        compute_rewards(&env, slot);
+    }
+    EXPECT_EQ_INT(env.agents[first_idx].first_collision_partner_idx, second_idx);
+    EXPECT_EQ_INT(env.agents[second_idx].first_collision_partner_idx, third_idx);
+
+    add_log(&env);
+    EXPECT_NEAR(env.log.collision_rate, 2.0f, 1e-6f);
+    EXPECT_NEAR(env.log.total_infractions, 2.0f, 1e-6f);
+
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_metric_offroad_outside_grid);
@@ -138,5 +199,7 @@ int main(void) {
     RUN_TEST(test_metric_invalid_position_resets);
     RUN_TEST(test_metric_on_road_lane_alignment);
     RUN_TEST(test_metric_final_goal_requires_speed);
+    RUN_TEST(test_metric_mutual_collision_counts_one_infraction);
+    RUN_TEST(test_metric_non_mutual_collision_counts_per_agent);
     return test_summary(failures);
 }
