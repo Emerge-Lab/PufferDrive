@@ -1667,6 +1667,14 @@ static bool check_segment_crosses_moving_box(float ax, float ay, float bx, float
         return true;
     }
 
+    // Centre moved less than the inscribed radius: a segment over its path already hit the cur test above.
+    float center_step_x = agent->sim_x - agent->prev_x;
+    float center_step_y = agent->sim_y - agent->prev_y;
+    float inscribed_radius = fminf(half_length, half_width);
+    if (center_step_x * center_step_x + center_step_y * center_step_y < inscribed_radius * inscribed_radius) {
+        return false;
+    }
+
     // All edges can miss while the swept region still covers the box center: consistent cross-product
     // sign means the origin is inside the quad. The quad chords the prev/cur segments, but the true
     // endpoint paths are arcs, so at large per-step yaw the chords under-cover and a swept center reads

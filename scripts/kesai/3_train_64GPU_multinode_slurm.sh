@@ -111,20 +111,10 @@ echo "Training done, evaluating ${MODEL_PATH}"
     load_model_path=${MODEL_PATH} \
     wandb=True
 
-python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
-    eval.map_dir=/home/shared/data/nuplan/PufferDrive \
-    vec.num_envs=64 \
-    eval.num_agents=300 \
-    eval.reward_comfort=0.0 \
-    eval.reward_lane_center=0.0075 \
-    env.eval_perceived_size_margin_m=0.0 \
-    eval.disable_red_light_infractions=1 \
-    eval.render_filter=all_infractions \
-    eval.capture_observations=true \
-    eval.output_name=${RUN_NAME} \
-    load_model_path=${MODEL_PATH} \
-    wandb=True
-
+# nuPlan eval needs one node: submit it as its own job so this 8-node allocation ends now.
+echo "CARLA eval done, submitting nuPlan eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh \
+    || echo "nuPlan eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh"
 
 end=$(date +%s)
 runtime=$((end-start))

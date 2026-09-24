@@ -171,6 +171,17 @@ static int test_swept_line_box_cases(void) {
     return 0;
 }
 
+static int test_swept_line_box_stationary_collinear_segment(void) {
+    // Far segment whose extension line passes through the box centre within float rounding (Town01 eval case).
+    Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
+    EXPECT_FALSE(check_segment_crosses_moving_box(5.7308259f, 9.52599049f, 5.27106953f, 8.76176643f, &agent));
+
+    agent.prev_x = -0.001f;
+    EXPECT_FALSE(check_segment_crosses_moving_box(5.7308259f, 9.52599049f, 5.27106953f, 8.76176643f, &agent));
+
+    return 0;
+}
+
 static int test_stop_line_red_light_gating(void) {
     Drive env = {0};
     TrafficControlElement tc = {0};
@@ -268,6 +279,7 @@ int main(void) {
     RUN_TEST(test_collision_check_filters);
     RUN_TEST(test_segment_aabb_cases);
     RUN_TEST(test_swept_line_box_cases);
+    RUN_TEST(test_swept_line_box_stationary_collinear_segment);
     RUN_TEST(test_stop_line_red_light_gating);
     RUN_TEST(test_stop_line_stationary_on_red);
     return test_summary(failures);
