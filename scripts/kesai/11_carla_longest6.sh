@@ -52,6 +52,9 @@ EVALUATOR=$CARL_WORK_DIR/original_leaderboard/leaderboard/leaderboard/leaderboar
 for path in "$CKPT" "$PY" "$CARLA_ROOT/CarlaUE4.sh" "$EVALUATOR" "$ROUTES" "$CARL_WORK_DIR/tools/result_parser.py"; do
     [ -e "$path" ] || { echo "missing $path"; exit 1; }
 done
+for path in "$PY" "$CARLA_ROOT/CarlaUE4.sh"; do
+    [ -x "$path" ] || { echo "not executable: $path (chmod +x, or the filesystem is mounted noexec)"; exit 1; }
+done
 echo "Evaluating checkpoint: $CKPT"
 
 # GPUs of this allocation; one CARLA server + one evaluator per GPU
@@ -107,17 +110,18 @@ sys.exit(0 if records and all(r["status"] not in crashed for r in records) else 
 EOF
 }
 
-run_route() {  # $1 gpu, $2 route id: one CARLA server + one evaluator run, into $OUT/routes/route_<id>
-    local gpu=$1 route_id=$2
+run_route() {  # $1 gpu, $2 route id, $3 attempt: one CARLA server + one evaluator run, into $OUT/routes/route_<id>
+    local gpu=$1 route_id=$2 attempt=$3
     local route_dir=$OUT/routes/route_$(printf "%02d" "$route_id")
     local port=$((PORT_BASE + gpu * 50)) tm_port=$((PORT_BASE + 6000 + gpu * 50))
+    local server_log=$route_dir/carla_server_attempt$attempt.log evaluator_log=$route_dir/evaluator_attempt$attempt.log
     mkdir -p "$route_dir"
     rm -f "$route_dir/result.json"
     # no camera sensor without logging, so the server can skip rendering entirely
     local render_args=(-RenderOffScreen -graphicsadapter="$gpu")
     [ "$LOGGING" = "1" ] || render_args=(-nullrhi)
     "$CARLA_ROOT/CarlaUE4.sh" "${render_args[@]}" -nosound \
-        -carla-rpc-port="$port" -carla-streaming-port=$((port + 1)) > "$route_dir/carla_server.log" 2>&1 &
+        -carla-rpc-port="$port" -carla-streaming-port=$((port + 1)) > "$server_log" 2>&1 &
     local server_pid=$! up=1
     echo "$server_pid" >> "$OUT/server_pids"
     for _ in $(seq 1 60); do
@@ -132,6 +136,7 @@ except Exception:
     done
     if [ $up -ne 0 ]; then
         pkill -9 -P "$server_pid" 2>/dev/null; kill -9 "$server_pid" 2>/dev/null
+        echo "[gpu$gpu route$route_id] last lines of $server_log:"; tail -n 20 "$server_log"
         return 1
     fi
     local log_env=()
@@ -143,10 +148,12 @@ except Exception:
         "$PY" -u "$EVALUATOR" --routes "$ROUTES" --routes-subset "$route_id" --repetitions "$REPETITIONS" \
         --agent "$PD/pufferlib/ocean/cosim/carla/leaderboard_agent.py" --agent-config "$CKPT" \
         --checkpoint "$route_dir/result.json" --track MAP --port "$port" --traffic-manager-port "$tm_port" \
-        > "$route_dir/evaluator.log" 2>&1
+        > "$evaluator_log" 2>&1
     # children first: killing the wrapper shell first reparents the UE4 binary and leaves it running
     pkill -9 -P "$server_pid" 2>/dev/null; kill -9 "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null
-    route_done "$route_dir/result.json"
+    route_done "$route_dir/result.json" && return 0
+    echo "[gpu$gpu route$route_id] no valid route record; last lines of $evaluator_log:"; tail -n 20 "$evaluator_log"
+    return 1
 }
 
 run_worker() {  # $1 gpu: its share of the routes, sequentially, each retried up to MAX_ATTEMPTS
@@ -155,8 +162,8 @@ run_worker() {  # $1 gpu: its share of the routes, sequentially, each retried up
         local route_id=${ROUTE_IDS[k]} attempt
         for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
             echo "[gpu$gpu] route $route_id attempt $attempt $(date +%H:%M:%S)"
-            run_route "$gpu" "$route_id" && break
-            echo "[gpu$gpu] route $route_id attempt $attempt failed (see $OUT/routes/route_$(printf "%02d" "$route_id")/evaluator.log)"
+            run_route "$gpu" "$route_id" "$attempt" && break
+            echo "[gpu$gpu] route $route_id attempt $attempt failed"
         done
     done
 }
