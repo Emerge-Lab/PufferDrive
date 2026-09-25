@@ -189,6 +189,9 @@ pufferlib/resources/drive/binaries/carla/.DS_Store
 
 # Compiled drive binary in root
 /drive
+regents_2/
+regent_fig/
+regents_womd/
 /visualize
 # But allow drive directories
 !*/drive/
