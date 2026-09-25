@@ -131,7 +131,7 @@
 #define SPLINE_CONSISTENCY_MAX_SAMPLES 64
 
 // Depth of the per-agent spline history ring, bounding spline_consistency_lag_count.
-#define SPLINE_CONSISTENCY_MAX_LAG 4
+#define SPLINE_CONSISTENCY_MAX_LAG 25
 
 // =====================================================================================
 // 3. DYNAMICS

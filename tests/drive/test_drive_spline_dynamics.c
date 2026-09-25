@@ -276,12 +276,13 @@ static int test_consistency_reward_guard_and_rotation(void) {
     compute_rewards(&env, 0);
     EXPECT_TRUE(reward[0] < -10.0f);
 
-    // Six more pushes (nine total) saturate the ring and wrap head rather than running off it.
-    for (int step = 0; step < 6; step++) {
+    // Enough further pushes to overfill the ring saturate its count and wrap head rather than running off it.
+    int total_pushes = SPLINE_CONSISTENCY_MAX_LAG + 5;
+    for (int step = 3; step < total_pushes; step++) {
         compute_rewards(&env, 0);
     }
     EXPECT_EQ_INT(agent.spline_history_count, SPLINE_CONSISTENCY_MAX_LAG);
-    EXPECT_EQ_INT(agent.spline_history_head, 9 % SPLINE_CONSISTENCY_MAX_LAG);
+    EXPECT_EQ_INT(agent.spline_history_head, total_pushes % SPLINE_CONSISTENCY_MAX_LAG);
 
     // A non-policy controller never gets a fresh curve, so the term must leave its ring alone.
     agent.controller = CONTROLLER_IDM;

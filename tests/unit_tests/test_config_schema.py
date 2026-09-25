@@ -422,7 +422,7 @@ class TestConfigSchema(unittest.TestCase):
         args = load_config("puffer_drive")
         args["trajectory_training"] = True
         args["env"]["dt"] = 0.3
-        args["env"]["spline_horizon_seconds"] = 3.0  # max_lag 10, so the horizon allows up to 9
+        args["env"]["spline_horizon_seconds"] = 9.0  # max_lag 30, so the horizon allows up to 29
         args["env"]["spline_consistency_lag_count"] = binding.SPLINE_CONSISTENCY_MAX_LAG + 1
 
         with self.assertRaisesRegex(pufferlib.APIUsageError, "spline_consistency_lag_count"):
