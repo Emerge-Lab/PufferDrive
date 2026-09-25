@@ -1524,11 +1524,6 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     // Vehicle center crosses on red; the laterally extended line cannot be driven
     // around, and the heading gate exempts exiting/opposing traffic.
-    float center_x = agent->sim_x;
-    float center_y = agent->sim_y;
-    float prev_center_x = agent->prev_x;
-    float prev_center_y = agent->prev_y;
-
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
         if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
@@ -1568,14 +1563,14 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
             normal_x = -normal_x;
             normal_y = -normal_y;
         }
-        float s_prev = (prev_center_x - mid_x) * normal_x + (prev_center_y - mid_y) * normal_y;
-        float s_cur = (center_x - mid_x) * normal_x + (center_y - mid_y) * normal_y;
+        float s_prev = (agent->prev_x - mid_x) * normal_x + (agent->prev_y - mid_y) * normal_y;
+        float s_cur = (agent->sim_x - mid_x) * normal_x + (agent->sim_y - mid_y) * normal_y;
         if (!(s_prev < 0.0f && s_cur >= 0.0f)) {
             continue;
         }
         float crossing_frac = s_prev / (s_prev - s_cur);
-        float cross_x = prev_center_x + crossing_frac * (center_x - prev_center_x);
-        float cross_y = prev_center_y + crossing_frac * (center_y - prev_center_y);
+        float cross_x = agent->prev_x + crossing_frac * (agent->sim_x - agent->prev_x);
+        float cross_y = agent->prev_y + crossing_frac * (agent->sim_y - agent->prev_y);
         float lateral = (cross_x - mid_x) * line_ux + (cross_y - mid_y) * line_uy;
         if (fabsf(lateral) <= 0.5f * line_len + RED_LIGHT_LATERAL_EXTENSION_M) {
             return true;
