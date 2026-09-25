@@ -29,21 +29,21 @@ extern "C" {
 /* Visibility symbols, required for Windows DLLs */
 #ifndef INI_API
 #if defined _WIN32 || defined __CYGWIN__
-#	ifdef INI_SHARED_LIB
-#		ifdef INI_SHARED_LIB_BUILDING
-#			define INI_API __declspec(dllexport)
-#		else
-#			define INI_API __declspec(dllimport)
-#		endif
-#	else
-#		define INI_API
-#	endif
+#ifdef INI_SHARED_LIB
+#ifdef INI_SHARED_LIB_BUILDING
+#define INI_API __declspec(dllexport)
 #else
-#	if defined(__GNUC__) && __GNUC__ >= 4
-#		define INI_API __attribute__ ((visibility ("default")))
-#	else
-#		define INI_API
-#	endif
+#define INI_API __declspec(dllimport)
+#endif
+#else
+#define INI_API
+#endif
+#else
+#if defined(__GNUC__) && __GNUC__ >= 4
+#define INI_API __attribute__((visibility("default")))
+#else
+#define INI_API
+#endif
 #endif
 #endif
 
@@ -55,16 +55,13 @@ extern "C" {
    those must not be modified.
 */
 #if INI_HANDLER_LINENO
-typedef int (*ini_handler)(void* user, const char* section,
-                           const char* name, const char* value,
-                           int lineno);
+typedef int (*ini_handler)(void *user, const char *section, const char *name, const char *value, int lineno);
 #else
-typedef int (*ini_handler)(void* user, const char* section,
-                           const char* name, const char* value);
+typedef int (*ini_handler)(void *user, const char *section, const char *name, const char *value);
 #endif
 
 /* Typedef for prototype of fgets-style reader function. */
-typedef char* (*ini_reader)(char* str, int num, void* stream);
+typedef char *(*ini_reader)(char *str, int num, void *stream);
 
 /* Parse given INI-style file. May have [section]s, name=value pairs
    (whitespace stripped), and comments starting with ';' (semicolon). Section
@@ -79,27 +76,26 @@ typedef char* (*ini_reader)(char* str, int num, void* stream);
    stop on first error), -1 on file open error, or -2 on memory allocation
    error (only when INI_USE_STACK is zero).
 */
-INI_API int ini_parse(const char* filename, ini_handler handler, void* user);
+INI_API int ini_parse(const char *filename, ini_handler handler, void *user);
 
 /* Same as ini_parse(), but takes a FILE* instead of filename. This doesn't
    close the file when it's finished -- the caller must do that. */
-INI_API int ini_parse_file(FILE* file, ini_handler handler, void* user);
+INI_API int ini_parse_file(FILE *file, ini_handler handler, void *user);
 
 /* Same as ini_parse(), but takes an ini_reader function pointer instead of
    filename. Used for implementing custom or string-based I/O (see also
    ini_parse_string). */
-INI_API int ini_parse_stream(ini_reader reader, void* stream, ini_handler handler,
-                     void* user);
+INI_API int ini_parse_stream(ini_reader reader, void *stream, ini_handler handler, void *user);
 
 /* Same as ini_parse(), but takes a zero-terminated string with the INI data
    instead of a file. Useful for parsing INI data from a network socket or
    which is already in memory. */
-INI_API int ini_parse_string(const char* string, ini_handler handler, void* user);
+INI_API int ini_parse_string(const char *string, ini_handler handler, void *user);
 
 /* Same as ini_parse_string(), but takes a string and its length, avoiding
    strlen(). Useful for parsing INI data from a network socket or which is
    already in memory, or interfacing with C++ std::string_view. */
-INI_API int ini_parse_string_length(const char* string, size_t length, ini_handler handler, void* user);
+INI_API int ini_parse_string_length(const char *string, size_t length, ini_handler handler, void *user);
 
 /* Nonzero to allow multi-line value parsing, in the style of Python's
    configparser. If allowed, ini_parse() will call the handler with the same
@@ -180,7 +176,6 @@ INI_API int ini_parse_string_length(const char* string, size_t length, ini_handl
 #ifndef INI_CUSTOM_ALLOCATOR
 #define INI_CUSTOM_ALLOCATOR 0
 #endif
-
 
 #ifdef __cplusplus
 }
