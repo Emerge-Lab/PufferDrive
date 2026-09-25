@@ -1537,7 +1537,7 @@ self.onmessage = async event => {
             if(showAll){ obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=3*px; for(const r of frame.bounds){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } }
             if(showPool){ for(const r of frame.lanes.concat(frame.bounds)){ if(r[5] > 0){ obsCtx.strokeStyle=poolColor(r[5]/poolMax); obsCtx.lineWidth=pw(r[5]/poolMax); obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } } }
             for(const g of frame.gps){ obsCtx.fillStyle="magenta"; obsCtx.beginPath(); obsCtx.arc(g[0],g[1],5*px,0,7); obsCtx.fill(); }
-            for(const t of frame.traffic_controls){ if(showAll){ obsCtx.strokeStyle = bothMode ? "#000" : (t.type === 1 ? trafficColor({state:t.state}) : (t.type === 2 ? "#cc0000" : "#ffd700")); obsCtx.lineWidth=2.5*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } if(showPool && t.pool > 0){ obsCtx.strokeStyle=poolColor(t.pool/poolMax); obsCtx.lineWidth=pw(t.pool/poolMax)+0.8*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } }
+            for(const t of frame.traffic_controls){ if(showAll){ obsCtx.strokeStyle = bothMode ? "#000" : (t.type === 1 || t.type === 2 ? trafficColor({state:t.state}) : "#ffd700"); obsCtx.lineWidth=2.5*px; obsCtx.setLineDash(t.type === 2 ? [6*px, 4*px] : []); obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); obsCtx.setLineDash([]); } if(showPool && t.pool > 0){ obsCtx.strokeStyle=poolColor(t.pool/poolMax); obsCtx.lineWidth=pw(t.pool/poolMax)+0.8*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } }
             for(const p of frame.partners){ const win = showPool && p.pool > 0; if(!showAll && !win) continue; obsCtx.save(); obsCtx.translate(p.x,p.y); obsCtx.rotate(p.h); if(showAll){ obsCtx.fillStyle=bothMode?"rgba(0,0,0,.55)":"rgba(136,136,136,.8)"; obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-p.l/2,-p.w/2,p.l,p.w); obsCtx.fill(); obsCtx.stroke(); } if(win){ obsCtx.strokeStyle=poolColor(p.pool/poolMax); obsCtx.lineWidth=pw(p.pool/poolMax); obsCtx.strokeRect(-p.l/2,-p.w/2,p.l,p.w); } obsCtx.restore(); }
             if(frame.ego){ obsCtx.save(); obsCtx.rotate(Math.PI/2); obsCtx.fillStyle="rgba(0,102,255,.8)"; obsCtx.strokeStyle="#000"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-frame.ego.l/2,-frame.ego.w/2,frame.ego.l,frame.ego.w); obsCtx.fill(); obsCtx.stroke(); if(trueSize){ obsCtx.strokeStyle="#ffd700"; obsCtx.setLineDash([3*px,2*px]); obsCtx.strokeRect(-trueSize.l/2,-trueSize.w/2,trueSize.l,trueSize.w); obsCtx.setLineDash([]); } obsCtx.restore(); }
             obsCtx.restore();
@@ -1789,6 +1789,7 @@ def build_gallery_index(folder_path=".", file_metrics=None, links=None):
         ("collision", "collision_rate", "Collisions"),
         ("atfault", "at_fault_collision_rate", "At-fault collisions"),
         ("redlight", "red_light_violation_rate", "Red-light violations"),
+        ("stopsign", "stop_sign_violation_rate", "Stop-sign violations"),
     )
     available_failure_filters = [
         failure_filter for failure_filter in FAILURE_FILTERS if failure_filter[1] in present_metrics
@@ -1865,6 +1866,7 @@ def build_gallery_index(folder_path=".", file_metrics=None, links=None):
             --collision: #b42318;
             --atfault: #7e22ce;
             --redlight: #d92d20;
+            --stopsign: #0e7490;
         }
 
         * { box-sizing: border-box; }
@@ -1973,6 +1975,7 @@ def build_gallery_index(folder_path=".", file_metrics=None, links=None):
         .collision-dot { background: var(--collision); }
         .atfault-dot { background: var(--atfault); }
         .redlight-dot { background: var(--redlight); }
+        .stopsign-dot { background: var(--stopsign); }
 
         select {
             cursor: pointer;
@@ -2203,6 +2206,11 @@ def build_gallery_index(folder_path=".", file_metrics=None, links=None):
             color: var(--redlight);
         }
 
+        .scenario-badge.stopsign {
+            border-left: 3px solid var(--stopsign);
+            color: var(--stopsign);
+        }
+
         #viewer {
             flex: 1 1 auto;
             width: 100%;
@@ -2340,6 +2348,7 @@ def build_gallery_index(folder_path=".", file_metrics=None, links=None):
             if (selectedOption.dataset.collision === 'true') addFailureBadge('Collision', 'collision');
             if (selectedOption.dataset.atfault === 'true') addFailureBadge('At-fault collision', 'atfault');
             if (selectedOption.dataset.redlight === 'true') addFailureBadge('Red-light violation', 'redlight');
+            if (selectedOption.dataset.stopsign === 'true') addFailureBadge('Stop-sign violation', 'stopsign');
             if (!currentFailures.childElementCount) {
                 const badge = document.createElement('span');
                 badge.className = 'scenario-badge';

@@ -132,7 +132,7 @@ puffer eval puffer_drive carla_fast \
   eval.capture_observations=false
 ```
 
-The default `eval.render_filter: null` disables filtered rendering. Multiple comma-separated columns use OR: `collision_rate,offroad_rate` selects scenarios where either metric is greater than zero. Use `eval.render_filter=all_infractions` to select collision, at-fault collision, offroad, and red-light failures.
+The default `eval.render_filter: null` disables filtered rendering. Multiple comma-separated columns use OR: `collision_rate,offroad_rate` selects scenarios where either metric is greater than zero. Use `eval.render_filter=all_infractions` to select collision, at-fault collision, offroad, red-light, and stop-sign failures.
 
 The filtered pass replays the selected map/seed pairs, captures standard
 interactive `.replay.zlib` files, renders one HTML page per replay, and builds a

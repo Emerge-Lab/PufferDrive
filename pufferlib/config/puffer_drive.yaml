@@ -81,6 +81,8 @@ env:
   traffic_light_behavior: stop
   # Skip red light violation detection (metrics, reward, behavior) - 0 off, 1 on
   disable_red_light_infractions: 0
+  # Skip stop sign violation detection (metrics, reward, behavior); the sign obs still turn red/green - 0 off, 1 on
+  disable_stop_sign_infractions: 0
   # Cycle the lights of a junction phase-by-phase (TLPHASE1 bins) - 0 independent lights (legacy), 1 on
   traffic_light_junction_phases: 0
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map - 0 off, 1 on
@@ -378,6 +380,8 @@ eval:
   obs_slots_partners_n: null
   # Overrides env.disable_red_light_infractions of every selected benchmark; null keeps the benchmark's value.
   disable_red_light_infractions: null
+  # Overrides env.disable_stop_sign_infractions of every selected benchmark; null keeps the benchmark's value.
+  disable_stop_sign_infractions: null
   output_name: null
   # Results folder inside the run dir; also names the wandb key prefix final_<output_dir_name>_.
   output_dir_name: eval

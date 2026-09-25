@@ -361,6 +361,11 @@ def build_benchmark_args(base_args, benchmark, environment_config):
             if red_light_override not in (0, 1):
                 raise pufferlib.APIUsageError("eval.disable_red_light_infractions must be 0 or 1")
             args["env"]["disable_red_light_infractions"] = red_light_override
+        stop_sign_override = args["eval"].get("disable_stop_sign_infractions")
+        if stop_sign_override is not None:
+            if stop_sign_override not in (0, 1):
+                raise pufferlib.APIUsageError("eval.disable_stop_sign_infractions must be 0 or 1")
+            args["env"]["disable_stop_sign_infractions"] = stop_sign_override
         scenario_length = _positive_int(benchmark_environment_config["scenario_length"], "scenario_length")
         dt_override = args["eval"].get("dt")
         if dt_override is not None:

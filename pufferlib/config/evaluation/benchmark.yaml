@@ -104,6 +104,7 @@ benchmarks:
       map_dir: pufferlib/resources/drive/binaries/nuplan
       use_neighbor_cache: 0
       disable_red_light_infractions: 1
+      disable_stop_sign_infractions: 1
       goal_reach_requires_speed: false
 
   - name: nuplan_single
@@ -119,6 +120,7 @@ benchmarks:
       map_dir: pufferlib/resources/drive/binaries/nuplan
       use_neighbor_cache: 0
       disable_red_light_infractions: 1
+      disable_stop_sign_infractions: 1
       goal_reach_requires_speed: false
 
   # Closed-loop co-sim against the real external simulators (see

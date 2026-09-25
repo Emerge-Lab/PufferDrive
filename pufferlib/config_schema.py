@@ -119,6 +119,7 @@ class DriveEnvConfig:
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING
     disable_red_light_infractions: int = MISSING
+    disable_stop_sign_infractions: int = MISSING
     traffic_light_junction_phases: int = MISSING
     use_map_cache: int = MISSING
     use_neighbor_cache: int = MISSING

@@ -71,6 +71,7 @@ class Drive(pufferlib.PufferEnv):
         offroad_behavior="ignore",
         traffic_light_behavior="ignore",
         disable_red_light_infractions=0,
+        disable_stop_sign_infractions=0,
         traffic_light_junction_phases=0,
         use_map_cache=0,
         use_neighbor_cache=1,
@@ -282,6 +283,9 @@ class Drive(pufferlib.PufferEnv):
         if disable_red_light_infractions not in (0, 1):
             raise ValueError(f"disable_red_light_infractions must be 0 or 1. Got: {disable_red_light_infractions}")
         self.disable_red_light_infractions = disable_red_light_infractions
+        if disable_stop_sign_infractions not in (0, 1):
+            raise ValueError(f"disable_stop_sign_infractions must be 0 or 1. Got: {disable_stop_sign_infractions}")
+        self.disable_stop_sign_infractions = disable_stop_sign_infractions
         if traffic_light_junction_phases not in (0, 1):
             raise ValueError(f"traffic_light_junction_phases must be 0 or 1. Got: {traffic_light_junction_phases}")
         self.traffic_light_junction_phases = traffic_light_junction_phases
@@ -678,6 +682,7 @@ class Drive(pufferlib.PufferEnv):
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
             "disable_red_light_infractions": self.disable_red_light_infractions,
+            "disable_stop_sign_infractions": self.disable_stop_sign_infractions,
             "traffic_light_junction_phases": self.traffic_light_junction_phases,
             "use_map_cache": self.use_map_cache,
             "use_neighbor_cache": self.use_neighbor_cache,

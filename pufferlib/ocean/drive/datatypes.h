@@ -133,6 +133,7 @@ struct Agent {
     int stop_sign_target_idx;        // traffic element being approached, -1 if none
     int stop_sign_stop_completed;    // 0/1 -> stood still inside the target's trigger box
     int stop_sign_last_failed_idx;   // element run without stopping, not re-targeted until 20 m away
+    int stop_sign_standstill_idx;    // element whose trigger box the agent last stood still in, -1 if none
 
     // Jerk dynamics
     float accel_long;

@@ -41,6 +41,12 @@ static void drive_test_step_to(Agent *agent, float x, float y, float speed) {
     agent->sim_speed_signed = speed;
 }
 
+static void drive_test_turn_to(Agent *agent, float heading) {
+    agent->sim_heading = heading;
+    agent->cos_heading = cosf(heading);
+    agent->sin_heading = sinf(heading);
+}
+
 static int test_approach_acquires_target(void) {
     TrafficControlElement tc = drive_test_stop_sign();
     Agent agent = drive_test_stop_agent(-15.0f, 0.0f, 0.0f);
@@ -239,6 +245,55 @@ static int test_spawn_inside_box_counts_as_stopped(void) {
     return 0;
 }
 
+// Mid U-turn: standing still inside the box while pointed 115 deg off the lane, then aligning and crossing.
+static int test_standstill_before_targeting_counts(void) {
+    TrafficControlElement tc = drive_test_stop_sign();
+    Agent agent = drive_test_stop_agent(-0.7f, 0.0f, 2.0f);
+    Drive env = drive_test_stop_env(&tc, &agent);
+    drive_test_step_to(&agent, -0.7f, 0.0f, 0.0f);
+    EXPECT_FALSE(update_stop_sign_state(&env, 0));
+    EXPECT_EQ_INT(agent.stop_sign_target_idx, -1);
+    EXPECT_EQ_INT(agent.stop_sign_standstill_idx, 0);
+    drive_test_turn_to(&agent, 0.0f);
+    drive_test_step_to(&agent, -0.3f, 0.0f, 1.0f);
+    EXPECT_FALSE(update_stop_sign_state(&env, 0));
+    EXPECT_EQ_INT(agent.stop_sign_target_idx, 0);
+    EXPECT_EQ_INT(agent.stop_sign_stop_completed, 1);
+    drive_test_step_to(&agent, 0.5f, 0.0f, 1.0f);
+    EXPECT_FALSE(update_stop_sign_state(&env, 0));
+    EXPECT_EQ_INT(agent.stop_sign_last_failed_idx, -1);
+    return 0;
+}
+
+static int test_standstill_outside_box_before_targeting_does_not_count(void) {
+    TrafficControlElement tc = drive_test_stop_sign();
+    Agent agent = drive_test_stop_agent(-6.0f, 0.0f, 2.0f);
+    Drive env = drive_test_stop_env(&tc, &agent);
+    drive_test_step_to(&agent, -6.0f, 0.0f, 0.0f);
+    EXPECT_FALSE(update_stop_sign_state(&env, 0));
+    EXPECT_EQ_INT(agent.stop_sign_standstill_idx, -1);
+    drive_test_turn_to(&agent, 0.0f);
+    drive_test_step_to(&agent, -0.5f, 0.0f, 5.0f);
+    EXPECT_FALSE(update_stop_sign_state(&env, 0));
+    EXPECT_EQ_INT(agent.stop_sign_stop_completed, 0);
+    drive_test_step_to(&agent, 0.5f, 0.0f, 5.0f);
+    EXPECT_TRUE(update_stop_sign_state(&env, 0));
+    return 0;
+}
+
+static int test_standstill_clears_beyond_proximity(void) {
+    TrafficControlElement tc = drive_test_stop_sign();
+    Agent agent = drive_test_stop_agent(-0.7f, 0.0f, 2.0f);
+    Drive env = drive_test_stop_env(&tc, &agent);
+    drive_test_step_to(&agent, -0.7f, 0.0f, 0.0f);
+    EXPECT_FALSE(update_stop_sign_state(&env, 0));
+    EXPECT_EQ_INT(agent.stop_sign_standstill_idx, 0);
+    drive_test_step_to(&agent, -25.0f, 0.0f, 10.0f);
+    EXPECT_FALSE(update_stop_sign_state(&env, 0));
+    EXPECT_EQ_INT(agent.stop_sign_standstill_idx, -1);
+    return 0;
+}
+
 static int test_traffic_light_ignored(void) {
     TrafficControlElement tc = drive_test_stop_sign();
     tc.type = TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT;
@@ -275,6 +330,9 @@ int main(void) {
     RUN_TEST(test_different_z_level_not_targeted);
     RUN_TEST(test_state_clears_beyond_proximity);
     RUN_TEST(test_spawn_inside_box_counts_as_stopped);
+    RUN_TEST(test_standstill_before_targeting_counts);
+    RUN_TEST(test_standstill_outside_box_before_targeting_does_not_count);
+    RUN_TEST(test_standstill_clears_beyond_proximity);
     RUN_TEST(test_traffic_light_ignored);
     RUN_TEST(test_obb_collision_unchanged_by_shared_sat);
     return test_summary(failures);

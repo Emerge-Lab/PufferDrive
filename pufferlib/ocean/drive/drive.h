@@ -260,6 +260,7 @@ struct Drive {
     int offroad_behavior;
     int traffic_light_behavior;
     int disable_red_light_infractions;
+    int disable_stop_sign_infractions;
     int traffic_light_junction_phases;
     int sdc_controller;
     int non_sdc_controller;
@@ -548,6 +549,7 @@ static void reset_agent_state(Agent *agent) {
     agent->stop_sign_target_idx = -1;
     agent->stop_sign_stop_completed = 0;
     agent->stop_sign_last_failed_idx = -1;
+    agent->stop_sign_standstill_idx = -1;
     agent->current_lane_idx = -1;
     agent->previous_lane_idx = -1;
     agent->current_route_idx = 0;
@@ -1946,35 +1948,64 @@ static bool check_agent_in_stop_sign_box(Agent *agent, StopLineFrame *frame) {
     return check_corner_boxes_overlap(agent_corners, box_corners, axes);
 }
 
+static bool stop_sign_beyond_proximity(Drive *env, Agent *agent, int element_idx) {
+    TrafficControlElement *tc = &env->traffic_elements[element_idx];
+    float dx = agent->sim_x - (tc->stop_line[0] + tc->stop_line[3]) * 0.5f;
+    float dy = agent->sim_y - (tc->stop_line[1] + tc->stop_line[4]) * 0.5f;
+    return dx * dx + dy * dy > STOP_SIGN_PROXIMITY_DIST_SQ;
+}
+
+// A standstill inside a sign's trigger box is remembered so it still counts once that sign becomes the target
+static int find_stop_sign_standstill(Drive *env, Agent *agent) {
+    if (agent->sim_speed >= STOP_SIGN_STOP_SPEED_MPS) {
+        return -1;
+    }
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *tc = &env->traffic_elements[i];
+        if (tc->type != TRAFFIC_CONTROL_TYPE_STOP_SIGN || stop_sign_beyond_proximity(env, agent, i)) {
+            continue;
+        }
+        float mid_z = (tc->stop_line[2] + tc->stop_line[5]) * 0.5f;
+        if (fabsf(agent->sim_z - mid_z) > Z_BUFFER) {
+            continue;
+        }
+        StopLineFrame frame;
+        if (compute_stop_line_frame(tc, &frame) && check_agent_in_stop_sign_box(agent, &frame)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 // True on the step the centre crosses the target's stop line without a completed stop.
 static bool update_stop_sign_state(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     StopLineFrame frame = {0};
-    if (agent->stop_sign_last_failed_idx >= 0) {
-        compute_stop_line_frame(&env->traffic_elements[agent->stop_sign_last_failed_idx], &frame);
-        float dx = agent->sim_x - frame.mid_x;
-        float dy = agent->sim_y - frame.mid_y;
-        if (dx * dx + dy * dy > STOP_SIGN_PROXIMITY_DIST_SQ) {
-            agent->stop_sign_last_failed_idx = -1;
-        }
+    if (agent->stop_sign_last_failed_idx >= 0
+        && stop_sign_beyond_proximity(env, agent, agent->stop_sign_last_failed_idx)) {
+        agent->stop_sign_last_failed_idx = -1;
     }
-    if (agent->stop_sign_target_idx >= 0) {
-        compute_stop_line_frame(&env->traffic_elements[agent->stop_sign_target_idx], &frame);
-        float dx = agent->sim_x - frame.mid_x;
-        float dy = agent->sim_y - frame.mid_y;
-        if (dx * dx + dy * dy > STOP_SIGN_PROXIMITY_DIST_SQ) {
-            agent->stop_sign_target_idx = -1;
-            agent->stop_sign_stop_completed = 0;
-        }
+    if (agent->stop_sign_standstill_idx >= 0
+        && stop_sign_beyond_proximity(env, agent, agent->stop_sign_standstill_idx)) {
+        agent->stop_sign_standstill_idx = -1;
+    }
+    if (agent->stop_sign_target_idx >= 0 && stop_sign_beyond_proximity(env, agent, agent->stop_sign_target_idx)) {
+        agent->stop_sign_target_idx = -1;
+        agent->stop_sign_stop_completed = 0;
     }
     if (agent->stop_sign_target_idx < 0) {
+        int standstill_idx = find_stop_sign_standstill(env, agent);
+        if (standstill_idx >= 0) {
+            agent->stop_sign_standstill_idx = standstill_idx;
+        }
         agent->stop_sign_target_idx = find_stop_sign_target(env, agent);
-        agent->stop_sign_stop_completed = 0;
+        agent->stop_sign_stop_completed
+            = agent->stop_sign_target_idx >= 0 && agent->stop_sign_target_idx == agent->stop_sign_standstill_idx;
         if (agent->stop_sign_target_idx < 0) {
             return false;
         }
-        compute_stop_line_frame(&env->traffic_elements[agent->stop_sign_target_idx], &frame);
     }
+    compute_stop_line_frame(&env->traffic_elements[agent->stop_sign_target_idx], &frame);
     if (!agent->stop_sign_stop_completed && agent->sim_speed < STOP_SIGN_STOP_SPEED_MPS
         && check_agent_in_stop_sign_box(agent, &frame)) {
         agent->stop_sign_stop_completed = 1;
@@ -4201,6 +4232,7 @@ int c_set_stop_signs(Drive *env, int count, const float *lines, const float *hea
         env->agents[i].stop_sign_target_idx = -1;
         env->agents[i].stop_sign_stop_completed = 0;
         env->agents[i].stop_sign_last_failed_idx = -1;
+        env->agents[i].stop_sign_standstill_idx = -1;
     }
     return 0;
 }
@@ -4467,10 +4499,10 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         return;
     }
 
-    // Priority 4: Handle stop sign violation
+    // Priority 4: Handle stop sign violation; the state update runs even when disabled so the sign obs stay identical
     if (env->obs_slots_traffic_controls_n
         && traffic_control_in_scope(TRAFFIC_CONTROL_TYPE_STOP_SIGN, env->traffic_control_scope)
-        && update_stop_sign_state(env, agent_idx)) {
+        && update_stop_sign_state(env, agent_idx) && !env->disable_stop_sign_infractions) {
         agent->metrics_array[STOP_SIGN_IDX] = 1.0f;
         apply_infraction_behavior(agent, env->traffic_light_behavior);
         return;

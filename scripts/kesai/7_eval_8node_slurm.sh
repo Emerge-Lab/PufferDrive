@@ -49,6 +49,7 @@ fi
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=200 \
     env.disable_red_light_infractions=1 \
+    env.disable_stop_sign_infractions=1 \
     env.traffic_light_junction_phases=0 \
     env.eval_standstill_jerk_deadband_mps3=1.5 \
     eval.output_name=${RUN_NAME}_random_tl2 \
@@ -69,6 +70,7 @@ python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
     eval.reward_lane_center=0.0075 \
     env.eval_perceived_size_margin_m=0.0 \
     eval.disable_red_light_infractions=1 \
+    eval.disable_stop_sign_infractions=1 \
     env.eval_standstill_jerk_deadband_mps3=1.5 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
