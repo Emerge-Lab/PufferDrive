@@ -114,10 +114,13 @@ echo "Training done, evaluating ${MODEL_PATH}"
     load_model_path=${MODEL_PATH} \
     wandb=True
 
-# nuPlan eval needs one node: submit it as its own job so this 8-node allocation ends now.
+# nuPlan and longest6 evals need one node each: submit them as their own jobs so this 8-node allocation ends now.
 echo "CARLA eval done, submitting nuPlan eval for ${MODEL_PATH}"
 RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh \
     || echo "nuPlan eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh"
+echo "Submitting longest6 eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6.sh \
+    || echo "longest6 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6.sh"
 
 end=$(date +%s)
 runtime=$((end-start))
