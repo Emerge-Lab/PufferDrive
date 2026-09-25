@@ -528,7 +528,6 @@ class PuffeRL:
         done_training = self.global_step >= config["total_timesteps"]
         should_log = done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25
         if torch.distributed.is_initialized():
-            # mean_and_log gathers across ranks; the wall-clock gate must decide identically everywhere
             should_log_flag = torch.tensor([1 if should_log else 0], device=config["device"], dtype=torch.int32)
             torch.distributed.broadcast(should_log_flag, src=0)
             should_log = bool(should_log_flag.item())
