@@ -8,14 +8,19 @@ import { fileURLToPath } from "node:url";
 
 const DT_SECONDS = 0.1;
 const SIMULATION_SECONDS = 10;
-const HISTORY_SECONDS = 4.5;
-const WARNING_LEAD_SECONDS = 1.5;
+const DEFAULT_HISTORY_SECONDS = 4.5;
+const BRAKE_MARGIN_SECONDS = 0.2;
+const WARNING_TO_BRAKE_SECONDS = 0.8;
+const BRAKE_LEAD_SEARCH_MAX_SECONDS = 4;
 const BRAKING_DECELERATION_MPS2 = 5;
 const POST_IMPACT_CHECK_SECONDS = 2;
-const TTC_HORIZON_SECONDS = 4;
-const TTC_STEP_SECONDS = 0.05;
-const DANGER_THRESHOLD_SECONDS = 2;
-const LATERAL_BUFFER_METERS = 0.2;
+const REACTION_TIME_SECONDS = 1.0;
+const DANGER_TTC_MARGIN_SECONDS = 0.1;
+const DANGER_TTC_MAX_PROJECTION_STEPS = 92;
+const LATERAL_BUFFER_BASE_METERS = 0.2;
+const LATERAL_BUFFER_RESPONSE_TIME_SECONDS = 0.0;
+const LATERAL_BUFFER_DECELERATION_MPS2 = 0.8;
+const LATERAL_BUFFER_MAX_METERS = 2.0;
 
 const LANE_WIDTH_METERS = 3.6;
 const LANE_COUNT = 3;
@@ -23,17 +28,37 @@ const EGO_LANE_INDEX = 1;
 const VEHICLE_LENGTH_METERS = 4.6;
 const VEHICLE_WIDTH_METERS = 1.9;
 
-const TARGET_START_X_METERS = -28;
-const TARGET_SPEED_MPS = 14;
-const HITTER_START_X_METERS = 2;
-const HITTER_SPEED_MPS = 10;
-const CUT_IN_START_SECONDS = 4.0;
-const CUT_IN_DURATION_SECONDS = 3.2;
-const CONTEXT_VEHICLES = Object.freeze([
-    { startX: -24, laneIndex: 2, speedMps: 10 },
-    { startX: 23, laneIndex: 2, speedMps: 10.5 },
-    { startX: -20, laneIndex: 0, speedMps: 13 },
-]);
+const KMH_PER_MPS = 3.6;
+const MOCK_PRESETS = Object.freeze({
+    cut_in: {
+        outputName: "mock_cut_in",
+        description: "three-lane road; slower vehicle ahead in the adjacent lane drifts into the target lane",
+        targetStartX: -28,
+        targetSpeedMps: 14,
+        hitterStartX: 2,
+        hitterSpeedMps: 10,
+        cutInStartSeconds: 4.0,
+        cutInDurationSeconds: 3.2,
+        contextVehicles: [
+            { startX: -24, laneIndex: 2, speedMps: 10 },
+            { startX: 23, laneIndex: 2, speedMps: 10.5 },
+            { startX: -20, laneIndex: 0, speedMps: 13 },
+        ],
+    },
+    cut_in_2: {
+        outputName: "mock_cut_in_2",
+        description: "three-lane road; target at 30 km/h, vehicle at 10 km/h in the adjacent lane cuts in ahead of it",
+        targetStartX: -30,
+        targetSpeedMps: 30 / KMH_PER_MPS,
+        hitterStartX: -30 + (30 / KMH_PER_MPS) * 4.0 + 24 - (10 / KMH_PER_MPS) * 4.0,
+        hitterSpeedMps: 10 / KMH_PER_MPS,
+        cutInStartSeconds: 4.0,
+        cutInDurationSeconds: 5.0,
+        historySeconds: 7.0,
+        contextVehicles: [],
+    },
+});
+const DEFAULT_PRESET = "cut_in";
 
 const TARGET_AGENT_INDEX = 0;
 const HITTER_AGENT_INDEX = 1;
@@ -119,40 +144,40 @@ function clipPolygon(subjectPolygon, clipPolygonPoints) {
     return output;
 }
 
-function smoothstepProgress(timeSeconds) {
-    const progress = Math.min(1, Math.max(0, (timeSeconds - CUT_IN_START_SECONDS) / CUT_IN_DURATION_SECONDS));
+function smoothstepProgress(scenario, timeSeconds) {
+    const progress = Math.min(1, Math.max(0, (timeSeconds - scenario.cutInStartSeconds) / scenario.cutInDurationSeconds));
     return progress * progress * (3 - 2 * progress);
 }
 
-function smoothstepRate(timeSeconds) {
-    const progress = (timeSeconds - CUT_IN_START_SECONDS) / CUT_IN_DURATION_SECONDS;
+function smoothstepRate(scenario, timeSeconds) {
+    const progress = (timeSeconds - scenario.cutInStartSeconds) / scenario.cutInDurationSeconds;
     if (progress <= 0 || progress >= 1) {
         return 0;
     }
-    return 6 * progress * (1 - progress) / CUT_IN_DURATION_SECONDS;
+    return 6 * progress * (1 - progress) / scenario.cutInDurationSeconds;
 }
 
-function hitterState(timeSeconds) {
+function hitterState(scenario, timeSeconds) {
     const lateralSpanMeters = laneCenterY(EGO_LANE_INDEX + 1) - laneCenterY(EGO_LANE_INDEX);
-    const lateralVelocityMps = -lateralSpanMeters * smoothstepRate(timeSeconds);
+    const lateralVelocityMps = -lateralSpanMeters * smoothstepRate(scenario, timeSeconds);
     return {
-        x: HITTER_START_X_METERS + HITTER_SPEED_MPS * timeSeconds,
-        y: laneCenterY(EGO_LANE_INDEX + 1) - lateralSpanMeters * smoothstepProgress(timeSeconds),
-        heading: Math.atan2(lateralVelocityMps, HITTER_SPEED_MPS),
-        vx: HITTER_SPEED_MPS,
+        x: scenario.hitterStartX + scenario.hitterSpeedMps * timeSeconds,
+        y: laneCenterY(EGO_LANE_INDEX + 1) - lateralSpanMeters * smoothstepProgress(scenario, timeSeconds),
+        heading: Math.atan2(lateralVelocityMps, scenario.hitterSpeedMps),
+        vx: scenario.hitterSpeedMps,
         vy: lateralVelocityMps,
     };
 }
 
-function targetState(timeSeconds, brakeStartSeconds = Infinity) {
+function targetState(scenario, timeSeconds, brakeStartSeconds = Infinity) {
     const cruiseSeconds = Math.min(timeSeconds, brakeStartSeconds);
     const brakingSeconds = Math.min(
         Math.max(0, timeSeconds - brakeStartSeconds),
-        TARGET_SPEED_MPS / BRAKING_DECELERATION_MPS2,
+        scenario.targetSpeedMps / BRAKING_DECELERATION_MPS2,
     );
-    const speedMps = TARGET_SPEED_MPS - BRAKING_DECELERATION_MPS2 * brakingSeconds;
+    const speedMps = scenario.targetSpeedMps - BRAKING_DECELERATION_MPS2 * brakingSeconds;
     return {
-        x: TARGET_START_X_METERS + TARGET_SPEED_MPS * (cruiseSeconds + brakingSeconds)
+        x: scenario.targetStartX + scenario.targetSpeedMps * (cruiseSeconds + brakingSeconds)
             - 0.5 * BRAKING_DECELERATION_MPS2 * brakingSeconds * brakingSeconds,
         y: laneCenterY(EGO_LANE_INDEX),
         heading: 0,
@@ -161,8 +186,8 @@ function targetState(timeSeconds, brakeStartSeconds = Infinity) {
     };
 }
 
-function contextStates(timeSeconds) {
-    return CONTEXT_VEHICLES.map((vehicle) => ({
+function contextStates(scenario, timeSeconds) {
+    return scenario.contextVehicles.map((vehicle) => ({
         x: vehicle.startX + vehicle.speedMps * timeSeconds,
         y: laneCenterY(vehicle.laneIndex),
         heading: 0,
@@ -177,11 +202,31 @@ function straightProjection(vehicle, horizonSeconds) {
     };
 }
 
-function straightTtcSeconds(target, hitter) {
-    const stepCount = Math.round(TTC_HORIZON_SECONDS / TTC_STEP_SECONDS);
-    for (let stepIndex = 0; stepIndex <= stepCount; stepIndex++) {
-        const horizonSeconds = stepIndex * TTC_STEP_SECONDS;
-        const projectedTarget = orientedBoxCorners(straightProjection(target, horizonSeconds), LATERAL_BUFFER_METERS * 2);
+function lateralSafetyBufferMeters(target, hitter) {
+    const leftX = -Math.sin(target.heading);
+    const leftY = Math.cos(target.heading);
+    const signedLateralMeters = (hitter.x - target.x) * leftX + (hitter.y - target.y) * leftY;
+    const relativeLateralMps = (hitter.vx - target.vx) * leftX + (hitter.vy - target.vy) * leftY;
+    const intrusionMps = Math.abs(signedLateralMeters) > 1e-6
+        ? Math.max(0, -relativeLateralMps * Math.sign(signedLateralMeters))
+        : 0;
+    const bufferMeters = LATERAL_BUFFER_BASE_METERS + intrusionMps * LATERAL_BUFFER_RESPONSE_TIME_SECONDS
+        + intrusionMps * intrusionMps / (2 * LATERAL_BUFFER_DECELERATION_MPS2);
+    return Math.min(LATERAL_BUFFER_MAX_METERS, bufferMeters);
+}
+
+function dangerThresholdSeconds(target) {
+    return REACTION_TIME_SECONDS + Math.hypot(target.vx, target.vy) / BRAKING_DECELERATION_MPS2
+        + DANGER_TTC_MARGIN_SECONDS;
+}
+
+function straightTtcSeconds(target, hitter, lateralBufferMeters, thresholdSeconds) {
+    for (let stepIndex = 0; stepIndex < DANGER_TTC_MAX_PROJECTION_STEPS; stepIndex++) {
+        const horizonSeconds = stepIndex * DT_SECONDS;
+        if (horizonSeconds >= thresholdSeconds) {
+            return Infinity;
+        }
+        const projectedTarget = orientedBoxCorners(straightProjection(target, horizonSeconds), lateralBufferMeters * 2);
         const projectedHitter = orientedBoxCorners(straightProjection(hitter, horizonSeconds));
         if (polygonsOverlap(projectedTarget, projectedHitter)) {
             return horizonSeconds;
@@ -194,11 +239,26 @@ function vehiclesOverlap(firstVehicle, secondVehicle) {
     return polygonsOverlap(orientedBoxCorners(firstVehicle), orientedBoxCorners(secondVehicle));
 }
 
-function buildEvidence() {
+function minimumBrakingGapMeters(scenario, brakeFrame, postImpactFrame) {
+    const brakeSeconds = brakeFrame * DT_SECONDS;
+    let gapMeters = Infinity;
+    for (let frameIndex = brakeFrame; frameIndex <= postImpactFrame; frameIndex++) {
+        const timeSeconds = frameIndex * DT_SECONDS;
+        const brakingTarget = targetState(scenario, timeSeconds, brakeSeconds);
+        const hitter = hitterState(scenario, timeSeconds);
+        if (vehiclesOverlap(brakingTarget, hitter)) {
+            return -Infinity;
+        }
+        gapMeters = Math.min(gapMeters, hitter.x - brakingTarget.x - VEHICLE_LENGTH_METERS);
+    }
+    return gapMeters;
+}
+
+function buildEvidence(scenario) {
     const frameCount = Math.round(SIMULATION_SECONDS / DT_SECONDS);
     let impactFrame = -1;
     for (let frameIndex = 0; frameIndex <= frameCount; frameIndex++) {
-        if (vehiclesOverlap(targetState(frameIndex * DT_SECONDS), hitterState(frameIndex * DT_SECONDS))) {
+        if (vehiclesOverlap(targetState(scenario, frameIndex * DT_SECONDS), hitterState(scenario, frameIndex * DT_SECONDS))) {
             impactFrame = frameIndex;
             break;
         }
@@ -207,45 +267,59 @@ function buildEvidence() {
         fail("Mock scenario produced no collision");
     }
     const impactSeconds = impactFrame * DT_SECONDS;
-    const historyFrameCount = Math.round(HISTORY_SECONDS / DT_SECONDS);
+    const historySeconds = scenario.historySeconds ?? DEFAULT_HISTORY_SECONDS;
+    const historyFrameCount = Math.round(historySeconds / DT_SECONDS);
     if (impactFrame < historyFrameCount) {
-        fail(`Impact at ${impactSeconds} s leaves less than ${HISTORY_SECONDS} s of history`);
+        fail(`Impact at ${impactSeconds} s leaves less than ${historySeconds} s of history`);
     }
-    const detectionFrame = impactFrame - Math.round(WARNING_LEAD_SECONDS / DT_SECONDS);
-    const detectionSeconds = detectionFrame * DT_SECONDS;
     for (let frameIndex = 0; frameIndex <= frameCount; frameIndex++) {
-        for (const context of contextStates(frameIndex * DT_SECONDS)) {
-            if (vehiclesOverlap(context, targetState(frameIndex * DT_SECONDS))
-                || vehiclesOverlap(context, hitterState(frameIndex * DT_SECONDS))) {
+        for (const context of contextStates(scenario, frameIndex * DT_SECONDS)) {
+            if (vehiclesOverlap(context, targetState(scenario, frameIndex * DT_SECONDS))
+                || vehiclesOverlap(context, hitterState(scenario, frameIndex * DT_SECONDS))) {
                 fail(`Context vehicle overlaps a key vehicle at frame ${frameIndex}`);
             }
         }
     }
 
     const postImpactFrame = impactFrame + Math.round(POST_IMPACT_CHECK_SECONDS / DT_SECONDS);
-    let minimumBrakingGapMeters = Infinity;
-    for (let frameIndex = detectionFrame; frameIndex <= postImpactFrame; frameIndex++) {
-        const timeSeconds = frameIndex * DT_SECONDS;
-        const brakingTarget = targetState(timeSeconds, detectionSeconds);
-        const hitter = hitterState(timeSeconds);
-        if (vehiclesOverlap(brakingTarget, hitter)) {
-            fail(`Braking from t = -${WARNING_LEAD_SECONDS} s still collides at frame ${frameIndex}`);
+    const maximumLeadSteps = Math.min(impactFrame, Math.round(BRAKE_LEAD_SEARCH_MAX_SECONDS / DT_SECONDS));
+    let latestAvoidingLeadSteps = -1;
+    for (let leadSteps = 1; leadSteps <= maximumLeadSteps; leadSteps++) {
+        if (minimumBrakingGapMeters(scenario, impactFrame - leadSteps, postImpactFrame) > -Infinity) {
+            latestAvoidingLeadSteps = leadSteps;
+            break;
         }
-        const gapMeters = hitter.x - brakingTarget.x - VEHICLE_LENGTH_METERS;
-        minimumBrakingGapMeters = Math.min(minimumBrakingGapMeters, gapMeters);
+    }
+    if (latestAvoidingLeadSteps < 0) {
+        fail(`No braking start within ${BRAKE_LEAD_SEARCH_MAX_SECONDS} s avoids the collision`);
+    }
+    const brakeLeadSteps = latestAvoidingLeadSteps + Math.round(BRAKE_MARGIN_SECONDS / DT_SECONDS);
+    const warningLeadSteps = brakeLeadSteps + Math.round(WARNING_TO_BRAKE_SECONDS / DT_SECONDS);
+    const brakeFrame = impactFrame - brakeLeadSteps;
+    const brakeSeconds = brakeFrame * DT_SECONDS;
+    const detectionFrame = impactFrame - warningLeadSteps;
+    const detectionSeconds = detectionFrame * DT_SECONDS;
+    if (detectionFrame < 0) {
+        fail("Warning frame precedes the start of the mock scenario");
+    }
+    const brakingGapMeters = minimumBrakingGapMeters(scenario, brakeFrame, postImpactFrame);
+    if (brakingGapMeters === -Infinity) {
+        fail(`Braking ${brakeLeadSteps} steps before impact still collides`);
     }
 
-    const targetAtDetection = targetState(detectionSeconds);
-    const hitterAtDetection = hitterState(detectionSeconds);
-    const ttcSeconds = straightTtcSeconds(targetAtDetection, hitterAtDetection);
-    if (!(ttcSeconds < DANGER_THRESHOLD_SECONDS)) {
-        fail(`Straight TTC ${ttcSeconds} s at detection is not below ${DANGER_THRESHOLD_SECONDS} s`);
+    const targetAtDetection = targetState(scenario, detectionSeconds);
+    const hitterAtDetection = hitterState(scenario, detectionSeconds);
+    const lateralBufferMeters = lateralSafetyBufferMeters(targetAtDetection, hitterAtDetection);
+    const thresholdSeconds = dangerThresholdSeconds(targetAtDetection);
+    const ttcSeconds = straightTtcSeconds(targetAtDetection, hitterAtDetection, lateralBufferMeters, thresholdSeconds);
+    if (!(ttcSeconds < thresholdSeconds)) {
+        fail(`No straight-TTC conflict below ${thresholdSeconds.toFixed(2)} s at ${warningLeadSteps} steps before impact`);
     }
     const projectedTarget = straightProjection(targetAtDetection, ttcSeconds);
     const projectedHitter = straightProjection(hitterAtDetection, ttcSeconds);
     const projectedOverlap = clipPolygon(
         orientedBoxCorners(projectedHitter),
-        orientedBoxCorners(projectedTarget, LATERAL_BUFFER_METERS * 2).reverse(),
+        orientedBoxCorners(projectedTarget, lateralBufferMeters * 2).reverse(),
     );
     if (projectedOverlap.length < 3) {
         fail("Projected footprints do not overlap at the reported TTC");
@@ -255,12 +329,14 @@ function buildEvidence() {
     const frames = [];
     for (let frameIndex = firstFrame; frameIndex <= impactFrame; frameIndex++) {
         const timeSeconds = frameIndex * DT_SECONDS;
-        const vehicles = [targetState(timeSeconds), hitterState(timeSeconds), ...contextStates(timeSeconds)];
+        const vehicles = [
+            targetState(scenario, timeSeconds), hitterState(scenario, timeSeconds), ...contextStates(scenario, timeSeconds),
+        ];
         frames.push(vehicles.map((vehicle, vehicleIndex) => serializeVehicle(vehicle, vehicleIndex)));
     }
     const brakingTargetStates = [];
-    for (let frameIndex = detectionFrame; frameIndex <= impactFrame; frameIndex++) {
-        const { x, y, heading } = targetState(frameIndex * DT_SECONDS, detectionSeconds);
+    for (let frameIndex = brakeFrame; frameIndex <= impactFrame; frameIndex++) {
+        const { x, y, heading } = targetState(scenario, frameIndex * DT_SECONDS, brakeSeconds);
         brakingTargetStates.push({ x, y, heading });
     }
     const figureEvidence = {
@@ -273,14 +349,14 @@ function buildEvidence() {
         first_frame: firstFrame,
         collision_frame: impactFrame,
         detection_frame: detectionFrame,
-        braking_start_frame: detectionFrame,
+        braking_start_frame: brakeFrame,
         roads: roadPolylines(),
         frames,
         braking_target_states: brakingTargetStates,
         prediction: {
             ttc_mode: "straight",
             ttc_seconds: ttcSeconds,
-            lateral_buffer_meters: LATERAL_BUFFER_METERS,
+            lateral_buffer_meters: lateralBufferMeters,
             target_path: [targetAtDetection, projectedTarget].map(({ x, y }) => ({ x, y })),
             hitter_path: [hitterAtDetection, projectedHitter].map(({ x, y }) => ({ x, y })),
             projected_target: serializeVehicle(projectedTarget, TARGET_AGENT_INDEX),
@@ -288,7 +364,17 @@ function buildEvidence() {
             overlap_polygon: projectedOverlap,
         },
     };
-    return { figureEvidence, impactSeconds, ttcSeconds, minimumBrakingGapMeters };
+    return {
+        figureEvidence,
+        impactSeconds,
+        latestAvoidingBrakeSeconds: latestAvoidingLeadSteps * DT_SECONDS,
+        brakeLeadSeconds: brakeLeadSteps * DT_SECONDS,
+        warningLeadSeconds: warningLeadSteps * DT_SECONDS,
+        ttcSeconds,
+        thresholdSeconds,
+        lateralBufferMeters,
+        brakingGapMeters,
+    };
 }
 
 function serializeVehicle(vehicle, vehicleIndex) {
@@ -328,47 +414,79 @@ function runRenderer(evidencePath, outputDirectory) {
     return result.stdout.split("\n").filter((line) => line.length > 0);
 }
 
+function parseCliArguments(cliArguments) {
+    let evidenceOnly = false;
+    let presetName = DEFAULT_PRESET;
+    const positionalArguments = [];
+    for (let argumentIndex = 0; argumentIndex < cliArguments.length; argumentIndex++) {
+        const argument = cliArguments[argumentIndex];
+        if (argument === "--evidence-only") {
+            evidenceOnly = true;
+            continue;
+        }
+        if (argument === "--preset") {
+            argumentIndex++;
+            presetName = cliArguments[argumentIndex];
+            continue;
+        }
+        if (argument.startsWith("-")) {
+            fail(`Unknown option: ${argument}`);
+        }
+        positionalArguments.push(argument);
+    }
+    if (!Object.hasOwn(MOCK_PRESETS, presetName)) {
+        fail(`Unknown preset ${presetName}; expected one of ${Object.keys(MOCK_PRESETS).join(", ")}`);
+    }
+    return { evidenceOnly, presetName, outputArgument: positionalArguments[0] };
+}
+
 function main() {
-    const evidenceOnly = process.argv.includes("--evidence-only");
-    const outputArgument = process.argv.slice(2).find((argument) => argument !== "--evidence-only");
-    const outputDirectory = path.resolve(outputArgument || path.join("paper_figures", "mock_cut_in"));
+    const { evidenceOnly, presetName, outputArgument } = parseCliArguments(process.argv.slice(2));
+    const scenario = MOCK_PRESETS[presetName];
+    const outputDirectory = path.resolve(outputArgument || path.join("paper_figures", scenario.outputName));
     fs.mkdirSync(outputDirectory, { recursive: true });
-    const { figureEvidence, impactSeconds, ttcSeconds, minimumBrakingGapMeters } = buildEvidence();
+    const evidence = buildEvidence(scenario);
+    const { figureEvidence, impactSeconds, ttcSeconds, thresholdSeconds, lateralBufferMeters, brakingGapMeters } = evidence;
     const evidencePath = path.join(outputDirectory, "figure_evidence.json");
     fs.writeFileSync(evidencePath, `${JSON.stringify(figureEvidence)}\n`);
     const writtenFiles = [evidencePath, ...(evidenceOnly ? [] : runRenderer(evidencePath, outputDirectory))];
     const metadata = {
         schema_version: 2,
         provenance: "synthetic mock; analytic kinematics, not replay or simulator data",
-        scenario: "three-lane road; slower vehicle ahead in the adjacent lane cuts into the target lane",
+        preset: presetName,
+        scenario: scenario.description,
         dt_seconds: DT_SECONDS,
         vehicle_size_meters: [VEHICLE_LENGTH_METERS, VEHICLE_WIDTH_METERS],
-        target_speed_mps: TARGET_SPEED_MPS,
-        hitter_speed_mps: HITTER_SPEED_MPS,
-        cut_in_duration_seconds: CUT_IN_DURATION_SECONDS,
+        target_speed_mps: scenario.targetSpeedMps,
+        hitter_speed_mps: scenario.hitterSpeedMps,
+        cut_in_duration_seconds: scenario.cutInDurationSeconds,
         collision_time_seconds: impactSeconds,
         braking_counterfactual: {
-            seconds_before_collision: WARNING_LEAD_SECONDS,
+            seconds_before_collision: evidence.brakeLeadSeconds,
+            latest_avoiding_seconds_before_collision: evidence.latestAvoidingBrakeSeconds,
             deceleration_mps2: BRAKING_DECELERATION_MPS2,
             avoided: true,
-            minimum_gap_meters: Number(minimumBrakingGapMeters.toFixed(3)),
+            minimum_gap_meters: Number(brakingGapMeters.toFixed(3)),
         },
         early_warning: {
-            seconds_before_collision: WARNING_LEAD_SECONDS,
+            seconds_before_collision: evidence.warningLeadSeconds,
             selected_ttc_mode: "straight",
             selected_ttc_seconds: ttcSeconds,
-            danger_threshold_seconds: DANGER_THRESHOLD_SECONDS,
-            lateral_buffer_meters: LATERAL_BUFFER_METERS,
+            danger_threshold_seconds: thresholdSeconds,
+            lateral_buffer_meters: lateralBufferMeters,
         },
         rendering: {
             method: "figure_evidence.json rendered by scripts/render_paper_figure_panels.py (matplotlib)",
-            history_seconds: HISTORY_SECONDS,
+            history_seconds: scenario.historySeconds ?? DEFAULT_HISTORY_SECONDS,
         },
         outputs: writtenFiles.map((filePath) => path.basename(filePath)),
     };
     fs.writeFileSync(path.join(outputDirectory, "figure_metadata.json"), `${JSON.stringify(metadata, null, 2)}\n`);
-    process.stdout.write(`Collision at t=${formatNumber(impactSeconds)} s, TTC at warning `
-        + `${formatNumber(ttcSeconds, 2)} s, braking min gap ${formatNumber(minimumBrakingGapMeters, 2)} m\n`);
+    process.stdout.write(`${presetName}: collision at t=${formatNumber(impactSeconds)} s; `
+        + `latest avoiding brake -${formatNumber(evidence.latestAvoidingBrakeSeconds)} s, `
+        + `brake -${formatNumber(evidence.brakeLeadSeconds)} s, warning -${formatNumber(evidence.warningLeadSeconds)} s; `
+        + `TTC ${formatNumber(ttcSeconds, 2)} s < ${formatNumber(thresholdSeconds, 2)} s; `
+        + `braking gap ${formatNumber(brakingGapMeters, 2)} m\n`);
     process.stdout.write(`Wrote mock cut-in evidence${evidenceOnly ? "" : " and panels"} to ${outputDirectory}\n`);
 }
 

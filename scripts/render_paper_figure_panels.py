@@ -33,8 +33,12 @@ BRAKE_MARKER_COLOR = BRAKING_COLOR
 BRAKE_MARKER_SIZE_POINTS = 6
 BRAKE_MARKER_EDGE_WIDTH_POINTS = 0.7
 FUTURE_BRAKE_MARKER_ALPHA = 0.6
-FUTURE_ORIGINAL_PATH_ALPHA = 0.25
-FUTURE_BRAKING_PATH_ALPHA = 0.5
+FUTURE_ORIGINAL_PATH_ALPHA = 0.45
+FUTURE_BRAKING_PATH_ALPHA = 0.85
+FUTURE_PATH_WIDTH_POINTS = 2.2
+FUTURE_PATH_DASH = (0, (4, 3))
+TIME_LABEL_FONT_SIZE_POINTS = 11
+TIME_LABEL_MARGIN_AXES = 0.03
 ORIGINAL_PATH_ALPHA = 0.55
 
 ROAD_STYLES = {
@@ -375,9 +379,9 @@ def render_panel_c(ax, evidence, bounds):
         [state["x"] for state in future_original],
         [state["y"] for state in future_original],
         color=TARGET_COLOR,
-        linewidth=3.2,
+        linewidth=FUTURE_PATH_WIDTH_POINTS,
+        linestyle=FUTURE_PATH_DASH,
         alpha=FUTURE_ORIGINAL_PATH_ALPHA,
-        solid_capstyle="round",
         zorder=3,
     )
     braking_path = evidence["braking_target_states"]
@@ -385,9 +389,9 @@ def render_panel_c(ax, evidence, bounds):
         [state["x"] for state in braking_path],
         [state["y"] for state in braking_path],
         color=BRAKING_COLOR,
-        linewidth=3.2,
+        linewidth=FUTURE_PATH_WIDTH_POINTS,
+        linestyle=FUTURE_PATH_DASH,
         alpha=FUTURE_BRAKING_PATH_ALPHA,
-        solid_capstyle="round",
         zorder=3.5,
     )
     for path_key, color in (("target_path", TARGET_COLOR), ("hitter_path", ADVERSARIAL_COLOR)):
@@ -432,19 +436,49 @@ def save_figure(fig, output_stem, fill_figure=False):
     return [output_path]
 
 
-def render_evidence(evidence_path, output_dir, crop_half_width):
+def panel_time_labels(evidence):
+    dt = evidence["dt_seconds"]
+    brake_seconds = (evidence["braking_start_frame"] - evidence["collision_frame"]) * dt
+    warning_seconds = (evidence["detection_frame"] - evidence["collision_frame"]) * dt
+    return (
+        "t = 0.0 s",
+        f"t = 0.0 s (brake at t = {brake_seconds:.1f} s)",
+        f"t = {warning_seconds:.1f} s",
+    )
+
+
+def draw_time_label(ax, label):
+    ax.text(
+        TIME_LABEL_MARGIN_AXES,
+        1 - TIME_LABEL_MARGIN_AXES,
+        label.replace("-", "\u2212"),
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=TIME_LABEL_FONT_SIZE_POINTS,
+        color="#111827",
+        zorder=20,
+    )
+
+
+def render_evidence(evidence_path, output_dir, crop_half_width, time_labels=False):
     evidence = load_evidence(evidence_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     bounds = collision_trajectory_bounds(evidence, crop_half_width)
+    labels = panel_time_labels(evidence)
     written = []
     for panel_name, renderer in zip(PANEL_NAMES, PANEL_RENDERERS):
         fig, axes = new_figure(1)
         renderer(axes[0], evidence, bounds)
+        if time_labels:
+            draw_time_label(axes[0], labels[PANEL_RENDERERS.index(renderer)])
         written += save_figure(fig, output_dir / panel_name, fill_figure=True)
     fig, axes = new_figure(len(PANEL_RENDERERS))
     for ax, renderer in zip(axes, PANEL_RENDERERS):
         renderer(ax, evidence, bounds)
+        if time_labels:
+            draw_time_label(ax, labels[PANEL_RENDERERS.index(renderer)])
     written += save_figure(fig, output_dir / "figure_abc")
     return written
 
@@ -454,11 +488,12 @@ def main():
     parser.add_argument("evidence_path")
     parser.add_argument("output_dir", nargs="?", default=None)
     parser.add_argument("--crop-half-width", type=float, default=DEFAULT_CROP_HALF_WIDTH_METERS)
+    parser.add_argument("--time-labels", action="store_true", help="Stamp each panel with the time it shows")
     args = parser.parse_args()
     if not (args.crop_half_width > 0 and math.isfinite(args.crop_half_width)):
         parser.error("--crop-half-width must be a positive finite number of meters")
     output_dir = args.output_dir or Path(args.evidence_path).parent
-    for output_path in render_evidence(args.evidence_path, output_dir, args.crop_half_width):
+    for output_path in render_evidence(args.evidence_path, output_dir, args.crop_half_width, args.time_labels):
         print(output_path)
 
 

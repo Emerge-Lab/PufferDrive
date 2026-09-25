@@ -13,6 +13,12 @@ const DEFAULT_HISTORY_SECONDS = 4.5;
 const MAXIMUM_HISTORY_SECONDS = 30.0;
 const MAXIMUM_COLLISION_TOLERANCE_METERS = 0.5;
 const CONTACT_EPSILON_METERS = 1e-4;
+const REACTION_TIME_SECONDS = 1.0;
+const DANGER_TTC_MARGIN_SECONDS = 0.1;
+const LATERAL_BUFFER_BASE_METERS = 0.2;
+const LATERAL_BUFFER_RESPONSE_TIME_SECONDS = 0.0;
+const LATERAL_BUFFER_DECELERATION_MPS2 = 0.8;
+const LATERAL_BUFFER_MAX_METERS = 2.0;
 const GAP_BISECTION_ITERATIONS = 30;
 const EVIDENCE_SCHEMA = "paper_figure_evidence";
 const EVIDENCE_VERSION = 1;
@@ -521,18 +527,12 @@ function agentHistory(replay, agentIndex, endFrame, historySeconds, dtSeconds, e
     return states;
 }
 
-function velocityAt(replay, frameIndex, agentIndex, dtSeconds) {
-    const neighboringFrame = frameIndex < replay.header.frames - 1 ? frameIndex + 1 : frameIndex - 1;
-    const currentAgent = readAgent(replay, frameIndex, agentIndex);
-    const neighboringAgent = readAgent(replay, neighboringFrame, agentIndex);
-    if (!currentAgent || !neighboringAgent) {
-        fail(`Cannot estimate velocity for agent ${agentIndex} at frame ${frameIndex}`);
+function velocityAt(replay, frameIndex, agentIndex) {
+    const agent = readAgent(replay, frameIndex, agentIndex);
+    if (!agent) {
+        fail(`Agent ${agentIndex} is absent at frame ${frameIndex}`);
     }
-    const elapsedSeconds = (neighboringFrame - frameIndex) * dtSeconds;
-    return {
-        vx: (neighboringAgent.x - currentAgent.x) / elapsedSeconds,
-        vy: (neighboringAgent.y - currentAgent.y) / elapsedSeconds,
-    };
+    return { vx: agent.speed * Math.cos(agent.heading), vy: agent.speed * Math.sin(agent.heading) };
 }
 
 function appendUniquePoint(points, point) {
@@ -636,32 +636,37 @@ function straightTtcSeconds(target, targetVelocity, hitter, hitterVelocity, late
     return Infinity;
 }
 
-function recomputeWarningSample(replay, detectionSamples, collisionFrame, targetIndex, hitterIndex, stepsBack, dtSeconds) {
-    if (detectionSamples.length === 0) {
-        fail("Replay has no stored detection samples to take the lateral buffer and danger threshold from");
-    }
-    const nearestSample = detectionSamples.reduce((best, sample) => (
-        Math.abs(Number(sample.steps_back) - stepsBack) < Math.abs(Number(best.steps_back) - stepsBack) ? sample : best
-    ));
-    const lateralBufferMeters = Number(nearestSample.lateral_buffer_meters);
-    const dangerThresholdSeconds = Number(nearestSample.danger_threshold_seconds);
+function lateralSafetyBufferMeters(target, targetVelocity, hitter, hitterVelocity) {
+    const leftX = -Math.sin(target.heading);
+    const leftY = Math.cos(target.heading);
+    const signedLateralMeters = (hitter.x - target.x) * leftX + (hitter.y - target.y) * leftY;
+    const relativeLateralMps = (hitterVelocity.vx - targetVelocity.vx) * leftX
+        + (hitterVelocity.vy - targetVelocity.vy) * leftY;
+    const intrusionMps = Math.abs(signedLateralMeters) > 1e-6
+        ? Math.max(0, -relativeLateralMps * Math.sign(signedLateralMeters))
+        : 0;
+    const bufferMeters = LATERAL_BUFFER_BASE_METERS + intrusionMps * LATERAL_BUFFER_RESPONSE_TIME_SECONDS
+        + intrusionMps * intrusionMps / (2 * LATERAL_BUFFER_DECELERATION_MPS2);
+    return Math.min(LATERAL_BUFFER_MAX_METERS, bufferMeters);
+}
+
+function recomputeWarningSample(replay, collisionFrame, targetIndex, hitterIndex, stepsBack, dtSeconds, brakingDecelerationMps2) {
     const detectionFrame = collisionFrame - stepsBack;
     const target = readAgent(replay, detectionFrame, targetIndex);
     const hitter = readAgent(replay, detectionFrame, hitterIndex);
     if (!target || !hitter) {
         fail(`Target or hitter is absent at the requested warning frame ${detectionFrame}`);
     }
+    const targetVelocity = velocityAt(replay, detectionFrame, targetIndex);
+    const hitterVelocity = velocityAt(replay, detectionFrame, hitterIndex);
+    const lateralBufferMeters = lateralSafetyBufferMeters(target, targetVelocity, hitter, hitterVelocity);
+    const dangerThresholdSeconds = REACTION_TIME_SECONDS + target.speed / brakingDecelerationMps2
+        + DANGER_TTC_MARGIN_SECONDS;
     const ttcSeconds = straightTtcSeconds(
-        target,
-        velocityAt(replay, detectionFrame, targetIndex, dtSeconds),
-        hitter,
-        velocityAt(replay, detectionFrame, hitterIndex, dtSeconds),
-        lateralBufferMeters,
-        dangerThresholdSeconds,
-        dtSeconds,
+        target, targetVelocity, hitter, hitterVelocity, lateralBufferMeters, dangerThresholdSeconds, dtSeconds,
     );
     if (!Number.isFinite(ttcSeconds)) {
-        fail(`No straight-TTC conflict within ${dangerThresholdSeconds} s at ${stepsBack} steps before collision`);
+        fail(`No straight-TTC conflict within ${dangerThresholdSeconds.toFixed(2)} s at ${stepsBack} steps before collision`);
     }
     return {
         steps_back: stepsBack,
@@ -670,7 +675,7 @@ function recomputeWarningSample(replay, detectionSamples, collisionFrame, target
         straight_ttc_seconds: ttcSeconds,
         route_ttc_seconds: Number.NaN,
         lateral_buffer_meters: lateralBufferMeters,
-        recomputed_with_parameters_from_steps_back: Number(nearestSample.steps_back),
+        recomputed: true,
     };
 }
 
@@ -789,7 +794,7 @@ function collectEvidence(
             fail(`Stored detection sample at ${requestedWarningSeconds} s before collision is not dangerous`);
         }
         warningSample = storedSample ?? recomputeWarningSample(
-            replay, detectionSamples, collisionFrame, targetIndex, hitterIndex, warningStepsBack, dtSeconds,
+            replay, collisionFrame, targetIndex, hitterIndex, warningStepsBack, dtSeconds, brakingDecelerationMps2,
         );
         warningLeadSeconds = warningStepsBack * dtSeconds;
     }
@@ -869,8 +874,8 @@ function collectEvidence(
     if (!targetAtDetection || !hitterAtDetection) {
         fail("Target or hitter is absent at the one-second detection frame");
     }
-    const targetVelocity = velocityAt(replay, detectionFrame, targetIndex, dtSeconds);
-    const hitterVelocity = velocityAt(replay, detectionFrame, hitterIndex, dtSeconds);
+    const targetVelocity = velocityAt(replay, detectionFrame, targetIndex);
+    const hitterVelocity = velocityAt(replay, detectionFrame, hitterIndex);
     let targetProjectionPath;
     if (selectedTtc.mode === "route") {
         const route = capturedRouteFromAgent(
@@ -1139,8 +1144,7 @@ function writeOutputs(sourcePath, outputDirectory, replay, figureEvidence, evide
             route_ttc_seconds: Number(evidence.warningSample.route_ttc_seconds),
             danger_threshold_seconds: evidence.dangerThresholdSeconds,
             lateral_buffer_meters: evidence.lateralBufferMeters,
-            recomputed_with_parameters_from_steps_back:
-                evidence.warningSample.recomputed_with_parameters_from_steps_back ?? null,
+            recomputed_from_replay: evidence.warningSample.recomputed === true,
         },
         rendering: {
             method: "figure_evidence.json rendered by scripts/render_paper_figure_panels.py (matplotlib)",
