@@ -777,9 +777,10 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_f32[f32_base + AGENT_F32_GOAL_RADIUS_IDX] = a->reward_coefs[REWARD_COEF_GOAL_RADIUS];
 
             if (i == EGO_IDX && drive->action_type == ACTION_TYPE_SPLINE) {
-                float path_sample_dt = drive->spline_horizon_seconds / (AGENT_F32_PATH_SAMPLES - 1);
+                // curve was fit at the pre-step pose; start one dt in so it begins at the car's current pose
+                float path_sample_dt = (drive->spline_horizon_seconds - drive->dt) / (AGENT_F32_PATH_SAMPLES - 1);
                 for (int sample_idx = 0; sample_idx < AGENT_F32_PATH_SAMPLES; sample_idx++) {
-                    float sample_t = sample_idx * path_sample_dt;
+                    float sample_t = drive->dt + sample_idx * path_sample_dt;
                     int path_base = f32_base + AGENT_F32_PATH_BASE_IDX + 2 * sample_idx;
                     agent_f32[path_base] = evaluate_quintic_derivative(a->spline_coefs_x, sample_t, 0);
                     agent_f32[path_base + 1] = evaluate_quintic_derivative(a->spline_coefs_y, sample_t, 0);

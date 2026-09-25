@@ -1373,7 +1373,7 @@ self.onmessage = async event => {
             path.moveTo(C.agent_f32[base], C.agent_f32[base+1]);
             for (let k=1;k<n;k++) path.lineTo(C.agent_f32[base+2*k], C.agent_f32[base+2*k+1]);
             ctx.save();
-            ctx.strokeStyle = PREDICTED_PATH_COLOR; ctx.globalAlpha = .5; ctx.lineWidth = Math.max(ego.w, .1); ctx.lineCap = 'round';
+            ctx.strokeStyle = PREDICTED_PATH_COLOR; ctx.globalAlpha = .5; ctx.lineWidth = Math.max(ego.w, .1); ctx.lineCap = 'butt';
             ctx.stroke(path);
             ctx.restore();
         }
