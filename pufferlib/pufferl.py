@@ -44,6 +44,7 @@ import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
 from pufferlib.config_schema import (
+    MAX_C_SEED,
     normalize_puffer_drive_config,
     validate_puffer_drive_config,
     validate_puffer_drive_resources,
@@ -136,8 +137,11 @@ def logits_to_float(logits):
 
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None):
-        # Backend perf optimization
-        torch.set_float32_matmul_precision("high")
+        # Backend perf optimization; tf32=False forces true float32 matmuls/convs
+        allow_tf32 = config.get("tf32", True)
+        torch.set_float32_matmul_precision("high" if allow_tf32 else "highest")
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+        torch.backends.cudnn.allow_tf32 = allow_tf32
         torch.backends.cudnn.deterministic = config["torch_deterministic"]
         torch.backends.cudnn.benchmark = not config["torch_deterministic"]
         torch.use_deterministic_algorithms(config["torch_deterministic"], warn_only=True)
@@ -180,6 +184,10 @@ class PuffeRL:
         use_cuda = is_cuda_device(device)
         if precision == "bfloat16" and use_cuda and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 precision requires a CUDA device with bf16 support")
+        if precision == "bfloat16" and not config.get("amp", True):
+            raise pufferlib.APIUsageError("bfloat16 precision requires train.amp=True")
+        if precision == "bfloat16" and not config.get("tf32", True):
+            raise pufferlib.APIUsageError("train.tf32=False requires train.precision=float32")
 
         rollout_dtype = config.get("rollout_dtype", "float32")
         if rollout_dtype == "float32":
@@ -282,6 +290,13 @@ class PuffeRL:
                 heavyball_momentum=True,
             )
         self.optimizer = optimizer
+
+        critic_params = [param for name, param in self.policy.named_parameters() if "critic" in name]
+        critic_param_ids = {id(param) for param in critic_params}
+        actor_params = [param for param in self.policy.parameters() if id(param) not in critic_param_ids]
+        self.separate_grad_clip = bool(config["separate_grad_clip"] and critic_params and actor_params)
+        self.actor_params = actor_params
+        self.critic_params = critic_params
 
         # Logging
         self.logger = logger
@@ -511,7 +526,12 @@ class PuffeRL:
         logs = None
         self.epoch += 1
         done_training = self.global_step >= config["total_timesteps"]
-        if done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25:
+        should_log = done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25
+        if torch.distributed.is_initialized():
+            should_log_flag = torch.tensor([1 if should_log else 0], device=config["device"], dtype=torch.int32)
+            torch.distributed.broadcast(should_log_flag, src=0)
+            should_log = bool(should_log_flag.item())
+        if should_log:
             self.losses = {k: v.item() if isinstance(v, torch.Tensor) else v for k, v in losses.items()}
             logs = self.mean_and_log()
             self.print_dashboard()
@@ -525,6 +545,18 @@ class PuffeRL:
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
         return logs
+
+    def _current_ent_coef(self):
+        config = self.config
+        ent_coef = config["ent_coef"]
+        if not config["ent_coef_anneal"]:
+            return ent_coef
+        progress = min(self.global_step / max(config["total_timesteps"], 1), 1.0)
+        start_frac = config["ent_coef_anneal_start_frac"]
+        if progress <= start_frac:
+            return ent_coef
+        anneal_frac = (progress - start_frac) / max(1.0 - start_frac, 1e-8)
+        return ent_coef + anneal_frac * (config["ent_coef_final"] - ent_coef)
 
     def _ppo_loss(self, mb_obs, mb_actions, mb_logprobs, mb_values, mb_returns, mb_adv, adv_weights=None):
         config = self.config
@@ -581,7 +613,8 @@ class PuffeRL:
             v_loss = 0.5 * (newvalue - mb_returns) ** 2
             v_loss = v_loss.mean()
         entropy_loss = entropy.mean()
-        loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+        ent_coef = self._current_ent_coef()
+        loss = pg_loss + config["vf_coef"] * v_loss - ent_coef * entropy_loss
 
         return (
             loss,
@@ -591,11 +624,20 @@ class PuffeRL:
                 "policy_loss": pg_loss.detach(),
                 "value_loss": v_loss.detach(),
                 "entropy": entropy_loss.detach(),
+                "ent_coef": ent_coef,
                 "old_approx_kl": old_approx_kl,
                 "approx_kl": approx_kl,
                 "clipfrac": clipfrac,
             },
         )
+
+    def _clip_gradients(self, losses):
+        max_grad_norm = self.config["max_grad_norm"]
+        if self.separate_grad_clip:
+            losses["actor_grad_norm"] = torch.nn.utils.clip_grad_norm_(self.actor_params, max_grad_norm).item()
+            losses["critic_grad_norm"] = torch.nn.utils.clip_grad_norm_(self.critic_params, max_grad_norm).item()
+        else:
+            losses["grad_norm"] = torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_grad_norm).item()
 
     def _compute_advantages(self, ratio, rho_clip, c_clip):
         config = self.config
@@ -672,7 +714,7 @@ class PuffeRL:
             profile("learn", epoch)
             loss.backward()
             if (mb + 1) % self.accumulate_minibatches == 0:
-                torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
+                self._clip_gradients(losses)
                 self.optimizer.step()
                 self.optimizer.zero_grad()
 
@@ -714,6 +756,8 @@ class PuffeRL:
             threshold = config["adv_filter_threshold_scale"] * self.ema_max
 
             keep_mask = valid_abs_adv >= threshold
+            if config["adv_filter_leak_fraction"] > 0.0:
+                keep_mask |= torch.rand_like(valid_abs_adv) < config["adv_filter_leak_fraction"]
             keep_idx = valid_idx[keep_mask]
             num_valid, num_kept = valid_idx.numel(), keep_idx.numel()
 
@@ -790,18 +834,18 @@ class PuffeRL:
                 pending_minibatches += 1
 
                 if pending_minibatches >= self.accumulate_minibatches:
-                    torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
+                    self._clip_gradients(losses)
                     self.optimizer.step()
                     self.optimizer.zero_grad()
                     pending_minibatches = 0
 
         if pending_minibatches > 0:
-            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
+            self._clip_gradients(losses)
             self.optimizer.step()
             self.optimizer.zero_grad()
 
         if total_minibatches > 0:
-            for key in ("policy_loss", "value_loss", "entropy", "old_approx_kl", "approx_kl", "clipfrac"):
+            for key in ("policy_loss", "value_loss", "entropy", "ent_coef", "old_approx_kl", "approx_kl", "clipfrac"):
                 losses[key] /= total_minibatches
 
         y_pred = flat_values[valid_idx]
@@ -813,7 +857,28 @@ class PuffeRL:
 
     def mean_and_log(self):
         config = self.config
-        self.stats = pufferlib.utils.reduce_environment_metrics(self.stats)
+        env_metric_sums = pufferlib.utils.environment_metric_sums(self.stats)
+        losses = {k: float(v) for k, v in self.losses.items()}
+        if torch.distributed.is_initialized():
+            world_size = torch.distributed.get_world_size()
+            rank_payloads = [None] * world_size
+            torch.distributed.all_gather_object(rank_payloads, (env_metric_sums, losses))
+            merged_env_sums = {}
+            loss_sums = {}
+            for rank_env_sums, rank_losses in rank_payloads:
+                for key, (value_sum, value_count) in rank_env_sums.items():
+                    entry = merged_env_sums.setdefault(key, [0.0, 0])
+                    entry[0] += value_sum
+                    entry[1] += value_count
+                for key, value in rank_losses.items():
+                    if value != value:  # skip NaN so one degenerate rank can't poison the mean
+                        continue
+                    entry = loss_sums.setdefault(key, [0.0, 0])
+                    entry[0] += value
+                    entry[1] += 1
+            env_metric_sums = merged_env_sums
+            losses = {key: total / count for key, (total, count) in loss_sums.items()}
+        self.stats = pufferlib.utils.finalize_environment_metrics(env_metric_sums)
 
         device = config["device"]
         agent_steps = int(dist_sum(self.global_step, device))
@@ -825,11 +890,8 @@ class PuffeRL:
             "epoch": int(dist_sum(self.epoch, device)),  # VB Why it is a sum ?
             "learning_rate": self.optimizer.param_groups[0]["lr"],
             **{f"environment/{k}": v for k, v in self.stats.items()},
-            **{f"losses/{k}": v for k, v in self.losses.items()},
+            **{f"losses/{k}": v for k, v in losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
-            # **{f'environment/{k}': dist_mean(v, device) for k, v in self.stats.items()},
-            # **{f'losses/{k}': dist_mean(v, device) for k, v in self.losses.items()},
-            # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
 
         if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
@@ -1084,6 +1146,15 @@ def dist_mean(value, device):
         return value
 
     return dist_sum(value, device) / torch.distributed.get_world_size()
+
+
+def shutdown_distributed():
+    if not torch.distributed.is_initialized():
+        return
+
+    # Every rank must be done with the shared buffers before any rank tears them down.
+    torch.distributed.barrier()
+    torch.distributed.destroy_process_group()
 
 
 def capture_rng_state():
@@ -1600,6 +1671,16 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                     run_dir=path,
                 )
 
+        if is_rank0 and args["train"]["render"] and pufferl.epoch % args["train"]["render_interval"] == 0:
+            render_training_replays(
+                env_name=env_name,
+                args=args,
+                policy=pufferl.uncompiled_policy,
+                epoch=pufferl.epoch,
+                global_step=_global_agent_steps(pufferl),
+                run_dir=path,
+            )
+
         if logs is not None:
             should_stop_early = False
             if early_stop_fn is not None:
@@ -1644,6 +1725,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
     pufferl.print_dashboard()
     model_path = pufferl.close()
+    shutdown_distributed()
     pufferl.logger.close(model_path, early_stop=False)
     return all_logs
 
@@ -1670,10 +1752,14 @@ def eval(
     render_filter = eval_config["render_filter"]
     max_rendered_failures = eval_config["max_rendered_failures"]
     failure_replay_csv = eval_config["failure_replay_csv"]
+    scenario_offset = eval_config["scenario_offset"]
+    configured_output_subdir = eval_config["output_subdir"]
     eval_training_render = args["env"]["eval_training_render"]
 
-    report_to_wandb = bool(args["wandb"]) and not use_training_config
-    environment_config, benchmarks = drive_benchmark.load_benchmark_config(benchmark_config_path, selected_benchmarks)
+    report_to_wandb = bool(args["wandb"]) and not use_training_config and failure_replay_csv is None
+    environment_config, benchmarks = drive_benchmark.load_benchmark_config(
+        benchmark_config_path, selected_benchmarks, eval_config["map_dir"], eval_config["num_scenarios"]
+    )
     if use_training_config:
         if policy is None:
             raise pufferlib.APIUsageError("Training evaluation requires the live policy")
@@ -1692,7 +1778,7 @@ def eval(
         run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
         eval_output_dir = os.path.join(run_dir, eval_config["output_dir_name"])
     if eval_output_subdir is None:
-        eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")
+        eval_output_subdir = configured_output_subdir or datetime.now().strftime("%Y%m%d-%H%M%S")
     failure_replay_output_dir = None
     if failure_replay_csv is not None:
         failure_replay_csv = os.path.abspath(failure_replay_csv)
@@ -1707,6 +1793,21 @@ def eval(
             cli_overrides,
         )
         render_scenarios = eval_config["render_scenarios"] or run_args["env"]["eval_training_render"]
+        if scenario_offset:
+            if run_args["env"]["simulation_mode"] == "replay":
+                map_dir = run_args["env"]["map_dir"]
+                available_map_count = (
+                    1 if os.path.isfile(map_dir) else len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
+                )
+                if scenario_offset + run_args["num_scenarios"] > available_map_count:
+                    raise pufferlib.APIUsageError(
+                        f"eval.scenario_offset ({scenario_offset}) plus num_scenarios "
+                        f"({run_args['num_scenarios']}) exceeds the {available_map_count} replay maps in {map_dir}"
+                    )
+            # Shard-unique seed: identical seeds make every shard re-draw the same scenarios.
+            shard_seed = (run_args["train"]["seed"] + scenario_offset) % (MAX_C_SEED + 1)
+            run_args["train"]["seed"] = shard_seed
+            run_args["vec"]["seed"] = shard_seed
         output_directory_name = benchmark["name"]
         if output_name is not None:
             output_directory_name = f"{output_directory_name}_{output_name}"
@@ -1750,6 +1851,7 @@ def eval(
             num_workers,
             run_args["env"]["scenario_length"],
             capture_replay=render_scenarios,
+            scenario_offset=scenario_offset,
         )
         print(f"Evaluation {benchmark['name']}: {num_scenarios} scenarios across {num_workers} workers")
         replay_output_dir = (
@@ -1774,7 +1876,12 @@ def eval(
         }
 
         if render_scenarios:
-            drive_eval_replay._render_eval_replays(summaries, benchmark_output_dir, eval_config["keep_zlib_replays"])
+            max_renderer_count = (
+                eval_config["observation_replay_writer_count"] if eval_config["capture_observations"] else None
+            )
+            drive_eval_replay._render_eval_replays(
+                summaries, benchmark_output_dir, eval_config["keep_zlib_replays"], max_renderer_count
+            )
         elif render_filter is not None:
             _render_eval_failures(
                 env_name,
@@ -2218,6 +2325,12 @@ def _run_eval_rollout(
         use_bfloat16 = args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
         if use_bfloat16 and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
+        allow_tf32 = args["train"].get("tf32", True)
+        if not allow_tf32 and use_bfloat16:
+            raise pufferlib.APIUsageError("train.tf32=False requires train.precision=float32")
+        torch.set_float32_matmul_precision("high" if allow_tf32 else "highest")
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+        torch.backends.cudnn.allow_tf32 = allow_tf32
         eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
         obs, _ = vecenv.reset(rollout_seed)
         _require_finite_eval_batch(obs, "observations after eval reset", num_workers, worker_env_kwargs)
@@ -2337,6 +2450,51 @@ def _run_eval_rollout(
     return episode_summaries
 
 
+def render_training_replays(env_name, args, policy, epoch, global_step, run_dir):
+    """Render one HTML replay per training map with the live policy, observations included."""
+    run_args = copy.deepcopy(args)
+    env_config = run_args["env"]
+    num_scenarios = env_config["num_maps"]
+    # Fixed-length episodes: eval-mode summaries flush on the resample boundary.
+    env_config["termination_mode"] = False
+    env_config["compute_eval_metrics"] = True
+    env_config["num_agents"] = env_config["max_agents_per_env"]
+    run_args["eval"]["action_selection"] = pufferlib.pytorch.ACTION_SELECT_SAMPLE
+    capture_observations = run_args["eval"]["capture_observations"]
+    # Observation replays render at multi-GB RSS each; the obs writer count bounds that too.
+    max_renderer_count = run_args["eval"]["observation_replay_writer_count"] if capture_observations else None
+    num_workers = min(run_args["vec"]["num_envs"], num_scenarios)
+    worker_env_kwargs, total_steps = drive_benchmark._plan_benchmark_eval_workers(
+        run_args, num_scenarios, num_workers, env_config["scenario_length"], capture_replay=True
+    )
+    output_dir = os.path.join(run_dir, "renders", f"epoch_{epoch:06d}_step_{global_step}")
+
+    rng_state = capture_rng_state()
+    policy_was_training = bool(getattr(policy, "training", False))
+    try:
+        summaries = _run_eval_rollout(
+            run_args,
+            env_name,
+            worker_env_kwargs,
+            total_steps,
+            "Rendering training replays",
+            num_scenarios,
+            policy=policy,
+            replay_output_dir=os.path.join(output_dir, "replays"),
+            capture_observations=capture_observations,
+        )
+        drive_eval_replay._render_eval_replays(
+            summaries, output_dir, run_args["eval"]["keep_zlib_replays"], max_renderer_count
+        )
+    except Exception:
+        print(f"\n[training render] Replay rendering failed at epoch {epoch}; continuing training:")
+        traceback.print_exc()
+    finally:
+        if hasattr(policy, "train"):
+            policy.train(policy_was_training)
+        restore_rng_state({"rng_state": rng_state})
+
+
 def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, run_dir):
     """Run the configured evaluator and log its means on the training run."""
     eval_args = copy.deepcopy(args)
@@ -2450,7 +2608,10 @@ def _render_eval_failures(
         )
         summaries.extend(wave_summaries)
     summary = drive_benchmark._write_eval_reports(summaries, failures_dir, len(pairs))
-    drive_eval_replay._render_eval_replays(summaries, failures_dir, run_args["eval"]["keep_zlib_replays"])
+    max_renderer_count = run_args["eval"]["observation_replay_writer_count"] if capture_observations else None
+    drive_eval_replay._render_eval_replays(
+        summaries, failures_dir, run_args["eval"]["keep_zlib_replays"], max_renderer_count
+    )
     return {
         "episodes": summaries,
         "summary": summary,

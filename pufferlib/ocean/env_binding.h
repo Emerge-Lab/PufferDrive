@@ -1323,6 +1323,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "GOAL_XY_FIELDS", GOAL_XY_FIELDS);
     PyModule_AddIntConstant(m, "METRICS_F32_FIELDS", METRICS_F32_FIELDS);
     PyModule_AddIntConstant(m, "SCORE_F32_FIELDS", SCORE_F32_FIELDS);
+    PyModule_AddIntConstant(m, "REWARD_F32_FIELDS", REWARD_F32_FIELDS);
     PyModule_AddIntConstant(m, "TRAFFIC_I16_FIELDS", TRAFFIC_I16_FIELDS);
     PyModule_AddIntConstant(m, "REWARD_F32_FIELDS", REWARD_F32_FIELDS);
     PyModule_AddIntConstant(m, "NUM_REWARD_COEFS", NUM_REWARD_COEFS);
@@ -1350,6 +1351,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "CONTROL_MODE_SDC_ONLY", CONTROL_MODE_SDC_ONLY);
     PyModule_AddIntConstant(m, "INIT_MODE_CREATE_ALL_VALID", INIT_MODE_CREATE_ALL_VALID);
     PyModule_AddIntConstant(m, "INIT_MODE_CREATE_ONLY_CONTROLLED", INIT_MODE_CREATE_ONLY_CONTROLLED);
+    PyModule_AddIntConstant(m, "INIT_MODE_CREATE_CONTROLLABLE_TYPES", INIT_MODE_CREATE_CONTROLLABLE_TYPES);
     PyObject_SetAttrString(m, "MULTI_LANE_FULL_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_FULL_SCORE_TIME));
     PyObject_SetAttrString(m, "MULTI_LANE_HALF_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_HALF_SCORE_TIME));
 

@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0010_${SEED}
+export RUN_NAME=k_scaled_0030_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -72,35 +72,43 @@ srun torchrun \
     train.seed=${SEED} \
     tb=True
 
-# Only evaluate a run that actually finished, otherwise the eval jobs below would
-# score a stale final_model.pt from an earlier attempt (or fail on a missing one).
-# srun blocks until every node's task exits, so this is the whole run's status.
-TRAIN_STATUS=$?
-if [ ${TRAIN_STATUS} -ne 0 ]; then
-    echo "Training exited with status ${TRAIN_STATUS}; skipping evaluation."
-    exit ${TRAIN_STATUS}
-fi
 if [ ! -f ${MODEL_PATH} ]; then
-    echo "Training finished but ${MODEL_PATH} is missing; skipping evaluation."
+    echo "Training did not produce ${MODEL_PATH}; skipping evaluation."
     exit 1
 fi
 
-# No srun: evaluation is a single-node job, run here on the batch host rather than
-# once per allocated node.
+# parallel_eval places one shard per allocated node via srun, so each shard's 64
+# env workers get a full node's cores instead of sharing the batch host.
 echo "Training done, evaluating ${MODEL_PATH}"
-.venv/bin/puffer eval puffer_drive carla \
+.venv/bin/python scripts/parallel_eval.py carla \
+    --total-scenarios 40000 \
+    --num-nodes 8 \
+    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     vec.num_envs=64 \
-    num_scenarios=4000 \
+    eval.reward_comfort=0.0 \
+    eval.reward_lane_center=0.0075 \
+    env.eval_perceived_size_margin_m=0.2 \
+    eval.min_goal_spacing=20 \
+    eval.max_goal_spacing=30 \
+    env.max_speed_mps=13.33 \
+    env.disable_red_light_infractions=1 \
+    env.traffic_light_junction_phases=0 \
+    env.eval_standstill_jerk_deadband_mps3=1.5 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
-.venv/bin/puffer eval puffer_drive nuplan_single \
+.venv/bin/puffer eval puffer_drive nuplan_multi \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
     vec.num_envs=64 \
-    eval.max_sdc_replay_workers=64 \
+    eval.num_agents=300 \
+    eval.reward_comfort=0.0 \
+    eval.reward_lane_center=0.0075 \
+    env.eval_perceived_size_margin_m=0.15 \
+    env.max_speed_mps=13.33 \
+    eval.disable_red_light_infractions=1 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \

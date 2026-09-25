@@ -96,6 +96,7 @@ struct Agent {
     int displacement_sample_count;
     float distance_since_spawn;
     float seconds_stopped;
+    int comfort_violation_last_window_idx;
     int stop_sign_stopped_timestep_count;
 
     // Goal positions
@@ -160,6 +161,8 @@ struct TrafficControlElement {
     float heading;
     int num_controlled_lanes;
     int *controlled_lanes;
+    int junction_id; // -1: light is not part of a junction signal cycle
+    int phase_idx;   // slot in the junction cycle, compact 0..N-1; -1 with junction_id -1
 };
 
 struct LaneGraph {
