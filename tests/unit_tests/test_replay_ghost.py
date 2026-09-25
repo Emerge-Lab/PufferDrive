@@ -15,6 +15,7 @@ def _replay(ghost=None):
     replay = {
         "env": {
             "num_goals": 2,
+            "goal_radius": 2.0,
             "reward_conditioning": False,
             "obs_slots_partners_n": 4,
             "obs_slots_lane_n": 4,

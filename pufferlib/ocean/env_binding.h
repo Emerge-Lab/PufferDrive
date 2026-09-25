@@ -215,7 +215,7 @@ static PyObject *env_reset(PyObject *self, PyObject *args) {
 static PyObject *env_step(PyObject *self, PyObject *args) {
     int num_args = PyTuple_Size(args);
     if (num_args != 1) {
-        PyErr_SetString(PyExc_TypeError, "vec_render requires 1 argument");
+        PyErr_SetString(PyExc_TypeError, "env_step requires 1 argument");
         return NULL;
     }
 
@@ -224,16 +224,6 @@ static PyObject *env_step(PyObject *self, PyObject *args) {
         return NULL;
     }
     c_step(env);
-    Py_RETURN_NONE;
-}
-
-// Python function to step the environment
-static PyObject *env_render(PyObject *self, PyObject *args) {
-    Env *env = unpack_env(args);
-    if (!env) {
-        return NULL;
-    }
-    c_render((Drive *) env, 0); // single-env binding: VIEW_MODE_DEFAULT
     Py_RETURN_NONE;
 }
 
@@ -593,109 +583,6 @@ static PyObject *vec_step(PyObject *self, PyObject *arg) {
     Py_RETURN_NONE;
 }
 
-static PyObject *vec_render(PyObject *self, PyObject *args) {
-    int num_args = PyTuple_Size(args);
-    if (num_args != 3) {
-        PyErr_SetString(PyExc_TypeError, "vec_render requires 3 arguments (vec_env, view_mode, env_id)");
-        return NULL;
-    }
-
-    VecEnv *vec = (VecEnv *) PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
-    if (!vec) {
-        PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
-        return NULL;
-    }
-
-    PyObject *view_mode_arg = PyTuple_GetItem(args, 1);
-    if (!PyObject_TypeCheck(view_mode_arg, &PyLong_Type)) {
-        PyErr_SetString(PyExc_TypeError, "view_mode must be an integer");
-        return NULL;
-    }
-    int view_mode = PyLong_AsLong(view_mode_arg);
-
-    PyObject *env_id_arg = PyTuple_GetItem(args, 2);
-    if (!PyObject_TypeCheck(env_id_arg, &PyLong_Type)) {
-        PyErr_SetString(PyExc_TypeError, "env_id must be an integer");
-        return NULL;
-    }
-    int env_id = PyLong_AsLong(env_id_arg);
-
-    c_render(vec->envs[env_id], view_mode);
-    Py_RETURN_NONE;
-}
-
-// Set the per-env video suffix BEFORE the first vec_render of a rollout.
-// make_client reads env->video_suffix when constructing the ffmpeg output
-// filename, so multi-view rollouts (sim_state + bev) can produce distinct
-// {scenario_id}.mp4 vs {scenario_id}_bev.mp4 without overwrite.
-static PyObject *vec_set_video_suffix(PyObject *self, PyObject *args) {
-    int num_args = PyTuple_Size(args);
-    if (num_args != 3) {
-        PyErr_SetString(PyExc_TypeError, "vec_set_video_suffix requires 3 arguments (vec_env, suffix, env_id)");
-        return NULL;
-    }
-    VecEnv *vec = (VecEnv *) PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
-    if (!vec) {
-        PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
-        return NULL;
-    }
-    PyObject *suffix_arg = PyTuple_GetItem(args, 1);
-    if (!PyUnicode_Check(suffix_arg)) {
-        PyErr_SetString(PyExc_TypeError, "suffix must be a string");
-        return NULL;
-    }
-    const char *suffix = PyUnicode_AsUTF8(suffix_arg);
-    if (!suffix) {
-        return NULL;
-    }
-    PyObject *env_id_arg = PyTuple_GetItem(args, 2);
-    if (!PyObject_TypeCheck(env_id_arg, &PyLong_Type)) {
-        PyErr_SetString(PyExc_TypeError, "env_id must be an integer");
-        return NULL;
-    }
-    int env_id = PyLong_AsLong(env_id_arg);
-    if (env_id < 0 || env_id >= vec->num_envs) {
-        PyErr_SetString(PyExc_IndexError, "vec_set_video_suffix env_id out of range");
-        return NULL;
-    }
-    Drive *drive = (Drive *) vec->envs[env_id];
-    strncpy(drive->video_suffix, suffix, sizeof(drive->video_suffix) - 1);
-    drive->video_suffix[sizeof(drive->video_suffix) - 1] = '\0';
-    Py_RETURN_NONE;
-}
-
-// Explicit per-env client teardown. Distinct from c_close (which tears the
-// whole Env down) — this just releases the render Client so ffmpeg/ PBOs
-// are flushed without destroying the env. Used by eval renderers that want
-// to close out one scenario's mp4 and then reset the env for the next one.
-static PyObject *vec_close_client(PyObject *self, PyObject *args) {
-    int num_args = PyTuple_Size(args);
-    if (num_args != 2) {
-        PyErr_SetString(PyExc_TypeError, "vec_close_client requires 2 arguments");
-        return NULL;
-    }
-
-    VecEnv *vec = (VecEnv *) PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
-    if (!vec) {
-        PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
-        return NULL;
-    }
-
-    PyObject *env_id_arg = PyTuple_GetItem(args, 1);
-    if (!PyObject_TypeCheck(env_id_arg, &PyLong_Type)) {
-        PyErr_SetString(PyExc_TypeError, "env_id must be an integer");
-        return NULL;
-    }
-    int env_id = PyLong_AsLong(env_id_arg);
-
-    Env *env = vec->envs[env_id];
-    if (env && env->client) {
-        close_client(env->client);
-        env->client = NULL;
-    }
-    Py_RETURN_NONE;
-}
-
 static int assign_to_dict(PyObject *dict, char *key, float value) {
     PyObject *v = PyFloat_FromDouble(value);
     if (v == NULL) {
@@ -801,8 +688,8 @@ static PyObject *vec_get(PyObject *self, PyObject *args) {
 }
 
 static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 7) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_obs_html_frame requires 7 arguments");
+    if (PyTuple_Size(args) != 9) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_obs_html_frame requires 9 arguments");
         return NULL;
     }
 
@@ -816,10 +703,13 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     PyArrayObject *metrics_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 3);
     PyArrayObject *puffer_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 4);
     PyArrayObject *traffic_i16_array = (PyArrayObject *) PyTuple_GetItem(args, 5);
-    PyArrayObject *rewards_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 6);
+    PyArrayObject *goals_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 6);
+    PyArrayObject *rewards_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 7);
+    PyArrayObject *coefs_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 8);
 
     if (!PyArray_Check(agent_f32_array) || !PyArray_Check(agent_i32_array) || !PyArray_Check(metrics_f32_array)
-        || !PyArray_Check(puffer_f32_array) || !PyArray_Check(traffic_i16_array) || !PyArray_Check(rewards_f32_array)) {
+        || !PyArray_Check(puffer_f32_array) || !PyArray_Check(traffic_i16_array) || !PyArray_Check(goals_f32_array)
+        || !PyArray_Check(rewards_f32_array) || !PyArray_Check(coefs_f32_array)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -829,14 +719,18 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     memset(PyArray_DATA(metrics_f32_array), 0, PyArray_NBYTES(metrics_f32_array));
     memset(PyArray_DATA(puffer_f32_array), 0, PyArray_NBYTES(puffer_f32_array));
     memset(PyArray_DATA(traffic_i16_array), 0, PyArray_NBYTES(traffic_i16_array));
+    memset(PyArray_DATA(goals_f32_array), 0, PyArray_NBYTES(goals_f32_array));
     memset(PyArray_DATA(rewards_f32_array), 0, PyArray_NBYTES(rewards_f32_array));
+    memset(PyArray_DATA(coefs_f32_array), 0, PyArray_NBYTES(coefs_f32_array));
 
     float *agent_f32 = (float *) PyArray_DATA(agent_f32_array);
     int *agent_i32 = (int *) PyArray_DATA(agent_i32_array);
     float *metrics_f32 = (float *) PyArray_DATA(metrics_f32_array);
     float *puffer_f32 = (float *) PyArray_DATA(puffer_f32_array);
     short *traffic_i16 = (short *) PyArray_DATA(traffic_i16_array);
+    float *goals_f32 = (float *) PyArray_DATA(goals_f32_array);
     float *rewards_f32 = (float *) PyArray_DATA(rewards_f32_array);
+    float *coefs_f32 = (float *) PyArray_DATA(coefs_f32_array);
 
     int env_cap = (int) PyArray_DIM(agent_f32_array, 0);
     int env_count = vec->num_envs < env_cap ? vec->num_envs : env_cap;
@@ -847,7 +741,15 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     int puffer_fields = (int) PyArray_DIM(puffer_f32_array, 2);
     int traffic_cap = (int) PyArray_DIM(traffic_i16_array, 1);
     int traffic_fields = (int) PyArray_DIM(traffic_i16_array, 2);
+    int goal_fields = (int) PyArray_DIM(goals_f32_array, 2);
+    int goal_slots = goal_fields / GOAL_XY_FIELDS;
     int reward_fields = (int) PyArray_DIM(rewards_f32_array, 2);
+    int coef_fields = (int) PyArray_DIM(coefs_f32_array, 2);
+
+    if (coef_fields != NUM_REWARD_COEFS) {
+        PyErr_SetString(PyExc_ValueError, "coefs_f32 must have NUM_REWARD_COEFS fields");
+        return NULL;
+    }
 
     for (int e = 0; e < env_count; e++) {
         Drive *drive = (Drive *) vec->envs[e];
@@ -872,6 +774,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_f32[f32_base + 9] = a->accel_lat;
             agent_f32[f32_base + 10] = a->jerk_long;
             agent_f32[f32_base + 11] = a->jerk_lat;
+            agent_f32[f32_base + AGENT_F32_GOAL_RADIUS_IDX] = a->reward_coefs[REWARD_COEF_GOAL_RADIUS];
 
             agent_i32[i32_base + 0] = i;
             agent_i32[i32_base + 1] = a->type;
@@ -885,6 +788,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_i32[i32_base + 9] = a->phantom_braking_counter > 0;
 
             memcpy(&metrics_f32[metrics_base], a->metrics_array, sizeof(float) * NUM_METRICS);
+            memcpy(&coefs_f32[(e * agent_cap + i) * coef_fields], a->reward_coefs, sizeof(float) * NUM_REWARD_COEFS);
         }
 
         if (drive->active_agent_indices) {
@@ -895,7 +799,16 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
                 }
                 int i32_base = (e * agent_cap + agent_idx) * agent_i32_fields;
                 int puffer_base = (e * agent_cap + agent_idx) * puffer_fields;
+                int reward_base = (e * agent_cap + agent_idx) * reward_fields;
                 agent_i32[i32_base + 7] = j;
+
+                Agent *active = &drive->agents[agent_idx];
+                int goal_count = active->goal_count < goal_slots ? active->goal_count : goal_slots;
+                int goal_base = (e * agent_cap + agent_idx) * goal_fields;
+                for (int goal_idx = active->current_goal_idx; goal_idx < goal_count; goal_idx++) {
+                    goals_f32[goal_base + goal_idx * GOAL_XY_FIELDS] = active->list_goal_x[goal_idx];
+                    goals_f32[goal_base + goal_idx * GOAL_XY_FIELDS + 1] = active->list_goal_y[goal_idx];
+                }
 
                 if (!drive->compute_eval_metrics || !drive->logs || j >= drive->logs_capacity) {
                     continue;
@@ -917,21 +830,20 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
                 puffer_f32[puffer_base + 13] = log->multiplier;
                 puffer_f32[puffer_base + 14] = log->weighted_average;
 
-                int reward_base = (e * agent_cap + agent_idx) * reward_fields;
-                rewards_f32[reward_base + 0] = log->episode_return;
-                rewards_f32[reward_base + 1] = log->reward_collision;
-                rewards_f32[reward_base + 2] = log->reward_offroad;
-                rewards_f32[reward_base + 3] = log->reward_red_light;
-                rewards_f32[reward_base + 4] = log->reward_goal;
-                rewards_f32[reward_base + 5] = log->reward_lane_align;
-                rewards_f32[reward_base + 6] = log->reward_lane_center;
-                rewards_f32[reward_base + 7] = log->reward_comfort;
-                rewards_f32[reward_base + 8] = log->reward_velocity;
-                rewards_f32[reward_base + 9] = log->reward_timestep;
-                rewards_f32[reward_base + 10] = log->reward_reverse;
-                rewards_f32[reward_base + 11] = log->reward_overspeed;
-                rewards_f32[reward_base + 12] = log->reward_ade;
-                rewards_f32[reward_base + 13] = log->reward_stop_sign;
+                rewards_f32[reward_base + REWARD_F32_EPISODE_RETURN_IDX] = log->episode_return;
+                rewards_f32[reward_base + REWARD_F32_COLLISION_IDX] = log->reward_collision;
+                rewards_f32[reward_base + REWARD_F32_OFFROAD_IDX] = log->reward_offroad;
+                rewards_f32[reward_base + REWARD_F32_RED_LIGHT_IDX] = log->reward_red_light;
+                rewards_f32[reward_base + REWARD_F32_STOP_SIGN_IDX] = log->reward_stop_sign;
+                rewards_f32[reward_base + REWARD_F32_GOAL_IDX] = log->reward_goal;
+                rewards_f32[reward_base + REWARD_F32_LANE_ALIGN_IDX] = log->reward_lane_align;
+                rewards_f32[reward_base + REWARD_F32_LANE_CENTER_IDX] = log->reward_lane_center;
+                rewards_f32[reward_base + REWARD_F32_COMFORT_IDX] = log->reward_comfort;
+                rewards_f32[reward_base + REWARD_F32_VELOCITY_IDX] = log->reward_velocity;
+                rewards_f32[reward_base + REWARD_F32_TIMESTEP_IDX] = log->reward_timestep;
+                rewards_f32[reward_base + REWARD_F32_REVERSE_IDX] = log->reward_reverse;
+                rewards_f32[reward_base + REWARD_F32_OVERSPEED_IDX] = log->reward_overspeed;
+                rewards_f32[reward_base + REWARD_F32_ADE_IDX] = log->reward_ade;
             }
         }
 
@@ -1559,7 +1471,6 @@ static PyMethodDef methods[]
         "Init environment with observation, action, reward, terminal, truncation arrays"},
        {"env_reset", env_reset, METH_VARARGS, "Reset the environment"},
        {"env_step", env_step, METH_VARARGS, "Step the environment"},
-       {"env_render", env_render, METH_VARARGS, "Render the environment"},
        {"env_close", env_close, METH_VARARGS, "Close the environment"},
        {"env_get", env_get, METH_VARARGS, "Get the environment state"},
        {"env_put", (PyCFunction) env_put, METH_VARARGS | METH_KEYWORDS, "Put stuff into env"},
@@ -1572,12 +1483,6 @@ static PyMethodDef methods[]
         METH_VARARGS,
         "Return one per-episode metrics dict per env whose eval episode has finished"},
        {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
-       {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
-       {"vec_set_video_suffix", vec_set_video_suffix, METH_VARARGS, "Set the mp4 filename suffix for an env"},
-       {"vec_close_client",
-        vec_close_client,
-        METH_VARARGS,
-        "Release a single env's render client without destroying the env"},
        {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
        {"vec_get", vec_get, METH_VARARGS, "Get attributes from each env in a VecEnv"},
        {"vec_get_obs_html_frame",
@@ -1681,21 +1586,18 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_STATE_YELLOW", TRAFFIC_CONTROL_STATE_YELLOW);
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_STATE_GREEN", TRAFFIC_CONTROL_STATE_GREEN);
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_STATE_OFF", TRAFFIC_CONTROL_STATE_OFF);
-    PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS", TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS);
-    PyModule_AddIntConstant(
-        m,
-        "TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN",
-        TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN);
-    PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_SCOPE_ALL", TRAFFIC_CONTROL_SCOPE_ALL);
     PyModule_AddIntConstant(m, "EGO_FEATURES", EGO_FEATURES);
     PyModule_AddIntConstant(m, "GOAL_FEATURES", GOAL_FEATURES);
     PyModule_AddIntConstant(m, "MAX_GOALS", MAX_GOALS);
     PyModule_AddIntConstant(m, "AGENT_F32_FIELDS", AGENT_F32_FIELDS);
+    PyModule_AddIntConstant(m, "AGENT_F32_GOAL_RADIUS_IDX", AGENT_F32_GOAL_RADIUS_IDX);
     PyModule_AddIntConstant(m, "AGENT_I32_FIELDS", AGENT_I32_FIELDS);
+    PyModule_AddIntConstant(m, "GOAL_XY_FIELDS", GOAL_XY_FIELDS);
     PyModule_AddIntConstant(m, "METRICS_F32_FIELDS", METRICS_F32_FIELDS);
     PyModule_AddIntConstant(m, "SCORE_F32_FIELDS", SCORE_F32_FIELDS);
     PyModule_AddIntConstant(m, "REWARD_F32_FIELDS", REWARD_F32_FIELDS);
     PyModule_AddIntConstant(m, "TRAFFIC_I16_FIELDS", TRAFFIC_I16_FIELDS);
+    PyModule_AddIntConstant(m, "REWARD_F32_FIELDS", REWARD_F32_FIELDS);
     PyModule_AddIntConstant(m, "NUM_REWARD_COEFS", NUM_REWARD_COEFS);
     PyModule_AddIntConstant(m, "GOAL_REGEN_FINITE", GOAL_REGEN_FINITE);
     PyModule_AddIntConstant(m, "GOAL_REGEN_ROLLING", GOAL_REGEN_ROLLING);

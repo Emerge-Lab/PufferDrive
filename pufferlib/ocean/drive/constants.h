@@ -96,11 +96,6 @@
 #define SIMULATION_MODE_GIGAFLOW 0
 #define SIMULATION_MODE_REPLAY 1
 
-// Which traffic controls are enforced
-#define TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS 0
-#define TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN 1
-#define TRAFFIC_CONTROL_SCOPE_ALL 2
-
 // What happens to an agent on collision/infraction
 #define INFRACTION_BEHAVIOR_IGNORE 0
 #define INFRACTION_BEHAVIOR_STOP 1
@@ -124,10 +119,6 @@
 // Action representation
 #define ACTION_TYPE_DISCRETE 0
 #define ACTION_TYPE_CONTINUOUS 1
-
-// Render target (selected by drive.py's render_mode kwarg, plumbed via binding.c)
-#define RENDER_WINDOW 0
-#define RENDER_HEADLESS 1
 
 // =====================================================================================
 // 3. DYNAMICS
@@ -185,11 +176,12 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define COSIM_PARTNER_DEFAULT_LENGTH_M 4.5f // co-sim partner slot box until the external sim sets sizes
 #define COSIM_PARTNER_DEFAULT_WIDTH_M 2.0f
 #define COSIM_PARTNER_DEFAULT_HEIGHT_M 1.5f
+#define SPAWN_OFFROAD_SCALE_FACTOR 1.1f
 // Replay self-play: logged vehicles failing these are created static instead of policy-controlled
-#define REPLAY_SPAWN_EDGE_CLEARANCE_M 0.5f
-#define REPLAY_SPAWN_LONGITUDINAL_CLEARANCE_M SPAWN_CLEARANCE_M
-#define REPLAY_MAX_CONTROLLED_LENGTH_M 6.0f
-#define REPLAY_SPAWN_MAX_LANE_DISTANCE_M 2.5f
+#define REPLAY_SPAWN_EDGE_CLEARANCE_M 0.5f                      // Car box must stay this far from the road edge
+#define REPLAY_SPAWN_LONGITUDINAL_CLEARANCE_M SPAWN_CLEARANCE_M // Gap needed to other cars in front of and behind
+#define REPLAY_MAX_CONTROLLED_LENGTH_M 6.0f                     // Longer vehicles (trucks, buses) are made static
+#define REPLAY_SPAWN_MAX_LANE_DISTANCE_M 2.5f                   // Car must be this close to a lane center line
 
 // Stop line geometry (spawn overlap check and IDM braking)
 #define STOP_LINE_DIST_SQ (10.0f * 10.0f)
@@ -356,13 +348,29 @@ static const int ROAD_OFFSETS[25][2]
 // =====================================================================================
 
 // obs_html_frame array field counts
+#define AGENT_F32_GOAL_RADIUS_IDX 12
 #define AGENT_F32_FIELDS                                                                                               \
-    12 // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat, jerk_long, jerk_lat
+    13 // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat, jerk_long, jerk_lat, goal_radius
 #define AGENT_I32_FIELDS                                                                                               \
     10 // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx, blindness_active, braking_active
+#define GOAL_XY_FIELDS 2               // goal x, y per goal slot; reached slots stay zeroed
 #define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
 #define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
 #define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
-#define REWARD_F32_FIELDS 14           // Log fields: episode_return, reward_collision .. reward_ade, reward_stop_sign
+#define REWARD_F32_EPISODE_RETURN_IDX 0
+#define REWARD_F32_COLLISION_IDX 1
+#define REWARD_F32_OFFROAD_IDX 2
+#define REWARD_F32_RED_LIGHT_IDX 3
+#define REWARD_F32_STOP_SIGN_IDX 4
+#define REWARD_F32_GOAL_IDX 5
+#define REWARD_F32_LANE_ALIGN_IDX 6
+#define REWARD_F32_LANE_CENTER_IDX 7
+#define REWARD_F32_COMFORT_IDX 8
+#define REWARD_F32_VELOCITY_IDX 9
+#define REWARD_F32_TIMESTEP_IDX 10
+#define REWARD_F32_REVERSE_IDX 11
+#define REWARD_F32_OVERSPEED_IDX 12
+#define REWARD_F32_ADE_IDX 13
+#define REWARD_F32_FIELDS 14
 
 #endif

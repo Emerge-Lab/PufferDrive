@@ -220,6 +220,69 @@ static int test_forked_child_owns_and_frees_new_map_cache_entry(void) {
     return 0;
 }
 
+static int test_forked_child_reuses_preloaded_map_cache_entry(void) {
+    drive_map_cache_clear();
+    Drive preload_config = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 8, 1);
+    preload_config.use_neighbor_cache = 1;
+    const char *map_files[] = {drive_carla_map()};
+    pid_t parent_pid = getpid();
+
+    EXPECT_EQ_INT(preload_map_cache(&preload_config, map_files, 1), 1);
+    EXPECT_EQ_INT(drive_map_cache_live_count(), 1);
+    struct SharedMapData *preloaded = map_cache_lookup(&preload_config);
+    EXPECT_TRUE(preloaded != NULL);
+    EXPECT_EQ_INT(preloaded->ref_count, 1);
+    EXPECT_EQ_INT(preloaded->owner_pid, parent_pid);
+
+    int fds[2];
+    EXPECT_EQ_INT(pipe(fds), 0);
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(fds[0]);
+        Drive child = create_test_env_with_cache_modes(1, 1, 8);
+        int payload[] = {
+            child.shared_map == preloaded,
+            child.grid_map == preloaded->grid_map,
+            child.road_elements == preloaded->road_elements,
+            child.shared_map->owner_pid == parent_pid,
+            drive_map_cache_live_count(),
+            child.shared_map->ref_count,
+            0,
+            0,
+        };
+        free_allocated(&child);
+        payload[6] = drive_map_cache_live_count();
+        payload[7] = preloaded->ref_count;
+        write(fds[1], payload, sizeof(payload));
+        close(fds[1]);
+        _exit(0);
+    }
+
+    close(fds[1]);
+    int payload[8] = {0};
+    int status = 0;
+    read(fds[0], payload, sizeof(payload));
+    close(fds[0]);
+    waitpid(pid, &status, 0);
+    EXPECT_TRUE(WIFEXITED(status));
+    EXPECT_EQ_INT(WEXITSTATUS(status), 0);
+    EXPECT_EQ_INT(payload[0], 1);
+    EXPECT_EQ_INT(payload[1], 1);
+    EXPECT_EQ_INT(payload[2], 1);
+    EXPECT_EQ_INT(payload[3], 1);
+    EXPECT_EQ_INT(payload[4], 1);
+    EXPECT_EQ_INT(payload[5], 2);
+    EXPECT_EQ_INT(payload[6], 1);
+    EXPECT_EQ_INT(payload[7], 1);
+    EXPECT_EQ_INT(preloaded->ref_count, 1);
+
+    EXPECT_EQ_INT(release_preloaded_map_cache(&preload_config, map_files, 1), 0);
+    EXPECT_EQ_INT(drive_map_cache_live_count(), 0);
+    free(preload_config.map_name);
+    drive_map_cache_clear();
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_all_cache_modes_produce_identical_step_outputs);
@@ -227,5 +290,6 @@ int main(void) {
     RUN_TEST(test_mixed_neighbor_modes_share_map_and_populate_neighbor_cache);
     RUN_TEST(test_repeated_single_map_lifetimes_reuse_one_cache_slot);
     RUN_TEST(test_forked_child_owns_and_frees_new_map_cache_entry);
+    RUN_TEST(test_forked_child_reuses_preloaded_map_cache_entry);
     return test_summary(failures);
 }

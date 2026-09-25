@@ -76,7 +76,7 @@ def _build_config():
             "max_agents_per_env": 16,
             "action_type": "discrete",
             "num_maps": 2,
-            "use_map_cache": 1,
+            "use_map_cache": True,
             "map_dir": "pufferlib/resources/drive/binaries/carla",
             "scenario_length": BPTT_HORIZON,
             "stagger_first_episode": False,  # golden expects full-length first episodes
@@ -85,7 +85,7 @@ def _build_config():
     )
     args["wandb"] = False
     args["neptune"] = False
-    args["eval"] = {}
+    args["eval"] = None
     return args
 
 

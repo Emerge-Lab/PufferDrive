@@ -50,8 +50,6 @@ static inline Drive drive_test_env_config(
     int num_agents,
     int use_map_cache) {
     Drive env = {0};
-    env.render_mode = RENDER_WINDOW;
-    snprintf(env.resource_root, sizeof(env.resource_root), "%s", DRIVE_TEST_REPO_ROOT "/pufferlib/resources/drive");
     env.action_type = 0;
     env.dynamics_model = DYNAMICS_MODEL_CLASSIC;
     env.reward_goal = 1.0f;
@@ -71,6 +69,7 @@ static inline Drive drive_test_env_config(
     env.collision_behavior = INFRACTION_BEHAVIOR_IGNORE;
     env.offroad_behavior = INFRACTION_BEHAVIOR_IGNORE;
     env.traffic_light_behavior = INFRACTION_BEHAVIOR_IGNORE;
+    env.stop_sign_behavior = INFRACTION_BEHAVIOR_IGNORE;
     env.use_map_cache = use_map_cache;
     env.conditioning_speed_scale = 1.5f;
     env.goal_radius = 2.0f;
@@ -91,7 +90,9 @@ static inline Drive drive_test_env_config(
     env.obs_slots_partners_n = 16;
     env.obs_partner_relative_velocity = 0;
     env.obs_slots_traffic_controls_n = 4;
-    env.traffic_control_scope = TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS;
+    env.traffic_lights_enabled = 1;
+    env.stop_signs_enabled = 0;
+    env.yield_signs_enabled = 0;
     env.dt = 0.1f;
     env.base_max_speed_mps = 20.0f;
     env.spawn_initial_speed = 0.0f;

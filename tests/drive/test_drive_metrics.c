@@ -166,8 +166,8 @@ static int test_metric_stop_sign_infraction_can_be_disabled(void) {
     for (int disabled = 0; disabled < 2; disabled++) {
         srand(5);
         Drive env = drive_test_make_env(TOWN03_MAP, SIMULATION_MODE_GIGAFLOW, 1, 0);
-        env.traffic_control_scope = TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN;
-        env.traffic_light_behavior = INFRACTION_BEHAVIOR_STOP;
+        env.stop_signs_enabled = 1;
+        env.stop_sign_behavior = INFRACTION_BEHAVIOR_STOP;
         env.disable_stop_sign_infractions = disabled;
         int agent_idx = env.active_agent_indices[0];
         Agent *agent = &env.agents[agent_idx];

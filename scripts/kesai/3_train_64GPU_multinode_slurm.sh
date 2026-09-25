@@ -74,7 +74,7 @@ srun torchrun \
     env.goal_reach_requires_speed=true \
     env.obs_partner_relative_velocity=true \
     env.obs_lane_heading_signed=true \
-    env.traffic_control_scope=traffic_lights_stop_sign \
+    env.stop_signs_enabled=true \
     env.pose_noise_xy_m=0.025 \
     env.pose_noise_yaw_deg=0.25 \
     env.speed_limit_random_prob=1.0 \

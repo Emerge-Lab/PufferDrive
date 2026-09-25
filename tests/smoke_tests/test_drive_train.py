@@ -141,7 +141,7 @@ def _build_config():
             "max_agents_per_env": 16,
             "action_type": "discrete",
             "num_maps": 2,  # few maps -> fast load
-            "use_map_cache": 1,  # share map geometry across envs in a worker
+            "use_map_cache": True,  # share map geometry across envs in a worker
             "map_dir": "pufferlib/resources/drive/binaries/carla",
             "scenario_length": BPTT_HORIZON,  # short -> episodes complete each epoch
             "stagger_first_episode": False,  # golden expects full-length first episodes
@@ -167,7 +167,7 @@ def _build_config():
 
     args["wandb"] = False
     args["neptune"] = False
-    args["eval"] = {}  # disable all evaluators during the smoke run
+    args["eval"] = None  # disable all evaluators during the smoke run
 
     return args
 
@@ -189,7 +189,6 @@ def _finalize_train_config(args, total_agents):
             "max_minibatch_size": minibatch_size,
             "total_timesteps": 10_000_000,  # large -> never "done" during 5 epochs
             "checkpoint_interval": 10_000_000,
-            "render": False,
         },
     )
     return dict(**args["train"], env="puffer_drive", eval=args.get("eval", {}))

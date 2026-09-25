@@ -20,6 +20,8 @@ import random
 import shutil
 import subprocess
 import importlib
+import platform
+import shlex
 from datetime import datetime
 from threading import Thread
 from collections import defaultdict, deque
@@ -42,7 +44,12 @@ import pufferlib.sweep
 import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
-from pufferlib.config_schema import ENV_SCHEMAS
+from pufferlib.config_schema import (
+    MAX_C_SEED,
+    normalize_puffer_drive_config,
+    validate_puffer_drive_config,
+    validate_puffer_drive_resources,
+)
 
 
 try:
@@ -83,6 +90,16 @@ HIDDEN_DASHBOARD_METRICS = {
 # Metric key prefixes for benchmark results. Training evaluation logs a step series;
 # a standalone eval writes run-level summaries, so the two never share a key.
 TRAINING_EVAL_KEY_PREFIX = "eval_"
+
+# Environment variables coordinate the perf launcher and profiled child.
+PROFILE_SUBPROCESS_ENV = "PUFFER_PROFILE_SUBPROCESS"
+PROFILE_OUTPUT_ENV = "PUFFER_PROFILE_OUTPUT_DIR"
+# FIFO paths: child sends enable/disable; perf acknowledges completion.
+PROFILE_CONTROL_ENV = "PUFFER_PROFILE_CONTROL"
+PROFILE_ACK_ENV = "PUFFER_PROFILE_ACK"
+PROFILE_ACK = b"ack\n\0"
+# Sim-only profiles define a cycle as a fixed number of environment steps.
+PROFILE_SIM_STEPS_PER_CYCLE = 16_384
 
 
 def torch_device(device):
@@ -153,9 +170,7 @@ class PuffeRL:
         self.total_agents = total_agents
 
         # Experience
-        if config["batch_size"] == "auto" and config["bptt_horizon"] == "auto":
-            raise pufferlib.APIUsageError("Must specify batch_size or bptt_horizon")
-        elif config["batch_size"] == "auto":
+        if config["batch_size"] == "auto":
             config["batch_size"] = total_agents * config["bptt_horizon"]
         elif config["bptt_horizon"] == "auto":
             config["bptt_horizon"] = config["batch_size"] // total_agents
@@ -164,13 +179,9 @@ class PuffeRL:
         horizon = config["bptt_horizon"]
         segments = batch_size // horizon
         self.segments = segments
-        if total_agents > segments:
-            raise pufferlib.APIUsageError(f"Total agents {total_agents} <= segments {segments}")
 
         device = config["device"]
         precision = config["precision"]
-        if precision not in ("float32", "bfloat16"):
-            raise pufferlib.APIUsageError(f"Invalid precision: {precision}: use float32 or bfloat16")
         use_cuda = is_cuda_device(device)
         if precision == "bfloat16" and use_cuda and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 precision requires a CUDA device with bf16 support")
@@ -178,7 +189,9 @@ class PuffeRL:
             raise pufferlib.APIUsageError("bfloat16 precision requires train.amp=True")
         fp32_heads = getattr(base_policy(policy), "fp32_heads", False)
         if precision == "bfloat16" and not config.get("tf32", True) and not fp32_heads:
-            raise pufferlib.APIUsageError("train.tf32=False with train.precision=bfloat16 requires policy.fp32_heads=true")
+            raise pufferlib.APIUsageError(
+                "train.tf32=False with train.precision=bfloat16 requires policy.fp32_heads=true"
+            )
 
         rollout_dtype = config.get("rollout_dtype", "float32")
         if rollout_dtype == "float32":
@@ -227,21 +240,9 @@ class PuffeRL:
         minibatch_size = config["minibatch_size"]
         max_minibatch_size = config["max_minibatch_size"]
         self.minibatch_size = min(minibatch_size, max_minibatch_size)
-        if minibatch_size > max_minibatch_size and minibatch_size % max_minibatch_size != 0:
-            raise pufferlib.APIUsageError(
-                f"minibatch_size {minibatch_size} > max_minibatch_size {max_minibatch_size} must divide evenly"
-            )
-
-        if batch_size < minibatch_size:
-            raise pufferlib.APIUsageError(f"batch_size {batch_size} must be >= minibatch_size {minibatch_size}")
-
         self.accumulate_minibatches = max(1, minibatch_size // max_minibatch_size)
         self.total_minibatches = int(config["update_epochs"] * batch_size / self.minibatch_size)
         self.minibatch_segments = self.minibatch_size // horizon
-        if self.minibatch_segments * horizon != self.minibatch_size:
-            raise pufferlib.APIUsageError(
-                f"minibatch_size {self.minibatch_size} must be divisible by bptt_horizon {horizon}"
-            )
 
         # Torch compile
         self.uncompiled_policy = base_policy(policy)
@@ -292,9 +293,6 @@ class PuffeRL:
                 eps=config["adam_eps"],
                 heavyball_momentum=True,
             )
-        else:
-            raise ValueError(f"Unknown optimizer: {config['optimizer']}")
-
         self.optimizer = optimizer
 
         critic_params = [param for name, param in self.policy.named_parameters() if "critic" in name]
@@ -322,10 +320,9 @@ class PuffeRL:
         # Initializations
         self.config = config
         self.vecenv = vecenv
-        normalized_obs_mask = getattr(vecenv.driver_env, "normalized_obs_mask", None)
-        self.normalized_obs_idx = None
-        if normalized_obs_mask is not None:
-            self.normalized_obs_idx = torch.as_tensor(np.flatnonzero(normalized_obs_mask), device=config["device"])
+        self.obs_stats_feature_idx = torch.as_tensor(
+            np.flatnonzero(vecenv.driver_env.obs_stats_feature_mask), device=config["device"]
+        )
         self.epoch = 0
         self.global_step = 0
         self.agent_steps = 0
@@ -416,7 +413,12 @@ class PuffeRL:
             m = torch.as_tensor(mask).to(device)  # , non_blocking=True)
             done_mask = (d + t).clamp(max=1.0)
 
-            obs_stat_source = o_device if self.normalized_obs_idx is None else o_device[..., self.normalized_obs_idx]
+            # Obs distribution stats (max/min/mean across the batch and obs
+            # dims, appended per env step). Surfaces clipping / unbounded
+            # features / normalization regressions in wandb.
+            obs_stat_source = (
+                o_device if self.obs_stats_feature_idx is None else o_device[..., self.obs_stats_feature_idx]
+            )
             self.stats["obs/max"].append(obs_stat_source.max().item())
             self.stats["obs/min"].append(obs_stat_source.min().item())
             self.stats["obs/mean"].append(obs_stat_source.mean().item())
@@ -524,7 +526,6 @@ class PuffeRL:
         done_training = self.global_step >= config["total_timesteps"]
         should_log = done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25
         if torch.distributed.is_initialized():
-            # mean_and_log gathers across ranks; the wall-clock gate must decide identically everywhere
             should_log_flag = torch.tensor([1 if should_log else 0], device=config["device"], dtype=torch.int32)
             torch.distributed.broadcast(should_log_flag, src=0)
             should_log = bool(should_log_flag.item())
@@ -1483,7 +1484,6 @@ def _latest_checkpoint_path(run_dir):
 
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
-    training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
 
     # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
     if args["load_model_path"]:
@@ -1511,7 +1511,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "obs_dropout_lane",
             "obs_slots_partners_n",
             "obs_slots_traffic_controls_n",
-            "traffic_control_scope",
+            "traffic_lights_enabled",
+            "stop_signs_enabled",
+            "yield_signs_enabled",
         }
         if os.path.exists(config_yaml_path):
             print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")
@@ -1533,6 +1535,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 f"No config.yaml at {config_yaml_path}; fine-tuning with the configured "
                 "policy/observation architecture instead of the checkpoint's."
             )
+
+    args = normalize_puffer_drive_config(args, "training")
+    validate_puffer_drive_config(args, "training")
+    if vecenv is None:
+        validate_puffer_drive_resources(args, "training")
+    training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
 
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -1584,6 +1592,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             )
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
+    if torch.distributed.is_initialized():
+        train_config["total_timesteps"] //= torch.distributed.get_world_size()
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     # A run is identified by its name, and its directory is train.data_dir. Relaunching
@@ -1767,38 +1777,12 @@ def eval(
     selected_benchmarks = benchmark_names if benchmark_names is not None else eval_config["benchmarks"]
     eval_config["benchmarks"] = selected_benchmarks
     output_name = eval_config["output_name"]
-    render_scenarios = eval_config["render_scenarios"]
     render_filter = eval_config["render_filter"]
     max_rendered_failures = eval_config["max_rendered_failures"]
     failure_replay_csv = eval_config["failure_replay_csv"]
-    max_sdc_replay_workers = eval_config["max_sdc_replay_workers"]
-    valid_action_selections = (
-        pufferlib.pytorch.ACTION_SELECT_SAMPLE,
-        pufferlib.pytorch.ACTION_SELECT_MODE,
-        pufferlib.pytorch.ACTION_SELECT_MEAN,
-    )
-    if eval_config["action_selection"] not in valid_action_selections:
-        raise pufferlib.APIUsageError(
-            f"eval.action_selection='{eval_config['action_selection']}' must be one of {valid_action_selections}"
-        )
     scenario_offset = eval_config["scenario_offset"]
-    if isinstance(scenario_offset, bool) or not isinstance(scenario_offset, int) or scenario_offset < 0:
-        raise pufferlib.APIUsageError("eval.scenario_offset must be a non-negative integer")
     configured_output_subdir = eval_config["output_subdir"]
-    if configured_output_subdir is not None and (
-        not isinstance(configured_output_subdir, str) or not configured_output_subdir.strip()
-    ):
-        raise pufferlib.APIUsageError("eval.output_subdir must be a non-empty string or null")
     eval_training_render = args["env"]["eval_training_render"]
-    if not isinstance(eval_training_render, bool):
-        raise pufferlib.APIUsageError("env.eval_training_render must be a boolean")
-    render_scenarios = render_scenarios or eval_training_render
-    if render_scenarios and failure_replay_csv is not None:
-        raise pufferlib.APIUsageError(
-            "Scenario rendering requires a standard benchmark pass and cannot be combined with eval.failure_replay_csv"
-        )
-    if failure_replay_csv is not None and render_filter is None:
-        raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
 
     report_to_wandb = bool(args["wandb"]) and not use_training_config and failure_replay_csv is None
     environment_config, benchmarks = drive_benchmark.load_benchmark_config(
@@ -1826,14 +1810,9 @@ def eval(
     failure_replay_output_dir = None
     if failure_replay_csv is not None:
         failure_replay_csv = os.path.abspath(failure_replay_csv)
-        if not os.path.isfile(failure_replay_csv):
-            raise pufferlib.APIUsageError(
-                f"eval.failure_replay_csv must reference an existing CSV file: {failure_replay_csv}"
-            )
         failure_replay_output_dir = os.path.dirname(failure_replay_csv)
     benchmark_results = {}
     evaluation_policy_cache = {"policy": policy}
-    cli_override_config = OmegaConf.from_dotlist(cli_overrides)
     for benchmark in benchmarks:
         if benchmark.get("simulation_mode") in drive_cosim_eval.COSIM_SIMULATION_MODES:
             if failure_replay_csv is not None:
@@ -1850,18 +1829,13 @@ def eval(
             )
             continue
 
-        run_args = drive_benchmark.build_benchmark_args(base_args, benchmark, environment_config)
-        run_args = OmegaConf.to_container(
-            OmegaConf.merge(OmegaConf.create(dict(run_args)), cli_override_config),
-            resolve=True,
+        run_args = drive_benchmark.build_benchmark_args(
+            base_args,
+            benchmark,
+            environment_config,
+            cli_overrides,
         )
-        run_args["env"]["eval_training_render"] = eval_training_render
-        run_args["env"]["num_agents"] = run_args["eval"]["num_agents"]
-        if eval_training_render:
-            run_args["env"]["compute_eval_metrics"] = True
-            run_args["env"]["resample_frequency"] = run_args["env"]["scenario_length"]
-        if run_args["env"]["simulation_mode"] == "replay" and run_args["env"]["control_mode"] == "control_sdc_only":
-            run_args["vec"]["num_envs"] = min(run_args["vec"]["num_envs"], max_sdc_replay_workers)
+        render_scenarios = eval_config["render_scenarios"] or run_args["env"]["eval_training_render"]
         if scenario_offset:
             if run_args["env"]["simulation_mode"] == "replay":
                 map_dir = run_args["env"]["map_dir"]
@@ -1874,7 +1848,7 @@ def eval(
                         f"({run_args['num_scenarios']}) exceeds the {available_map_count} replay maps in {map_dir}"
                     )
             # Shard-unique seed: identical seeds make every shard re-draw the same scenarios.
-            shard_seed = (run_args["train"]["seed"] + scenario_offset) % (drive_benchmark.MAX_C_SEED + 1)
+            shard_seed = (run_args["train"]["seed"] + scenario_offset) % (MAX_C_SEED + 1)
             run_args["train"]["seed"] = shard_seed
             run_args["vec"]["seed"] = shard_seed
         output_directory_name = benchmark["name"]
@@ -1923,7 +1897,9 @@ def eval(
             scenario_offset=scenario_offset,
         )
         print(f"Evaluation {benchmark['name']}: {num_scenarios} scenarios across {num_workers} workers")
-        replay_output_dir = os.path.join(benchmark_output_dir, "replays") if render_scenarios else None
+        replay_output_dir = (
+            os.path.join(benchmark_output_dir, drive_eval_replay.ZLIB_REPLAY_DIR_NAME) if render_scenarios else None
+        )
         summaries = _run_eval_rollout(
             run_args,
             env_name,
@@ -1946,7 +1922,9 @@ def eval(
             max_renderer_count = (
                 eval_config["observation_replay_writer_count"] if eval_config["capture_observations"] else None
             )
-            drive_eval_replay._render_eval_replays(summaries, benchmark_output_dir, max_renderer_count)
+            drive_eval_replay._render_eval_replays(
+                summaries, benchmark_output_dir, eval_config["keep_zlib_replays"], max_renderer_count
+            )
         elif render_filter is not None:
             _render_eval_failures(
                 env_name,
@@ -2065,45 +2043,228 @@ def controlled_exp(env_name, args=None):
     print(f"\n✓ Completed all {len(combinations)} experiments")
 
 
-def profile(args=None, env_name=None, vecenv=None, policy=None):
-    args = load_config()
-    vecenv = vecenv or load_env(env_name, args)
-    policy = policy or load_policy(args, vecenv)
+def profile(env_name):
+    args = load_config(env_name)
+    # Parent starts perf disabled, then reruns this command as the profiled child.
+    if os.environ.get(PROFILE_SUBPROCESS_ENV) != "1":
+        if platform.system() != "Linux":
+            raise pufferlib.APIUsageError("Profiling requires Linux perf")
+        perf = shutil.which("perf")
+        if perf is None:
+            raise pufferlib.APIUsageError("Profiling requires the Linux perf executable")
 
-    train_config = dict(**args["train"], env=args["env_name"], tag=args["tag"])
-    pufferl = PuffeRL(train_config, vecenv, policy, neptune=args["neptune"], wandb=args["wandb"])
+        output_root = os.path.abspath(args["profile"]["output_dir"])
+        output_dir = os.path.join(output_root, datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
+        os.makedirs(output_dir)
+        perf_data_path = os.path.join(output_dir, "perf.data")
+        perf_text_path = os.path.join(output_dir, "profile.linux-perf.txt")
+        perf_report_path = os.path.join(output_dir, "profile.linux-perf.report.txt")
+        perf_control_path = os.path.join(output_dir, "perf.control")
+        perf_ack_path = os.path.join(output_dir, "perf.ack")
+        os.mkfifo(perf_control_path)
+        os.mkfifo(perf_ack_path)
+        subprocess_env = os.environ.copy()
+        subprocess_env[PROFILE_SUBPROCESS_ENV] = "1"
+        subprocess_env[PROFILE_OUTPUT_ENV] = output_dir
+        subprocess_env[PROFILE_CONTROL_ENV] = perf_control_path
+        subprocess_env[PROFILE_ACK_ENV] = perf_ack_path
+        subprocess.run(
+            [
+                perf,
+                "record",
+                "-e",
+                "cpu-clock:u",
+                "--call-graph",
+                "fp",
+                "-F",
+                str(args["profile"]["perf_frequency_hz"]),
+                "--delay=-1",
+                f"--control=fifo:{perf_control_path},{perf_ack_path}",
+                "-o",
+                perf_data_path,
+                "--",
+                sys.executable,
+                "-m",
+                "pufferlib.pufferl",
+                "profile",
+                env_name,
+                *sys.argv[1:],
+            ],
+            check=True,
+            env=subprocess_env,
+        )
+        os.unlink(perf_control_path)
+        os.unlink(perf_ack_path)
+        perf_script = subprocess.run(
+            [perf, "script", "--inline", "-i", perf_data_path], check=True, capture_output=True, text=True
+        ).stdout
+        native_profile_blocks = []
+        for block in perf_script.split("\n\n"):
+            lines = block.splitlines()
+            native_line_indices = [
+                line_idx for line_idx, line in enumerate(lines) if "/pufferlib/ocean/drive/binding." in line
+            ]
+            if native_line_indices:
+                native_profile_blocks.append("\n".join(lines[: native_line_indices[-1] + 1]))
+        with open(perf_text_path, "w") as perf_text_file:
+            perf_text_file.write("\n\n".join(native_profile_blocks) + "\n")
+        perf_report = subprocess.run(
+            [
+                perf,
+                "report",
+                "--stdio",
+                "--show-nr-samples",
+                "--show-total-period",
+                "--percent-limit",
+                "0",
+                "--parent",
+                "^c_step$|^c_reset$|^init$",
+                "--exclude-other",
+                "--call-graph",
+                "graph,0,caller,function,percent",
+                "-i",
+                perf_data_path,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        with open(perf_report_path, "w") as perf_report_file:
+            perf_report_file.write("# Children: inclusive sampled CPU time. Self: exclusive sampled CPU time.\n")
+            perf_report_file.write("# Period: sampled CPU time in nanoseconds.\n")
+            perf_report_file.write(perf_report)
 
-    from torch.profiler import profile, record_function, ProfilerActivity
+        quoted_perf_data = shlex.quote(perf_data_path)
+        quoted_perf_text = shlex.quote(perf_text_path)
+        quoted_perf_report = shlex.quote(perf_report_path)
+        print(f"Profile artifacts: {output_dir}")
+        print(f"Speedscope C profile: {quoted_perf_text}")
+        print(f"C inclusive/self time report: {quoted_perf_report}")
+        print(f"perf report: perf report -i {quoted_perf_data}")
+        print(f"perf annotate: perf annotate -i {quoted_perf_data} --symbol c_step")
+        if args["profile"]["mode"] != "sim":
+            quoted_trace = shlex.quote(os.path.join(output_dir, "torch_trace.json"))
+            print(f"Perfetto PyTorch trace: {quoted_trace}")
+        print("Source-line timings are samples; cold or optimized-away lines may have no samples.")
 
-    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
-        with record_function("model_inference"):
-            for _ in range(10):
-                stats = pufferl.evaluate()
-                pufferl.train()
+        return
 
-    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-    prof.export_chrome_trace("trace.json")
+    # Child warmup remains outside the native recording window.
+    output_dir = os.environ[PROFILE_OUTPUT_ENV]
+    profile_config = args["profile"]
+    profile_mode = profile_config["mode"]
+    args["wandb"] = False
+    args["neptune"] = False
+    args["tb"] = False
+    args["load_id"] = None
+    args["env"]["compute_eval_metrics"] = False
+    args["env"]["eval_training_render"] = False
+    args["env"]["num_agents"] = 256
+    args["vec"]["backend"] = "Serial"
+    args["vec"]["num_envs"] = 1
+    args["vec"]["num_workers"] = 1
+    args["vec"]["batch_size"] = 1
+    args["train"]["minibatch_size"] = args["env"]["num_agents"] * args["train"]["bptt_horizon"] // 16
+    args["train"]["checkpoint_interval"] = profile_config["warmup_cycles"] + profile_config["trace_cycles"] + 1
+    validation_context = "simulation profiling" if profile_mode == "sim" else "profiling"
+    validate_puffer_drive_config(args, validation_context)
+    validate_puffer_drive_resources(args, "profiling")
 
+    # Acknowledged FIFO commands make the trace boundaries exact.
+    perf_control = open(os.environ[PROFILE_CONTROL_ENV], "w")
+    perf_ack = open(os.environ[PROFILE_ACK_ENV], "rb")
 
-def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent=False):
-    args = args or load_config(env_name)
-    vecenv = vecenv or load_env(env_name, args)
-    policy = policy or load_policy(args, vecenv)
+    train_seed = args["train"]["seed"]
+    if train_seed is None:
+        train_seed = time.time_ns() & 0xFFFFFFFF
+    torch_seed, env_seed = derive_rank_seeds(args["vec"]["seed"], train_seed, 1, 0)
 
-    weights = []
-    for name, param in policy.named_parameters():
-        weights.append(param.data.cpu().numpy().flatten())
-        if not silent:
-            print(name, param.shape, param.data.cpu().numpy().ravel()[0])
+    if profile_mode == "sim":
+        perf_control.write("enable\n")
+        perf_control.flush()
+        if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
+            raise RuntimeError("perf failed to enable setup profiling")
+        vecenv = load_env(env_name, args, seed=env_seed)
+        vecenv.async_reset(env_seed)
+        vecenv.recv()
+        perf_control.write("disable\n")
+        perf_control.flush()
+        if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
+            raise RuntimeError("perf failed to disable setup profiling")
+        actions = np.zeros(vecenv.action_space.shape, dtype=vecenv.action_space.dtype)
 
-    weights = np.concatenate(weights)
-    if path is None:
-        path = f"pufferlib/resources/drive/{args['env_name']}_weights.bin"
+        for _ in range(profile_config["warmup_cycles"] * PROFILE_SIM_STEPS_PER_CYCLE):
+            vecenv.send(actions)
+            vecenv.recv()
+        profiler = contextlib.nullcontext()
+    else:
+        from torch.profiler import ProfilerActivity, profile as torch_profile, record_function
 
-    weights.tofile(path)
+        torch.manual_seed(torch_seed)
+        vecenv = load_env(env_name, args, seed=env_seed)
+        policy = load_policy(args, vecenv, env_name)
+        train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
+        pufferl = PuffeRL(train_config, vecenv, policy)
+        use_cuda = is_cuda_device(train_config["device"])
+        profile_rollouts = profile_mode != "training"
+        activities = [ProfilerActivity.CPU]
+        if use_cuda:
+            activities.append(ProfilerActivity.CUDA)
 
-    if not silent:
-        print(f"Saved {len(weights)} weights to {path}")
+        if not profile_rollouts:
+            pufferl.evaluate()
+        for _ in range(profile_config["warmup_cycles"]):
+            if use_cuda and profile_rollouts:
+                torch.compiler.cudagraph_mark_step_begin()
+            if profile_rollouts:
+                pufferl.evaluate()
+            if use_cuda:
+                torch.compiler.cudagraph_mark_step_begin()
+            pufferl.train()
+        profiler = torch_profile(activities=activities)
+
+    # Native and PyTorch profilers cover the same selected cycles.
+    with profiler as prof:
+        perf_control.write("enable\n")
+        perf_control.flush()
+        if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
+            raise RuntimeError("perf failed to enable profiling")
+        if profile_mode == "sim":
+            for _ in range(profile_config["trace_cycles"] * PROFILE_SIM_STEPS_PER_CYCLE):
+                vecenv.send(actions)
+                vecenv.recv()
+        else:
+            for _ in range(profile_config["trace_cycles"]):
+                if use_cuda and profile_rollouts:
+                    torch.compiler.cudagraph_mark_step_begin()
+                if profile_rollouts:
+                    with record_function("rollout"):
+                        pufferl.evaluate()
+                if use_cuda:
+                    torch.compiler.cudagraph_mark_step_begin()
+                with record_function("ppo_update"):
+                    pufferl.train()
+            if use_cuda:
+                torch.cuda.synchronize()
+        perf_control.write("disable\n")
+        perf_control.flush()
+        if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
+            raise RuntimeError("perf failed to disable profiling")
+
+    perf_control.close()
+    perf_ack.close()
+    vecenv.close()
+    if profile_mode == "sim":
+        return
+
+    pufferl.utilization.stop()
+
+    torch_ops_path = os.path.join(output_dir, "torch_ops.txt")
+    with open(torch_ops_path, "w") as torch_ops_file:
+        sort_by = "self_cuda_time_total" if use_cuda else "self_cpu_time_total"
+        torch_ops_file.write(prof.key_averages().table(sort_by=sort_by, row_limit=-1))
+        torch_ops_file.write("\n")
+    prof.export_chrome_trace(os.path.join(output_dir, "torch_trace.json"))
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):
@@ -2209,7 +2370,9 @@ def _run_eval_rollout(
             raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
         allow_tf32 = args["train"].get("tf32", True)
         if not allow_tf32 and use_bfloat16 and not getattr(uncompiled_policy, "fp32_heads", False):
-            raise pufferlib.APIUsageError("train.tf32=False with train.precision=bfloat16 requires policy.fp32_heads=true")
+            raise pufferlib.APIUsageError(
+                "train.tf32=False with train.precision=bfloat16 requires policy.fp32_heads=true"
+            )
         torch.set_float32_matmul_precision("high" if allow_tf32 else "highest")
         torch.backends.cuda.matmul.allow_tf32 = allow_tf32
         torch.backends.cudnn.allow_tf32 = allow_tf32
@@ -2338,7 +2501,7 @@ def render_training_replays(env_name, args, policy, epoch, global_step, run_dir)
     env_config = run_args["env"]
     num_scenarios = env_config["num_maps"]
     # Fixed-length episodes: eval-mode summaries flush on the resample boundary.
-    env_config["termination_mode"] = 0
+    env_config["termination_mode"] = False
     env_config["compute_eval_metrics"] = True
     env_config["num_agents"] = env_config["max_agents_per_env"]
     run_args["eval"]["action_selection"] = pufferlib.pytorch.ACTION_SELECT_SAMPLE
@@ -2365,7 +2528,9 @@ def render_training_replays(env_name, args, policy, epoch, global_step, run_dir)
             replay_output_dir=os.path.join(output_dir, "replays"),
             capture_observations=capture_observations,
         )
-        drive_eval_replay._render_eval_replays(summaries, output_dir, max_renderer_count)
+        drive_eval_replay._render_eval_replays(
+            summaries, output_dir, run_args["eval"]["keep_zlib_replays"], max_renderer_count
+        )
     except Exception:
         print(f"\n[training render] Replay rendering failed at epoch {epoch}; continuing training:")
         traceback.print_exc()
@@ -2429,7 +2594,9 @@ def run_cosim_debug_benchmarks(env_name, args, checkpoint_path, label):
     devkit -- that training itself doesn't own)."""
     eval_config = args["eval"]
     try:
-        _, benchmarks = drive_benchmark.load_benchmark_config(eval_config["benchmark_config"], list(COSIM_DEBUG_BENCHMARKS))
+        _, benchmarks = drive_benchmark.load_benchmark_config(
+            eval_config["benchmark_config"], list(COSIM_DEBUG_BENCHMARKS)
+        )
     except pufferlib.APIUsageError as exc:
         print(f"[cosim_eval] skipping {label}-of-training cosim debug eval: {exc}")
         return
@@ -2477,29 +2644,17 @@ def _render_eval_failures(
     pairs = list(zip(map_indices, seeds))
     failure_args = copy.deepcopy(run_args)
     configured_worker_count = failure_args["vec"]["num_envs"]
-    if configured_worker_count <= 0:
-        raise pufferlib.APIUsageError("Failure rendering requires at least one worker")
     replay_wave_size = len(pairs)
     if capture_observations:
         observation_replay_wave_size = run_args["eval"]["observation_replay_wave_size"]
-        if (
-            isinstance(observation_replay_wave_size, bool)
-            or not isinstance(observation_replay_wave_size, int)
-            or observation_replay_wave_size <= 0
-        ):
-            raise pufferlib.APIUsageError(
-                "eval.observation_replay_wave_size must be a positive integer when rendering observations"
-            )
         replay_wave_size = min(
             len(pairs),
             configured_worker_count,
             observation_replay_wave_size,
         )
         replay_agent_capacity = failure_args["env"]["max_agents_per_env"]
-        if replay_agent_capacity <= 0:
-            raise pufferlib.APIUsageError("Failure rendering requires max_agents_per_env > 0")
         failure_args["env"]["num_agents"] = replay_agent_capacity
-    replay_output_dir = os.path.join(failures_dir, "replays")
+    replay_output_dir = os.path.join(failures_dir, drive_eval_replay.ZLIB_REPLAY_DIR_NAME)
     os.makedirs(replay_output_dir, exist_ok=True)
     agents_per_batch_values = selected_rows["agents_per_batch"].unique()
     if len(agents_per_batch_values) != 1:
@@ -2537,7 +2692,9 @@ def _render_eval_failures(
         summaries.extend(wave_summaries)
     summary = drive_benchmark._write_eval_reports(summaries, failures_dir, len(pairs))
     max_renderer_count = run_args["eval"]["observation_replay_writer_count"] if capture_observations else None
-    drive_eval_replay._render_eval_replays(summaries, failures_dir, max_renderer_count)
+    drive_eval_replay._render_eval_replays(
+        summaries, failures_dir, run_args["eval"]["keep_zlib_replays"], max_renderer_count
+    )
     return {
         "episodes": summaries,
         "summary": summary,
@@ -2577,8 +2734,6 @@ def load_policy(args, vecenv, env_name=""):
             path = NeptuneLogger(args, load_id, mode="read-only").download()
         elif args["wandb"]:
             path = WandbLogger(args, load_id).download()
-        else:
-            raise pufferlib.APIUsageError("No run id provided for eval")
 
         state_dict = torch.load(path, map_location=device)
         policy.load_state_dict(clean_policy_state_dict(state_dict))
@@ -2614,31 +2769,13 @@ def load_config(env_name, config_dir=None):
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(config_name=env_name, overrides=overrides)
 
-    # Structured-schema validation (types, enum names, unknown keys) for envs
-    # that declare one. Overrides are already composed in, so CLI typos fail
-    # here too — at load time, not deep in env construction.
-    env_schema = ENV_SCHEMAS.get(env_name)
-    if env_schema is not None:
-        cfg["env"] = OmegaConf.merge(OmegaConf.structured(env_schema), cfg["env"])
-
-    # Plain nested dict — the contract every downstream consumer relies on.
-    # Protein's sweep.suggest() writes arbitrary keys into it, so no
-    # struct-mode OmegaConf objects may leak past this point. enum_to_str
-    # converts validated enum members back to their names; throw_on_missing
-    # rejects schema keys the YAML no longer provides.
-    args = defaultdict(dict, OmegaConf.to_container(cfg, resolve=True, enum_to_str=True, throw_on_missing=True))
-
+    args = defaultdict(dict, OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True))
     args["train"]["use_rnn"] = args["rnn_name"] is not None
-
-    if "LOCAL_RANK" in os.environ:
-        world_size = int(os.environ.get("WORLD_SIZE", 1))
-        args["train"]["total_timesteps"] //= world_size
-
-    return args
+    return defaultdict(dict, normalize_puffer_drive_config(args, "load"))
 
 
 def main():
-    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -2659,8 +2796,6 @@ def main():
         autotune(env_name=env_name)
     elif mode == "profile":
         profile(env_name=env_name)
-    elif mode == "export":
-        export(env_name=env_name)
     else:
         raise pufferlib.APIUsageError(err)
 
