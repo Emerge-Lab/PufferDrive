@@ -336,7 +336,8 @@ class Drive(nn.Module):
     ):
         super().__init__()
 
-        if env.dynamics_model_flag == binding.DYNAMICS_MODEL_JERK:
+        # spline dynamics is continuous-only; the jerk table is never indexed there, it only fills the unused buffers
+        if env.dynamics_model_flag in (binding.DYNAMICS_MODEL_JERK, binding.DYNAMICS_MODEL_SPLINE):
             action_long_values, action_lat_values = binding.JERK_LONG, binding.JERK_LAT
         elif env.dynamics_model_flag == binding.DYNAMICS_MODEL_CLASSIC:
             action_long_values, action_lat_values = binding.ACCELERATION_VALUES, binding.STEERING_VALUES

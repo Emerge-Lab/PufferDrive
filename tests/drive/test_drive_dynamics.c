@@ -95,6 +95,20 @@ static int test_neutral_actions_zero_out(void) {
         EXPECT_NEAR(JERK_LAT[j_lat_idx], 0.0f, 1e-6f);
         free_allocated(&env);
     }
+    {
+        Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
+        env.action_type = ACTION_TYPE_SPLINE;
+        env.dynamics_model = DYNAMICS_MODEL_SPLINE;
+        float *actions = (float *) env.actions;
+        for (int feature_idx = 0; feature_idx < SPLINE_INTENT_FEATURES; feature_idx++) {
+            actions[feature_idx] = 1.0f;
+        }
+        drive_set_neutral_actions(&env);
+        for (int feature_idx = 0; feature_idx < SPLINE_INTENT_FEATURES; feature_idx++) {
+            EXPECT_NEAR(actions[feature_idx], 0.0f, 1e-6f);
+        }
+        free_allocated(&env);
+    }
     return 0;
 }
 

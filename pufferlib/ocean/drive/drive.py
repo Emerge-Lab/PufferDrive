@@ -189,7 +189,10 @@ class Drive(pufferlib.PufferEnv):
         self.dynamics_model_flag = {
             "classic": binding.DYNAMICS_MODEL_CLASSIC,
             "jerk": binding.DYNAMICS_MODEL_JERK,
+            "spline": binding.DYNAMICS_MODEL_SPLINE,
         }[dynamics_model]
+        if dynamics_model == "spline" and action_type != "spline":
+            raise ValueError(f"dynamics_model 'spline' requires action_type 'spline', got {action_type!r}")
         self.reset_accel_on_stop = reset_accel_on_stop
         self.spline_horizon_seconds = spline_horizon_seconds
         self.spline_consistency_lag_count = spline_consistency_lag_count

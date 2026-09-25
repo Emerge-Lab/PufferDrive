@@ -112,6 +112,7 @@
 // Dynamics model
 #define DYNAMICS_MODEL_CLASSIC 0
 #define DYNAMICS_MODEL_JERK 1
+#define DYNAMICS_MODEL_SPLINE 2 // car follows the spline decoded from jerk-channel actions exactly
 
 // Action representation
 #define ACTION_TYPE_DISCRETE 0
@@ -146,6 +147,13 @@ static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 #define NUM_JERK_LAT_ACTIONS 3
 static const float JERK_LONG[NUM_JERK_LONG_ACTIONS] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[NUM_JERK_LAT_ACTIONS] = {-4.0f, 0.0f, 4.0f};
+
+// Spline dynamics: heading turns at most arc_length * tan(STEERING_ANGLE_LIMIT) / wheelbase per step
+#define STEERING_ANGLE_LIMIT 0.55f
+#define SPLINE_MIN_SPEED_FOR_HEADING_MPS 1e-3f
+#define SPLINE_MIN_ARC_M 1e-4f
+// Spline dynamics action per ego axis: (accel change over dt, jerk at T/2, jerk at T)
+#define SPLINE_CHANNELS_PER_AXIS 3
 
 // Discrete action space, DYNAMICS_MODEL_CLASSIC
 #define NUM_ACCELERATION_ACTIONS 7

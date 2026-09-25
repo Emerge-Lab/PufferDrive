@@ -155,10 +155,10 @@ static inline void drive_set_neutral_actions(Drive *env) {
         }
         return;
     }
-    float (*actions)[2] = (float (*)[2]) env->actions;
-    for (int i = 0; i < env->active_agent_count; i++) {
-        actions[i][0] = 0.0f;
-        actions[i][1] = 0.0f;
+    int stride = (env->action_type == ACTION_TYPE_SPLINE) ? SPLINE_INTENT_FEATURES : 2;
+    float *actions = (float *) env->actions;
+    for (int i = 0; i < env->active_agent_count * stride; i++) {
+        actions[i] = 0.0f;
     }
 }
 

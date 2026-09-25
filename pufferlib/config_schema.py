@@ -118,6 +118,7 @@ class ActionType(Enum):
 class DynamicsModel(Enum):
     classic = 0
     jerk = 1
+    spline = 2
 
 
 class InfractionBehavior(Enum):
@@ -514,7 +515,7 @@ def normalize_puffer_drive_config(config, context="load"):
         # exists between them for discrete/continuous. This overrides unconditionally rather
         # than attempting to detect an "explicit conflicting override", since OmegaConf's
         # merge-to-plain-dict here does not preserve whether a value came from the user or a
-        # class default. env.dynamics_model=="jerk" is still enforced below, fail-fast.
+        # class default. env.dynamics_model in {"jerk", "spline"} is still enforced below, fail-fast.
         container["env"]["action_type"] = "spline"
         container["policy"]["action_type"] = "spline"
     return container
@@ -629,9 +630,14 @@ def _validate_cross_field_constraints(config, context):
     # alone would let dynamics_model=="classic"/an unfit horizon through untouched in
     # that direct-set path -- move_dynamics's DYNAMICS_MODEL_CLASSIC branch has no
     # ACTION_TYPE_SPLINE case and would silently leave the agent inert instead of erroring.
+    # Spline dynamics decodes six floats per agent from the spline action buffer; nothing else feeds it.
+    if env["dynamics_model"] == "spline" and env["action_type"] != "spline":
+        _raise_config_error(context, "env.dynamics_model", "'spline' requires env.action_type to be 'spline'")
     if env["action_type"] == "spline":
-        if env["dynamics_model"] != "jerk":
-            _raise_config_error(context, "env.action_type", "'spline' requires env.dynamics_model to be 'jerk'")
+        if env["dynamics_model"] not in ("jerk", "spline"):
+            _raise_config_error(
+                context, "env.action_type", "'spline' requires env.dynamics_model to be 'jerk' or 'spline'"
+            )
         # At least two horizon steps: the consistency term averages over max_lag-1 slots, so a
         # horizon under 2*dt leaves it dividing by zero.
         if env["spline_horizon_seconds"] < 2 * env["dt"]:

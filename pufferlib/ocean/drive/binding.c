@@ -1959,6 +1959,17 @@ static PyObject *map_cache_release_py(
 static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->action_type = (int) unpack(kwargs, "action_type");
     env->dynamics_model = (int) unpack(kwargs, "dynamics_model");
+    if (env->dynamics_model < DYNAMICS_MODEL_CLASSIC || env->dynamics_model > DYNAMICS_MODEL_SPLINE) {
+        PyErr_Format(PyExc_ValueError, "dynamics_model must be in [%d, %d]. Got: %d", DYNAMICS_MODEL_CLASSIC,
+                     DYNAMICS_MODEL_SPLINE, env->dynamics_model);
+        return -1;
+    }
+    // spline dynamics reads six action floats per agent; any narrower action buffer would be read out of bounds
+    if (env->dynamics_model == DYNAMICS_MODEL_SPLINE && env->action_type != ACTION_TYPE_SPLINE) {
+        PyErr_Format(PyExc_ValueError, "dynamics_model spline requires action_type spline. Got action_type: %d",
+                     env->action_type);
+        return -1;
+    }
     env->reset_accel_on_stop = (bool) unpack(kwargs, "reset_accel_on_stop");
     env->spline_horizon_seconds = (float) unpack(kwargs, "spline_horizon_seconds");
     env->spline_consistency_lag_count = (int) unpack(kwargs, "spline_consistency_lag_count");
@@ -2168,6 +2179,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/trajectory_consistency", log->reward_trajectory_consistency);
     assign_to_dict(dict, "spline/consistency_msd_m2", log->spline_consistency_msd_m2);
     assign_to_dict(dict, "spline/consistency_lag1_msd_m2", log->spline_consistency_lag1_msd_m2);
+    assign_to_dict(dict, "spline/slip_angle_rad", log->spline_slip_angle_rad);
 
     if (env->compute_eval_metrics) {
         // Puffer score components

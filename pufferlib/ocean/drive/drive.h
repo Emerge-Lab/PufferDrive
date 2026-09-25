@@ -90,6 +90,7 @@ struct Log {
     float reward_trajectory_consistency;
     float spline_consistency_msd_m2;
     float spline_consistency_lag1_msd_m2;
+    float spline_slip_angle_rad;
 };
 
 struct GridMapEntity {
@@ -2253,6 +2254,7 @@ static void add_log(Drive *env) {
         episode_log.reward_trajectory_consistency += env->logs[i].reward_trajectory_consistency;
         episode_log.spline_consistency_msd_m2 += env->logs[i].spline_consistency_msd_m2 / safe_timestep;
         episode_log.spline_consistency_lag1_msd_m2 += env->logs[i].spline_consistency_lag1_msd_m2 / safe_timestep;
+        episode_log.spline_slip_angle_rad += env->logs[i].spline_slip_angle_rad / safe_timestep;
         // Comfort and velocity metrics (normalized per timestep)
         episode_log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         episode_log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -3695,6 +3697,29 @@ static void solve_quintic_coefficients(
     *c5_out = (6.0f * delta_p - 3.0f * delta_v * T + 0.5f * delta_a * T2) / T5;
 }
 
+// c3..c5 for one ego axis from (accel change over dt, jerk at T/2, jerk at T); det > 0 for 0 < dt <= T.
+static void solve_quintic_from_jerk_channels(
+    float dt,
+    float T,
+    float delta_accel,
+    float jerk_mid,
+    float jerk_end,
+    float *c3_out,
+    float *c4_out,
+    float *c5_out) {
+    float t_mid = 0.5f * T;
+    float m00 = 6.0f * dt, m01 = 12.0f * dt * dt, m02 = 20.0f * dt * dt * dt;
+    float m10 = 6.0f, m11 = 24.0f * t_mid, m12 = 60.0f * t_mid * t_mid;
+    float m20 = 6.0f, m21 = 24.0f * T, m22 = 60.0f * T * T;
+    float cof00 = m11 * m22 - m12 * m21, cof01 = m12 * m20 - m10 * m22, cof02 = m10 * m21 - m11 * m20;
+    float cof10 = m02 * m21 - m01 * m22, cof11 = m00 * m22 - m02 * m20, cof12 = m01 * m20 - m00 * m21;
+    float cof20 = m01 * m12 - m02 * m11, cof21 = m02 * m10 - m00 * m12, cof22 = m00 * m11 - m01 * m10;
+    float det = m00 * cof00 + m01 * cof01 + m02 * cof02;
+    *c3_out = (cof00 * delta_accel + cof10 * jerk_mid + cof20 * jerk_end) / det;
+    *c4_out = (cof01 * delta_accel + cof11 * jerk_mid + cof21 * jerk_end) / det;
+    *c5_out = (cof02 * delta_accel + cof12 * jerk_mid + cof22 * jerk_end) / det;
+}
+
 // Evaluates a quintic (coefs[0..5] = c0..c5) or one of its derivatives at time t.
 // order: 0=position, 1=velocity, 2=acceleration. if/else on a mode constant, not a function
 // pointer, per this codebase's control-flow conventions.
@@ -3752,6 +3777,44 @@ static float compute_spline_consistency_cost(
     // Means, not sums: keeps the coefficient independent of lag_count and the T/dt slot count.
     *lag1_msd_out = lag1_cost_sum / (float) (max_lag - 1);
     return slot_cost_sum / (float) (max_lag - 1);
+}
+
+static void compute_spline_rewards(Drive *env, int i) {
+    Agent *agent = &env->agents[env->active_agent_indices[i]];
+    Log *agent_log = &env->logs[i];
+    int spline_dynamics = env->dynamics_model == DYNAMICS_MODEL_SPLINE;
+    if (spline_dynamics) {
+        float fwd_speed = agent->sim_vx * agent->cos_heading + agent->sim_vy * agent->sin_heading;
+        float left_speed = -agent->sim_vx * agent->sin_heading + agent->sim_vy * agent->cos_heading;
+        agent_log->spline_slip_angle_rad += atan2f(fabsf(left_speed), fabsf(fwd_speed));
+    }
+    // the phantom override is the env's curve, not intent; clearing keeps the ring's lag spacing exact
+    if (spline_dynamics && agent->phantom_braking_counter > 0) {
+        agent->spline_history_count = 0;
+        agent->spline_history_head = 0;
+        return;
+    }
+    // deepest lag sharing >=1 grid point with curr; +1 mirrors num_samples' own derivation
+    int max_lag = env->spline_consistency_num_samples + 1;
+    if (agent->spline_history_count > 0) {
+        float lag1_cost = 0.0f;
+        float consistency_cost = compute_spline_consistency_cost(
+            agent, env->spline_consistency_lag_count, max_lag, env->dt, &lag1_cost);
+        float consistency_penalty = -agent->reward_coefs[REWARD_COEF_TRAJECTORY_CONSISTENCY] * consistency_cost;
+        env->rewards[i] += consistency_penalty;
+        agent_log->reward_trajectory_consistency += consistency_penalty;
+        agent_log->spline_consistency_msd_m2 += consistency_cost;
+        agent_log->spline_consistency_lag1_msd_m2 += lag1_cost;
+    }
+    // Push curr into the ring now that it has been used, for later steps' comparisons.
+    for (int k = 0; k < 6; k++) {
+        agent->spline_history_coefs_x[agent->spline_history_head][k] = agent->spline_coefs_x[k];
+        agent->spline_history_coefs_y[agent->spline_history_head][k] = agent->spline_coefs_y[k];
+    }
+    agent->spline_history_head = (agent->spline_history_head + 1) % SPLINE_CONSISTENCY_MAX_LAG;
+    if (agent->spline_history_count < SPLINE_CONSISTENCY_MAX_LAG) {
+        agent->spline_history_count++;
+    }
 }
 
 static void compute_rewards(Drive *env, int i) {
@@ -3876,27 +3939,7 @@ static void compute_rewards(Drive *env, int i) {
     // smoothness of *executed* motion — move_dynamics's jerk clamp already handles that.
     // Only CONTROLLER_POLICY agents reach move_dynamics, so only they hold a fresh curve.
     if (env->action_type == ACTION_TYPE_SPLINE && agent->controller == CONTROLLER_POLICY) {
-        // deepest lag sharing >=1 grid point with curr; +1 mirrors num_samples' own derivation
-        int max_lag = env->spline_consistency_num_samples + 1;
-        if (agent->spline_history_count > 0) {
-            float lag1_cost = 0.0f;
-            float consistency_cost = compute_spline_consistency_cost(
-                agent, env->spline_consistency_lag_count, max_lag, env->dt, &lag1_cost);
-            float consistency_penalty = -agent->reward_coefs[REWARD_COEF_TRAJECTORY_CONSISTENCY] * consistency_cost;
-            env->rewards[i] += consistency_penalty;
-            agent_log->reward_trajectory_consistency += consistency_penalty;
-            agent_log->spline_consistency_msd_m2 += consistency_cost;
-            agent_log->spline_consistency_lag1_msd_m2 += lag1_cost;
-        }
-        // Push curr into the ring now that it has been used, for later steps' comparisons.
-        for (int k = 0; k < 6; k++) {
-            agent->spline_history_coefs_x[agent->spline_history_head][k] = agent->spline_coefs_x[k];
-            agent->spline_history_coefs_y[agent->spline_history_head][k] = agent->spline_coefs_y[k];
-        }
-        agent->spline_history_head = (agent->spline_history_head + 1) % SPLINE_CONSISTENCY_MAX_LAG;
-        if (agent->spline_history_count < SPLINE_CONSISTENCY_MAX_LAG) {
-            agent->spline_history_count++;
-        }
+        compute_spline_rewards(env, i);
     }
 
     // Update episode return
@@ -4392,6 +4435,100 @@ static void compute_observations(Drive *env) {
     }
 }
 
+// Moves the car exactly onto the decoded quintic at dt, no clamps; only the heading turn rate is bounded.
+static void move_spline_dynamics(Drive *env, Agent *agent, int action_idx) {
+    float (*action_array_f)[SPLINE_INTENT_FEATURES] = (float (*)[SPLINE_INTENT_FEATURES]) env->actions;
+    float raw[SPLINE_INTENT_FEATURES];
+    for (int feature_idx = 0; feature_idx < SPLINE_INTENT_FEATURES; feature_idx++) {
+        raw[feature_idx] = action_array_f[action_idx][feature_idx];
+        agent->spline_intent[feature_idx] = raw[feature_idx];
+    }
+    int phantom_active = agent->phantom_braking_counter > 0;
+    if (phantom_active) {
+        raw[0] = -1.0f;
+    }
+
+    float dt = env->dt;
+    float c_throttle = agent->reward_coefs[REWARD_COEF_THROTTLE];
+    float c_steer = agent->reward_coefs[REWARD_COEF_STEER];
+    float long_channels[SPLINE_CHANNELS_PER_AXIS];
+    float lat_channels[SPLINE_CHANNELS_PER_AXIS];
+    for (int channel_idx = 0; channel_idx < SPLINE_CHANNELS_PER_AXIS; channel_idx++) {
+        float raw_long = raw[channel_idx];
+        float long_limit = (raw_long < 0.0f) ? -JERK_LONG[0] : JERK_LONG[3];
+        long_channels[channel_idx] = c_throttle * raw_long * long_limit;
+        lat_channels[channel_idx] = c_steer * raw[channel_idx + SPLINE_CHANNELS_PER_AXIS] * JERK_LAT[2];
+    }
+    // channel 0 is a jerk held over the executed step, i.e. an accel change of jerk * dt
+    long_channels[0] *= dt;
+    lat_channels[0] *= dt;
+
+    float c3_fwd, c4_fwd, c5_fwd, c3_left, c4_left, c5_left;
+    float T = env->spline_horizon_seconds;
+    solve_quintic_from_jerk_channels(dt, T, long_channels[0], long_channels[1], long_channels[2], &c3_fwd, &c4_fwd, &c5_fwd);
+    solve_quintic_from_jerk_channels(dt, T, lat_channels[0], lat_channels[1], lat_channels[2], &c3_left, &c4_left, &c5_left);
+
+    float a0_x, a0_y;
+    project_vector_from_ego_frame(agent, agent->accel_long, agent->accel_lat, &a0_x, &a0_y);
+    agent->spline_coefs_x[0] = agent->sim_x;
+    agent->spline_coefs_y[0] = agent->sim_y;
+    agent->spline_coefs_x[1] = agent->sim_vx;
+    agent->spline_coefs_y[1] = agent->sim_vy;
+    agent->spline_coefs_x[2] = 0.5f * a0_x;
+    agent->spline_coefs_y[2] = 0.5f * a0_y;
+    project_vector_from_ego_frame(agent, c3_fwd, c3_left, &agent->spline_coefs_x[3], &agent->spline_coefs_y[3]);
+    project_vector_from_ego_frame(agent, c4_fwd, c4_left, &agent->spline_coefs_x[4], &agent->spline_coefs_y[4]);
+    project_vector_from_ego_frame(agent, c5_fwd, c5_left, &agent->spline_coefs_x[5], &agent->spline_coefs_y[5]);
+
+    float new_x = evaluate_quintic_derivative(agent->spline_coefs_x, dt, 0);
+    float new_y = evaluate_quintic_derivative(agent->spline_coefs_y, dt, 0);
+    float new_vx = evaluate_quintic_derivative(agent->spline_coefs_x, dt, 1);
+    float new_vy = evaluate_quintic_derivative(agent->spline_coefs_y, dt, 1);
+    float accel_x = evaluate_quintic_derivative(agent->spline_coefs_x, dt, 2);
+    float accel_y = evaluate_quintic_derivative(agent->spline_coefs_y, dt, 2);
+
+    float fwd_speed, left_speed;
+    project_vector_to_ego_frame(agent, new_vx, new_vy, &fwd_speed, &left_speed);
+    float speed_new = sqrtf(new_vx * new_vx + new_vy * new_vy);
+    float heading_step_raw = 0.0f;
+    if (speed_new >= SPLINE_MIN_SPEED_FOR_HEADING_MPS) {
+        // reversing chases -v, so a car backing up does not pirouette to face its motion
+        heading_step_raw = (fwd_speed >= 0.0f) ? atan2f(left_speed, fwd_speed) : atan2f(-left_speed, -fwd_speed);
+    }
+    float arc_length_m = 0.5f * (agent->sim_speed + speed_new) * dt;
+    float heading_step_max = arc_length_m * tanf(STEERING_ANGLE_LIMIT) / agent->wheelbase;
+    float heading_step = clip(heading_step_raw, -heading_step_max, heading_step_max);
+
+    // phantom braking stops at zero instead of reversing, as in the jerk model
+    int phantom_stop = phantom_active && fwd_speed < 0.0f;
+    if (phantom_stop) {
+        new_vx = 0.0f;
+        new_vy = 0.0f;
+        accel_x = 0.0f;
+        accel_y = 0.0f;
+    }
+
+    agent->sim_x = new_x;
+    agent->sim_y = new_y;
+    agent->sim_heading = normalize_heading(agent->sim_heading + heading_step);
+    agent->cos_heading = cosf(agent->sim_heading);
+    agent->sin_heading = sinf(agent->sim_heading);
+    agent->sim_vx = new_vx;
+    agent->sim_vy = new_vy;
+    update_agent_speed(agent);
+
+    float accel_long_new, accel_lat_new;
+    project_vector_to_ego_frame(agent, accel_x, accel_y, &accel_long_new, &accel_lat_new);
+    agent->jerk_long = (accel_long_new - agent->accel_long) / dt;
+    agent->jerk_lat = (accel_lat_new - agent->accel_lat) / dt;
+    agent->accel_long = accel_long_new;
+    agent->accel_lat = accel_lat_new;
+    agent->yaw_rate = heading_step / dt;
+    if (arc_length_m > SPLINE_MIN_ARC_M) {
+        agent->steering_angle = atanf(heading_step / arc_length_m * agent->wheelbase);
+    }
+}
+
 static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     copy_pose_to_prev(agent);
@@ -4703,6 +4840,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->accel_long = a_long_new;
         agent->accel_lat = a_lat_new;
         agent->steering_angle = new_steering_angle;
+    } else if (env->dynamics_model == DYNAMICS_MODEL_SPLINE) {
+        move_spline_dynamics(env, agent, action_idx);
     }
 
     update_agent_z(env, agent);

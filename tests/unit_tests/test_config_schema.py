@@ -330,7 +330,7 @@ class TestConfigSchema(unittest.TestCase):
         self.assertEqual(normalized["policy"]["action_type"], baseline_policy_action_type)
 
     @patch("sys.argv", ["pufferl.py"])
-    def test_trajectory_training_requires_jerk_dynamics(self):
+    def test_trajectory_training_requires_jerk_or_spline_dynamics(self):
         args = load_config("puffer_drive")
         args["trajectory_training"] = True
         args["env"]["dynamics_model"] = "classic"
@@ -339,7 +339,7 @@ class TestConfigSchema(unittest.TestCase):
             validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
 
     @patch("sys.argv", ["pufferl.py"])
-    def test_spline_action_type_requires_jerk_dynamics_even_without_trajectory_training(self):
+    def test_spline_action_type_requires_jerk_or_spline_dynamics_even_without_trajectory_training(self):
         """The dynamics_model/horizon/sample-cap checks must fire off of env.action_type
         itself, not just the trajectory_training convenience switch -- otherwise setting
         env.action_type=spline/policy.action_type=spline directly (bypassing
@@ -353,6 +353,23 @@ class TestConfigSchema(unittest.TestCase):
         args["env"]["dynamics_model"] = "classic"
 
         with self.assertRaisesRegex(pufferlib.APIUsageError, "spline.*requires env.dynamics_model"):
+            validate_puffer_drive_config(args, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_trajectory_training_accepts_spline_dynamics(self):
+        args = load_config("puffer_drive")
+        args["trajectory_training"] = True
+        args["env"]["dynamics_model"] = "spline"
+
+        validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_spline_dynamics_requires_spline_action_type(self):
+        args = load_config("puffer_drive")
+        self.assertIs(args["trajectory_training"], False)
+        args["env"]["dynamics_model"] = "spline"
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "requires env.action_type to be 'spline'"):
             validate_puffer_drive_config(args, "test")
 
     @patch("sys.argv", ["pufferl.py"])

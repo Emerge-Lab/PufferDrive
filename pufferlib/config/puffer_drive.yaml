@@ -50,9 +50,9 @@ env:
   max_agents_per_env: 120
   # Actions type - options: "discrete", "continuous"
   action_type: continuous
-  # Dynamics model - options: "classic", "jerk"
+  # Dynamics model - options: "classic", "jerk", "spline" (spline requires trajectory_training: true)
   dynamics_model: jerk
-  # Jerk dynamics: Zero both accelerations when velocity crosses zero
+  # Jerk dynamics only: Zero both accelerations when velocity crosses zero
   reset_accel_on_stop: false
   # Spline terminal-boundary planning horizon, seconds. Only meaningful when
   # trajectory_training: true (top-level); placeholder default, tune empirically.

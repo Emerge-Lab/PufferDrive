@@ -1,0 +1,21 @@
+# Opt-in variant for dynamics_model: spline. Usage: puffer train puffer_drive_spline_dyn [overrides...]
+#
+# The six spline action channels mean, per ego axis (forward, left): the change in acceleration over
+# the executed step, the jerk at T/2 and the jerk at T, each in [-1, 1] and scaled by the jerk limits.
+# The car moves exactly onto the resulting quintic every step. Nothing clamps acceleration, speed,
+# reverse speed or curvature, and reset_accel_on_stop, c_acc and c_speed have no effect; the rewards
+# (collision, offroad, comfort, overspeed, reverse, trajectory consistency) are the only pressure
+# toward physical motion. Heading turns toward the direction of travel at most
+# arc_length * tan(0.55) / wheelbase per step, so sideways requests at low speed make the car crab:
+# watch spline/slip_angle_rad. Acceleration observations are not clipped to [-1, 1].
+defaults:
+  - puffer_drive
+  - _self_
+
+trajectory_training: true
+
+env:
+  dynamics_model: spline
+  # Placeholders carried over from puffer_drive_spline.yaml; sweep for this model.
+  reward_trajectory_consistency: 0.00000003
+  spline_consistency_lag_count: 3
