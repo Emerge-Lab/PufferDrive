@@ -164,10 +164,10 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define SPAWN_CLEARANCE_M 1.5f       // Min box-to-box gap between agents at spawn
 #define SPAWN_OFFROAD_SCALE_FACTOR 1.1f
 // Replay self-play: logged vehicles failing these are created static instead of policy-controlled
-#define REPLAY_SPAWN_EDGE_CLEARANCE_M 0.5f
-#define REPLAY_SPAWN_LONGITUDINAL_CLEARANCE_M SPAWN_CLEARANCE_M
-#define REPLAY_MAX_CONTROLLED_LENGTH_M 6.0f
-#define REPLAY_SPAWN_MAX_LANE_DISTANCE_M 2.5f
+#define REPLAY_SPAWN_EDGE_CLEARANCE_M 0.5f                      // Car box must stay this far from the road edge
+#define REPLAY_SPAWN_LONGITUDINAL_CLEARANCE_M SPAWN_CLEARANCE_M // Gap needed to other cars in front of and behind
+#define REPLAY_MAX_CONTROLLED_LENGTH_M 6.0f                     // Longer vehicles (trucks, buses) are made static
+#define REPLAY_SPAWN_MAX_LANE_DISTANCE_M 2.5f                   // Car must be this close to a lane center line
 
 // Stop line geometry (spawn overlap check and IDM braking)
 #define STOP_LINE_DIST_SQ (10.0f * 10.0f)
