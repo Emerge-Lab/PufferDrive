@@ -21,11 +21,16 @@ start below SCENARIO_LENGTH stays in bounds.
 """
 
 import os
+import sys
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 
+import pufferlib
+from pufferlib.config_schema import validate_puffer_drive_config
 from pufferlib.ocean.drive.drive import Drive
+from pufferlib.pufferl import load_config
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MAP_DIR = os.path.join(REPO_ROOT, "pufferlib", "resources", "drive", "binaries", "sdc_replay_test")
@@ -70,7 +75,7 @@ def _make_spread_env(cls=Drive, *, init_step_spread=True, **overrides):
         non_sdc_controller="replay",
         scenario_length=SCENARIO_LENGTH,
         resample_frequency=1_000_000,  # don't resample mid-episode
-        termination_mode=0,
+        termination_mode=False,
         init_step_spread=init_step_spread,
         init_step_min_horizon=MIN_HORIZON,
         num_goals=3,
@@ -132,8 +137,11 @@ def test_different_start_steps_yield_different_initial_observations():
 def test_spread_rejected_in_non_replay_mode():
     """init_step_spread is replay-only: enabling it in gigaflow mode must raise,
     since there is no logged trajectory to spread over."""
-    with pytest.raises(ValueError, match="replay"):
-        _make_spread_env(simulation_mode="gigaflow")
+    with patch.object(sys, "argv", ["pufferl.py"]):
+        args = load_config("puffer_drive")
+    args["env"]["init_step_spread"] = True
+    with pytest.raises(pufferlib.APIUsageError, match="replay"):
+        validate_puffer_drive_config(args, "test")
 
 
 @pytest.mark.parametrize(
@@ -148,8 +156,16 @@ def test_spread_rejected_when_min_horizon_at_or_past_episode_length(min_horizon)
     """A min_horizon greater than (or equal to) the episode length leaves no
     valid start to sample (upper <= 0), so construction must fail fast instead of
     handing an empty/out-of-bounds range to the sampler."""
-    with pytest.raises(ValueError, match="init_step_min_horizon"):
-        _make_spread_env(init_step_min_horizon=min_horizon)
+    with patch.object(sys, "argv", ["pufferl.py"]):
+        args = load_config("puffer_drive")
+    args["env"].update(
+        simulation_mode="replay",
+        init_step_spread=True,
+        scenario_length=SCENARIO_LENGTH,
+        init_step_min_horizon=min_horizon,
+    )
+    with pytest.raises(pufferlib.APIUsageError, match="init_step_min_horizon"):
+        validate_puffer_drive_config(args, "test")
 
 
 if __name__ == "__main__":

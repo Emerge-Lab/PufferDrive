@@ -4,6 +4,8 @@ The driver builds one env of its own purely to read spaces off, which must not
 stay resident for the run.
 """
 
+import multiprocessing
+
 import gymnasium
 import numpy as np
 
@@ -12,6 +14,7 @@ from pufferlib import PufferEnv
 
 OBSERVATION_SIZE = 4
 ACTION_COUNT = 2
+PRELOADED = False
 
 
 class MinimalEnv(PufferEnv):
@@ -39,8 +42,39 @@ class MinimalEnv(PufferEnv):
         self.close_count += 1
 
 
+class PreloadEnv(MinimalEnv):
+    def __init__(self, buf=None, seed=0, config_only=False):
+        self.preload_count = 0
+        super().__init__(buf=buf, seed=seed)
+
+    def preload_shared_resources(self):
+        global PRELOADED
+        PRELOADED = True
+        self.preload_count += 1
+        return 1
+
+    def reset(self, seed=None):
+        self.observations[:] = PRELOADED
+        return self.observations, []
+
+
 def _make_minimal_env(**kwargs):
     return MinimalEnv(**kwargs)
+
+
+def _run_preload_from_forkserver(queue):
+    vecenv = pufferlib.vector.make(
+        PreloadEnv,
+        backend="Multiprocessing",
+        num_envs=1,
+        num_workers=1,
+        batch_size=1,
+    )
+    try:
+        obs, _ = vecenv.reset()
+        queue.put((multiprocessing.get_start_method(), vecenv.driver_env.preload_count, bool(obs[0, 0])))
+    finally:
+        vecenv.close()
 
 
 def test_driver_env_is_released_but_stays_readable():
@@ -70,3 +104,14 @@ def test_driver_env_is_released_but_stays_readable():
         vecenv.close()
     # close() must not close it a second time; on a native env that double frees.
     assert vecenv.driver_env.close_count == 1
+
+
+def test_preloaded_resources_are_inherited_when_default_is_forkserver():
+    context = multiprocessing.get_context("forkserver")
+    queue = context.Queue()
+    process = context.Process(target=_run_preload_from_forkserver, args=(queue,))
+    process.start()
+    process.join()
+
+    assert process.exitcode == 0
+    assert queue.get() == ("forkserver", 1, True)

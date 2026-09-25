@@ -618,7 +618,9 @@ def plot_observation(
     )
     target_position_scale = scales["goal_to_position"]
 
-    ego_speed, ego_width, ego_length, steering_angle, accel_long, accel_lat, lcenter, lalign, speed_limit, *_ = ego_state
+    ego_speed, ego_width, ego_length, steering_angle, accel_long, accel_lat, lcenter, lalign, speed_limit, *_ = (
+        ego_state
+    )
 
     ego_width *= scales["veh_width_to_position"]
     ego_length *= scales["veh_len_to_position"]
@@ -858,7 +860,8 @@ def encode_interactive_replay(scenario, replay):
     road_points = []
     road_lengths = []
     road_types = []
-    for elem in scenario.get("road_elements", []) or []:
+    road_ids = []
+    for road_idx, elem in enumerate(scenario.get("road_elements", []) or []):
         if not isinstance(elem, dict):
             continue
         elem_type = int(elem.get("type", 0))
@@ -877,6 +880,7 @@ def encode_interactive_replay(scenario, replay):
         count = min(len(xs), len(ys))
         road_lengths.append(count)
         road_types.append(draw_type)
+        road_ids.append(int(elem.get("id", road_idx)))
         for i in range(count):
             road_points.append((float(xs[i]), float(ys[i])))
 
@@ -923,6 +927,7 @@ def encode_interactive_replay(scenario, replay):
         "road_points": np.asarray(road_points or [(0.0, 0.0)], dtype=np.float32),
         "road_lengths": np.asarray(road_lengths or [0], dtype=np.int32),
         "road_types": np.asarray(road_types or [0], dtype=np.int16),
+        "road_ids": np.asarray(road_ids or [0], dtype=np.int32),
         "traffic_stop_lines": np.asarray(traffic_stop_lines or [[0, 0, 0, 0, 0, 0]], dtype=np.float32),
         "traffic_types": np.asarray(traffic_types or [0], dtype=np.int16),
         "agent_f32": replay["agent_f32"].astype(np.float32, copy=False),
@@ -935,8 +940,12 @@ def encode_interactive_replay(scenario, replay):
         "value": replay["value"].astype(np.float32, copy=False),
         "entropy": replay["entropy"].astype(np.float32, copy=False),
     }
+    if replay.get("goals_f32") is not None:
+        chunks["goals_f32"] = replay["goals_f32"].astype(np.float32, copy=False)
     if replay.get("rewards_f32") is not None:
         chunks["rewards_f32"] = replay["rewards_f32"].astype(np.float32, copy=False)
+    if replay.get("coefs_f32") is not None:
+        chunks["coefs_f32"] = replay["coefs_f32"].astype(np.float32, copy=False)
     if quantized_observations is not None:
         chunks["obs"] = quantized_observations
         chunks["obs_scale"] = observation_scale_per_dim.astype(np.float32)
@@ -989,6 +998,8 @@ def encode_interactive_replay(scenario, replay):
         "eval_overrides": replay.get("eval_overrides") or {},
         "frames": int(replay["agent_f32"].shape[0]),
         "agent_cap": int(replay["agent_f32"].shape[1]),
+        "agent_goal_radius_field": int(binding.AGENT_F32_GOAL_RADIUS_IDX),
+        "default_goal_radius_meters": float(env_cfg["goal_radius"]),
         "traffic_cap": int(replay["traffic_i16"].shape[1]),
         "active_count": int(replay["raw_action"].shape[1]),
         "obs_dim": int(replay["obs"].shape[2]) if replay.get("obs") is not None else 0,
@@ -1144,8 +1155,10 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <div id="reward-grid" class="grid toggle-body"></div>
             <button type="button" id="ego-obs-header" class="toggle-header" data-target="ego-obs-grid"><span>Ego observation</span><span>&#9662;</span></button>
             <div id="ego-obs-grid" class="grid toggle-body"></div>
-            <button type="button" id="cond-obs-header" class="toggle-header" data-target="cond-obs-grid"><span>Conditioning</span><span>&#9662;</span></button>
+            <button type="button" id="cond-obs-header" class="toggle-header" data-target="cond-obs-grid"><span>Conditioning (obs)</span><span>&#9662;</span></button>
             <div id="cond-obs-grid" class="grid toggle-body"></div>
+            <button type="button" id="coef-header" class="toggle-header is-collapsed" data-target="coef-grid"><span>Conditioning</span><span>&#9662;</span></button>
+            <div id="coef-grid" class="grid toggle-body is-collapsed"></div>
             <button type="button" class="toggle-header" data-target="puffer-score-body"><span>Puffer score</span><span>&#9662;</span></button>
             <div id="puffer-score-body" class="toggle-body"><div id="tel-ps" class="score-num">0.000</div></div>
             <button type="button" class="toggle-header" data-target="puffer-grid"><span>Puffer metrics</span><span>&#9662;</span></button>
@@ -1168,10 +1181,12 @@ __PAYLOAD_CHUNKS__
         const METRIC_LABELS = __METRIC_LABELS__;
         const VEHICLE_COLORS = __VEHICLE_COLORS__;
         // Order must match the Log fields written in env_binding.h vec_get_obs_html_frame (15 values).
-        const EGO_OBS_LABELS = ["speed","width","length","steer","accel lon","accel lat","lane dist","lane angle cos","speed limit","stopped","lane curvature"];
-        const REWARD_LABELS = ["collision","offroad","red light","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed","ADE"];
-        const EGO_COND_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","C_throttle","C_steer","C_acc","C_vel"];
         const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];
+        // Order must match the REWARD_COEF_* indices in constants.h.
+        const COEF_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","throttle","steer","acc","speed"];
+        const REWARD_LABELS = ["collision","offroad","red light","stop sign","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed","ADE"];
+        const EGO_OBS_LABELS = ["speed","width","length","steer","accel lon","accel lat","lane dist","lane angle cos","speed limit","stopped","lane curvature"];
+        const EGO_COND_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","C_throttle","C_steer","C_acc","C_vel"];
         const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
         const JLONG = [-15,-4,0,4], JLAT = [-4,0,4];
         const DYNAMIC_EXPERT_COLOR = "#c4c8cf";
@@ -1180,9 +1195,10 @@ __PAYLOAD_CHUNKS__
         const PARTNER_BLINDNESS_OUTLINE_COLOR = "#6d28d9";
         const PHANTOM_BRAKING_OUTLINE_COLOR = "#b45309";
         const INFRACTION_METRIC_COUNT = 4;
+        const DEFAULT_GOAL_RADIUS_METERS = 2;
         const SVG_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>';
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
-        let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, lastDrawn = -1;
+        let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, roadPathsById = new Map(), lastDrawn = -1;
         const c = document.getElementById('c'), ctx = c.getContext('2d');
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
@@ -1291,7 +1307,7 @@ self.onmessage = async event => {
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
             if (C.obs && !C.obs_scale) C.obs_scale = new Float32Array(H.obs_dim).fill(H.obs_scale === undefined ? 1 : H.obs_scale); // pre-per-dim replays
             if (C.obs && H.obs_layout === "agent_dim_frame_delta") { const T = H.frames, o = C.obs; for (let row = 0; row < o.length; row += T) for (let t = row + 1; t < row + T; t++) o[t] += o[t-1]; }
-            F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2], rf:H.chunks.rewards_f32 ? H.chunks.rewards_f32.shape[2] : 0};
+            F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2], gf:H.chunks.goals_f32 ? H.chunks.goals_f32.shape[2] : 0, rf:H.chunks.rewards_f32 ? H.chunks.rewards_f32.shape[2] : 0, cf:H.chunks.coefs_f32 ? H.chunks.coefs_f32.shape[2] : 0};
             expertAgentIndices = new Set(H.expert_indices);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
@@ -1312,12 +1328,19 @@ self.onmessage = async event => {
 
         function buildMapPaths() {
             paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()};
+            roadPathsById = new Map();
             let p = 0;
             for (let i=0;i<H.road_polyline_count;i++) {
-                const len = C.road_lengths[i], type = C.road_types[i], path = paths[type];
+                const len = C.road_lengths[i], type = C.road_types[i], path = paths[type], roadId = C.road_ids[i];
                 if (len <= 0) continue;
+                const roadPath = new Path2D();
                 path.moveTo(C.road_points[p*2], C.road_points[p*2+1]);
-                for (let j=1;j<len;j++) path.lineTo(C.road_points[(p+j)*2], C.road_points[(p+j)*2+1]);
+                roadPath.moveTo(C.road_points[p*2], C.road_points[p*2+1]);
+                for (let j=1;j<len;j++) {
+                    path.lineTo(C.road_points[(p+j)*2], C.road_points[(p+j)*2+1]);
+                    roadPath.lineTo(C.road_points[(p+j)*2], C.road_points[(p+j)*2+1]);
+                }
+                roadPathsById.set(roadId, roadPath);
                 p += len;
             }
         }
@@ -1391,7 +1414,10 @@ self.onmessage = async event => {
             const isExpert = expertAgentIndices.has(idx);
             const hasInfraction = agentType === 1 && agentHasInfraction(frame, idx);
             const agentColor = colorForAgent(C.agent_i32[ib], isActive, isExpert, hasInfraction);
-            return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], partnerBlindnessActive:C.agent_i32[ib+8] === 1, phantomBrakingActive:C.agent_i32[ib+9] === 1, x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], c:agentColor};
+            const goalRadiusField = H.agent_goal_radius_field;
+            const defaultGoalRadius = H.default_goal_radius_meters || DEFAULT_GOAL_RADIUS_METERS;
+            const goalRadius = Number.isInteger(goalRadiusField) && goalRadiusField < F.af ? C.agent_f32[fb+goalRadiusField] : defaultGoalRadius;
+            return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], partnerBlindnessActive:C.agent_i32[ib+8] === 1, phantomBrakingActive:C.agent_i32[ib+9] === 1, x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], goalRadius:goalRadius, c:agentColor};
         }
         function getFrameAgents(frame) { const out = []; for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a) out.push(a); } return out; }
         function drawGhosts(f) {
@@ -1462,22 +1488,30 @@ self.onmessage = async event => {
             return row;
         }
         function selectedGoals(frame, agent) {
-            if (!C.obs || !agent || agent.slot < 0) return [];
-            const base = 0, obs = obsRow(frame, agent.slot);
-            const v = (o) => obs[o];
-            let p = base + H.ego_dim;
-            if (H.reward_conditioning) p += H.reward_coef_count;
-            const scale = H.scales.obs_norm_goal_offset_m;
-            const out = [];
+            // World-frame goals from the replay log, so goals render without captured observations.
+            if (!C.goals_f32 || !agent || agent.slot < 0) return [];
+            const base = (frame * H.agent_cap + agent.idx) * F.gf, stride = F.gf / H.num_goals, goals = C.goals_f32, out = [];
             for (let i=0;i<H.num_goals;i++) {
-                const o = p + i * H.goal_features;
-                let empty = true;
-                for (let j=0;j<H.goal_features;j++) if (obs[o+j] !== 0) empty = false;
-                if (empty) continue;
-                const rx = v(o) * scale, ry = v(o+1) * scale, ch = Math.cos(agent.h), sh = Math.sin(agent.h);
-                out.push({x:agent.x + rx * ch - ry * sh, y:agent.y + rx * sh + ry * ch});
+                const o = base + i * stride;
+                if (goals[o] === 0 && goals[o+1] === 0) continue;
+                out.push({x:goals[o], y:goals[o+1], radius:agent.goalRadius});
             }
             return out;
+        }
+        function strokeLanePath(laneId, color, width) {
+            const path = roadPathsById.get(laneId);
+            if (!path) return;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.stroke(path);
+        }
+        function drawCurrentLane(agent, colors) {
+            if (!agent || agent.cl < 0) return;
+            ctx.save();
+            ctx.lineCap = 'round';
+            strokeLanePath(agent.cl, 'rgba(255,255,255,.35)', Math.max(.5, 5.0/cam.z));
+            strokeLanePath(agent.cl, colors.accent, Math.max(.35, 4.0/cam.z));
+            ctx.restore();
         }
         function decodeObs(frame, slot) {
             if (!C.obs || slot < 0 || slot >= H.active_count) return null;
@@ -1549,6 +1583,10 @@ self.onmessage = async event => {
             while (condLabels.length < H.reward_coef_count) condLabels.push(`coef[${condLabels.length}]`);
             cg.innerHTML = showCond ? condLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
             document.getElementById('cond-obs-header').style.display = showCond ? '' : 'none';
+            const kg = document.getElementById('coef-grid');
+            const coefLabels = COEF_LABELS.slice(0, F.cf);
+            kg.innerHTML = C.coefs_f32 ? coefLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
+            document.getElementById('coef-header').style.display = C.coefs_f32 ? '' : 'none';
             const pol = document.getElementById('policy-grid');
             let html = '<div class="item"><span class="name">value</span><span class="num" data-pol="v">-</span></div><div class="item"><span class="name">entropy</span><span class="num" data-pol="e">-</span></div>';
             let labels = [];
@@ -1568,11 +1606,12 @@ self.onmessage = async event => {
             refs = {
                 metric: [...mg.querySelectorAll('.num')],
                 puffer: [...pg.querySelectorAll('.num')],
+                rewardCells: [...rg.querySelectorAll('.num')],
+                coefCells: [...kg.querySelectorAll('.num')],
                 polV: pol.querySelector('[data-pol=v]'), polE: pol.querySelector('[data-pol=e]'),
                 heat: [...pol.querySelectorAll('.heat-cell')],
                 acts: [...pol.querySelectorAll('.pol-act')], means: [...pol.querySelectorAll('.pol-mean')], stds: [...pol.querySelectorAll('.pol-std')],
                 egoObs: [...eg.querySelectorAll('.num')],
-                rewardCells: [...rg.querySelectorAll('.num')],
                 condObs: [...cg.querySelectorAll('.num')],
                 polLp: pol.querySelector('[data-pol=lp]'),
                 discrete, actionDims,
@@ -1607,6 +1646,10 @@ self.onmessage = async event => {
             }
             if (C.policy_mean) { for (let i=0;i<refs.means.length;i++){ refs.means[i].textContent = C.policy_mean[ab+i].toFixed(3); refs.stds[i].textContent = C.policy_std[ab+i].toFixed(3); } refs.polLp.textContent = C.policy_log_prob[s].toFixed(3); }
         }
+        function formatCoef(value) {
+            if (value === 0) return "0";
+            return Math.abs(value) >= 1e-3 ? value.toFixed(4) : value.toExponential(1);
+        }
         function updateUI(agent=null) {
             const f = Math.max(0, Math.min(frameMax(), Math.floor(step)));
             document.getElementById('stepNow').textContent = f;
@@ -1622,16 +1665,21 @@ self.onmessage = async event => {
             if (refs.rewardCells.length) {
                 // rewards_f32 rows are cumulative Log sums; step value = difference to the previous frame.
                 const rb = (f * H.agent_cap + agent.idx) * F.rf, rbPrev = ((f-1) * H.agent_cap + agent.idx) * F.rf;
-                const cum = i => C.rewards_f32[rb + i], stepDelta = i => f > 0 ? cum(i) - C.rewards_f32[rbPrev + i] : cum(i);
-                const fmtReward = v => v === 0 ? "0" : (Math.abs(v) >= 1e-4 ? v.toFixed(5) : v.toExponential(1));
-                refs.rewardCells[0].textContent = cum(0).toFixed(3);
-                refs.rewardCells[1].textContent = fmtReward(stepDelta(0));
-                for (let i=2;i<refs.rewardCells.length;i++) refs.rewardCells[i].textContent = fmtReward(stepDelta(i-1));
+                const cumulativeReward = i => C.rewards_f32[rb + i];
+                const stepReward = i => f > 0 ? cumulativeReward(i) - C.rewards_f32[rbPrev + i] : cumulativeReward(i);
+                const formatReward = value => value === 0 ? "0" : (Math.abs(value) >= 1e-4 ? value.toFixed(5) : value.toExponential(1));
+                refs.rewardCells[0].textContent = cumulativeReward(0).toFixed(3);
+                refs.rewardCells[1].textContent = formatReward(stepReward(0));
+                for (let i=2;i<refs.rewardCells.length;i++) refs.rewardCells[i].textContent = formatReward(stepReward(i-1));
             }
             if (refs.egoObs.length && agent.slot >= 0) {
                 const egoRow = obsRow(f, agent.slot);
                 for (let i=0;i<refs.egoObs.length;i++) refs.egoObs[i].textContent = egoRow[i].toFixed(3);
                 for (let i=0;i<refs.condObs.length;i++) refs.condObs[i].textContent = egoRow[H.ego_dim+i].toFixed(3);
+            }
+            if (refs.coefCells.length) {
+                const cb = (f * H.agent_cap + agent.idx) * F.cf;
+                for (let i=0;i<refs.coefCells.length;i++) refs.coefCells[i].textContent = formatCoef(C.coefs_f32[cb+i]);
             }
             updatePolicy(f, agent);
             const warnings = []; if(C.metrics_f32[mb] === 1) warnings.push("COLLISION"); if(C.metrics_f32[mb+1] === 1) warnings.push("OFFROAD"); if(C.metrics_f32[mb+2] === 1) warnings.push("RED LIGHT"); if(C.metrics_f32[mb+3] === 1) warnings.push("STOP SIGN");
@@ -1648,10 +1696,11 @@ self.onmessage = async event => {
             updateUI(target);
             const colors = getColors(); ctx.fillStyle = colors.bg; ctx.fillRect(0,0,c.width,c.height); ctx.save(); ctx.translate(c.width/2,c.height/2); ctx.scale(cam.z,-cam.z); if(isEgoCam && target) ctx.rotate(Math.PI/2 - target.h); ctx.translate(-cam.x,-cam.y);
             ctx.lineCap='round'; ctx.strokeStyle=colors.road; ctx.lineWidth=.5; ctx.stroke(paths[0]); ctx.strokeStyle=colors.line; ctx.setLineDash([1,1]); ctx.stroke(paths[1]); ctx.setLineDash([]); ctx.strokeStyle=colors.edge; ctx.lineWidth=.8; ctx.stroke(paths[2]);
+            drawCurrentLane(target, colors);
             drawGhosts(f);
             for(const a of getFrameAgents(f)){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
             for(let i=0;i<H.traffic_static_count;i++){ const t=trafficAt(f,i); if(!t) continue; const sl=t.stop_line; ctx.lineCap='butt'; if(t.type === 1){ ctx.strokeStyle=trafficColor(t); ctx.lineWidth=Math.min(1.5,3/cam.z); } else { ctx.strokeStyle=t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth=Math.min(1.2,2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]); } ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke(); ctx.setLineDash([]); }
-            if(target){ for(const g of selectedGoals(f,target)){ const r=Math.max(1.8,8/cam.z); ctx.strokeStyle='#38bdf8'; ctx.fillStyle='rgba(56,189,248,.22)'; ctx.lineWidth=Math.max(.25,2.5/cam.z); ctx.beginPath(); ctx.arc(g.x,g.y,r,0,7); ctx.fill(); ctx.stroke(); } }
+            if(target){ for(const g of selectedGoals(f,target)){ ctx.strokeStyle='#38bdf8'; ctx.fillStyle='rgba(56,189,248,.22)'; ctx.lineWidth=Math.max(.25,2.5/cam.z); ctx.beginPath(); ctx.arc(g.x,g.y,g.radius,0,7); ctx.fill(); ctx.stroke(); } }
             ctx.restore(); lastDrawn = f;
         }
         function toggle(){ play=!play; lastTick=performance.now(); updateBtn(); if(play) requestAnimationFrame(loop); }
