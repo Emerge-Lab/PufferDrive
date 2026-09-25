@@ -28,6 +28,7 @@ from pathlib import Path
 
 
 TRAFFIC_PHASE_SECTION_TAG = b"TLPHASE1"
+LANE_WIDTH_SECTION_TAG = b"LANEWID1"
 
 
 def _is_lane(road_type: int) -> bool:
@@ -146,6 +147,14 @@ def read_bin(path: Path) -> dict:
         for t in traffic:
             t["junction_id"], t["phase_idx"] = _read("<ii", f) if has_phase_section else (-1, -1)
 
+        width_tag = f.read(len(LANE_WIDTH_SECTION_TAG))
+        has_width_section = width_tag == LANE_WIDTH_SECTION_TAG
+        assert has_width_section or width_tag == b"", f"unexpected bytes after phase section in {path}"
+        if has_width_section:
+            for r in roads:
+                if _is_lane(r["type"]):
+                    r["widths"] = _read_f_array(f, r["S"])
+
         trailing = f.read()
         assert not trailing, f"{len(trailing)} unparsed trailing bytes in {path}"
 
@@ -162,13 +171,14 @@ def read_bin(path: Path) -> dict:
         "objects_of_interest": objects_of_interest,
         "tracks_to_predict": tracks_to_predict,
         "has_phase_section": has_phase_section,
+        "has_width_section": has_width_section,
     }
 
 
 def mirror(data: dict) -> dict:
     """Reflect across the x-axis: negate y for every position, vy for every
     velocity, heading → -heading. Lane-graph distances, segment lengths,
-    cumulative lengths, and all int IDs are reflection-invariant."""
+    cumulative lengths, lane widths, and all int IDs are reflection-invariant."""
     for a in data["agents"]:
         c = a["cols"]
         c["y"] = tuple(-v for v in c["y"])
@@ -277,6 +287,11 @@ def write_bin(data: dict, path: Path):
             f.write(TRAFFIC_PHASE_SECTION_TAG)
             for t in traffic:
                 f.write(struct.pack("<ii", t["junction_id"], t["phase_idx"]))
+        if data["has_width_section"]:
+            f.write(LANE_WIDTH_SECTION_TAG)
+            for r in roads:
+                if _is_lane(r["type"]) and r["S"]:
+                    f.write(struct.pack(f"<{r['S']}f", *r["widths"]))
 
 
 def main():

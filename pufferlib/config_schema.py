@@ -252,6 +252,10 @@ class DriveEnvConfig:
     base_max_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     max_speed_mps: float | None = _constrained_field(POSITIVE_NUMBER_CONSTRAINT, default=None)
     spawn_initial_speed: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    spawn_lateral_offset_max_frac: float = _constrained_field(PROBABILITY_CONSTRAINT)
+    spawn_heading_max_deg: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    pose_noise_xy_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    pose_noise_yaw_deg: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING
@@ -285,6 +289,8 @@ class DriveEnvConfig:
     obs_goal_lane_distance: bool = MISSING
     goal_radius: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     goal_speed: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    goal_speed_randomization: bool = MISSING
+    goal_reach_requires_speed: bool = MISSING
     num_goals: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     min_goal_spacing: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     max_goal_spacing: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
@@ -308,9 +314,11 @@ class DriveEnvConfig:
     reward_ade: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    allow_map_subset: bool = MISSING
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     obs_slots_boundary_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     obs_slots_partners_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
+    obs_partner_relative_velocity: bool = MISSING
     obs_slots_traffic_controls_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     obs_dropout_lane: float = _constrained_field(PROBABILITY_CONSTRAINT)
     obs_dropout_boundary: float = _constrained_field(PROBABILITY_CONSTRAINT)
@@ -365,6 +373,7 @@ class DrivePolicyConfig:
     critic_hidden_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     critic_num_layers: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     critic_head_layer_norm: bool = MISSING
+    fp32_heads: bool = MISSING
     shared_network: bool = MISSING
     action_type: ActionType = MISSING
 
@@ -773,6 +782,14 @@ def _validate_map_resources(env, context):
     if env["num_maps"] > available_maps:
         _raise_config_error(
             context, "env.num_maps", f"requests {env['num_maps']} maps but only {available_maps} are available"
+        )
+    # Sorted order would silently train on the first files only; benchmark overlays carry no allow_map_subset
+    if not env.get("eval_mode") and env.get("allow_map_subset") is False and env["num_maps"] < available_maps:
+        _raise_config_error(
+            context,
+            "env.num_maps",
+            f"requests {env['num_maps']} of {available_maps} available maps; set env.num_maps={available_maps} "
+            "or env.allow_map_subset=true",
         )
     return available_maps
 

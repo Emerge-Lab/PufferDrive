@@ -192,6 +192,10 @@ struct Drive {
     float base_max_speed_mps;
     float max_speed_mps;
     float spawn_initial_speed;
+    float spawn_lateral_offset_max_frac;
+    float spawn_heading_max_deg;
+    float pose_noise_xy_m;
+    float pose_noise_yaw_rad;
     int dynamics_model;
     int reset_accel_on_stop;
     int init_mode;
@@ -236,7 +240,9 @@ struct Drive {
     float goal_speed;
     float min_goal_spacing;
     float max_goal_spacing;
-    float goal_heading_max_deg; // 0 disables the successive-waypoint heading constraint
+    float goal_heading_max_deg;    // 0 disables the successive-waypoint heading constraint
+    int goal_speed_randomization;  // 0 pins the goal-speed coef to goal_speed (paper: v_goal fixed)
+    int goal_reach_requires_speed; // 1: final goal is consumed only below goal speed (paper semantics)
     int num_goals;
     int goal_regen_mode;
     int goal_source;
@@ -245,6 +251,7 @@ struct Drive {
     int obs_slots_boundary_n;
     int obs_slots_lane_n;
     int obs_slots_partners_n;
+    int obs_partner_relative_velocity;
     int obs_slots_traffic_controls_n;
     int traffic_lights_enabled;
     int stop_signs_enabled;
@@ -389,12 +396,34 @@ static float compute_heading_diff(float heading1, float heading2) {
     return normalize_heading(heading1 - heading2);
 }
 
+static float compute_lane_curvature(RoadMapElement *element, int seg_idx) {
+    int num_segments = element->segment_size - 1;
+    if (num_segments < 2) {
+        return 0.0f;
+    }
+    int next_seg_idx = (seg_idx < num_segments - 1) ? seg_idx + 1 : seg_idx;
+    int prev_seg_idx = next_seg_idx - 1;
+    float dx = element->x[next_seg_idx] - element->x[prev_seg_idx];
+    float dy = element->y[next_seg_idx] - element->y[prev_seg_idx];
+    float seg_length = sqrtf(dx * dx + dy * dy);
+    if (seg_length < 1e-3f) {
+        return 0.0f;
+    }
+    return compute_heading_diff(element->headings[next_seg_idx], element->headings[prev_seg_idx]) / seg_length;
+}
+
 static float sample_uniform(Rng *rng_state, float min_val, float max_val) {
     return min_val + rng_uniform_f32(rng_state) * (max_val - min_val);
 }
 
 static float sample_log_uniform(Rng *rng_state, float min_val, float max_val) {
     return expf(sample_uniform(rng_state, logf(min_val), logf(max_val)));
+}
+
+static float sample_normal(Rng *rng_state, float std_dev) {
+    float u1 = fmaxf(rng_uniform_f32(rng_state), 1e-7f);
+    float u2 = rng_uniform_f32(rng_state);
+    return std_dev * sqrtf(-2.0f * logf(u1)) * cosf(2.0f * (float) M_PI * u2);
 }
 
 static float sample_mixed_uniform(Rng *rng_state, float a) {
@@ -457,6 +486,7 @@ static void reset_agent_state(Agent *agent) {
     agent->steering_angle = 0.0f;
     agent->distance_since_spawn = 0.0f;
     agent->seconds_stopped = 0.0f;
+    agent->lane_curvature = 0.0f;
     agent->comfort_violation_last_window_idx = -1;
     agent->stop_sign_stopped_timestep_count = 0;
     agent->phantom_braking_counter = 0;
@@ -523,6 +553,32 @@ static inline float compute_log_yaw_rate(Agent *agent, int timestep, float dt) {
     }
 
     return 0.0f;
+}
+
+static void init_dynamics_state_from_log(Drive *env, Agent *agent) {
+    // Seed accel/steering from the log so mid-motion spawns don't start the dynamics at zero state.
+    // Log frames are log_dt apart (nuPlan 0.1s), not env->dt; using env->dt inflated the seeded state.
+    int step = env->init_step;
+    if (step >= agent->trajectory_size) {
+        step = agent->trajectory_size - 1;
+    }
+    if (step < 0) {
+        step = 0;
+    }
+    int next_step = step + 1;
+    if (next_step < agent->trajectory_size && agent->log_valid[next_step] == 1) {
+        float cos_heading = cosf(agent->log_heading[step]);
+        float sin_heading = sinf(agent->log_heading[step]);
+        float speed_now = agent->log_velocity_x[step] * cos_heading + agent->log_velocity_y[step] * sin_heading;
+        float speed_next
+            = agent->log_velocity_x[next_step] * cos_heading + agent->log_velocity_y[next_step] * sin_heading;
+        agent->accel_long = clip((speed_next - speed_now) / env->log_dt, ACCEL_LONG_LIMIT[0], ACCEL_LONG_LIMIT[1]);
+    }
+    float log_yaw_rate = compute_log_yaw_rate(agent, step, env->log_dt);
+    agent->accel_lat = clip(agent->sim_speed_signed * log_yaw_rate, ACCEL_LAT_LIMIT[0], ACCEL_LAT_LIMIT[1]);
+    float v_eff = fmaxf(fabsf(agent->sim_speed_signed), 1.0f);
+    float signed_curvature = log_yaw_rate / v_eff;
+    agent->steering_angle = clip(atanf(signed_curvature * agent->wheelbase), -0.55f, 0.55f);
 }
 
 static inline void project_vector_to_local(
@@ -2251,6 +2307,9 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
                 ? sample_log_uniform(&env->rng_state, bounds[c].min_val, bounds[c].max_val)
                 : sample_uniform(&env->rng_state, bounds[c].min_val, bounds[c].max_val);
         }
+        if (!env->goal_speed_randomization) {
+            agent->reward_coefs[REWARD_COEF_GOAL_SPEED] = env->goal_speed;
+        }
         agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = 2.5e-5f;
         agent->reward_coefs[REWARD_COEF_THROTTLE] = sample_mixed_uniform(&env->rng_state, 1.25f);
@@ -2512,7 +2571,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     } else {
         // Training: random size
         spawn_length = sample_uniform(&env->rng_state, 0.8f, 7.0f);
-        spawn_width = sample_uniform(&env->rng_state, 0.8f, 2.7f);
+        spawn_width = sample_uniform(&env->rng_state, 0.8f, 3.0f);
     }
     if (spawn_width > spawn_length) {
         spawn_width = spawn_length;
@@ -2556,10 +2615,16 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
         start_lane_idx = chosen_lane_idx;
         start_lane = &env->road_elements[start_lane_idx];
 
-        spawn_x = start_lane->x[chosen_entity.geometry_idx];
-        spawn_y = start_lane->y[chosen_entity.geometry_idx];
+        float lane_heading = start_lane->headings[chosen_entity.geometry_idx];
+        float half_lane_width_m = 0.5f * start_lane->widths[chosen_entity.geometry_idx];
+        float lateral_offset_m
+            = env->spawn_lateral_offset_max_frac * half_lane_width_m * sample_uniform(&env->rng_state, -1.0f, 1.0f);
+        float heading_offset_rad
+            = env->spawn_heading_max_deg * (float) M_PI / 180.0f * sample_uniform(&env->rng_state, -1.0f, 1.0f);
+        spawn_x = start_lane->x[chosen_entity.geometry_idx] - sinf(lane_heading) * lateral_offset_m;
+        spawn_y = start_lane->y[chosen_entity.geometry_idx] + cosf(lane_heading) * lateral_offset_m;
         spawn_z = start_lane->z[chosen_entity.geometry_idx];
-        spawn_heading = start_lane->headings[chosen_entity.geometry_idx];
+        spawn_heading = normalize_heading(lane_heading + heading_offset_rad);
 
         Agent tmp_agent = {0};
         tmp_agent.sim_x = spawn_x;
@@ -2597,7 +2662,6 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     }
 
     if (!is_agent_spawned) {
-        printf("[GIGAFLOW WARNING] -> Failed to find a collision-free spawn position for agent %d\n", agent->id);
         return is_agent_spawned;
     }
 
@@ -2806,6 +2870,9 @@ static void set_start_position(Drive *env) {
         reset_agent_metrics(env, i);
         reset_agent_state(agent);
         generate_reward_coefs(env, agent);
+        if (env->simulation_mode == SIMULATION_MODE_REPLAY && is_active && agent->sim_valid == 1) {
+            init_dynamics_state_from_log(env, agent);
+        }
     }
 }
 
@@ -3168,6 +3235,10 @@ void init(Drive *env) {
             env->shared_map = map_cache_store(env);
         }
     }
+    if (env->simulation_mode == SIMULATION_MODE_REPLAY && (!isfinite(env->log_dt) || env->log_dt <= 0.0f)) {
+        fprintf(stderr, "[ERROR] -> Replay map %s has invalid log_dt %f\n", env->map_name, (double) env->log_dt);
+        return;
+    }
     if (env->use_neighbor_cache && env->grid_map->neighbor_cache_entities == NULL) {
         cache_neighbor_offsets(env);
     }
@@ -3263,9 +3334,13 @@ void c_close(Drive *env) {
     free_loaded_map_data(env);
 }
 
+static inline int partner_feature_count(const Drive *env) {
+    return PARTNER_FEATURES + (env->obs_partner_relative_velocity ? PARTNER_RELATIVE_VELOCITY_FEATURES : 0);
+}
+
 static int compute_observation_size(Drive *env) {
-    return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n + LANE_FEATURES * env->obs_slots_lane_kept
-        + BOUNDARY_FEATURES * env->obs_slots_boundary_kept
+    return EGO_FEATURES + partner_feature_count(env) * env->obs_slots_partners_n
+        + LANE_FEATURES * env->obs_slots_lane_kept + BOUNDARY_FEATURES * env->obs_slots_boundary_kept
         + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
         + env->reward_conditioning * NUM_REWARD_COEFS + env->num_goals * GOAL_FEATURES;
 }
@@ -3454,6 +3529,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     // Track best candidate by combined distance/heading score
     float best_score = 1e9f;
     int lane_idx = -1;
+    int lane_seg_idx = 0;
     float signed_lane_distance = 0.0f, lane_heading = 0.0f;
 
     GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
@@ -3606,6 +3682,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         if (score < best_score) {
             best_score = score;
             lane_idx = entity_idx;
+            lane_seg_idx = closest_seg_idx;
             signed_lane_distance = signed_dist;
             lane_heading = avg_lane_heading;
         }
@@ -3627,12 +3704,14 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         // theta_f = angle relative to lane heading
         float theta_f = compute_heading_diff(agent->sim_heading, lane_heading);
         agent->metrics_array[LANE_ANGLE_IDX] = cosf(theta_f); // Store cos(θ_f)
+        agent->lane_curvature = compute_lane_curvature(&env->road_elements[lane_idx], lane_seg_idx);
     } else {
         // Agent not on any lane
         agent->previous_lane_idx = -1;
         agent->current_lane_idx = -1;
         agent->metrics_array[LANE_DIST_IDX] = LANE_DISTANCE_NORMALIZATION; // Max distance (far from lane)
         agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;                       // Perpendicular (no alignment)
+        agent->lane_curvature = 0.0f;
     }
 
     // Update cumulative metrics
@@ -3720,8 +3799,10 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         agent->sim_x,
         agent->sim_y);
     float goal_z_dist = fabsf(agent->sim_z - agent->current_goal_z);
+    bool final_goal_too_fast = env->goal_reach_requires_speed && agent->current_goal_idx == agent->goal_count - 1
+        && agent->sim_speed > agent->reward_coefs[REWARD_COEF_GOAL_SPEED];
     if (agent->current_goal_idx < agent->goal_count && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS]
-        && goal_z_dist < Z_BUFFER) {
+        && goal_z_dist < Z_BUFFER && !final_goal_too_fast) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
         agent_log->num_goals_reached += 1;
         agent->current_goal_idx++;
@@ -3933,6 +4014,7 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
         = (ego->current_lane_idx != -1) ? env->road_elements[ego->current_lane_idx].speed_limit : -1.0f;
     obs[obs_idx++] = current_lane_speed_limit / env->obs_norm_speed_mps;
     obs[obs_idx++] = fminf(1.0f, ego->seconds_stopped / MAX_STOPPED_SECONDS);
+    obs[obs_idx++] = fmaxf(-1.0f, fminf(1.0f, ego->lane_curvature / LANE_CURVATURE_NORM));
     return obs_idx;
 }
 
@@ -3991,7 +4073,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         ego->partner_blindness_counter = env->partner_blindness_duration;
     }
     if (ego->partner_blindness_counter > 0) {
-        int partner_obs_stride = env->obs_slots_partners_n * PARTNER_FEATURES;
+        int partner_obs_stride = env->obs_slots_partners_n * partner_feature_count(env);
         memset(&obs[obs_idx], 0, partner_obs_stride * sizeof(float));
         *partner_count = 0;
         return obs_idx + partner_obs_stride;
@@ -4068,11 +4150,15 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         obs[obs_idx++] = other->sim_speed_signed / env->obs_norm_speed_mps;
         // TODO(hack): partner seconds_stopped is a temporary feature; remove later.
         obs[obs_idx++] = fminf(1.0f, other->seconds_stopped / MAX_STOPPED_SECONDS);
+        if (env->obs_partner_relative_velocity) {
+            obs[obs_idx++] = rel_vx / env->obs_norm_speed_mps;
+            obs[obs_idx++] = rel_vy / env->obs_norm_speed_mps;
+        }
         partners_written++;
     }
 
     *partner_count = partners_written;
-    return obs_idx + (env->obs_slots_partners_n - partners_written) * PARTNER_FEATURES;
+    return obs_idx + (env->obs_slots_partners_n - partners_written) * partner_feature_count(env);
 }
 
 static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *lane_count, int *boundary_count) {
@@ -4190,8 +4276,8 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         segment_dest[feature_base + 5] = rel_seg_dir_y;
         // Goal-distance features: absolute and relative to ego's lane->goal distance.
         if (is_lane) {
-            // Constant until the map format carries per-lane width
-            segment_dest[feature_base + 6] = LANE_WIDTH / env->obs_norm_road_seg_width_m;
+            float seg_width = 0.5f * (road_element->widths[geometry_idx] + road_element->widths[geometry_idx + 1]);
+            segment_dest[feature_base + 6] = seg_width / env->obs_norm_road_seg_width_m;
             float goal_dist_abs = 0.0f, goal_dist_rel = 0.0f; // 0 when flag off / unresolved
             if (env->obs_goal_lane_distance && goal_graph_idx >= 0 && entity_idx < env->num_road_elements) {
                 int lane_graph_idx = env->lane_graph.lane_to_graph_idx[entity_idx];
@@ -4607,6 +4693,16 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     return;
 }
 
+static void apply_pose_noise(Drive *env, Agent *agent) {
+    // GIGAFLOW dynamics randomization: brownian buffeting applied to the pose, not integrated through speed.
+    agent->sim_x += sample_normal(&env->rng_state, env->pose_noise_xy_m);
+    agent->sim_y += sample_normal(&env->rng_state, env->pose_noise_xy_m);
+    agent->sim_heading
+        = normalize_heading(agent->sim_heading + sample_normal(&env->rng_state, env->pose_noise_yaw_rad));
+    agent->cos_heading = cosf(agent->sim_heading);
+    agent->sin_heading = sinf(agent->sim_heading);
+}
+
 #include "idm.h"
 
 void c_reset(Drive *env) {
@@ -4643,13 +4739,6 @@ void c_reset(Drive *env) {
             }
         }
 
-        if (num_reset != env->active_agent_count) {
-            printf(
-                "[GIGAFLOW ERROR] -> Only respawned %d out of %d agents during reset\n",
-                num_reset,
-                env->active_agent_count);
-        }
-
         // GIGAFLOW: spawn_agent already set positions, routes, paths, goals.
         // Only need to generate reward coefs and compute initial metrics.
         for (int x = 0; x < env->active_agent_count; x++) {
@@ -4680,6 +4769,9 @@ void c_reset(Drive *env) {
         reset_agent_state(agent);
         sample_erratic_flags(env, agent);
         generate_reward_coefs(env, agent);
+        if (env->simulation_mode == SIMULATION_MODE_REPLAY && agent->sim_valid == 1) {
+            init_dynamics_state_from_log(env, agent);
+        }
 
         if (env->goal_source == GOAL_SOURCE_GT) {
             int start = env->init_step > 0 ? env->init_step : 0;
@@ -4756,6 +4848,10 @@ void c_step(Drive *env) {
         Agent *agent = &env->agents[agent_idx];
         if (agent->controller == CONTROLLER_POLICY) {
             move_dynamics(env, i, agent_idx);
+            if ((env->pose_noise_xy_m > 0.0f || env->pose_noise_yaw_rad > 0.0f)
+                && (!env->eval_mode || env->eval_training_render)) {
+                apply_pose_noise(env, agent);
+            }
         } else if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, agent_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
@@ -4792,6 +4888,7 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         if (env->agents[agent_idx].stopped || env->agents[agent_idx].removed) {
             env->terminals[i] = 1;
+            env->masks[i] = 0;
         }
     }
 

@@ -21,21 +21,11 @@ def test_encode_and_pool_masks_padded_objects():
         encoded_inputs.append(x)
         return x
 
-    pooled = backbone._encode_and_pool(objects, valid_counts, encoder, 2)
+    pooled = backbone._encode_and_pool(objects, valid_counts, encoder)
 
+    # Dense encode keeps shapes static; padded rows are masked out of the pool instead
     assert len(encoded_inputs) == 1
-    torch.testing.assert_close(
-        encoded_inputs[0],
-        torch.tensor(
-            [
-                [1.0, 10.0],
-                [2.0, 3.0],
-                [4.0, 0.0],
-                [-3.0, 7.0],
-                [5.0, 1.0],
-            ]
-        ),
-    )
+    torch.testing.assert_close(encoded_inputs[0], objects)
     torch.testing.assert_close(
         pooled,
         torch.tensor(
