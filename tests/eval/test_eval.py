@@ -14,6 +14,8 @@ import yaml
 
 import pufferlib
 from pufferlib import pufferl
+from pufferlib.config_schema import validate_puffer_drive_config
+from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
@@ -24,6 +26,7 @@ CARLA_SCENARIO_COUNT = 7
 CARLA_WORKER_COUNT = 2
 CARLA_MAP_COUNT = 4
 CARLA_SCENARIO_LENGTH = 32
+BENCHMARK_SCENARIO_LENGTH = 48
 TRAIN_EPOCH_COUNT = 7
 TRAIN_EVAL_INTERVAL = 3
 TRAIN_HORIZON = 16
@@ -96,7 +99,7 @@ def _write_benchmark_config(
                 "env": {
                     "eval_mode": 1,
                     "compute_eval_metrics": True,
-                    "termination_mode": 0,
+                    "termination_mode": False,
                     "obs_dropout_lane": 0.0,
                     "obs_dropout_boundary": 0.0,
                 },
@@ -148,7 +151,7 @@ def _standalone_eval_args(benchmark_config_path):
             "max_agents_per_env": 8,
             "num_maps": CARLA_MAP_COUNT,
             "map_dir": str(CARLA_MAP_DIR),
-            "use_map_cache": 1,
+            "use_map_cache": True,
             "scenario_length": CARLA_SCENARIO_LENGTH,
             "resample_frequency": CARLA_SCENARIO_LENGTH,
             "action_type": "discrete",
@@ -187,7 +190,7 @@ def carla_evaluation(tmp_path_factory):
         scenario_length=CARLA_SCENARIO_LENGTH,
         max_agents_per_env=8,
         control_mode="control_vehicles",
-        use_neighbor_cache=1,
+        use_neighbor_cache=True,
     )
     args = _standalone_eval_args(benchmark_config_path)
     multiprocessing_calls = []
@@ -304,7 +307,6 @@ def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
     environment_config["obs_dropout_lane"] = args["env"]["obs_dropout_lane"]
     environment_config["obs_dropout_boundary"] = args["env"]["obs_dropout_boundary"]
     replay_args = drive_benchmark.build_benchmark_args(args, benchmarks[0], environment_config)
-    replay_args["env"]["num_agents"] = replay_args["eval"]["num_agents"]
 
     map_indices = drive_benchmark._resolve_map_indices(
         replay_args["env"]["map_dir"],
@@ -374,7 +376,7 @@ def _replay_render_args():
             "non_sdc_controller": "replay",
             "scenario_length": 64,
             "resample_frequency": 64,
-            "termination_mode": 0,
+            "termination_mode": False,
             "terminate_on_goal": False,
             "goal_source": "gt",
             "num_goals": 3,
@@ -393,7 +395,24 @@ def _read_replay_header(replay_path):
     return json.loads(payload[4 : 4 + header_length])
 
 
-def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch):
+def _read_replay_float32_chunk(replay_path, chunk_name):
+    payload = zlib.decompress(replay_path.read_bytes())
+    header_length = struct.unpack_from("<I", payload)[0]
+    header = json.loads(payload[4 : 4 + header_length])
+    chunk = header["chunks"][chunk_name]
+    assert chunk["dtype"] == "float32"
+    data_start = 4 + header_length + (-(4 + header_length) % 4)
+    values = np.frombuffer(
+        payload,
+        dtype=np.float32,
+        count=chunk["nbytes"] // np.dtype(np.float32).itemsize,
+        offset=data_start + chunk["offset"],
+    )
+    return values.reshape(chunk["shape"])
+
+
+@pytest.mark.parametrize("capture_observations", [False, True], ids=["without_observations", "with_observations"])
+def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch, capture_observations):
     args = _replay_render_args()
     map_seed_pairs = [(0, 1234), (0, 5678)]
     worker_env_kwargs, total_steps = drive_benchmark._plan_failure_replay_workers(
@@ -410,7 +429,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch)
         return original_vector_make(*make_args, **make_kwargs)
 
     monkeypatch.setattr(pufferlib.vector, "make", record_vector_make)
-    replay_output_dir = tmp_path / "replays"
+    replay_output_dir = tmp_path / drive_eval_replay.ZLIB_REPLAY_DIR_NAME
     summaries = pufferl._run_eval_rollout(
         args,
         "puffer_drive",
@@ -420,7 +439,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch)
         expected_episodes=2,
         policy=ZeroPolicy(action_count=12),
         replay_output_dir=replay_output_dir,
-        capture_observations=True,
+        capture_observations=capture_observations,
     )
 
     assert len(multiprocessing_calls) == 1
@@ -435,22 +454,49 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch)
         "agent_i32",
         "metrics_f32",
         "traffic_i16",
-        "obs",
+        "goals_f32",
+        "rewards_f32",
+        "coefs_f32",
         "raw_action",
         "policy_probs",
     }
+    if capture_observations:
+        required_chunks.add("obs")
     for replay_path in replay_paths:
         header = _read_replay_header(replay_path)
         assert header["frames"] == 64
         assert header["active_count"] == 1
-        assert header["obs_dim"] > 0
+        assert (header["obs_dim"] > 0) is capture_observations
         assert required_chunks <= set(header["chunks"])
+        assert header["agent_goal_radius_field"] == 12
+        assert header["chunks"]["agent_f32"]["shape"][2] == 13
+        assert header["chunks"]["rewards_f32"]["shape"][2] == 14
+        agent_frames = _read_replay_float32_chunk(replay_path, "agent_f32")
+        assert np.any(agent_frames[..., header["agent_goal_radius_field"]] > 0.0)
+        rewards = _read_replay_float32_chunk(replay_path, "rewards_f32")
+        assert np.any(rewards[..., 0] != 0.0)
+        np.testing.assert_allclose(rewards[..., 0], rewards[..., 1:].sum(axis=-1), atol=1e-4)
 
-    render_dir = Path(drive_eval_replay._render_eval_replays(summaries, str(tmp_path)))
+        coefs = _read_replay_float32_chunk(replay_path, "coefs_f32")
+        assert header["chunks"]["coefs_f32"]["shape"][2] == binding.NUM_REWARD_COEFS
+        goal_radius_coefs = coefs[..., 0]
+        agent_goal_radii = agent_frames[..., header["agent_goal_radius_field"]]
+        np.testing.assert_allclose(goal_radius_coefs, agent_goal_radii, atol=1e-6)
+
+    render_dir = Path(drive_eval_replay._render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=True))
     rendered_pages = sorted(path for path in render_dir.glob("*.html") if path.name != "index.html")
     assert len(rendered_pages) == 2
     assert (render_dir / "index.html").is_file()
-    assert all('class="payload-chunk"' in page.read_text() for page in rendered_pages)
+    rendered_html = [page.read_text() for page in rendered_pages]
+    assert all('class="payload-chunk"' in html for html in rendered_html)
+    assert all('id="reward-grid"' in html and '"return (cum)"' in html for html in rendered_html)
+    assert all("ctx.arc(g.x,g.y,g.radius" in html for html in rendered_html)
+    assert all(replay_path.is_file() for replay_path in replay_paths)
+
+    drive_eval_replay._render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=False)
+    assert not replay_output_dir.exists()
+    assert (render_dir / "index.html").is_file()
+    assert len(sorted(path for path in render_dir.glob("*.html") if path.name != "index.html")) == 2
 
 
 def _write_training_benchmark(tmp_path):
@@ -464,7 +510,7 @@ def _write_training_benchmark(tmp_path):
         scenario_length=TRAIN_HORIZON,
         max_agents_per_env=TRAIN_AGENTS_PER_ENV,
         control_mode="control_vehicles",
-        use_neighbor_cache=1,
+        use_neighbor_cache=True,
     )
 
 
@@ -488,7 +534,7 @@ def _training_args(tmp_path, benchmark_config_path, evaluation_enabled):
             "max_agents_per_env": TRAIN_AGENTS_PER_ENV,
             "num_maps": 2,
             "map_dir": str(CARLA_MAP_DIR),
-            "use_map_cache": 1,
+            "use_map_cache": True,
             "scenario_length": TRAIN_HORIZON,
             "resample_frequency": TRAIN_HORIZON,
         }
@@ -529,7 +575,6 @@ def _training_args(tmp_path, benchmark_config_path, evaluation_enabled):
             "evaluation_interval_epochs": TRAIN_EVAL_INTERVAL if evaluation_enabled else None,
             "evaluation_benchmarks": "training_eval",
             "data_dir": str(tmp_path),
-            "render": False,
         }
     )
     args["eval"].update(
@@ -696,7 +741,7 @@ def _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir):
             "max_agents_per_env": SDC_MAX_AGENTS_PER_ENV,
             "num_maps": SDC_SCENARIO_COUNT,
             "map_dir": str(map_dir),
-            "use_map_cache": 1,
+            "use_map_cache": True,
             "simulation_mode": "replay",
             "control_mode": "control_sdc_only",
             "scenario_length": SDC_SCENARIO_LENGTH,
@@ -736,7 +781,7 @@ def _run_sdc_eval(output_root, map_dir, benchmark_name, max_scenarios_per_batch)
         scenario_length=SDC_SCENARIO_LENGTH,
         max_agents_per_env=None,
         control_mode="control_sdc_only",
-        use_neighbor_cache=1,
+        use_neighbor_cache=True,
         max_scenarios_per_batch=max_scenarios_per_batch,
     )
     args = _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir)
@@ -785,20 +830,11 @@ def test_batch_cap_bounds_resident_envs(sdc_replay_map_dir):
         capped.close()
 
 
-def test_batch_cap_rejects_non_positive_values(sdc_replay_map_dir):
-    with pytest.raises(ValueError, match="max_scenarios_per_batch"):
-        Drive(
-            num_agents=SDC_SCENARIO_COUNT,
-            num_maps=SDC_SCENARIO_COUNT,
-            map_dir=str(sdc_replay_map_dir),
-            simulation_mode="replay",
-            control_mode="control_sdc_only",
-            eval_mode=1,
-            num_eval_scenarios=SDC_SCENARIO_COUNT,
-            min_agents_per_env=1,
-            max_agents_per_env=SDC_MAX_AGENTS_PER_ENV,
-            max_scenarios_per_batch=0,
-        )
+def test_batch_cap_rejects_non_positive_values():
+    args = _load_config()
+    args["env"]["max_scenarios_per_batch"] = 0
+    with pytest.raises(pufferlib.APIUsageError, match="max_scenarios_per_batch"):
+        validate_puffer_drive_config(args, "test")
 
 
 def test_batch_cap_preserves_scenario_coverage(tmp_path, sdc_replay_map_dir):

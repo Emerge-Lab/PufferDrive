@@ -129,6 +129,26 @@ puffer train puffer_drive train.device=cpu vec.backend=Serial env.num_agents=64 
 torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train puffer_drive
 ```
 
+## Profile
+
+Profiling requires Linux and `perf`. Select simulation, PPO training, or both
+with `profile.mode=sim`, `training`, or `all`:
+
+```bash
+# Rebuild native extensions with symbols and frame pointers
+PROFILE=1 python setup.py build_ext --inplace --force
+
+puffer profile puffer_drive profile.mode=all \
+    profile.warmup_cycles=1 profile.trace_cycles=1
+```
+
+Warmup cycles run before recording. Set `profile.warmup_cycles=0` to capture
+the first cycle after setup; environment and policy initialization remain
+excluded. Results are written to a timestamped directory under
+`profile.output_dir` (default `profiles/`). `perf.data` and
+`profile.linux-perf.txt` contain native samples; non-sim modes also write
+`torch_ops.txt` and a Perfetto-compatible `torch_trace.json`.
+
 ## Eval
 
 The eval command loads one or more named benchmarks from the benchmark YAML and
@@ -145,7 +165,8 @@ puffer eval puffer_drive carla \
 ```
 
 Scenario renders are captured during the benchmark pass and written as
-interactive HTML with retained `.replay.zlib` files. To render only episodes
+self-contained interactive HTML; the intermediate `.replay.zlib` bundles are
+deleted afterwards unless `eval.keep_zlib_replays=true`. To render only episodes
 where `offroad_rate > 0` instead:
 
 ```bash
@@ -158,6 +179,8 @@ puffer eval puffer_drive carla \
 
 Set `env.eval_training_render=true` to evaluate and render the Gigaflow
 environment distribution saved in the checkpoint's adjacent `config.yaml`.
+The selected benchmark's `map_dir` and `num_maps` override the checkpoint values,
+so checkpoints remain portable across machines with different dataset paths.
 
 Use `eval.num_agents`, not `env.num_agents`, to configure evaluation capacity.
 Evaluation outputs are written under

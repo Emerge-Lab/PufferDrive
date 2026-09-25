@@ -15,21 +15,21 @@ static int test_leader_defaults_and_update(void) {
     IDMLeader leader = idm_no_leader();
     EXPECT_EQ_INT(leader.has_leader, 0);
     EXPECT_EQ_INT(leader.leader_agent_idx, -1);
-    EXPECT_TRUE(isinf(leader.gap));
+    EXPECT_TRUE(isinf(leader.gap_meters));
 
     idm_update_best_leader(&leader, 3, 0, -1.0f, -5.0f);
     EXPECT_EQ_INT(leader.has_leader, 1);
     EXPECT_EQ_INT(leader.leader_agent_idx, 3);
-    EXPECT_NEAR(leader.gap, IDM_MINIMUM_LEAD_DISTANCE, 1e-5f);
-    EXPECT_NEAR(leader.leader_speed, 0.0f, 1e-5f);
+    EXPECT_NEAR(leader.gap_meters, IDM_MIN_SPACING_METERS, 1e-5f);
+    EXPECT_NEAR(leader.leader_speed_mps, 0.0f, 1e-5f);
 
     idm_update_best_leader(&leader, 4, 0, 10.0f, 3.0f);
     EXPECT_EQ_INT(leader.leader_agent_idx, 3);
     idm_update_best_leader(&leader, 5, 1, 0.05f, 7.0f);
     EXPECT_EQ_INT(leader.leader_agent_idx, 5);
     EXPECT_EQ_INT(leader.is_traffic_light, 1);
-    EXPECT_NEAR(leader.gap, IDM_MINIMUM_LEAD_DISTANCE, 1e-5f);
-    EXPECT_NEAR(leader.leader_speed, 7.0f, 1e-5f);
+    EXPECT_NEAR(leader.gap_meters, IDM_MIN_SPACING_METERS, 1e-5f);
+    EXPECT_NEAR(leader.leader_speed_mps, 7.0f, 1e-5f);
     return 0;
 }
 
@@ -69,7 +69,7 @@ static int test_desired_speed_fallback_and_lane_limit(void) {
     EXPECT_NEAR(idm_desired_speed(&env, &agent), 12.0f, 1e-5f);
 
     lanes[1].speed_limit = 0.0f;
-    EXPECT_NEAR(idm_desired_speed(&env, &agent), IDM_DEFAULT_DESIRED_SPEED, 1e-5f);
+    EXPECT_NEAR(idm_desired_speed(&env, &agent), IDM_DEFAULT_DESIRED_SPEED_MPS, 1e-5f);
     return 0;
 }
 
