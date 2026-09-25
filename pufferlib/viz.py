@@ -1428,6 +1428,7 @@ self.onmessage = async event => {
             const db = (frame * H.traffic_cap + idx) * F.tf;
             if (!C.traffic_i16[db]) return null;
             const sb = idx * 6, type = C.traffic_types[idx] || C.traffic_i16[db+1], state = C.traffic_i16[db+2];
+            if (!type) return null;
             return {type, state, stop_line:Array.from(C.traffic_stop_lines.subarray(sb, sb + 6))};
         }
         function trafficColor(t) { return t.state === 1 ? "#ff0000" : t.state === 2 ? "#ffff00" : t.state === 3 ? "#00ff00" : "#888888"; }
