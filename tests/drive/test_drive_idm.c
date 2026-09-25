@@ -162,6 +162,7 @@ static int test_leader_selection_and_move_idm(void) {
     int statics[1] = {1};
     int ego_route[1] = {0};
     int other_route[1] = {0};
+    float lane_limits[1] = {10.0f};
 
     make_lane(&lane, x, y, z, h, 10.0f);
     agents[0] = drive_test_agent(0.0f, 0.0f, 0.0f);
@@ -179,6 +180,7 @@ static int test_leader_selection_and_move_idm(void) {
 
     env.road_elements = &lane;
     env.num_road_elements = 1;
+    env.lane_speed_limit_mps = lane_limits;
     env.agents = agents;
     env.active_agent_indices = active;
     env.static_agent_indices = statics;

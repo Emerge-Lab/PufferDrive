@@ -90,6 +90,7 @@ OFFSET_CALIBRATION_MAX_RESIDUAL_M = (
 )
 OFFSET_CALIBRATION_SPACING_M = 10.0
 OFFSET_CALIBRATION_MATCH_MAX_M = 2.0  # waypoint-to-bin-lane residuals beyond this are mismatches, not offset
+OFFSET_CALIBRATION_MAX_Z_OFFSET_M = 5.0  # exported bins sit 0-1.7 m below CARLA's ground; more means a frame mix-up
 
 
 def calibrate_town_offset(carla_map, transform, town_bin):
@@ -100,32 +101,42 @@ def calibrate_town_offset(carla_map, transform, town_bin):
     driving 0.44 m right of CARLA's lane centre on Town02 and clipping curbs the shadow env could not see.
     Least squares of the translation over the lane-normal residuals of CARLA's driving waypoints against
     the nearest bin lane segment, two passes (re-matched after the first shift), mismatches beyond
-    OFFSET_CALIBRATION_MATCH_MAX_M dropped. Returns (offset, residual_before_m, residual_after_m)."""
+    OFFSET_CALIBRATION_MATCH_MAX_M dropped. The bins also sit a constant per-town height below CARLA's
+    ground (Town03 0.77 m, Town04 1.24 m, Town05 1.64 m, Town06 0), so the same matches give the z offset as
+    the median of bin lane z minus waypoint z. Returns (offset, z_offset_m, residual_before_m, residual_after_m)."""
     data = _mbin.read_bin(Path(town_bin))
-    seg_start, seg_end = [], []
+    seg_start, seg_end, seg_z_start, seg_z_end = [], [], [], []
     for road in data["roads"]:
         if not (0 <= road["type"] <= 9) or len(road["x"]) < 2:
             continue
         pts = np.column_stack([road["x"], road["y"]])
+        heights = np.asarray(road["z"], dtype=np.float64)
         seg_start.append(pts[:-1])
         seg_end.append(pts[1:])
+        seg_z_start.append(heights[:-1])
+        seg_z_end.append(heights[1:])
     seg_start = np.vstack(seg_start)
     seg_end = np.vstack(seg_end)
+    seg_z_start = np.concatenate(seg_z_start)
+    seg_z_end = np.concatenate(seg_z_end)
     seg_dir = seg_end - seg_start
     seg_len_sq = np.maximum((seg_dir**2).sum(1), 1e-9)
-    points, normals = [], []
+    points, normals, waypoint_z = [], [], []
     for wp in carla_map.generate_waypoints(OFFSET_CALIBRATION_SPACING_M):
         if wp.is_junction or str(wp.lane_type) != "Driving":
             continue
         loc, right = wp.transform.location, wp.transform.get_right_vector()
         points.append(transform.loc_to_bin(loc.x, loc.y))
         normals.append((right.x, -right.y))  # y flips into the bin frame
+        waypoint_z.append(loc.z)
     points = np.array(points, dtype=np.float64).reshape(-1, 2)
     normals = np.array(normals, dtype=np.float64).reshape(-1, 2)
     normals /= np.maximum(np.hypot(normals[:, 0], normals[:, 1]), 1e-9)[:, None]
+    waypoint_z = np.array(waypoint_z, dtype=np.float64)
 
     def normal_residuals(shift):
         residuals = np.empty(len(points))
+        foot_z = np.empty(len(points))
         for start in range(0, len(points), 256):
             chunk = points[start : start + 256] - shift
             t = (
@@ -140,35 +151,52 @@ def calibrate_town_offset(carla_map, transform, town_bin):
             rows = np.arange(len(chunk))
             delta = np.column_stack([foot_x[rows, nearest], foot_y[rows, nearest]]) - chunk
             residuals[start : start + 256] = (delta * normals[start : start + 256]).sum(1)
-        return residuals
+            t_nearest = t[rows, nearest]
+            foot_z[start : start + 256] = seg_z_start[nearest] + t_nearest * (seg_z_end[nearest] - seg_z_start[nearest])
+        return residuals, foot_z
 
     shift = np.zeros(2)  # bin lanes = CARLA lanes + shift  ->  loc_to_bin must add shift
-    residual_before = float(np.median(np.abs(normal_residuals(shift))))
+    residual_before = float(np.median(np.abs(normal_residuals(shift)[0])))
     for _ in range(2):
-        residuals = normal_residuals(-shift)
+        residuals, _ = normal_residuals(-shift)
         keep = np.abs(residuals) <= OFFSET_CALIBRATION_MATCH_MAX_M
         n = normals[keep]
         # residual_i = n_i . v  ->  (N^T N) v = N^T r
         shift += np.linalg.lstsq(n, residuals[keep], rcond=None)[0]
-    residual_after = float(np.median(np.abs(normal_residuals(-shift))))
+    residuals, foot_z = normal_residuals(-shift)
+    residual_after = float(np.median(np.abs(residuals)))
     if residual_after > OFFSET_CALIBRATION_MAX_RESIDUAL_M:
         raise RuntimeError(
             f"{Path(town_bin).name}: bin lanes do not match this CARLA map (median lane residual "
             f"{residual_after:.2f} m after offset calibration)"
         )
-    return (transform.tx + float(shift[0]), transform.ty + float(shift[1])), residual_before, residual_after
+    keep = np.abs(residuals) <= OFFSET_CALIBRATION_MATCH_MAX_M
+    z_offset = float(np.median(foot_z[keep] - waypoint_z[keep]))  # bin z = CARLA z + z_offset
+    if not np.isfinite(z_offset) or abs(z_offset) > OFFSET_CALIBRATION_MAX_Z_OFFSET_M:
+        raise RuntimeError(
+            f"{Path(town_bin).name}: bin lane height is {z_offset:.2f} m off this CARLA map (limit "
+            f"{OFFSET_CALIBRATION_MAX_Z_OFFSET_M} m)"
+        )
+    return (transform.tx + float(shift[0]), transform.ty + float(shift[1])), z_offset, residual_before, residual_after
 
 
 class CarlaTransform:
-    """Bidirectional CARLA <-> PufferDrive-bin-frame transform for one town."""
+    """Bidirectional CARLA <-> PufferDrive-bin-frame transform for one town.
 
-    def __init__(self, town: str, offset=None):
+    z_offset: bin z = CARLA z + z_offset (calibrate_town_offset; the bins sit 0.8-1.6 m below CARLA's
+    ground on Town03/04/05, so every injected height must go through z_to_bin)."""
+
+    def __init__(self, town: str, offset=None, z_offset=0.0):
         self.town = town
         self.tx, self.ty = offset if offset is not None else TOWN_OFFSETS[town]
+        self.tz = float(z_offset)
 
     # --- CARLA -> bin frame ---
     def loc_to_bin(self, cx, cy):
         return cx + self.tx, -cy + self.ty
+
+    def z_to_bin(self, cz):
+        return cz + self.tz
 
     def yaw_to_bin(self, yaw_deg):
         return -math.radians(yaw_deg)
@@ -193,11 +221,14 @@ class CarlaTransform:
         accel_long = accel_x * math.cos(heading) + accel_y * math.sin(heading)
         box = actor.bounding_box  # pivot differs per asset (vehicles: ground, walkers: capsule centre); bin z = ground
         ground_z = tf.location.z + box.location.z - box.extent.z
-        return (bx, by, ground_z, heading, v.x, -v.y, yaw_rate, accel_long)
+        return (bx, by, self.z_to_bin(ground_z), heading, v.x, -v.y, yaw_rate, accel_long)
 
     # --- bin frame -> CARLA (to teleport the ego back into CARLA) ---
     def bin_to_loc(self, bx, by):
         return bx - self.tx, -(by - self.ty)
+
+    def z_to_carla(self, bz):
+        return bz - self.tz
 
     def bin_heading_to_yaw(self, heading_rad):
         return -math.degrees(heading_rad)
@@ -415,7 +446,8 @@ def map_lights_to_bin(lights, transform, town_bin):
 def stop_signs_from_carla(world, carla_map, transform):
     """(lines (K, 6), headings (K,)) in the bin frame, one per CARLA `traffic.stop` actor: the trigger
     volume's centre projected onto its driving lane, spanning the trigger's width across that lane, with
-    the lane's travel direction as heading. Feed to Drive.set_stop_signs so the shadow env runs on the
+    the lane's travel direction as heading and the lane waypoint's height (a few trigger volumes sit up
+    to 1.5 m above or below their road). Feed to Drive.set_stop_signs so the shadow env runs on the
     volumes the leaderboard scores against instead of the bin's exported stop lines (which sit up to
     9 m away on a few Town03/05 approaches and miss four signs)."""
     import carla
@@ -436,6 +468,7 @@ def stop_signs_from_carla(world, carla_map, transform):
         across_x, across_y = -math.sin(lane_yaw), math.cos(lane_yaw)
         left = transform.loc_to_bin(center.x - half_width * across_x, center.y - half_width * across_y)
         right = transform.loc_to_bin(center.x + half_width * across_x, center.y + half_width * across_y)
-        lines.append([left[0], left[1], center.z, right[0], right[1], center.z])
+        line_z = transform.z_to_bin(waypoint.transform.location.z)
+        lines.append([left[0], left[1], line_z, right[0], right[1], line_z])
         headings.append(transform.yaw_to_bin(math.degrees(lane_yaw)))
     return np.array(lines, np.float32).reshape(-1, 6), np.array(headings, np.float32)

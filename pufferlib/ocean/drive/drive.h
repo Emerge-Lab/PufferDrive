@@ -237,6 +237,10 @@ struct Drive {
     int timestep;
     int autoreset_pending;
     int init_step;
+    int init_step_min_horizon;
+    int stagger_first_episode;
+    int first_reset_pending;
+    int episode_end_timestep;
     float dt;
     float base_max_speed_mps;
     float max_speed_mps;
@@ -3409,7 +3413,8 @@ void set_active_agents(Drive *env) {
     bool filter_spawns = !is_log_replay && env->control_mode != CONTROL_MODE_WOSAC;
 
     // Iterate through entities to find agents to create and/or control
-    for (int i = 0; i < env->num_total_agents && env->num_agents < max_agents; i++) {
+    int created_agent_count = 0;
+    for (int i = 0; i < env->num_total_agents && created_agent_count < max_agents; i++) {
         Agent *agent = &env->agents[i];
 
         // Skip if not valid at initialization
@@ -3436,20 +3441,20 @@ void set_active_agents(Drive *env) {
         if (filter_spawns) {
             load_pose_from_log(agent, env->init_step);
         }
-        if (filter_spawns && log_pose_overlaps_created_agent(env, agent, created_agent_indices, env->num_agents)) {
+        if (filter_spawns && log_pose_overlaps_created_agent(env, agent, created_agent_indices, created_agent_count)) {
             continue;
         }
-        created_agent_indices[env->num_agents] = i;
-        env->num_agents++;
+        created_agent_indices[created_agent_count] = i;
+        created_agent_count++;
     }
 
     // Control decisions need every created agent's pose, so they run after creation
-    for (int created_idx = 0; created_idx < env->num_agents; created_idx++) {
+    for (int created_idx = 0; created_idx < created_agent_count; created_idx++) {
         int i = created_agent_indices[created_idx];
         Agent *agent = &env->agents[i];
         bool is_controlled = should_control_agent(env, i);
         if (is_controlled && filter_spawns && agent->type == VEHICLE
-            && !replay_spawn_fit_for_control(env, agent, created_agent_indices, env->num_agents)) {
+            && !replay_spawn_fit_for_control(env, agent, created_agent_indices, created_agent_count)) {
             is_controlled = false;
         }
 
@@ -3472,6 +3477,8 @@ void set_active_agents(Drive *env) {
             }
         }
     }
+
+    env->num_agents = env->active_agent_count + env->static_agent_count;
 
     // Set up initial active agents
     env->active_agent_indices = (int *) malloc(env->active_agent_count * sizeof(int));
@@ -3606,6 +3613,7 @@ void remove_bad_trajectories(Drive *env) {
 void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
+    env->first_reset_pending = 1;
     struct SharedMapData *shared = env->use_map_cache ? map_cache_lookup(env) : NULL;
     if (shared != NULL) {
         // Cache hit: load only the per-env data (agents, traffic-control elements),
@@ -5419,6 +5427,15 @@ static void update_rollout_masks(Drive *env) {
 
 void c_reset(Drive *env) {
     env->autoreset_pending = 0;
+    env->episode_end_timestep = env->scenario_length;
+    if (env->first_reset_pending) {
+        env->first_reset_pending = 0;
+        // first episode after creation ends early so sub-envs do not run their episodes in lockstep
+        if (env->stagger_first_episode && !env->eval_mode) {
+            int offset_range = env->scenario_length - env->init_step - env->init_step_min_horizon;
+            env->episode_end_timestep -= rng_below(&env->rng_state, offset_range + 1);
+        }
+    }
     if (env->timestep == 0) {
         for (int i = 0; i < env->num_total_agents; i++) {
             copy_pose_to_prev(&env->agents[i]);
@@ -5667,7 +5684,7 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->timestep == env->scenario_length || early_reset) {
+    if (env->timestep == env->episode_end_timestep || early_reset) {
         if (early_reset && env->timestep <= EARLY_RESET_SHORT_TIMESTEPS) {
             record_short_early_reset(env);
         }

@@ -144,6 +144,7 @@ def _build_config():
             "use_map_cache": 1,  # share map geometry across envs in a worker
             "map_dir": "pufferlib/resources/drive/binaries/carla",
             "scenario_length": BPTT_HORIZON,  # short -> episodes complete each epoch
+            "stagger_first_episode": False,  # golden expects full-length first episodes
             "seed": SEED,
         },
     )

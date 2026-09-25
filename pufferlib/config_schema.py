@@ -131,6 +131,7 @@ class DriveEnvConfig:
     init_step: int = MISSING
     init_step_spread: bool = MISSING
     init_step_min_horizon: int = MISSING
+    stagger_first_episode: bool = MISSING
     control_mode: ControlMode = MISSING
     sdc_controller: Controller = MISSING
     non_sdc_controller: Controller = MISSING

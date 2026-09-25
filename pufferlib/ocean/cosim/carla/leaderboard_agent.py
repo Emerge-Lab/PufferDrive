@@ -353,19 +353,25 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         self._load_policy_and_env(self.town_bin)
 
         self.transform = cb.CarlaTransform(town, offset=cb.town_offset(self.town_bin))
-        offset, residual_before, residual_after = cb.calibrate_town_offset(self.cmap, self.transform, self.town_bin)
+        offset, z_offset, residual_before, residual_after = cb.calibrate_town_offset(
+            self.cmap, self.transform, self.town_bin
+        )
         print(
             f"[puffer_agent] bin offset calibrated against CARLA lanes: shift "
-            f"({offset[0] - self.transform.tx:+.2f}, {offset[1] - self.transform.ty:+.2f}) m, "
+            f"({offset[0] - self.transform.tx:+.2f}, {offset[1] - self.transform.ty:+.2f}) m, z {z_offset:+.2f} m, "
             f"median lane residual {residual_before:.2f} -> {residual_after:.2f} m"
         )
-        self.transform = cb.CarlaTransform(town, offset=offset)
+        self.transform = cb.CarlaTransform(town, offset=offset, z_offset=z_offset)
         if self.dynamics_source == "pufferdrive":
             self._sync_ego_from_carla(zero_velocity=True)
         ego_loc = self.vehicle.get_location()
+        target_points = plan_xyz(self._global_plan_world_coord)
+        dense_points = plan_xyz(self.dense_global_plan_world_coord)
+        target_points[:, 2] = self.transform.z_to_bin(target_points[:, 2])
+        dense_points[:, 2] = self.transform.z_to_bin(dense_points[:, 2])
         self.route_goals = route_goals_from_target_points(
-            plan_xyz(self._global_plan_world_coord),
-            plan_xyz(self.dense_global_plan_world_coord),
+            target_points,
+            dense_points,
             self.transform.loc_to_bin,
             self.transform.loc_to_bin(ego_loc.x, ego_loc.y),
             self.env.goal_radius,
@@ -665,8 +671,9 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         # multi-level roads the average can land the body mid-structure (measured: 20-100+
         # road collisions per Town03/04 route). sim_z only off the drivable network.
         # get_waypoint is nearest-in-3D: without sim_z the z=0 default snaps an overpass ego to the road beneath
-        wp = self.cmap.get_waypoint(carla.Location(x=x, y=y, z=sim_z))
-        z = wp.transform.location.z if wp is not None else sim_z
+        carla_z = self.transform.z_to_carla(sim_z)
+        wp = self.cmap.get_waypoint(carla.Location(x=x, y=y, z=carla_z))
+        z = wp.transform.location.z if wp is not None else carla_z
         road_up = wp.transform.rotation.get_up_vector() if wp is not None else carla.Vector3D(x=0.0, y=0.0, z=1.0)
         pitch_deg, roll_deg, forward = road_aligned_attitude(road_up, yaw_deg)
         # Waypoint z is quantised in ~0.5 m steps on steep grades (measured 0.32 m low at a Town03
@@ -919,6 +926,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                     "dt": self.dt,
                     "tick_dt": self.tick_dt,
                     "offset": [self.transform.tx, self.transform.ty],
+                    "z_offset": self.transform.tz,
                 }
             ),
         )

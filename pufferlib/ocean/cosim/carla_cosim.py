@@ -236,7 +236,7 @@ def build_route_goals(dense_route, transform, cmap, spacing=20.0):
         d = dense_route[i] - dense_route[i - 1]
         route_yaw = np.degrees(np.arctan2(d[1], d[0]))  # route travel direction (CARLA frame)
         gx, gy, gz = _route_goal_xy(cmap, dense_route[i][0], dense_route[i][1], route_yaw)
-        return (*transform.loc_to_bin(gx, gy), gz, d[0], -d[1])  # y flips into the bin frame
+        return (*transform.loc_to_bin(gx, gy), transform.z_to_bin(gz), d[0], -d[1])  # y flips into the bin frame
 
     goals, next_at, cum = [], spacing, 0.0
     for i in range(1, len(dense_route)):
@@ -414,13 +414,16 @@ def main():
     world, tm, ego, bg, lights = build_carla(client, town, route_wps, args.num_background, 0.1)
     cmap = world.get_map()
     transform = cb.CarlaTransform(town, offset=cb.town_offset(town_bin))
+    offset, z_offset, _, _ = cb.calibrate_town_offset(cmap, transform, town_bin)
+    transform = cb.CarlaTransform(town, offset=offset, z_offset=z_offset)
     _bin_lanes = cb._bin_lane_points(town_bin)  # bin lane points (== global frame) for diagnostics
     dense_route = densify_route(route_wps)  # fine-sampled route for lane-centered goal placement
     route_goals = build_route_goals(dense_route, transform, cmap)  # fixed 20-m lane-centered goal sequence
     goal_window = RouteGoalWindow(env, route_goals)
     light_map, num_traffic = cb.map_lights_to_bin(lights, transform, town_bin)
     print(
-        f"[cosim] carla: ego + {len(bg)} background + {len(lights)} lights; offset={transform.tx:.1f},{transform.ty:.1f}"
+        f"[cosim] carla: ego + {len(bg)} background + {len(lights)} lights; "
+        f"offset={transform.tx:.1f},{transform.ty:.1f} z={transform.tz:+.2f}"
     )
 
     car_bps = [

@@ -79,6 +79,7 @@ def _build_config():
             "use_map_cache": 1,
             "map_dir": "pufferlib/resources/drive/binaries/carla",
             "scenario_length": BPTT_HORIZON,
+            "stagger_first_episode": False,  # golden expects full-length first episodes
             "seed": SEED,
         },
     )

@@ -47,6 +47,7 @@ CLEAN_EVAL_OVERRIDES = {
     "pose_noise_xy_m": 0.0,
     "pose_noise_yaw_deg": 0.0,
     "speed_limit_random_prob": 0.0,
+    "stagger_first_episode": False,
 }
 
 

@@ -106,7 +106,11 @@ env:
   init_step_spread: false
   # sets an upper bound on the random init step
   # the sampled init step can be at most this close to the end of the episode;
+  # also the shortest first episode when stagger_first_episode is on
   init_step_min_horizon: 20
+  # training only: the first episode after every env (re)creation ends at a random step in
+  # [init_step_min_horizon, scenario_length], so sub-envs do not run their episodes in lockstep
+  stagger_first_episode: true
   # options: "control_vehicles", "control_agents", "control_tracks_to_predict", "control_sdc_only"
   control_mode: control_vehicles
   # Controller used by agent 0, the canonical SDC/target.
