@@ -36,6 +36,9 @@ class ObsReplayCapture:
                 "metrics_f32",
                 "puffer_f32",
                 "traffic_i16",
+                "goals_f32",
+                "rewards_f32",
+                "coefs_f32",
                 "obs",
                 "raw_action",
                 "action_index",
@@ -76,14 +79,21 @@ class ObsReplayCapture:
         metrics_f32 = np.zeros((1, cap, binding.METRICS_F32_FIELDS), np.float32)
         puffer_f32 = np.zeros((1, cap, binding.SCORE_F32_FIELDS), np.float32)
         traffic_i16 = np.zeros((1, tcap, binding.TRAFFIC_I16_FIELDS), np.int16)
+        goals_f32 = np.zeros((1, cap, int(self.env.num_goals) * binding.GOAL_XY_FIELDS), np.float32)
         rewards_f32 = np.zeros((1, cap, binding.REWARD_F32_FIELDS), np.float32)
-        self.env.get_obs_html_frame(agent_f32, agent_i32, metrics_f32, puffer_f32, traffic_i16, rewards_f32)
+        coefs_f32 = np.zeros((1, cap, binding.NUM_REWARD_COEFS), np.float32)
+        self.env.get_obs_html_frame(
+            agent_f32, agent_i32, metrics_f32, puffer_f32, traffic_i16, goals_f32, rewards_f32, coefs_f32
+        )
         frames = self.frames
         frames["agent_f32"].append(agent_f32[0])
         frames["agent_i32"].append(agent_i32[0])
         frames["metrics_f32"].append(metrics_f32[0])
         frames["puffer_f32"].append(puffer_f32[0])
         frames["traffic_i16"].append(traffic_i16[0])
+        frames["goals_f32"].append(goals_f32[0])
+        frames["rewards_f32"].append(rewards_f32[0])
+        frames["coefs_f32"].append(coefs_f32[0])
         obs = np.asarray(obs, dtype=np.float32)
         frames["obs"].append(np.clip(obs, -OBS_CLIP, OBS_CLIP))
         frames["raw_action"].append(np.asarray(actions, dtype=np.float32).reshape(obs.shape[0], -1))
@@ -104,6 +114,7 @@ class ObsReplayCapture:
             "action_type": "discrete",
             "dynamics_model": env.dynamics_model,
             "num_goals": int(env.num_goals),
+            "goal_radius": float(env.goal_radius),
             "reward_conditioning": bool(env.num_reward_coefs),
             "obs_slots_partners_n": int(env.obs_slots_partners_n),
             "obs_slots_lane_n": int(env.obs_slots_lane_n),
@@ -180,6 +191,9 @@ class ObsReplayCapture:
             "metrics_f32": np.stack(frames["metrics_f32"]),
             "puffer_f32": np.stack(frames["puffer_f32"]),
             "traffic_i16": np.stack(frames["traffic_i16"]),
+            "goals_f32": np.stack(frames["goals_f32"]),
+            "rewards_f32": np.stack(frames["rewards_f32"]),
+            "coefs_f32": np.stack(frames["coefs_f32"]),
             "obs": np.stack(frames["obs"]),
             "raw_action": np.stack(frames["raw_action"]),
             "clipped_action": np.stack(frames["raw_action"]),
