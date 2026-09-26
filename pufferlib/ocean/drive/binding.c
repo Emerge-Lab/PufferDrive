@@ -43,13 +43,17 @@ static PyObject *map_cache_release_py(PyObject *self __attribute__((unused)), Py
 
 // Seeds are 63-bit non-negative so they survive int64 round-trips (numpy, pandas, CSV).
 static int unpack_seed(PyObject *kwargs, uint64_t *seed_out) {
+    // An unpack() failure above is still pending; keep it rather than relabel it as a seed error
+    if (PyErr_Occurred()) {
+        return -1;
+    }
     PyObject *seed_obj = PyDict_GetItemString(kwargs, "seed");
     if (seed_obj == NULL || !PyLong_Check(seed_obj)) {
         PyErr_SetString(PyExc_TypeError, "Missing or non-integer keyword argument 'seed'");
         return -1;
     }
     long long seed = PyLong_AsLongLong(seed_obj);
-    if (PyErr_Occurred() || seed < 0) {
+    if (seed < 0) {
         PyErr_SetString(PyExc_ValueError, "seed must be a non-negative 63-bit integer");
         return -1;
     }
