@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """plot_obs_stride.py — Visualize the effect of obs stride on road geometry.
 
-Replicates the C `valid_for_obs` selection from init_grid_map (drive.h): for
-lanes (obs_lane_stride) and road edges (obs_boundary_stride) it keeps one point
-every `stride` points, plus any point whose heading deviates more than
+Replicates the C `valid_for_obs` selection from init_grid_map (map_data.h): lanes
+keep one point per `--lane-spacing-m` meters of arc length (0 falls back to the
+vertex stride rule below); road edges (obs_boundary_stride) keep one point every
+`stride` points, plus any point whose heading deviates more than
 OBS_STRIDE_HEADING_THRESHOLD from the last kept point (densifies curves).
 
 Outputs one self-contained zoomable HTML per CARLA map: kept points highlighted,
@@ -46,10 +47,20 @@ def normalize_heading(h):
     return h
 
 
-def valid_for_obs_mask(headings, stride, heading_threshold):
-    """Same selection as drive.h init_grid_map: per segment j in [0, S-1)."""
+def valid_for_obs_mask(road, stride, heading_threshold, spacing_m=0.0):
+    """Same selection as map_data.h init_grid_map: per segment j in [0, S-1)."""
+    xs, ys, headings = road["x"], road["y"], road["headings"]
     n_seg = len(headings) - 1
     mask = [True] * max(n_seg, 0)
+    if spacing_m > 0:
+        arc_since_kept = 0.0
+        for j in range(n_seg):
+            keep = j == 0 or arc_since_kept >= spacing_m
+            if keep:
+                arc_since_kept = 0.0
+            arc_since_kept += math.hypot(xs[j + 1] - xs[j], ys[j + 1] - ys[j])
+            mask[j] = keep
+        return mask
     if stride <= 1:
         return mask
     last_kept = 0
@@ -97,7 +108,7 @@ def _point_trace(xs, ys, color, name, size, opacity):
     )
 
 
-def build_figure(data, map_name, lane_stride, boundary_stride, heading_threshold):
+def build_figure(data, map_name, lane_stride, boundary_stride, heading_threshold, lane_spacing_m=0.0):
     roads = data["roads"]
     kept = {"lane": ([], []), "edge": ([], [])}
     dropped = {"lane": ([], []), "edge": ([], [])}
@@ -105,14 +116,14 @@ def build_figure(data, map_name, lane_stride, boundary_stride, heading_threshold
 
     for r in roads:
         if is_road_lane(r["type"]):
-            cat, stride = "lane", lane_stride
+            cat, stride, spacing_m = "lane", lane_stride, lane_spacing_m
         elif is_road_edge(r["type"]):
-            cat, stride = "edge", boundary_stride
+            cat, stride, spacing_m = "edge", boundary_stride, 0.0
         else:
             continue
         if r["S"] < 2:
             continue
-        mask = valid_for_obs_mask(r["headings"], stride, heading_threshold)
+        mask = valid_for_obs_mask(r, stride, heading_threshold, spacing_m)
         for j, keep in enumerate(mask):
             counts[cat][1] += 1
             bucket = kept[cat] if keep else dropped[cat]
@@ -136,9 +147,10 @@ def build_figure(data, map_name, lane_stride, boundary_stride, heading_threshold
     ek, et = counts["edge"]
     lpct = 100 * lk / lt if lt else 0
     epct = 100 * ek / et if et else 0
+    lane_rule = f"lane spacing {lane_spacing_m:g} m" if lane_spacing_m > 0 else f"lane stride {lane_stride}"
     fig.update_layout(
         title=(
-            f"{map_name} — lane stride {lane_stride} (kept {lk}/{lt}, {lpct:.0f}%) | "
+            f"{map_name} — {lane_rule} (kept {lk}/{lt}, {lpct:.0f}%) | "
             f"edge stride {boundary_stride} (kept {ek}/{et}, {epct:.0f}%) | "
             f"heading keep {math.degrees(heading_threshold):.0f}°"
         ),
@@ -157,8 +169,9 @@ def main():
         "--input", default="pufferlib/resources/drive/binaries/carla", help="Directory of *.bin maps or a single .bin"
     )
     p.add_argument("--output", default="obs_stride_plots", help="Output directory for HTML")
-    p.add_argument("--lane-stride", type=int, default=2)
+    p.add_argument("--lane-stride", type=int, default=2, help="Lane vertex stride, used when --lane-spacing-m is 0")
     p.add_argument("--boundary-stride", type=int, default=1)
+    p.add_argument("--lane-spacing-m", type=float, default=40.0, help="Lane obs point spacing in meters of arc length")
     p.add_argument(
         "--heading-threshold-deg",
         type=float,
@@ -178,10 +191,9 @@ def main():
 
     for b in bins:
         data = read_bin(b)
-        fig = build_figure(data, b.stem, args.lane_stride, args.boundary_stride, heading_threshold)
-        html = (
-            out / f"{b.stem}_lane{args.lane_stride}_edge{args.boundary_stride}_hdg{args.heading_threshold_deg:g}.html"
-        )
+        fig = build_figure(data, b.stem, args.lane_stride, args.boundary_stride, heading_threshold, args.lane_spacing_m)
+        lane_tag = f"lane{args.lane_spacing_m:g}m" if args.lane_spacing_m > 0 else f"lane{args.lane_stride}"
+        html = out / f"{b.stem}_{lane_tag}_edge{args.boundary_stride}_hdg{args.heading_threshold_deg:g}.html"
         fig.write_html(html, include_plotlyjs="cdn", config={"scrollZoom": True, "displaylogo": False})
         print(f"  {b.name} -> {html}")
 

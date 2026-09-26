@@ -243,8 +243,116 @@ static int test_reward_lane_align_wrong_way(void) {
     return 0;
 }
 
+static int test_lane_goal_distance_obs_unreachable_reads_far(void) {
+    const float norm_m = LANE_GRAPH_DISTANCE_NORM_M;
+    float dest[2];
+
+    write_lane_goal_distance_obs(0.25f * norm_m, 0.5f * norm_m, dest);
+    EXPECT_NEAR(dest[0], 0.25f, 1e-6f);
+    EXPECT_NEAR(dest[1], -0.25f, 1e-6f);
+
+    // Unreachable lane next to an ego lane 3 norms from the goal: must read worse than ego, not closer.
+    write_lane_goal_distance_obs(INFINITY, 3.0f * norm_m, dest);
+    EXPECT_NEAR(dest[0], 1.0f, 1e-6f);
+    EXPECT_NEAR(dest[1], 1.0f, 1e-6f);
+
+    write_lane_goal_distance_obs(3.0f * norm_m, INFINITY, dest);
+    EXPECT_NEAR(dest[0], 1.0f, 1e-6f);
+    EXPECT_NEAR(dest[1], -1.0f, 1e-6f);
+
+    write_lane_goal_distance_obs(INFINITY, INFINITY, dest);
+    EXPECT_NEAR(dest[0], 1.0f, 1e-6f);
+    EXPECT_NEAR(dest[1], 0.0f, 1e-6f);
+
+    write_lane_goal_distance_obs(0.25f * norm_m, -1.0f, dest);
+    EXPECT_NEAR(dest[0], 0.25f, 1e-6f);
+    EXPECT_NEAR(dest[1], 0.0f, 1e-6f);
+
+    write_lane_goal_distance_obs(-1.0f, 0.5f * norm_m, dest);
+    EXPECT_NEAR(dest[0], 0.0f, 1e-6f);
+    EXPECT_NEAR(dest[1], 0.0f, 1e-6f);
+    return 0;
+}
+
+static int test_lane_graph_distance_to_goal_sentinels(void) {
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
+    EXPECT_TRUE(env.lane_graph.n_lanes >= 2);
+    int lane_idx = env.lane_graph.lane_ids[0];
+    int goal_graph_idx = 1;
+    float *stored_distance_m = &env.lane_graph.distances[0 * env.lane_graph.n_lanes + goal_graph_idx];
+
+    *stored_distance_m = 123.0f;
+    EXPECT_NEAR(lane_graph_distance_to_goal_m(&env, lane_idx, goal_graph_idx), 123.0f, 1e-6f);
+    *stored_distance_m = INFINITY;
+    EXPECT_TRUE(isinf(lane_graph_distance_to_goal_m(&env, lane_idx, goal_graph_idx)));
+    *stored_distance_m = -1.0f;
+    EXPECT_TRUE(isinf(lane_graph_distance_to_goal_m(&env, lane_idx, goal_graph_idx)));
+    EXPECT_TRUE(lane_graph_distance_to_goal_m(&env, -1, goal_graph_idx) < 0.0f);
+    EXPECT_TRUE(lane_graph_distance_to_goal_m(&env, env.num_road_elements, goal_graph_idx) < 0.0f);
+
+    free_allocated(&env);
+    return 0;
+}
+
+static int grid_entity_obs_kind(Drive *env, int entity_idx, int geometry_idx) {
+    RoadMapElement *element = &env->road_elements[entity_idx];
+    float x_center = (element->x[geometry_idx] + element->x[geometry_idx + 1]) / 2;
+    float y_center = (element->y[geometry_idx] + element->y[geometry_idx + 1]) / 2;
+    int grid_index = get_grid_index(env, x_center, y_center);
+    if (grid_index < 0) {
+        return -1;
+    }
+    for (int e = 0; e < env->grid_map->cell_entities_count[grid_index]; e++) {
+        const GridMapEntity *entity = &env->grid_map->cells[grid_index][e];
+        if (entity->entity_idx == entity_idx && entity->geometry_idx == geometry_idx) {
+            return entity->obs_kind;
+        }
+    }
+    return -1;
+}
+
+static int test_lane_obs_points_spaced_by_arc_length(void) {
+    const float spacing_m = 40.0f;
+    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
+    env.obs_lane_stride = 2;
+    env.obs_lane_spacing_m = spacing_m;
+    env.use_neighbor_cache = 1;
+    allocate(&env);
+    c_reset(&env);
+
+    int lanes_checked = 0;
+    for (int lane_idx = 0; lane_idx < env.num_road_elements; lane_idx++) {
+        RoadMapElement *lane = &env.road_elements[lane_idx];
+        if (!is_road_lane(lane->type) || lane->segment_size < 2) {
+            continue;
+        }
+        lanes_checked++;
+        float arc_since_kept_m = 0.0f;
+        for (int j = 0; j < lane->segment_size - 1; j++) {
+            int obs_kind = grid_entity_obs_kind(&env, lane_idx, j);
+            EXPECT_TRUE(obs_kind >= 0);
+            EXPECT_EQ_INT(obs_kind == OBS_ENTITY_LANE, j == 0 || arc_since_kept_m >= spacing_m);
+            if (obs_kind == OBS_ENTITY_LANE) {
+                arc_since_kept_m = 0.0f;
+            }
+            arc_since_kept_m += hypotf(lane->x[j + 1] - lane->x[j], lane->y[j + 1] - lane->y[j]);
+        }
+    }
+    EXPECT_TRUE(lanes_checked > 0);
+
+    // The neighbor cache only lists obs-valid lane/edge entities, so it must be smaller than the raw window.
+    int cell_count = env.grid_map->grid_cols * env.grid_map->grid_rows;
+    EXPECT_TRUE(env.grid_map->neighbor_cache_count[cell_count] > 0);
+    EXPECT_TRUE(env.grid_map->neighbor_cache_count[cell_count] < env.grid_map->total_entities * cell_count);
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
+    RUN_TEST(test_lane_obs_points_spaced_by_arc_length);
+    RUN_TEST(test_lane_goal_distance_obs_unreachable_reads_far);
+    RUN_TEST(test_lane_graph_distance_to_goal_sentinels);
     RUN_TEST(test_observation_size_formula);
     RUN_TEST(test_observation_zero_fill_and_valid_counts);
     RUN_TEST(test_reward_terminal_components);

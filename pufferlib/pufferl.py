@@ -1507,6 +1507,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "obs_slots_lane_n",
             "obs_boundary_stride",
             "obs_lane_stride",
+            "obs_lane_spacing_m",
             "obs_dropout_boundary",
             "obs_dropout_lane",
             "obs_slots_partners_n",
@@ -1530,6 +1531,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 for k, v in yaml_config["env"].items():
                     if k in KEYS_OF_INTEREST:
                         args["env"][k] = v
+                # Checkpoints predating obs_lane_spacing_m sampled lane obs points by vertex stride
+                if "obs_lane_spacing_m" not in yaml_config["env"]:
+                    args["env"]["obs_lane_spacing_m"] = 0.0
         else:
             print(
                 f"No config.yaml at {config_yaml_path}; fine-tuning with the configured "

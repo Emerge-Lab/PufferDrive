@@ -33,7 +33,7 @@ static void add_entity_to_grid(
     int grid_index,
     int entity_idx,
     int geometry_idx,
-    int valid_for_obs,
+    int obs_kind,
     int *cell_entities_insert_index) {
     if (grid_index == -1) {
         return;
@@ -52,7 +52,7 @@ static void add_entity_to_grid(
 
     env->grid_map->cells[grid_index][count].entity_idx = entity_idx;
     env->grid_map->cells[grid_index][count].geometry_idx = geometry_idx;
-    env->grid_map->cells[grid_index][count].valid_for_obs = valid_for_obs;
+    env->grid_map->cells[grid_index][count].obs_kind = obs_kind;
     cell_entities_insert_index[grid_index] = count + 1;
 }
 
@@ -168,31 +168,41 @@ static int init_grid_map(Drive *env) {
             continue;
         }
         RoadMapElement *element = &env->road_elements[i];
+        int is_lane = is_road_lane(element->type);
         int obs_stride = 1;
-        if (is_road_lane(element->type)) {
+        if (is_lane) {
             obs_stride = env->obs_lane_stride;
         } else if (is_road_edge(element->type)) {
             obs_stride = env->obs_boundary_stride;
         }
+        // Lanes sample one obs point per obs_lane_spacing_m of arc length, independent of vertex density
+        int sample_by_arc_length = is_lane && env->obs_lane_spacing_m > 0.0f;
         int last_kept_idx = 0;
+        float arc_since_kept_m = 0.0f;
         for (int j = 0; j < element->segment_size - 1; j++) {
-            // Keep a point every obs_stride points, plus wherever heading deviates enough
-            // since the last kept point (densifies curves/intersections)
             int valid_for_obs = 1;
-            if (obs_stride > 1 && j > 0) {
+            if (sample_by_arc_length) {
+                valid_for_obs = j == 0 || arc_since_kept_m >= env->obs_lane_spacing_m;
+            } else if (obs_stride > 1 && j > 0) {
+                // Keep a point every obs_stride points, plus wherever heading deviates enough
+                // since the last kept point (densifies curves/intersections)
                 float heading_dev = fabsf(normalize_heading(element->headings[j] - element->headings[last_kept_idx]));
                 valid_for_obs = j - last_kept_idx >= obs_stride || heading_dev > OBS_STRIDE_HEADING_THRESHOLD;
             }
+            int obs_kind = OBS_ENTITY_NONE;
             if (valid_for_obs) {
                 last_kept_idx = j;
+                arc_since_kept_m = 0.0f;
+                obs_kind = is_lane ? OBS_ENTITY_LANE : OBS_ENTITY_EDGE;
             }
+            arc_since_kept_m += hypotf(element->x[j + 1] - element->x[j], element->y[j + 1] - element->y[j]);
             float x_center = (element->x[j] + element->x[j + 1]) / 2;
             float y_center = (element->y[j] + element->y[j + 1]) / 2;
             int grid_index = get_grid_index(env, x_center, y_center);
             if (grid_index == -1) {
                 continue;
             }
-            add_entity_to_grid(env, grid_index, i, j, valid_for_obs, cell_entities_insert_index);
+            add_entity_to_grid(env, grid_index, i, j, obs_kind, cell_entities_insert_index);
             if (is_drivable_road_lane(element->type) && !drivable_grid_seen[grid_index]) {
                 drivable_grid_seen[grid_index] = true;
                 env->grid_map->num_drivable_grid_cell++;
@@ -246,13 +256,15 @@ static void init_neighbor_offsets(Drive *env) {
     }
 }
 
-// Spiral-order entity_pool indices of one cell's vision window; dest NULL only counts.
-static int collect_neighbor_pool_indices(Drive *env, int cell_idx, uint16_t *dest) {
+// Spiral-order entity_pool indices of a cell's vision window, observed lanes first then edges; NULL dest only counts.
+// lane_count is written by the counting call and read by the filling call to place the edge block.
+static int collect_neighbor_pool_indices(Drive *env, int cell_idx, uint16_t *dest, int *lane_count) {
     GridMap *grid = env->grid_map;
     int cell_x = cell_idx % grid->grid_cols;
     int cell_y = cell_idx / grid->grid_cols;
     int window_size = grid->vision_range * grid->vision_range;
-    int count = 0;
+    int lanes_seen = 0;
+    int edges_seen = 0;
     for (int j = 0; j < window_size; j++) {
         int x = cell_x + env->neighbor_offsets[j * 2];
         int y = cell_y + env->neighbor_offsets[j * 2 + 1];
@@ -261,16 +273,22 @@ static int collect_neighbor_pool_indices(Drive *env, int cell_idx, uint16_t *des
         }
         int grid_index = grid->grid_cols * y + x;
         int cell_entity_count = grid->cell_entities_count[grid_index];
-        if (dest == NULL) {
-            count += cell_entity_count;
-            continue;
-        }
         int first_pool_idx = (int) (grid->cells[grid_index] - grid->entity_pool);
         for (int e = 0; e < cell_entity_count; e++) {
-            dest[count++] = (uint16_t) (first_pool_idx + e);
+            int obs_kind = grid->cells[grid_index][e].obs_kind;
+            if (obs_kind == OBS_ENTITY_NONE) {
+                continue;
+            }
+            int is_lane = obs_kind == OBS_ENTITY_LANE;
+            if (dest != NULL) {
+                dest[is_lane ? lanes_seen : *lane_count + edges_seen] = (uint16_t) (first_pool_idx + e);
+            }
+            lanes_seen += is_lane;
+            edges_seen += !is_lane;
         }
     }
-    return count;
+    *lane_count = lanes_seen;
+    return lanes_seen + edges_seen;
 }
 
 static void cache_neighbor_offsets(Drive *env) {
@@ -282,9 +300,10 @@ static void cache_neighbor_offsets(Drive *env) {
     }
     grid->neighbor_cache_pool_idx = (uint16_t **) calloc(cell_count, sizeof(uint16_t *));
     grid->neighbor_cache_count = (int *) calloc(cell_count + 1, sizeof(int));
+    grid->neighbor_cache_lane_count = (int *) calloc(cell_count, sizeof(int));
     int total_count = 0;
     for (int i = 0; i < cell_count; i++) {
-        int neighbor_count = collect_neighbor_pool_indices(env, i, NULL);
+        int neighbor_count = collect_neighbor_pool_indices(env, i, NULL, &grid->neighbor_cache_lane_count[i]);
         grid->neighbor_cache_count[i] = neighbor_count;
         total_count += neighbor_count;
         if (neighbor_count == 0) {
@@ -292,7 +311,7 @@ static void cache_neighbor_offsets(Drive *env) {
             continue;
         }
         grid->neighbor_cache_pool_idx[i] = (uint16_t *) malloc(neighbor_count * sizeof(uint16_t));
-        collect_neighbor_pool_indices(env, i, grid->neighbor_cache_pool_idx[i]);
+        collect_neighbor_pool_indices(env, i, grid->neighbor_cache_pool_idx[i], &grid->neighbor_cache_lane_count[i]);
     }
     grid->neighbor_cache_count[cell_count] = total_count;
 }
@@ -332,27 +351,22 @@ static int get_neighbors_entities(
     return entity_list_count;
 }
 
-// Walks the spiral neighborhood of a query point: cached pool indices, or the scratch list.
+// Walks one obs kind of the spiral neighborhood of a query point: the kind's block of cached pool indices, or the
+// scratch list filtered by kind.
 typedef struct NeighborCursor {
     const GridMapEntity *entities;
     const uint16_t *pool_indices;
     int count;
     int pos;
+    int obs_kind;
 } NeighborCursor;
 
-static NeighborCursor neighbor_cursor_begin(Drive *env, float x, float y) {
-    NeighborCursor cursor = {0};
-    int grid_idx = get_grid_index(env, x, y);
-    if (grid_idx < 0 || grid_idx >= env->grid_map->grid_cols * env->grid_map->grid_rows) {
-        return cursor;
-    }
+// Uncached path only: spiral neighborhood of a query point into the scratch list, shared by both obs kinds.
+static int fill_neighbor_scratch(Drive *env, float x, float y) {
     if (env->use_neighbor_cache) {
-        cursor.pool_indices = env->grid_map->neighbor_cache_pool_idx[grid_idx];
-        cursor.count = env->grid_map->neighbor_cache_count[grid_idx];
-        return cursor;
+        return 0;
     }
-    cursor.entities = env->obs_neighbor_scratch;
-    cursor.count = get_neighbors_entities(
+    return get_neighbors_entities(
         env,
         x,
         y,
@@ -360,18 +374,39 @@ static NeighborCursor neighbor_cursor_begin(Drive *env, float x, float y) {
         env->grid_map->total_entities,
         (const int (*)[2]) env->neighbor_offsets,
         env->grid_map->vision_range * env->grid_map->vision_range);
+}
+
+static NeighborCursor neighbor_cursor_begin(Drive *env, float x, float y, int obs_kind, int scratch_count) {
+    NeighborCursor cursor = {0};
+    cursor.obs_kind = obs_kind;
+    if (!env->use_neighbor_cache) {
+        cursor.entities = env->obs_neighbor_scratch;
+        cursor.count = scratch_count;
+        return cursor;
+    }
+    int grid_idx = get_grid_index(env, x, y);
+    if (grid_idx < 0 || grid_idx >= env->grid_map->grid_cols * env->grid_map->grid_rows) {
+        return cursor;
+    }
+    int lane_count = env->grid_map->neighbor_cache_lane_count[grid_idx];
+    int total_count = env->grid_map->neighbor_cache_count[grid_idx];
+    const uint16_t *pool_indices = env->grid_map->neighbor_cache_pool_idx[grid_idx];
+    cursor.pool_indices = obs_kind == OBS_ENTITY_LANE ? pool_indices : pool_indices + lane_count;
+    cursor.count = obs_kind == OBS_ENTITY_LANE ? lane_count : total_count - lane_count;
     return cursor;
 }
 
 static inline const GridMapEntity *neighbor_cursor_next(Drive *env, NeighborCursor *cursor) {
-    if (cursor->pos >= cursor->count) {
-        return NULL;
+    for (int k = cursor->pos; k < cursor->count; k++) {
+        cursor->pos = k + 1;
+        if (cursor->pool_indices != NULL) {
+            return &env->grid_map->entity_pool[cursor->pool_indices[k]];
+        }
+        if (cursor->entities[k].obs_kind == cursor->obs_kind) {
+            return &cursor->entities[k];
+        }
     }
-    int k = cursor->pos++;
-    if (cursor->pool_indices != NULL) {
-        return &env->grid_map->entity_pool[cursor->pool_indices[k]];
-    }
-    return &cursor->entities[k];
+    return NULL;
 }
 
 // ========================================
@@ -939,7 +974,8 @@ static struct SharedMapData *map_cache_lookup(Drive *env) {
     for (int i = 0; i < g_map_cache_count; i++) {
         if (g_map_cache[i] != NULL && strcmp(g_map_cache[i]->map_name, env->map_name) == 0
             && g_map_cache[i]->obs_lane_stride == env->obs_lane_stride
-            && g_map_cache[i]->obs_boundary_stride == env->obs_boundary_stride) {
+            && g_map_cache[i]->obs_boundary_stride == env->obs_boundary_stride
+            && g_map_cache[i]->obs_lane_spacing_m == env->obs_lane_spacing_m) {
             return g_map_cache[i];
         }
     }
@@ -969,6 +1005,7 @@ static struct SharedMapData *map_cache_store(Drive *env) {
     entry->lane_graph = env->lane_graph;
     entry->obs_lane_stride = env->obs_lane_stride;
     entry->obs_boundary_stride = env->obs_boundary_stride;
+    entry->obs_lane_spacing_m = env->obs_lane_spacing_m;
     entry->ref_count = 1;
     entry->owner_pid = getpid();
     map_cache_insert(entry);
@@ -991,6 +1028,7 @@ static void free_grid_map(GridMap *grid_map) {
     }
     free(grid_map->neighbor_cache_pool_idx);
     free(grid_map->neighbor_cache_count);
+    free(grid_map->neighbor_cache_lane_count);
     free(grid_map);
 }
 

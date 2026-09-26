@@ -46,6 +46,7 @@ fi
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
     env.eval_perceived_size_margin_m=0.2 \
+    eval.goal_source=map \
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=200 \
     env.disable_red_light_infractions=1 \

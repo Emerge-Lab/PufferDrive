@@ -202,7 +202,10 @@ env:
   # Fraction of segment observation slots to drop (reduces obs size)
   obs_dropout_lane: 0.5
   obs_dropout_boundary: 0.4
-  # Stride for lane and boundary segments; 1 means use every segment, 2 means use every other segment, etc.
+  # Lane obs points every this many meters of lane arc length (GIGAFLOW: 40 m), independent of the map's vertex
+  # density; 0 falls back to obs_lane_stride (checkpoints trained before this key)
+  obs_lane_spacing_m: 40.0
+  # Stride for lane (only when obs_lane_spacing_m is 0) and boundary segments; 1 = every segment, 2 = every other, etc.
   obs_lane_stride: 2
   obs_boundary_stride: 1
   # --- Observation normalization ---

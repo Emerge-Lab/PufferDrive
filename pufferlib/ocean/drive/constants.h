@@ -214,6 +214,9 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 64
 #define ROAD_QUERY_ENTITY_COUNT (MAX_ENTITIES_PER_CELL * 25) // 5x5 cell neighborhood
+#define OBS_ENTITY_NONE 0 // grid entity not sampled for road observations
+#define OBS_ENTITY_LANE 1
+#define OBS_ENTITY_EDGE 2
 
 // 5x5 cell neighborhood swept by a road query, centered on the agent's cell
 static const int ROAD_OFFSETS[25][2]
@@ -252,6 +255,7 @@ static const int ROAD_OFFSETS[25][2]
 #define SPEED_LIMIT_JUNCTION_INHERIT_PASSES 4
 #define UNKNOWN_LANE_SPEED_LIMIT_MPS 15.0f // lanes without a map limit (nuPlan Boston/Singapore); CaRL's IDM fallback
 #define TL_INDIVIDUAL_REMOVE_PROB 0.20f
+#define TL_GROUP_REMOVE_PROB 0.20f
 #define TL_ALWAYS_GREEN_PROB 0.05f
 
 // =====================================================================================

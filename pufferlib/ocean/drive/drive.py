@@ -118,6 +118,7 @@ class Drive(pufferlib.PufferEnv):
         obs_slots_boundary_n=32,
         obs_lane_stride=1,
         obs_boundary_stride=1,
+        obs_lane_spacing_m=0.0,
         obs_slots_partners_n=16,
         obs_partner_relative_velocity=False,
         obs_lane_heading_signed=False,
@@ -303,6 +304,7 @@ class Drive(pufferlib.PufferEnv):
         self.obs_slots_boundary_n = obs_slots_boundary_n
         self.obs_lane_stride = obs_lane_stride
         self.obs_boundary_stride = obs_boundary_stride
+        self.obs_lane_spacing_m = float(obs_lane_spacing_m)
         self.obs_slots_partners_n = obs_slots_partners_n
         self.obs_partner_relative_velocity = int(bool(obs_partner_relative_velocity))
         self.obs_lane_heading_signed = int(bool(obs_lane_heading_signed))
@@ -520,6 +522,7 @@ class Drive(pufferlib.PufferEnv):
             "use_neighbor_cache": self.use_neighbor_cache,
             "obs_lane_stride": self.obs_lane_stride,
             "obs_boundary_stride": self.obs_boundary_stride,
+            "obs_lane_spacing_m": self.obs_lane_spacing_m,
             "obs_range_road_front_m": self.obs_range_road_front_m,
             "obs_range_road_behind_m": self.obs_range_road_behind_m,
             "obs_range_road_side_m": self.obs_range_road_side_m,
@@ -570,6 +573,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_boundary_n": self.obs_slots_boundary_n,
             "obs_lane_stride": self.obs_lane_stride,
             "obs_boundary_stride": self.obs_boundary_stride,
+            "obs_lane_spacing_m": self.obs_lane_spacing_m,
             "obs_slots_partners_n": self.obs_slots_partners_n,
             "obs_partner_relative_velocity": self.obs_partner_relative_velocity,
             "obs_lane_heading_signed": self.obs_lane_heading_signed,

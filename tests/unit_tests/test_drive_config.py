@@ -54,6 +54,10 @@ class TestDriveConfig(unittest.TestCase):
         args["env"]["obs_boundary_stride"] = 0
         with self.assertRaisesRegex(pufferlib.APIUsageError, "obs_boundary_stride"):
             validate_puffer_drive_config(args, "test")
+        args["env"]["obs_boundary_stride"] = 1
+        args["env"]["obs_lane_spacing_m"] = -1.0
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "obs_lane_spacing_m"):
+            validate_puffer_drive_config(args, "test")
 
     def test_speed_limit_randomization_validation(self):
         with self.assertRaisesRegex(ValueError, "speed_limit_random_prob"):

@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0041_${SEED}
+export RUN_NAME=k_scaled_0042_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -74,6 +74,7 @@ srun torchrun \
     env.goal_reach_requires_speed=true \
     env.obs_partner_relative_velocity=true \
     env.obs_lane_heading_signed=true \
+    env.obs_lane_spacing_m=40.0 \
     env.stop_signs_enabled=true \
     env.pose_noise_xy_m=0.025 \
     env.pose_noise_yaw_deg=0.25 \
@@ -102,6 +103,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
     env.eval_perceived_size_margin_m=0.2 \
+    eval.goal_source=map \
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=200 \
     env.disable_red_light_infractions=1 \

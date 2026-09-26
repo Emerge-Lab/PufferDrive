@@ -1928,6 +1928,7 @@ static int unpack_map_cache_args(PyObject *kwargs, Drive *config, const char ***
     config->use_neighbor_cache = (int) unpack(kwargs, "use_neighbor_cache");
     config->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
     config->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
+    config->obs_lane_spacing_m = (float) unpack(kwargs, "obs_lane_spacing_m");
     config->obs_range_road_front_m = (float) unpack(kwargs, "obs_range_road_front_m");
     config->obs_range_road_behind_m = (float) unpack(kwargs, "obs_range_road_behind_m");
     config->obs_range_road_side_m = (float) unpack(kwargs, "obs_range_road_side_m");
@@ -1935,8 +1936,9 @@ static int unpack_map_cache_args(PyObject *kwargs, Drive *config, const char ***
         return -1;
     }
     if (config->use_neighbor_cache < 0 || config->use_neighbor_cache > 1 || config->obs_lane_stride < 1
-        || config->obs_boundary_stride < 1 || !isfinite(config->obs_range_road_front_m)
-        || !isfinite(config->obs_range_road_behind_m) || !isfinite(config->obs_range_road_side_m)
+        || config->obs_boundary_stride < 1 || !isfinite(config->obs_lane_spacing_m) || config->obs_lane_spacing_m < 0.0f
+        || !isfinite(config->obs_range_road_front_m) || !isfinite(config->obs_range_road_behind_m)
+        || !isfinite(config->obs_range_road_side_m)
         || config->obs_range_road_front_m < 0.0f || config->obs_range_road_behind_m < 0.0f
         || config->obs_range_road_side_m < 0.0f) {
         PyErr_SetString(PyExc_ValueError, "invalid map cache configuration");
@@ -2064,6 +2066,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->yield_signs_enabled = (bool) unpack(kwargs, "yield_signs_enabled");
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
     env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
+    env->obs_lane_spacing_m = (float) unpack(kwargs, "obs_lane_spacing_m");
     env->dt = (float) unpack(kwargs, "dt");
     env->base_max_speed_mps = (float) unpack(kwargs, "base_max_speed_mps");
     env->max_speed_mps = (float) unpack(kwargs, "max_speed_mps");
