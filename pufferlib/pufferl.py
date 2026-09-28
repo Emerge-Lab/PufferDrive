@@ -790,17 +790,12 @@ class PuffeRL:
 
         self.optimizer.zero_grad()
         total_minibatches = 0
-        pending_minibatches = 0
-
-        # Disabled for now: dropping the partial final minibatch means zero optimizer
-        # steps (silently) whenever fewer than minibatch_size transitions survive the
-        # advantage filter, which permanently freezes a plateaued policy.
-        # full_minibatch_transitions = (keep_idx.numel() // self.minibatch_size) * self.minibatch_size
-        full_minibatch_transitions = keep_idx.numel()
+        retained_transition_count = keep_idx.numel()
+        optimizer_batch_size = self.minibatch_size * self.accumulate_minibatches
 
         for _ in range(config["update_epochs"]):
-            permutation = keep_idx[torch.randperm(keep_idx.numel(), device=keep_idx.device)]
-            for start in range(0, full_minibatch_transitions, self.minibatch_size):
+            permutation = keep_idx[torch.randperm(retained_transition_count, device=keep_idx.device)]
+            for start in range(0, retained_transition_count, self.minibatch_size):
                 profile("train_copy", epoch)
                 mb_idx = permutation[start : start + self.minibatch_size]
                 if config["cpu_offload"]:
@@ -828,20 +823,20 @@ class PuffeRL:
                     losses[key] += value
 
                 profile("learn", epoch)
+                accumulation_start = (start // optimizer_batch_size) * optimizer_batch_size
+                accumulation_end = min(accumulation_start + optimizer_batch_size, retained_transition_count)
+                # Mean losses contribute in proportion to their samples, including a partial final group.
+                if self.accumulate_minibatches > 1:
+                    loss = loss * (mb_idx.numel() / (accumulation_end - accumulation_start))
                 loss.backward()
                 total_minibatches += 1
-                pending_minibatches += 1
 
-                if pending_minibatches >= self.accumulate_minibatches:
-                    self._clip_gradients(losses)
-                    self.optimizer.step()
-                    self.optimizer.zero_grad()
-                    pending_minibatches = 0
-
-        if pending_minibatches > 0:
-            self._clip_gradients(losses)
-            self.optimizer.step()
-            self.optimizer.zero_grad()
+                # Flush at the end of each PPO epoch so updates never span two permutations.
+                if start + self.minibatch_size < accumulation_end:
+                    continue
+                self._clip_gradients(losses)
+                self.optimizer.step()
+                self.optimizer.zero_grad()
 
         if total_minibatches > 0:
             for key in ("policy_loss", "value_loss", "entropy", "ent_coef", "old_approx_kl", "approx_kl", "clipfrac"):

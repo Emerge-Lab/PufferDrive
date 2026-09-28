@@ -5652,10 +5652,7 @@ void c_step(Drive *env) {
         return;
     }
 
-    // -> 4. Compute observations
-    compute_observations(env);
-
-    // -> 5. Update goals for agents that reached their goal
+    // -> 4. Update goals for agents that reached their goal
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
@@ -5695,4 +5692,7 @@ void c_step(Drive *env) {
             env->terminals[i] = 1;
         }
     }
+
+    // -> 5. Observations must describe the goals used by the next action.
+    compute_observations(env);
 }
