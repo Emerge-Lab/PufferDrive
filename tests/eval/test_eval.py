@@ -533,6 +533,7 @@ def _training_args(tmp_path, benchmark_config_path, evaluation_enabled):
             "min_agents_per_env": TRAIN_AGENTS_PER_ENV,
             "max_agents_per_env": TRAIN_AGENTS_PER_ENV,
             "num_maps": 2,
+            "allow_map_subset": True,
             "map_dir": str(CARLA_MAP_DIR),
             "use_map_cache": True,
             "scenario_length": TRAIN_HORIZON,

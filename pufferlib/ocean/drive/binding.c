@@ -2028,6 +2028,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_boundary_n = (int) unpack(kwargs, "obs_slots_boundary_n");
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
+    env->obs_partner_relative_velocity = (int) unpack(kwargs, "obs_partner_relative_velocity");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
     env->traffic_lights_enabled = (bool) unpack(kwargs, "traffic_lights_enabled");
     env->stop_signs_enabled = (bool) unpack(kwargs, "stop_signs_enabled");
@@ -2042,7 +2043,13 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         return -1;
     }
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
+    env->spawn_lateral_offset_max_frac = (float) unpack(kwargs, "spawn_lateral_offset_max_frac");
+    env->spawn_heading_max_deg = (float) unpack(kwargs, "spawn_heading_max_deg");
+    env->pose_noise_xy_m = (float) unpack(kwargs, "pose_noise_xy_m");
+    env->pose_noise_yaw_rad = (float) unpack(kwargs, "pose_noise_yaw_deg") * (float) M_PI / 180.0f;
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
+    env->goal_speed_randomization = (int) unpack(kwargs, "goal_speed_randomization");
+    env->goal_reach_requires_speed = (int) unpack(kwargs, "goal_reach_requires_speed");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");
     env->termination_mode = (int) unpack(kwargs, "termination_mode");
     env->inactive_agent_threshold = (float) unpack(kwargs, "inactive_agent_threshold");
@@ -2153,7 +2160,7 @@ static int my_episode_to_dict(PyObject *dict, Env *env) {
 
 static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     float total_distance_travelled = log->total_distance_travelled * n;
-    float total_infractions = log->total_infractions * n;
+    float total_infractions = roundf(log->total_infractions * n);
     float avg_distance_per_infraction = total_distance_travelled / fmaxf(1.0f, total_infractions);
 
     assign_to_dict(dict, "n", log->n);

@@ -96,6 +96,7 @@ struct Agent {
     int displacement_sample_count;
     float distance_since_spawn;
     float seconds_stopped;
+    float lane_curvature; // 1/m at the closest segment of current lane, positive = left turn
     int comfort_violation_last_window_idx;
     int stop_sign_stopped_timestep_count;
 
@@ -150,6 +151,7 @@ struct RoadMapElement {
     float speed_limit;
     float length;
     float *cum_lengths;
+    float *widths; // per-point lane width, meters
 };
 
 struct TrafficControlElement {
@@ -194,6 +196,7 @@ void free_road_element(struct RoadMapElement *element) {
     free(element->entry_lanes);
     free(element->exit_lanes);
     free(element->cum_lengths);
+    free(element->widths);
 }
 
 void free_traffic_element(struct TrafficControlElement *element) {

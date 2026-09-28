@@ -37,6 +37,8 @@ export VECLIB_MAXIMUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
+REPO_DIR=/home/bjaeger/nightly_PufferDrive
+cd ${REPO_DIR} || exit 1
 source .venv/bin/activate
 
 # Only task 0 builds; concurrent in-place builds race on shared NFS build files.
@@ -88,13 +90,13 @@ if [ ! -f ${MODEL_PATH} ]; then
 fi
 
 echo "Training done, evaluating ${MODEL_PATH}"
-.venv/bin/puffer eval puffer_drive carla \
+python -m pufferlib.pufferl eval puffer_drive carla \
     vec.num_envs=16 \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
-.venv/bin/puffer eval puffer_drive nuplan_single \
+python -m pufferlib.pufferl eval puffer_drive nuplan_single \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \

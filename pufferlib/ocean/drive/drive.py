@@ -54,10 +54,17 @@ class Drive(pufferlib.PufferEnv):
         base_max_speed_mps=20.0,
         max_speed_mps=None,
         spawn_initial_speed=0.0,
+        spawn_lateral_offset_max_frac=0.0,
+        spawn_heading_max_deg=0.0,
+        pose_noise_xy_m=0.0,
+        pose_noise_yaw_deg=0.0,
         goal_speed=3.0,
+        goal_speed_randomization=True,
+        goal_reach_requires_speed=False,
         scenario_length=None,
         resample_frequency=91,
         num_maps=100,
+        allow_map_subset=False,
         num_agents=512,
         min_agents_per_env=32,
         max_agents_per_env=64,
@@ -100,6 +107,7 @@ class Drive(pufferlib.PufferEnv):
         obs_lane_stride=1,
         obs_boundary_stride=1,
         obs_slots_partners_n=16,
+        obs_partner_relative_velocity=False,
         obs_slots_traffic_controls_n=4,
         traffic_lights_enabled=True,
         stop_signs_enabled=False,
@@ -134,13 +142,26 @@ class Drive(pufferlib.PufferEnv):
         self.base_max_speed_mps = float(base_max_speed_mps)
         self.max_speed_mps = self.base_max_speed_mps if max_speed_mps is None else float(max_speed_mps)
         self.spawn_initial_speed = float(spawn_initial_speed)
+        self.spawn_lateral_offset_max_frac = float(spawn_lateral_offset_max_frac)
+        self.spawn_heading_max_deg = float(spawn_heading_max_deg)
+        if not 0.0 <= self.spawn_lateral_offset_max_frac <= 1.0:
+            raise ValueError(f"spawn_lateral_offset_max_frac must be in [0, 1], got {spawn_lateral_offset_max_frac}")
+        if not 0.0 <= self.spawn_heading_max_deg <= 180.0:
+            raise ValueError(f"spawn_heading_max_deg must be in [0, 180], got {spawn_heading_max_deg}")
+        self.pose_noise_xy_m = float(pose_noise_xy_m)
+        self.pose_noise_yaw_deg = float(pose_noise_yaw_deg)
+        if self.pose_noise_xy_m < 0.0 or self.pose_noise_yaw_deg < 0.0:
+            raise ValueError(f"pose noise must be >= 0, got xy {pose_noise_xy_m}, yaw {pose_noise_yaw_deg}")
         self.goal_speed = float(goal_speed)
+        self.goal_speed_randomization = int(bool(goal_speed_randomization))
+        self.goal_reach_requires_speed = int(bool(goal_reach_requires_speed))
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
         self.reward_log_sampling = reward_log_sampling
         self.compute_eval_metrics = compute_eval_metrics
         self.shared_network = shared_network
         self.num_maps = num_maps
+        self.allow_map_subset = bool(allow_map_subset)
         self.report_interval = report_interval
         self.reward_goal = reward_goal
         self.reward_collision = reward_collision
@@ -228,6 +249,7 @@ class Drive(pufferlib.PufferEnv):
         self.obs_lane_stride = obs_lane_stride
         self.obs_boundary_stride = obs_boundary_stride
         self.obs_slots_partners_n = obs_slots_partners_n
+        self.obs_partner_relative_velocity = int(bool(obs_partner_relative_velocity))
         self.traffic_lights_enabled = traffic_lights_enabled
         self.stop_signs_enabled = stop_signs_enabled
         self.yield_signs_enabled = yield_signs_enabled
@@ -270,7 +292,9 @@ class Drive(pufferlib.PufferEnv):
         self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
         self.phantom_braking_duration_seconds = float(phantom_braking_duration_seconds)
         self.phantom_braking_freeze_steering = int(bool(phantom_braking_freeze_steering))
-        self.partner_features = binding.PARTNER_FEATURES
+        self.partner_features = binding.PARTNER_FEATURES + (
+            binding.PARTNER_RELATIVE_VELOCITY_FEATURES if self.obs_partner_relative_velocity else 0
+        )
         self.lane_features = binding.LANE_FEATURES
         self.boundary_features = binding.BOUNDARY_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
@@ -488,6 +512,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_lane_stride": self.obs_lane_stride,
             "obs_boundary_stride": self.obs_boundary_stride,
             "obs_slots_partners_n": self.obs_slots_partners_n,
+            "obs_partner_relative_velocity": self.obs_partner_relative_velocity,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_lights_enabled": self.traffic_lights_enabled,
             "stop_signs_enabled": self.stop_signs_enabled,
@@ -496,7 +521,13 @@ class Drive(pufferlib.PufferEnv):
             "base_max_speed_mps": self.base_max_speed_mps,
             "max_speed_mps": self.max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,
+            "spawn_lateral_offset_max_frac": self.spawn_lateral_offset_max_frac,
+            "spawn_heading_max_deg": self.spawn_heading_max_deg,
+            "pose_noise_xy_m": self.pose_noise_xy_m,
+            "pose_noise_yaw_deg": self.pose_noise_yaw_deg,
             "goal_speed": self.goal_speed,
+            "goal_speed_randomization": self.goal_speed_randomization,
+            "goal_reach_requires_speed": self.goal_reach_requires_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),
             "inactive_agent_threshold": float(self.inactive_agent_threshold),
