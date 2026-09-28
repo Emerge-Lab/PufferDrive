@@ -50,7 +50,7 @@ EGO_LABELS = [
     "accel_long",
     "accel_lat",
     "lane_center",
-    "lane_align",
+    "lane_heading_error",
     "speed_limit",
     "stopped",
 ]
