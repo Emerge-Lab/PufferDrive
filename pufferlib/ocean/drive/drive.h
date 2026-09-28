@@ -4337,7 +4337,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             int j_lat_idx = action_val % num_lat;
             j_long = JERK_LONG[j_long_idx];
             j_lat = JERK_LAT[j_lat_idx];
-        } else if (env->action_type == ACTION_TYPE_CONTINUOUS) {
+        } else {
             float (*action_array_f)[2] = (float (*)[2]) env->actions;
             // Asymmetric scaling for longitudinal jerk to match discrete action space
             // Discrete: JERK_LONG = [-15, -4, 0, 4] (more braking than acceleration)
