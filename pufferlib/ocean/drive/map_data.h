@@ -56,7 +56,46 @@ static void add_entity_to_grid(
     cell_entities_insert_index[grid_index] = count + 1;
 }
 
+// Build after loading lane widths and before sharing the immutable road elements.
+static void cache_road_observation_geometry(Drive *env) {
+    for (int road_idx = 0; road_idx < env->num_road_elements; road_idx++) {
+        RoadMapElement *road = &env->road_elements[road_idx];
+        if (!is_road_grid_candidate(road->type)) {
+            continue;
+        }
+        if (road->segment_size < 0) {
+            raise_error_with_message(ERROR_INVALID_ARGUMENT, "Negative point count for road %d", road_idx);
+        }
+        if (road->segment_size < 2) {
+            continue;
+        }
+        size_t segment_count = (size_t) road->segment_size - 1;
+        if (segment_count > SIZE_MAX / sizeof(RoadObservationSegment)) {
+            raise_error_with_message(ERROR_INVALID_ARGUMENT, "Road %d geometry cache is too large", road_idx);
+        }
+        road->observation_segments = (RoadObservationSegment *) calloc(segment_count, sizeof(RoadObservationSegment));
+        if (road->observation_segments == NULL) {
+            raise_error_with_message(ERROR_MEMORY_ALLOCATION, "Failed to cache geometry for road %d", road_idx);
+        }
+        int has_lane_width = is_road_lane(road->type);
+        for (int segment_idx = 0; segment_idx < road->segment_size - 1; segment_idx++) {
+            RoadObservationSegment *segment = &road->observation_segments[segment_idx];
+            // Preserve the observation formulas and float rounding, including zero-length segments.
+            segment->mid_x_m = (road->x[segment_idx] + road->x[segment_idx + 1]) / 2.0f;
+            segment->mid_y_m = (road->y[segment_idx] + road->y[segment_idx + 1]) / 2.0f;
+            segment->mid_z_m = (road->z[segment_idx] + road->z[segment_idx + 1]) / 2.0f;
+            float half_dx_m = road->x[segment_idx + 1] - segment->mid_x_m;
+            float half_dy_m = road->y[segment_idx + 1] - segment->mid_y_m;
+            segment->half_length_m = sqrtf(half_dx_m * half_dx_m + half_dy_m * half_dy_m);
+            segment->direction_x = segment->half_length_m > 0.0f ? half_dx_m / segment->half_length_m : half_dx_m;
+            segment->direction_y = segment->half_length_m > 0.0f ? half_dy_m / segment->half_length_m : half_dy_m;
+            segment->width_m = has_lane_width ? 0.5f * (road->widths[segment_idx] + road->widths[segment_idx + 1]) : 0.0f;
+        }
+    }
+}
+
 static int init_grid_map(Drive *env) {
+    cache_road_observation_geometry(env);
     env->grid_map = (GridMap *) calloc(1, sizeof(GridMap));
 
     float top_left_x = 0.0f, top_left_y = 0.0f, bottom_right_x = 0.0f, bottom_right_y = 0.0f;

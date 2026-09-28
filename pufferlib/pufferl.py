@@ -323,6 +323,10 @@ class PuffeRL:
         self.obs_stats_feature_idx = torch.as_tensor(
             np.flatnonzero(vecenv.driver_env.obs_stats_feature_mask), device=config["device"]
         )
+        # Workers already exist; registration belongs to this rank's CUDA context.
+        if use_cuda and hasattr(vecenv, "pin_observations"):
+            with torch.cuda.device(device):
+                vecenv.pin_observations()
         self.epoch = 0
         self.global_step = 0
         self.agent_steps = 0
@@ -631,12 +635,13 @@ class PuffeRL:
         )
 
     def _clip_gradients(self, losses):
+        # train() converts these logging-only scalars after the optimizer updates.
         max_grad_norm = self.config["max_grad_norm"]
         if self.separate_grad_clip:
-            losses["actor_grad_norm"] = torch.nn.utils.clip_grad_norm_(self.actor_params, max_grad_norm).item()
-            losses["critic_grad_norm"] = torch.nn.utils.clip_grad_norm_(self.critic_params, max_grad_norm).item()
+            losses["actor_grad_norm"] = torch.nn.utils.clip_grad_norm_(self.actor_params, max_grad_norm).detach()
+            losses["critic_grad_norm"] = torch.nn.utils.clip_grad_norm_(self.critic_params, max_grad_norm).detach()
         else:
-            losses["grad_norm"] = torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_grad_norm).item()
+            losses["grad_norm"] = torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_grad_norm).detach()
 
     def _compute_advantages(self, ratio, rho_clip, c_clip):
         config = self.config

@@ -139,6 +139,16 @@ struct Agent {
     unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
 };
 
+typedef struct {
+    float mid_x_m;
+    float mid_y_m;
+    float mid_z_m;
+    float half_length_m;
+    float direction_x;
+    float direction_y;
+    float width_m;
+} RoadObservationSegment;
+
 struct RoadMapElement {
     int type;
 
@@ -147,6 +157,7 @@ struct RoadMapElement {
     float *y;
     float *z;
     float *headings; // Pre-computed heading for each segment
+    RoadObservationSegment *observation_segments; // Immutable; owned with the shared road geometry.
 
     // Lane specific info
     int num_entries;
@@ -199,6 +210,7 @@ void free_road_element(struct RoadMapElement *element) {
     free(element->y);
     free(element->z);
     free(element->headings);
+    free(element->observation_segments);
     free(element->entry_lanes);
     free(element->exit_lanes);
     free(element->cum_lengths);

@@ -448,6 +448,7 @@ class Multiprocessing:
         self.initialized = False
         self.zero_copy = zero_copy
         self.sync_traj = sync_traj
+        self._observation_registration = None
 
         self.ready_workers = []
         self.waiting_workers = []
@@ -581,11 +582,39 @@ class Multiprocessing:
     def notify(self):
         self.buf["notify"][:] = True
 
+    def pin_observations(self):
+        """Register stable shared observations in the trainer's current CUDA context."""
+        if self.processes is None:
+            raise pufferlib.APIUsageError("Cannot pin observations after the vector environment is closed")
+        # Non-zero-copy recv() returns newly allocated arrays, not this shared buffer.
+        if not self.zero_copy or self._observation_registration is not None:
+            return
+
+        import torch
+
+        observations = self.buf["observations"]
+        device = torch.cuda.current_device()
+        error = torch.cuda.cudart().cudaHostRegister(observations.ctypes.data, observations.nbytes, 0)
+        if int(error) != 0:
+            raise RuntimeError(f"cudaHostRegister failed for observations ({observations.nbytes} bytes): {error}")
+        self._observation_registration = (observations, device)
+
     def close(self):
         if self.processes is None:
             return
         for p in self.processes:
             p.terminate()
+        if self._observation_registration is not None:
+            import torch
+
+            observations, device = self._observation_registration
+            # Finish any asynchronous reads before releasing this rank's registration.
+            with torch.cuda.device(device):
+                torch.cuda.synchronize()
+                error = torch.cuda.cudart().cudaHostUnregister(observations.ctypes.data)
+            if int(error) != 0:
+                raise RuntimeError(f"cudaHostUnregister failed for observations: {error}")
+            self._observation_registration = None
         if self._driver_env_open:
             self.driver_env.close()
             self._driver_env_open = False

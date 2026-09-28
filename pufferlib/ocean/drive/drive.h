@@ -4876,18 +4876,10 @@ static int write_road_obs_rows(
         int geometry_idx = entity->geometry_idx;
         RoadMapElement *road_element = &env->road_elements[entity_idx];
 
-        float start_x = road_element->x[geometry_idx];
-        float start_y = road_element->y[geometry_idx];
-        float start_z = road_element->z[geometry_idx];
-        float end_x = road_element->x[geometry_idx + 1];
-        float end_y = road_element->y[geometry_idx + 1];
-        float end_z = road_element->z[geometry_idx + 1];
-        float mid_x = (start_x + end_x) / 2.0f;
-        float mid_y = (start_y + end_y) / 2.0f;
-        float mid_z = (start_z + end_z) / 2.0f;
+        const RoadObservationSegment *segment = &road_element->observation_segments[geometry_idx];
         float rel_x, rel_y;
-        float rel_z = mid_z - ego->sim_z;
-        project_point_to_ego_frame(ego, mid_x, mid_y, &rel_x, &rel_y);
+        float rel_z = segment->mid_z_m - ego->sim_z;
+        project_point_to_ego_frame(ego, segment->mid_x_m, segment->mid_y_m, &rel_x, &rel_y);
         if (rel_x < -env->obs_range_road_behind_m || rel_x > env->obs_range_road_front_m) {
             continue;
         }
@@ -4895,25 +4887,19 @@ static int write_road_obs_rows(
             continue;
         }
 
-        float seg_dx = end_x - mid_x;
-        float seg_dy = end_y - mid_y;
-        float seg_half_len = sqrtf(seg_dx * seg_dx + seg_dy * seg_dy);
-        float seg_dir_x = (seg_half_len > 0) ? seg_dx / seg_half_len : seg_dx;
-        float seg_dir_y = (seg_half_len > 0) ? seg_dy / seg_half_len : seg_dy;
         float rel_seg_dir_x, rel_seg_dir_y;
-        project_vector_to_ego_frame(ego, seg_dir_x, seg_dir_y, &rel_seg_dir_x, &rel_seg_dir_y);
+        project_vector_to_ego_frame(ego, segment->direction_x, segment->direction_y, &rel_seg_dir_x, &rel_seg_dir_y);
 
         float *row = &dest[rows_written++ * segment_features];
         row[0] = rel_x / env->obs_norm_xy_offset_m;
         row[1] = rel_y / env->obs_norm_xy_offset_m;
         row[2] = rel_z / env->obs_norm_z_m;
-        row[3] = seg_half_len / env->obs_norm_road_seg_length_m;
+        row[3] = segment->half_length_m / env->obs_norm_road_seg_length_m;
         row[4] = rel_seg_dir_x;
         row[5] = rel_seg_dir_y;
         // Goal-distance features: absolute and relative to ego's lane->goal distance.
         if (is_lane) {
-            float seg_width = 0.5f * (road_element->widths[geometry_idx] + road_element->widths[geometry_idx + 1]);
-            row[6] = seg_width / env->obs_norm_road_seg_width_m;
+            row[6] = segment->width_m / env->obs_norm_road_seg_width_m;
             float lane_dist_m
                 = goal_graph_idx >= 0 ? lane_graph_distance_to_goal_m(env, entity_idx, goal_graph_idx) : -1.0f;
             write_lane_goal_distance_obs(lane_dist_m, ego_dist_to_goal_m, &row[7]);
