@@ -58,7 +58,7 @@ srun torchrun \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine_zones_tol002_stop \
+    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop \
     env.num_maps=128 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
@@ -74,7 +74,6 @@ srun torchrun \
     env.goal_reach_requires_speed=true \
     env.obs_partner_relative_velocity=true \
     env.obs_lane_heading_signed=true \
-    env.obs_lane_spacing_m=40.0 \
     env.stop_signs_enabled=true \
     env.pose_noise_xy_m=0.025 \
     env.pose_noise_yaw_deg=0.25 \

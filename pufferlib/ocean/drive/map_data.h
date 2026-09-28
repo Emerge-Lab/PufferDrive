@@ -175,27 +175,20 @@ static int init_grid_map(Drive *env) {
         } else if (is_road_edge(element->type)) {
             obs_stride = env->obs_boundary_stride;
         }
-        // Lanes sample one obs point per obs_lane_spacing_m of arc length, independent of vertex density
-        int sample_by_arc_length = is_lane && env->obs_lane_spacing_m > 0.0f;
         int last_kept_idx = 0;
-        float arc_since_kept_m = 0.0f;
         for (int j = 0; j < element->segment_size - 1; j++) {
+            // Keep a point every obs_stride points, plus wherever heading deviates enough
+            // since the last kept point (densifies curves/intersections)
             int valid_for_obs = 1;
-            if (sample_by_arc_length) {
-                valid_for_obs = j == 0 || arc_since_kept_m >= env->obs_lane_spacing_m;
-            } else if (obs_stride > 1 && j > 0) {
-                // Keep a point every obs_stride points, plus wherever heading deviates enough
-                // since the last kept point (densifies curves/intersections)
+            if (obs_stride > 1 && j > 0) {
                 float heading_dev = fabsf(normalize_heading(element->headings[j] - element->headings[last_kept_idx]));
                 valid_for_obs = j - last_kept_idx >= obs_stride || heading_dev > OBS_STRIDE_HEADING_THRESHOLD;
             }
             int obs_kind = OBS_ENTITY_NONE;
             if (valid_for_obs) {
                 last_kept_idx = j;
-                arc_since_kept_m = 0.0f;
                 obs_kind = is_lane ? OBS_ENTITY_LANE : OBS_ENTITY_EDGE;
             }
-            arc_since_kept_m += hypotf(element->x[j + 1] - element->x[j], element->y[j + 1] - element->y[j]);
             float x_center = (element->x[j] + element->x[j + 1]) / 2;
             float y_center = (element->y[j] + element->y[j + 1]) / 2;
             int grid_index = get_grid_index(env, x_center, y_center);
@@ -974,8 +967,7 @@ static struct SharedMapData *map_cache_lookup(Drive *env) {
     for (int i = 0; i < g_map_cache_count; i++) {
         if (g_map_cache[i] != NULL && strcmp(g_map_cache[i]->map_name, env->map_name) == 0
             && g_map_cache[i]->obs_lane_stride == env->obs_lane_stride
-            && g_map_cache[i]->obs_boundary_stride == env->obs_boundary_stride
-            && g_map_cache[i]->obs_lane_spacing_m == env->obs_lane_spacing_m) {
+            && g_map_cache[i]->obs_boundary_stride == env->obs_boundary_stride) {
             return g_map_cache[i];
         }
     }
@@ -1005,7 +997,6 @@ static struct SharedMapData *map_cache_store(Drive *env) {
     entry->lane_graph = env->lane_graph;
     entry->obs_lane_stride = env->obs_lane_stride;
     entry->obs_boundary_stride = env->obs_boundary_stride;
-    entry->obs_lane_spacing_m = env->obs_lane_spacing_m;
     entry->ref_count = 1;
     entry->owner_pid = getpid();
     map_cache_insert(entry);
