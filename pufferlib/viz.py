@@ -1122,7 +1122,7 @@ __PAYLOAD_CHUNKS__
         const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];
         // Order must match the REWARD_COEF_* indices in constants.h.
         const COEF_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","throttle","steer","acc","speed"];
-        const REWARD_LABELS = ["collision","offroad","red light","stop sign","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed","ADE"];
+        const REWARD_LABELS = ["collision","offroad","red light","stop sign","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed","ADE","expert sim"];
         const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
         const JLONG = [-15,-4,0,4], JLAT = [-4,0,4];
         const DYNAMIC_EXPERT_COLOR = "#c4c8cf";

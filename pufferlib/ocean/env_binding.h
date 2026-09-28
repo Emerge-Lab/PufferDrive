@@ -844,6 +844,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
                 rewards_f32[reward_base + REWARD_F32_REVERSE_IDX] = log->reward_reverse;
                 rewards_f32[reward_base + REWARD_F32_OVERSPEED_IDX] = log->reward_overspeed;
                 rewards_f32[reward_base + REWARD_F32_ADE_IDX] = log->reward_ade;
+                rewards_f32[reward_base + REWARD_F32_EXPERT_SIMILARITY_IDX] = log->reward_expert_similarity;
             }
         }
 

@@ -198,3 +198,22 @@ def sample_logits(
         return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0), None
 
     return action.T, logprob.sum(0), logits_entropy, None
+
+
+def kl_divergence_to_reference(logits, reference_logits):
+    # Per-sample forward KL D_KL(pi || pi_ref); both inputs use the sample_logits layouts.
+    if isinstance(logits, torch.distributions.Normal):
+        batch = logits.loc.shape[0]
+        log_scale_ratio = torch.log(reference_logits.scale) - torch.log(logits.scale)
+        scaled_variance = (logits.scale.square() + (logits.loc - reference_logits.loc).square()) / (
+            2.0 * reference_logits.scale.square()
+        )
+        return (log_scale_ratio + scaled_variance - 0.5).view(batch, -1).sum(1)
+    if isinstance(logits, torch.Tensor):
+        logits, reference_logits = (logits,), (reference_logits,)
+    kl = 0.0
+    for head_logits, head_reference_logits in zip(logits, reference_logits):
+        log_probs = head_logits.log_softmax(-1)
+        reference_log_probs = head_reference_logits.log_softmax(-1)
+        kl = kl + (log_probs.exp() * (log_probs - reference_log_probs)).sum(-1)
+    return kl

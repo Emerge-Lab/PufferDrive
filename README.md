@@ -129,6 +129,10 @@ puffer train puffer_drive train.device=cpu vec.backend=Serial env.num_agents=64 
 torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train puffer_drive
 ```
 
+To post-train a self-play checkpoint on logged human driving (agents-on-rails
+replay, expert-similarity reward, KL anchor to the frozen checkpoint), see
+[`docs/hift_finetuning.md`](docs/hift_finetuning.md).
+
 ## Profile
 
 Profiling requires Linux and `perf`. Select simulation, PPO training, or both

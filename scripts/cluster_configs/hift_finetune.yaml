@@ -1,0 +1,66 @@
+# Human-imitation fine-tuning (HIFT-PPO) program config for submit_cluster.py.
+# Warm-starts a self-play checkpoint and fine-tunes it on replay logs with the
+# expert-similarity reward and a KL anchor to the frozen checkpoint. See
+# docs/hift_finetuning.md. Keys here override pufferlib/config/puffer_drive.yaml.
+#
+# Required on the command line (no sane default here):
+#   load_model_path=<pretrained .pt>   env.map_dir=<replay .bin logs>   env.num_maps=<count>
+#
+# Launch:
+#   python scripts/submit_cluster.py \
+#       --save_dir $EXPERIMENTS_DIR --prefix $(date +%Y-%m-%d)_hift \
+#       --compute_config scripts/cluster_configs/nyu_greene.yaml \
+#       --program_config scripts/cluster_configs/hift_finetune.yaml \
+#       --container --heartbeat --account <acct> --partition <gpu-partition> --time 360 \
+#       --args load_model_path=<pt> env.map_dir=<dir> env.num_maps=<n> train.seed=0:1:2
+
+# Agents-on-rails: ego on the policy, every other agent replays its log.
+env.simulation_mode: replay
+env.control_mode: control_sdc_only
+env.sdc_controller: policy
+env.non_sdc_controller: replay
+env.non_vehicle_controller: replay
+env.goal_source: gt
+env.init_mode: create_all_valid
+env.max_agents_per_env: 1
+# One ego per env; replay logs load heavier than CARLA towns, keep this modest.
+env.num_agents: 128
+env.init_step: 0
+
+# Short sub-episodes with a random start offset inside each log (steps at the sim dt).
+env.episode_max_steps: 22
+env.init_step_jitter_steps: 9
+env.static_expert_min_motion_m: 1.0
+
+# Rewards: all self-play terms stay on, fixed conditioning vector, plus the
+# quadratic expert-similarity term.
+env.reward_expert_similarity: 0.01
+env.reward_conditioning: true
+env.reward_randomization: false
+env.goal_radius: 10.0
+env.reward_collision: 3.0
+env.reward_offroad: 3.0
+env.reward_comfort: 0.05
+env.reward_lane_align: 0.25
+env.reward_vel_align: 1.0
+env.reward_lane_center: 0.025
+env.reward_center_bias: 0.0
+env.reward_reverse: 0.005
+env.reward_stop_line: 1.0
+env.reward_overspeed: 1.0
+env.reward_velocity: 0.005
+
+# Behavioral perturbations off: partners are replayed, not learned.
+env.phantom_braking_prob: 0
+env.partner_blindness_prob: 0
+
+# Training: KL anchor to the loaded checkpoint, lower learning rate, short schedule.
+train.kl_ref_coef: 0.02
+train.learning_rate: 0.0001
+train.total_timesteps: 200_000_000
+train.checkpoint_interval: 100
+train.compile: true
+
+wandb: True
+wandb_project: hift-finetune
+wandb_group: hift-finetune

@@ -268,6 +268,9 @@ class DriveEnvConfig:
     init_step: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     init_step_spread: bool = MISSING
     init_step_min_horizon: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    init_step_jitter_steps: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
+    episode_max_steps: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
+    static_expert_min_motion_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     control_mode: ControlMode = MISSING
     sdc_controller: Controller = MISSING
     non_sdc_controller: Controller = MISSING
@@ -300,6 +303,7 @@ class DriveEnvConfig:
     reward_timestep: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_overspeed: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_ade: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    reward_expert_similarity: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
@@ -393,6 +397,7 @@ class TrainingConfig:
     max_grad_norm: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     normalize_rewards: bool = MISSING
     ent_coef: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    kl_ref_coef: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     use_value_bootstrapping: bool = MISSING
     adam_beta1: float = _constrained_field(PROBABILITY_CONSTRAINT)
     adam_beta2: float = _constrained_field(PROBABILITY_CONSTRAINT)
@@ -563,6 +568,29 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.init_step_spread", "is only supported in replay mode")
     if env["init_step_spread"] and env["init_step_min_horizon"] >= env["scenario_length"]:
         _raise_config_error(context, "env.init_step_min_horizon", "must be smaller than env.scenario_length")
+    if env["init_step_jitter_steps"] > 0 and env["simulation_mode"] != "replay":
+        _raise_config_error(context, "env.init_step_jitter_steps", "is only supported in replay mode")
+    if env["init_step_jitter_steps"] > 0 and env["init_step_spread"]:
+        _raise_config_error(context, "env.init_step_jitter_steps", "cannot be combined with env.init_step_spread")
+    if env["init_step"] + env["init_step_jitter_steps"] >= env["scenario_length"]:
+        _raise_config_error(
+            context, "env.init_step_jitter_steps", "init_step plus jitter must be smaller than env.scenario_length"
+        )
+    if env["episode_max_steps"] > 0 and env["simulation_mode"] != "replay":
+        _raise_config_error(context, "env.episode_max_steps", "is only supported in replay mode")
+    if env["episode_max_steps"] >= env["scenario_length"]:
+        _raise_config_error(context, "env.episode_max_steps", "must be smaller than env.scenario_length")
+    if env["static_expert_min_motion_m"] > 0 and env["simulation_mode"] != "replay":
+        _raise_config_error(context, "env.static_expert_min_motion_m", "is only supported in replay mode")
+    if env["reward_expert_similarity"] != 0 and env["simulation_mode"] != "replay":
+        _raise_config_error(context, "env.reward_expert_similarity", "is only supported in replay mode")
+    train = config["train"]
+    if train["kl_ref_coef"] > 0 and not config["load_model_path"] and config["load_id"] is None:
+        _raise_config_error(
+            context, "train.kl_ref_coef", "requires load_model_path or load_id for the frozen reference"
+        )
+    if train["kl_ref_coef"] > 0 and config["rnn_name"] is not None:
+        _raise_config_error(context, "train.kl_ref_coef", "is not supported with a recurrent policy")
     if env["goal_source"] == "gt" and env["simulation_mode"] != "replay":
         _raise_config_error(context, "env.goal_source", "'gt' is only supported in replay mode")
     if env["terminate_on_goal"] and (env["simulation_mode"] != "replay" or env["control_mode"] != "control_sdc_only"):

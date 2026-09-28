@@ -91,6 +91,12 @@ env:
   # sets an upper bound on the random init step
   # the sampled init step can be at most this close to the end of the episode;
   init_step_min_horizon: 20
+  # Replay fine-tuning: every reset re-samples the start step uniformly in [init_step, init_step + jitter]
+  init_step_jitter_steps: 0
+  # Truncate every episode this many steps after its start step; 0 runs to scenario_length
+  episode_max_steps: 0
+  # Mask agents whose logged trajectory moves less than this over the episode horizon; 0 disables
+  static_expert_min_motion_m: 0.0
   # options: "control_vehicles", "control_agents", "control_tracks_to_predict", "control_sdc_only"
   control_mode: control_vehicles
   # Controller used by agent 0, the canonical SDC/target.
@@ -142,6 +148,8 @@ env:
   reward_timestep: 2.5e-05
   reward_overspeed: 0.05
   reward_ade: 0.0
+  # Quadratic penalty on the ego-to-logged-expert position error (replay mode only)
+  reward_expert_similarity: 0.0
   # --- Map ---
   # Path to map used for training
   map_dir: pufferlib/resources/drive/binaries/carla
@@ -249,6 +257,8 @@ train:
   max_grad_norm: 0.5
   normalize_rewards: false
   ent_coef: 0.01
+  # Forward KL penalty D_KL(pi || pi_ref) against the frozen loaded checkpoint; 0 disables
+  kl_ref_coef: 0.0
   # enable value bootstrap to simulate infinite time horizon
   use_value_bootstrapping: true
   # ---

@@ -87,6 +87,7 @@ struct Log {
     float reward_reverse;
     float reward_overspeed;
     float reward_ade;
+    float reward_expert_similarity;
 };
 
 struct GridMapEntity {
@@ -188,6 +189,10 @@ struct Drive {
     // Simulation
     int timestep;
     int init_step;
+    int init_step_base;
+    int init_step_jitter_steps;
+    int episode_max_steps;
+    float static_expert_min_motion_m;
     float dt;
     float base_max_speed_mps;
     float spawn_initial_speed;
@@ -224,6 +229,7 @@ struct Drive {
     float reward_timestep;
     float reward_overspeed;
     float reward_ade;
+    float reward_expert_similarity;
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
@@ -450,6 +456,7 @@ static void reset_agent_state(Agent *agent) {
     agent->partner_blindness_counter = 0;
     agent->is_blind_partner = 0;
     agent->is_phantom_braker = 0;
+    agent->is_static_expert = 0;
 }
 
 static void invalidate_agent(Agent *agent) {
@@ -2182,6 +2189,7 @@ static void add_log(Drive *env) {
         episode_log.reward_reverse += env->logs[i].reward_reverse;
         episode_log.reward_overspeed += env->logs[i].reward_overspeed;
         episode_log.reward_ade += env->logs[i].reward_ade;
+        episode_log.reward_expert_similarity += env->logs[i].reward_expert_similarity;
         // Comfort and velocity metrics (normalized per timestep)
         episode_log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         episode_log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -2248,6 +2256,25 @@ static inline void sample_erratic_flags(Drive *env, Agent *agent) {
         : 0;
     agent->phantom_braking_counter = 0;
     agent->partner_blindness_counter = 0;
+}
+
+static void flag_static_expert(Drive *env, Agent *agent) {
+    agent->is_static_expert = 0;
+    if (env->static_expert_min_motion_m <= 0.0f || agent->trajectory_size <= 0) {
+        return;
+    }
+    int start_step = env->init_step;
+    int end_step = agent->trajectory_size - 1;
+    if (env->episode_max_steps > 0 && start_step + env->episode_max_steps < end_step) {
+        end_step = start_step + env->episode_max_steps;
+    }
+    if (start_step >= end_step || !agent->log_valid[start_step] || !agent->log_valid[end_step]) {
+        return;
+    }
+    float dx = agent->log_trajectory_x[end_step] - agent->log_trajectory_x[start_step];
+    float dy = agent->log_trajectory_y[end_step] - agent->log_trajectory_y[start_step];
+    float logged_motion_m = sqrtf(dx * dx + dy * dy);
+    agent->is_static_expert = logged_motion_m < env->static_expert_min_motion_m;
 }
 
 static void generate_reward_coefs(Drive *env, Agent *agent) {
@@ -3705,6 +3732,14 @@ static void compute_rewards(Drive *env, int i) {
     }
     agent_log->avg_displacement_error = current_ade;
 
+    // Expert similarity reward: -w * ||(x, y)_ego - (x, y)_expert||^2, zero when no logged pose
+    if (env->reward_expert_similarity != 0.0f && env->simulation_mode == SIMULATION_MODE_REPLAY) {
+        float expert_displacement_m = compute_displacement_error(agent, env->timestep);
+        float similarity_reward = -env->reward_expert_similarity * expert_displacement_m * expert_displacement_m;
+        env->rewards[i] += similarity_reward;
+        agent_log->reward_expert_similarity += similarity_reward;
+    }
+
     // Update episode return
     agent_log->episode_return += env->rewards[i];
 
@@ -4450,9 +4485,12 @@ void c_reset(Drive *env) {
         return;
     }
 
+    begin_episode_rng(env);
+    if (env->simulation_mode == SIMULATION_MODE_REPLAY && env->init_step_jitter_steps > 0 && !env->eval_mode) {
+        env->init_step = env->init_step_base + rng_below(&env->rng_state, env->init_step_jitter_steps + 1);
+    }
     env->timestep = env->init_step;
 
-    begin_episode_rng(env);
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         generate_traffic_light_states(env);
         int num_reset = 0;
@@ -4505,6 +4543,7 @@ void c_reset(Drive *env) {
         reset_agent_metrics(env, agent_idx);
         reset_agent_state(agent);
         sample_erratic_flags(env, agent);
+        flag_static_expert(env, agent);
         generate_reward_coefs(env, agent);
 
         if (env->goal_source == GOAL_SOURCE_GT) {
@@ -4554,7 +4593,7 @@ void c_step(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *a = &env->agents[agent_idx];
-        if (a->stopped || a->removed || a->is_blind_partner || a->is_phantom_braker) {
+        if (a->stopped || a->removed || a->is_blind_partner || a->is_phantom_braker || a->is_static_expert) {
             env->masks[i] = 0;
         } else {
             env->masks[i] = 1;
@@ -4647,7 +4686,9 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->timestep == env->scenario_length || early_reset) {
+    int episode_steps = env->timestep - env->init_step;
+    int episode_cap_reached = env->episode_max_steps > 0 && episode_steps >= env->episode_max_steps;
+    if (env->timestep == env->scenario_length || episode_cap_reached || early_reset) {
         for (int i = 0; i < env->active_agent_count; i++) {
             env->truncations[i] = 1;
         }

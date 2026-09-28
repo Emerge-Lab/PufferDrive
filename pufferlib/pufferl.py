@@ -135,7 +135,7 @@ def logits_to_float(logits):
 
 
 class PuffeRL:
-    def __init__(self, config, vecenv, policy, logger=None):
+    def __init__(self, config, vecenv, policy, logger=None, reference_policy=None):
         # Backend perf optimization
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.deterministic = config["torch_deterministic"]
@@ -243,6 +243,18 @@ class PuffeRL:
             self.policy = torch.compile(policy, **compile_kwargs)
             self.policy.forward_eval = torch.compile(self.uncompiled_policy.forward_eval, **compile_kwargs)
             pufferlib.pytorch.sample_logits = torch.compile(pufferlib.pytorch.sample_logits, **compile_kwargs)
+
+        # Frozen reference for the KL penalty; the loaded checkpoint before any fine-tuning step
+        self.kl_ref_coef = config["kl_ref_coef"]
+        self.reference_policy = reference_policy
+        if self.kl_ref_coef > 0:
+            if reference_policy is None:
+                raise pufferlib.APIUsageError("train.kl_ref_coef > 0 requires a reference policy")
+            if config["use_rnn"]:
+                raise pufferlib.APIUsageError("train.kl_ref_coef is not supported with a recurrent policy")
+            self.reference_policy.eval()
+            for param in self.reference_policy.parameters():
+                param.requires_grad_(False)
 
         # Optimizer
         if config["optimizer"] == "adam":
@@ -582,20 +594,24 @@ class PuffeRL:
             v_loss = v_loss.mean()
         entropy_loss = entropy.mean()
         loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+        stats = {
+            "policy_loss": pg_loss.detach(),
+            "value_loss": v_loss.detach(),
+            "entropy": entropy_loss.detach(),
+            "old_approx_kl": old_approx_kl,
+            "approx_kl": approx_kl,
+            "clipfrac": clipfrac,
+        }
 
-        return (
-            loss,
-            newvalue,
-            ratio,
-            {
-                "policy_loss": pg_loss.detach(),
-                "value_loss": v_loss.detach(),
-                "entropy": entropy_loss.detach(),
-                "old_approx_kl": old_approx_kl,
-                "approx_kl": approx_kl,
-                "clipfrac": clipfrac,
-            },
-        )
+        if self.kl_ref_coef > 0:
+            with torch.no_grad(), self.amp_context:
+                reference_logits, _ = self.reference_policy(mb_obs, state)
+            reference_logits = logits_to_float(reference_logits)
+            reference_kl = pufferlib.pytorch.kl_divergence_to_reference(logits, reference_logits).mean()
+            loss = loss + self.kl_ref_coef * reference_kl
+            stats["reference_kl"] = reference_kl.detach()
+
+        return loss, newvalue, ratio, stats
 
     def _compute_advantages(self, ratio, rho_clip, c_clip):
         config = self.config
@@ -801,8 +817,17 @@ class PuffeRL:
             self.optimizer.zero_grad()
 
         if total_minibatches > 0:
-            for key in ("policy_loss", "value_loss", "entropy", "old_approx_kl", "approx_kl", "clipfrac"):
-                losses[key] /= total_minibatches
+            for key in (
+                "policy_loss",
+                "value_loss",
+                "entropy",
+                "old_approx_kl",
+                "approx_kl",
+                "clipfrac",
+                "reference_kl",
+            ):
+                if key in losses:
+                    losses[key] /= total_minibatches
 
         y_pred = flat_values[valid_idx]
         y_true = flat_returns[valid_idx]
@@ -1482,11 +1507,16 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     torch.manual_seed(torch_seed)
     vecenv = vecenv or load_env(env_name, args, seed=env_seed)
     policy = policy or load_policy(args, vecenv, env_name)
+    reference_policy = None
+    if args["train"]["kl_ref_coef"] > 0:
+        reference_policy = copy.deepcopy(base_policy(policy))
 
     if "LOCAL_RANK" in os.environ:
         args["train"]["device"] = "cuda"
         torch.distributed.init_process_group(backend="nccl", world_size=world_size)
         policy = policy.to(local_rank)
+        if reference_policy is not None:
+            reference_policy = reference_policy.to(local_rank)
         model = torch.nn.parallel.DistributedDataParallel(policy, device_ids=[local_rank], output_device=local_rank)
         if hasattr(policy, "lstm"):
             # model.lstm = policy.lstm
@@ -1516,7 +1546,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
     if torch.distributed.is_initialized():
         train_config["total_timesteps"] //= torch.distributed.get_world_size()
-    pufferl = PuffeRL(train_config, vecenv, policy, logger)
+    pufferl = PuffeRL(train_config, vecenv, policy, logger, reference_policy=reference_policy)
 
     # A run is identified by its name, and its directory is train.data_dir. Relaunching
     # the same run therefore finds its own trainer_state.pt and continues from it rather

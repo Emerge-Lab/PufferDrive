@@ -1974,6 +1974,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_timestep = (float) unpack(kwargs, "reward_timestep");
     env->reward_overspeed = (float) unpack(kwargs, "reward_overspeed");
     env->reward_ade = (float) unpack(kwargs, "reward_ade");
+    env->reward_expert_similarity = (float) unpack(kwargs, "reward_expert_similarity");
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
@@ -2015,12 +2016,16 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->termination_mode = (int) unpack(kwargs, "termination_mode");
     env->inactive_agent_threshold = (float) unpack(kwargs, "inactive_agent_threshold");
     env->terminate_on_goal = (int) unpack(kwargs, "terminate_on_goal");
+    env->episode_max_steps = (int) unpack(kwargs, "episode_max_steps");
+    env->static_expert_min_motion_m = (float) unpack(kwargs, "static_expert_min_motion_m");
     char *map_file = unpack_str(kwargs, "map_file");
     env->map_name = map_file;
     env->num_controllable_agents = (int) unpack(kwargs, "max_agents");
     env->num_max_agents = (int) unpack(kwargs, "max_agents_per_env");
     int init_step = (int) unpack(kwargs, "init_step");
     env->init_step = init_step;
+    env->init_step_base = init_step;
+    env->init_step_jitter_steps = (int) unpack(kwargs, "init_step_jitter_steps");
     env->timestep = init_step;
     env->init_mode = (int) unpack(kwargs, "init_mode");
     env->control_mode = (int) unpack(kwargs, "control_mode");
@@ -2151,6 +2156,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/reverse", log->reward_reverse);
     assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
     assign_to_dict(dict, "reward_components/ade", log->reward_ade);
+    assign_to_dict(dict, "reward_components/expert_similarity", log->reward_expert_similarity);
 
     if (env->compute_eval_metrics) {
         // Puffer score components

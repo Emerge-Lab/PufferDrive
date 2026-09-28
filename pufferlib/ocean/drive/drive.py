@@ -34,6 +34,7 @@ class Drive(pufferlib.PufferEnv):
         reward_timestep=0.000025,
         reward_overspeed=0.05,
         reward_ade=0.0,
+        reward_expert_similarity=0.0,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
         num_goals=3,
@@ -69,6 +70,9 @@ class Drive(pufferlib.PufferEnv):
         init_step=0,
         init_step_spread=False,
         init_step_min_horizon=20,
+        init_step_jitter_steps=0,
+        episode_max_steps=0,
+        static_expert_min_motion_m=0.0,
         eval_mode=0,
         num_eval_scenarios=16,
         max_scenarios_per_batch=None,
@@ -148,6 +152,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_timestep = reward_timestep
         self.reward_overspeed = reward_overspeed
         self.reward_ade = reward_ade
+        self.reward_expert_similarity = reward_expert_similarity
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
@@ -290,6 +295,9 @@ class Drive(pufferlib.PufferEnv):
         self.init_step_spread = bool(init_step_spread)
         # limit at which we set the starting point from the end of the total episode length
         self.init_step_min_horizon = int(init_step_min_horizon)
+        self.init_step_jitter_steps = int(init_step_jitter_steps)
+        self.episode_max_steps = int(episode_max_steps)
+        self.static_expert_min_motion_m = float(static_expert_min_motion_m)
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
         self.sdc_controller_str = sdc_controller
@@ -443,6 +451,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_timestep": self.reward_timestep,
             "reward_overspeed": self.reward_overspeed,
             "reward_ade": self.reward_ade,
+            "reward_expert_similarity": self.reward_expert_similarity,
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
@@ -473,10 +482,13 @@ class Drive(pufferlib.PufferEnv):
             "termination_mode": int(self.termination_mode),
             "inactive_agent_threshold": float(self.inactive_agent_threshold),
             "terminate_on_goal": int(self.terminate_on_goal),
+            "episode_max_steps": self.episode_max_steps,
+            "static_expert_min_motion_m": self.static_expert_min_motion_m,
             "map_file": map_file,
             "max_agents": max_agents,
             "max_agents_per_env": self.max_agents_per_env,
             "init_step": self._sample_init_step(),
+            "init_step_jitter_steps": self.init_step_jitter_steps,
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,
             "sdc_controller": self.sdc_controller,
