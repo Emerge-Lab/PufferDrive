@@ -459,7 +459,8 @@ def select_render_rows(metrics_path, configured_render_filter, render_selection=
 
     rng = np.random.default_rng(TARGET_COLLISION_SELECTION_SEED)
     strata = [stratum for stratum, _ in TARGET_COLLISION_STRATA]
-    strata.append(UNCLASSIFIED_TARGET_COLLISION_STRATUM)
+    if not set(render_filter_columns).issubset(classifier_columns):
+        strata.append(UNCLASSIFIED_TARGET_COLLISION_STRATUM)
     quota, remainder = divmod(max_rows, len(strata))
     selected_indices = []
     for stratum_idx, stratum in enumerate(strata):
