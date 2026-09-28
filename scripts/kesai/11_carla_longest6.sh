@@ -20,11 +20,11 @@
 #
 # Overridable env: RUN_DIR, ROUTES, SCENARIOS (0 = pufferlib's scenario-free longest6), REPETITIONS,
 # ROUTE_SUBSET ("0 5 17": only these route ids), NUM_GPUS, PORT_BASE (CARLA rpc port of gpu 0; gpu w uses
-# PORT_BASE+50w, TM PORT_BASE+6000+50w), LOGGING (0, default: scores only, CARLA runs without rendering
-# (-nullrhi, which segfaults as soon as any sensor is requested, so no camera and no telemetry, whose CaRL
-# criteria attach a collision sensor); 1: chase-cam video, telemetry, world log and the HTML report per
-# route), OBS_HTML (1 = also the interactive obs replay per route, rendered into the one gallery folder
-# $OUT/obs_html at the end, large; needs LOGGING=1), REPORT (0 = skip the HTML report),
+# PORT_BASE+50w, TM PORT_BASE+6000+50w), LOGGING (1, default: telemetry, world log and the HTML report per
+# route; 0: scores only), CARLA_VIEW (0, default: CARLA runs without rendering (-nullrhi; collision sensors
+# and telemetry work, an RGB camera segfaults the server); 1: chase-cam mp4 per route on a rendering server,
+# needs LOGGING=1), OBS_HTML (1 = also the interactive obs replay per route, rendered into the one gallery
+# folder $OUT/obs_html at the end, large; needs LOGGING=1), REPORT (0 = skip the HTML report),
 # MAX_ATTEMPTS, CARLA_ROOT, CARL_WORK_DIR, PY, PD, COSIM_MAX_SPEED_MPS (ego speed cap, default 30),
 # COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: partners' stopped-time obs held at 0; 0 = real stopped times),
 # COSIM_PEDESTRIAN_MIN_SIZE_M (default 0: true CARLA walker boxes; 0.8 = the training spawn floor).
@@ -48,6 +48,8 @@ ROUTE_SUBSET=${ROUTE_SUBSET:-}
 PORT_BASE=${PORT_BASE:-2000}
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
 LOGGING=${LOGGING:-1}
+CARLA_VIEW=${CARLA_VIEW:-0}
+[ "$CARLA_VIEW" = "1" ] && [ "$LOGGING" != "1" ] && { echo "CARLA_VIEW=1 needs LOGGING=1"; exit 1; }
 OBS_HTML=${OBS_HTML:-1}
 REPORT=${REPORT:-$LOGGING}
 EVALUATOR=$CARL_WORK_DIR/original_leaderboard/leaderboard/leaderboard/leaderboard_evaluator.py
@@ -121,9 +123,9 @@ run_route() {  # $1 gpu, $2 route id, $3 attempt: one CARLA server + one evaluat
     local server_log=$route_dir/carla_server_attempt$attempt.log evaluator_log=$route_dir/evaluator_attempt$attempt.log
     mkdir -p "$route_dir"
     rm -f "$route_dir/result.json"
-    # no camera sensor without logging, so the server can skip rendering entirely
-    local render_args=(-RenderOffScreen -graphicsadapter="$gpu")
-    [ "$LOGGING" = "1" ] || render_args=(-nullrhi)
+    # only the chase camera needs the renderer; collision sensors and telemetry work under -nullrhi
+    local render_args=(-RenderOffScreen -nullrhi)
+    [ "$CARLA_VIEW" = "1" ] && render_args=(-RenderOffScreen -graphicsadapter="$gpu")
     "$CARLA_ROOT/CarlaUE4.sh" "${render_args[@]}" -nosound \
         -carla-rpc-port="$port" -carla-streaming-port=$((port + 1)) > "$server_log" 2>&1 &
     local server_pid=$! up=1
@@ -145,7 +147,8 @@ except Exception:
     fi
     local log_env=()
     if [ "$LOGGING" = "1" ]; then
-        log_env=(COSIM_TELEMETRY="$route_dir/telemetry" COSIM_WORLD_LOG="$route_dir/world_log" COSIM_DEBUG_CARLA_VIEW="$route_dir/carla_view")
+        log_env=(COSIM_TELEMETRY="$route_dir/telemetry" COSIM_WORLD_LOG="$route_dir/world_log")
+        [ "$CARLA_VIEW" = "1" ] && log_env+=(COSIM_DEBUG_CARLA_VIEW="$route_dir/carla_view")
         [ "$OBS_HTML" = "1" ] && log_env+=(COSIM_OBS_HTML="$route_dir/obs_html")
     fi
     env CUDA_VISIBLE_DEVICES="$gpu" "${log_env[@]}" \
