@@ -2913,15 +2913,17 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->active_agent = 1;
     agent->mark_as_expert = 0;
 
-    float spawn_length, spawn_width;
+    float spawn_length, spawn_width, spawn_edge_clearance_m;
     if (env->eval_mode && !env->eval_training_render) {
         // Eval: uniform random car-sized boxes
         spawn_length = sample_uniform(&env->rng_state, 2.0f, 5.5f);
         spawn_width = sample_uniform(&env->rng_state, 1.5f, 2.5f);
+        spawn_edge_clearance_m = EVAL_SPAWN_EDGE_CLEARANCE_M;
     } else {
         // Training: random size
         spawn_length = sample_uniform(&env->rng_state, 0.8f, 7.0f);
         spawn_width = sample_uniform(&env->rng_state, 0.8f, 3.0f);
+        spawn_edge_clearance_m = 0.0f;
     }
     if (spawn_width > spawn_length) {
         spawn_width = spawn_length;
@@ -3001,7 +3003,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
             continue;
         }
 
-        if (check_spawn_offroad(env, &tmp_agent, 0.0f)) {
+        if (check_spawn_offroad(env, &tmp_agent, spawn_edge_clearance_m)) {
             env->spawn_reject_counts[SPAWN_REJECT_OFFROAD]++;
             continue;
         }
