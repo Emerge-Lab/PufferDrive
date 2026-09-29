@@ -1225,7 +1225,8 @@ __PAYLOAD_CHUNKS__
         let step = 0, play = false, speed = 4, lastTick = 0;
         let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0};
         let followedId = null, isEgoCam = false, darkMode = false, showGhost = false, ghostPaths = [];
-        let obsZoom = 2.2, obsExpanded = false, obsMode = 2, obsShowLimits = true;
+        const OBS_ZOOM_DEFAULT = 2.2, OBS_ZOOM_MIN = .45, OBS_ZOOM_MAX = 8;
+        let obsZoom = OBS_ZOOM_DEFAULT, obsExpanded = false, obsMode = 2, obsShowLimits = true;
         let expertAgentIndices = new Set();
         const OBS_MODES = ["ALL","POOL","BOTH"];
         const EGO_LANE_SPEED_LIMIT_FEATURE = 8, MPS_TO_KMH = 3.6, SAME_LIMIT_LABEL_SPACING_PX = 100;
@@ -1480,7 +1481,7 @@ self.onmessage = async event => {
         function toggleTheme(){ darkMode=!darkMode; document.documentElement.setAttribute('data-theme', darkMode?'dark':'light'); draw(true); }
         function toggleGlobalPanel(){ const p=document.getElementById('hud-global'), collapsed=!p.classList.contains('collapsed'); p.classList.toggle('collapsed', collapsed); document.getElementById('globalChevron').innerHTML=collapsed?'&#9656;':'&#9662;'; }
         function toggleCamMode(){ if(followedId !== null){ isEgoCam=!isEgoCam; draw(true); } }
-        function resetObsZoom(e){ if(e) e.stopPropagation(); obsZoom=2.2; draw(true); }
+        function resetObsZoom(e){ if(e) e.stopPropagation(); obsZoom=OBS_ZOOM_DEFAULT; draw(true); }
         function toggleObsMode(e){ if(e) e.stopPropagation(); obsMode=(obsMode+1)%OBS_MODES.length; document.getElementById('obsModeBtn').textContent=OBS_MODES[obsMode]; draw(true); }
         function toggleObsLimits(e){ if(e) e.stopPropagation(); obsShowLimits=!obsShowLimits; document.getElementById('obsLimitBtn').classList.toggle('on', obsShowLimits); draw(true); }
         function toggleObsSize(e){ if(e) e.stopPropagation(); const p=document.getElementById('obs-container'), b=e ? e.currentTarget : null; obsExpanded=!obsExpanded; p.style.width=obsExpanded?'680px':'390px'; p.style.height=obsExpanded?'680px':'390px'; if(b) b.textContent=obsExpanded?'Collapse':'Expand'; resizeObsCanvas(); draw(true); }
@@ -1490,7 +1491,7 @@ self.onmessage = async event => {
         c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), wx=(e.clientX-r.left-c.width/2)/cam.z+cam.x, wy=(e.clientY-r.top-c.height/2)/-cam.z+cam.y; let hit=null, agents=getFrameAgents(Math.floor(step)); if(!isEgoCam) for(const a of agents) if(Math.hypot(wx-a.x, wy-a.y) < Math.max(a.l,3)){ hit=a.id; break; } if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; } draw(true); };
         window.onmouseup = () => cam.drag = false;
         c.onmousemove = e => { if(cam.drag && !isEgoCam){ cam.x -= (e.clientX-cam.lx)/cam.z; cam.y -= (e.clientY-cam.ly)/-cam.z; cam.lx=e.clientX; cam.ly=e.clientY; draw(true); } };
-        obsC.addEventListener('wheel', e => { e.preventDefault(); obsZoom = Math.max(.45, Math.min(8, obsZoom * Math.exp(-e.deltaY * .001))); draw(true); }, {passive:false});
+        obsC.addEventListener('wheel', e => { e.preventDefault(); obsZoom = Math.max(OBS_ZOOM_MIN, Math.min(OBS_ZOOM_MAX, obsZoom * Math.exp(-e.deltaY * .001))); draw(true); }, {passive:false});
         function dragPanel(handleId, panelId) { const h=document.getElementById(handleId), p=document.getElementById(panelId); let on=false,sx=0,sy=0,sl=0,st=0; h.addEventListener('mousedown', e => { if(e.target.closest('button')) return; on=true; sx=e.clientX; sy=e.clientY; const r=p.getBoundingClientRect(); sl=r.left; st=r.top; p.style.right='auto'; p.style.bottom='auto'; p.style.left=sl+'px'; p.style.top=st+'px'; }); window.addEventListener('mousemove', e => { if(on){ p.style.left=(sl+e.clientX-sx)+'px'; p.style.top=(st+e.clientY-sy)+'px'; }}); window.addEventListener('mouseup', () => on=false); }
         dragPanel('obs-title','obs-container');
         document.querySelectorAll('.obs-tool').forEach(btn => {
@@ -1515,7 +1516,7 @@ self.onmessage = async event => {
         function heatColor(t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); const f = t * (HEAT_STOPS.length - 1), i = Math.floor(f), k = f - i, a = HEAT_STOPS[i], b = HEAT_STOPS[Math.min(i + 1, HEAT_STOPS.length - 1)]; return `rgb(${Math.round(a[0]+(b[0]-a[0])*k)},${Math.round(a[1]+(b[1]-a[1])*k)},${Math.round(a[2]+(b[2]-a[2])*k)})`; }
         function poolColor(t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); const f = t * (POOL_STOPS.length - 1), i = Math.floor(f), k = f - i, a = POOL_STOPS[i], b = POOL_STOPS[Math.min(i + 1, POOL_STOPS.length - 1)]; return `rgb(${Math.round(a[0]+(b[0]-a[0])*k)},${Math.round(a[1]+(b[1]-a[1])*k)},${Math.round(a[2]+(b[2]-a[2])*k)})`; }
         function drawPoolLegend(maxN) { const w = 116*dpr, h = 9*dpr, x = obsC.width - w - 12*dpr, y = obsC.height - 20*dpr, grad = obsCtx.createLinearGradient(x, 0, x+w, 0); for (let i=0;i<=10;i++) grad.addColorStop(i/10, poolColor(i/10)); obsCtx.fillStyle = grad; obsCtx.fillRect(x, y, w, h); obsCtx.strokeStyle = "rgba(0,0,0,.45)"; obsCtx.lineWidth = dpr; obsCtx.strokeRect(x, y, w, h); obsCtx.fillStyle = "#111"; obsCtx.font = `bold ${9.5*dpr}px system-ui`; obsCtx.textAlign = "left"; obsCtx.fillText("pool wins  1", x, y - 4*dpr); obsCtx.textAlign = "right"; obsCtx.fillText(maxN, x+w, y - 4*dpr); }
-        const LIMIT_PILL_STYLES = {same: ["rgba(255,255,255,.9)", "rgba(0,0,0,.25)", "#555"], differs: ["rgba(255,237,213,.95)", "#c2410c", "#9a3412"], ego: ["rgba(255,255,255,.95)", "rgba(0,0,0,.45)", "#111"]};
+        const LIMIT_PILL_STYLES = {same: ["rgba(255,255,255,.55)", "rgba(0,0,0,.2)", "#444"], differs: ["rgba(255,237,213,.6)", "rgba(194,65,12,.8)", "#9a3412"], ego: ["rgba(255,255,255,.95)", "rgba(0,0,0,.45)", "#111"]};
         function drawLimitPill(x, y, w, h, text, style) {
             const [fill, stroke, ink] = LIMIT_PILL_STYLES[style];
             obsCtx.beginPath();
@@ -1534,16 +1535,18 @@ self.onmessage = async event => {
             obsCtx.font = `600 ${9*dpr}px system-ui`; obsCtx.textAlign = "center"; obsCtx.textBaseline = "middle";
             const differs = r => egoKmh !== null && Math.round(r[7] * MPS_TO_KMH) !== egoKmh;
             const lanes = frame.lanes.filter(r => r[7] !== null).sort((a, b) => (differs(b) - differs(a)) || ((a[0]*a[0] + a[1]*a[1]) - (b[0]*b[0] + b[1]*b[1])));
+            const zoomIn = Math.min(1, Math.max(0, Math.log(obsZoom / OBS_ZOOM_DEFAULT) / Math.log(OBS_ZOOM_MAX / OBS_ZOOM_DEFAULT)));
+            const sameValueSpacing = SAME_LIMIT_LABEL_SPACING_PX * dpr * (1 - zoomIn), labelEveryLane = zoomIn >= 1;
             const placed = [];
-            // limit changes first, then nearest; skip a label that would overlap a placed one or repeat its value close by
+            // limit changes first, then nearest; thinning fades with zoom and is off at max zoom so every visible element is labelled
             for (const r of lanes) {
                 const kmh = Math.round(r[7] * MPS_TO_KMH), text = String(kmh), x = cx + r[0]*scale, y = cy - r[1]*scale, w = obsCtx.measureText(text).width + 8*dpr;
                 if (x < w/2 || x > obsC.width - w/2 || y < top + h/2 || y > obsC.height - h/2) continue;
-                if (placed.some(p => Math.abs(p.x - x) < (p.w + w)/2 + gap && Math.abs(p.y - y) < h + gap)) continue;
-                if (placed.some(p => p.kmh === kmh && Math.hypot(p.x - x, p.y - y) < SAME_LIMIT_LABEL_SPACING_PX*dpr)) continue;
+                if (!labelEveryLane && placed.some(p => Math.abs(p.x - x) < (p.w + w)/2 + gap && Math.abs(p.y - y) < h + gap)) continue;
+                if (placed.some(p => p.kmh === kmh && Math.hypot(p.x - x, p.y - y) < sameValueSpacing)) continue;
                 placed.push({x, y, w, kmh, text, style: differs(r) ? "differs" : "same"});
             }
-            for (const p of placed) drawLimitPill(p.x, p.y, p.w, h, p.text, p.style);
+            for (let i = placed.length - 1; i >= 0; i--) drawLimitPill(placed[i].x, placed[i].y, placed[i].w, h, placed[i].text, placed[i].style);
             if (egoLimit !== null) {
                 const text = egoKmh === null ? "ego off lane" : `ego lane ${egoKmh} km/h`, w = obsCtx.measureText(text).width + 12*dpr;
                 drawLimitPill(12*dpr + w/2, obsC.height - 12*dpr - h/2, w, h, text, "ego");
