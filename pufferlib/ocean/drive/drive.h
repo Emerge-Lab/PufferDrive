@@ -5560,7 +5560,7 @@ void c_step(Drive *env) {
         Agent *agent = &env->agents[agent_idx];
         if (agent->controller == CONTROLLER_POLICY) {
             move_dynamics(env, i, agent_idx);
-            if ((env->pose_noise_xy_m > 0.0f || env->pose_noise_yaw_rad > 0.0f)
+            if (!agent->stopped && !agent->removed && (env->pose_noise_xy_m > 0.0f || env->pose_noise_yaw_rad > 0.0f)
                 && (!env->eval_mode || env->eval_training_render)) {
                 apply_pose_noise(env, agent);
             }
