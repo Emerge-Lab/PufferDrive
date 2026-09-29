@@ -1,0 +1,28 @@
+# Extra self-play control arm: keep training the self-play checkpoint with the
+# unchanged self-play recipe (gigaflow, all reward terms, no similarity reward,
+# no KL). Separates "more RL cycles" from what SHIFT adds.
+#
+# Required on the command line:
+#   load_model_path=<pretrained self-play .pt>
+#   train.total_timesteps=<budget>   matched data: the SHIFT run's total_timesteps;
+#                                    matched cycles: SHIFT epochs x this config's steps per epoch
+#                                    (steps per epoch = vec.num_envs x env.num_agents x train.bptt_horizon)
+# The launcher (scripts/launch_shift_experiments.sh) fills both in.
+
+policy.action_type: discrete
+env.num_agents: 3200
+vec.num_envs: 40
+train.minibatch_size: 256000
+train.max_minibatch_size: 64000
+train.compile: true
+
+# Same fine-tuning learning rate as the SHIFT arm so the only difference is the environment and loss.
+train.learning_rate: 0.0001
+train.kl_ref_coef: 0.0
+train.checkpoint_interval: 100
+train.evaluation_interval_epochs: 100
+train.evaluation_benchmarks: nuplan_single
+
+wandb: True
+wandb_project: shift-experiments
+wandb_group: selfplay_extended

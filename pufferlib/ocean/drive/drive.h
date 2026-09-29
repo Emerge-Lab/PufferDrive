@@ -46,6 +46,7 @@ struct Log {
     float lane_heading_aligned_rate;
     float dnf_rate;
     float avg_displacement_error;
+    float final_displacement_error;
     float avg_speed_per_agent;
     // Puffer score components
     float at_fault_collision_rate;
@@ -230,6 +231,7 @@ struct Drive {
     float reward_overspeed;
     float reward_ade;
     float reward_expert_similarity;
+    int expert_similarity_only;
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
@@ -2173,6 +2175,8 @@ static void add_log(Drive *env) {
         }
         float displacement_error = env->logs[i].avg_displacement_error;
         episode_log.avg_displacement_error += displacement_error;
+        env->logs[i].final_displacement_error = compute_displacement_error(agent, env->timestep);
+        episode_log.final_displacement_error += env->logs[i].final_displacement_error;
         episode_log.episode_length += env->logs[i].episode_length;
         episode_log.episode_return += env->logs[i].episode_return;
         // Per-component reward sums (mirrors compute_rewards' env->rewards[i]+= sites).
@@ -3732,6 +3736,10 @@ static void compute_rewards(Drive *env, int i) {
     }
     agent_log->avg_displacement_error = current_ade;
 
+    if (env->expert_similarity_only) {
+        env->rewards[i] = 0.0f; // BC-only: the terms above stay logged but never reach the agent
+    }
+
     // Expert similarity reward: -w * ||(x, y)_ego - (x, y)_expert||^2, zero when no logged pose
     if (env->reward_expert_similarity != 0.0f && env->simulation_mode == SIMULATION_MODE_REPLAY) {
         float expert_displacement_m = compute_displacement_error(agent, env->timestep);
@@ -4468,6 +4476,66 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     return;
 }
 
+static float expert_tracking_error(
+    Drive *env,
+    int active_idx,
+    int agent_idx,
+    int candidate_action,
+    int neutral_action,
+    int target_step) {
+    Agent *agent = &env->agents[agent_idx];
+    Agent saved_agent = *agent;
+    Rng saved_rng = env->rng_state;
+    int *actions = (int *) env->actions;
+    float error = 0.0f;
+    for (int lookahead = 0; lookahead < EXPERT_TRACKING_HORIZON_STEPS; lookahead++) {
+        int step = target_step + lookahead;
+        if (step >= agent->trajectory_size || !agent->log_valid[step]) {
+            break;
+        }
+        actions[active_idx] = lookahead == 0 ? candidate_action : neutral_action;
+        move_dynamics(env, active_idx, agent_idx);
+        float dx = agent->sim_x - agent->log_trajectory_x[step];
+        float dy = agent->sim_y - agent->log_trajectory_y[step];
+        float heading_error_m
+            = normalize_heading(agent->sim_heading - agent->log_heading[step]) * EXPERT_TRACKING_HEADING_WEIGHT_M;
+        error += dx * dx + dy * dy + heading_error_m * heading_error_m;
+    }
+    *agent = saved_agent;
+    env->rng_state = saved_rng;
+    return error;
+}
+
+// Writes the discrete action whose simulated poses stay closest to the log over the tracking horizon
+static void select_expert_tracking_action(Drive *env, int active_idx, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    int *actions = (int *) env->actions;
+    int target_step = env->timestep;
+    int is_jerk = env->dynamics_model == DYNAMICS_MODEL_JERK;
+    int num_actions = is_jerk ? NUM_JERK_LONG_ACTIONS * NUM_JERK_LAT_ACTIONS
+                              : NUM_ACCELERATION_ACTIONS * NUM_STEERING_ACTIONS;
+    int neutral_action = is_jerk ? (NUM_JERK_LONG_ACTIONS / 2) * NUM_JERK_LAT_ACTIONS + NUM_JERK_LAT_ACTIONS / 2
+                                 : (NUM_ACCELERATION_ACTIONS / 2) * NUM_STEERING_ACTIONS + NUM_STEERING_ACTIONS / 2;
+    if (target_step >= agent->trajectory_size || !agent->log_valid[target_step]) {
+        actions[active_idx] = neutral_action;
+        env->masks[active_idx] = 0;
+        return;
+    }
+    int best_action = neutral_action;
+    float best_error = expert_tracking_error(env, active_idx, agent_idx, neutral_action, neutral_action, target_step);
+    for (int candidate_action = 0; candidate_action < num_actions; candidate_action++) {
+        if (candidate_action == neutral_action) {
+            continue;
+        }
+        float error = expert_tracking_error(env, active_idx, agent_idx, candidate_action, neutral_action, target_step);
+        if (error < best_error) {
+            best_error = error;
+            best_action = candidate_action;
+        }
+    }
+    actions[active_idx] = best_action;
+}
+
 #include "idm.h"
 
 void c_reset(Drive *env) {
@@ -4625,6 +4693,9 @@ void c_step(Drive *env) {
             move_idm(env, agent_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
             move_expert(env, agent_idx);
+        } else if (agent->controller == CONTROLLER_EXPERT_TRACKING) {
+            select_expert_tracking_action(env, i, agent_idx);
+            move_dynamics(env, i, agent_idx);
         }
     }
 

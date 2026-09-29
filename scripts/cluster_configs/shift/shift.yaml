@@ -1,7 +1,8 @@
-# Human-imitation fine-tuning (HIFT-PPO) program config for submit_cluster.py.
+# SHIFT arm (HIFT-PPO) program config for submit_cluster.py.
 # Warm-starts a self-play checkpoint and fine-tunes it on replay logs with the
 # expert-similarity reward and a KL anchor to the frozen checkpoint. See
 # docs/hift_finetuning.md. Keys here override pufferlib/config/puffer_drive.yaml.
+# The env block is shared verbatim with bc_only.yaml and bc_rl.yaml.
 #
 # Required on the command line (no sane default here):
 #   load_model_path=<pretrained .pt>   env.map_dir=<replay .bin logs>   env.num_maps=<count>
@@ -10,7 +11,7 @@
 #   python scripts/submit_cluster.py \
 #       --save_dir $EXPERIMENTS_DIR --prefix $(date +%Y-%m-%d)_hift \
 #       --compute_config scripts/cluster_configs/nyu_greene.yaml \
-#       --program_config scripts/cluster_configs/hift_finetune.yaml \
+#       --program_config scripts/cluster_configs/shift/shift.yaml \
 #       --container --heartbeat --account <acct> --partition <gpu-partition> --time 360 \
 #       --args load_model_path=<pt> env.map_dir=<dir> env.num_maps=<n> train.seed=0:1:2
 
@@ -57,10 +58,13 @@ env.partner_blindness_prob: 0
 # Training: KL anchor to the loaded checkpoint, lower learning rate, short schedule.
 train.kl_ref_coef: 0.02
 train.learning_rate: 0.0001
-train.total_timesteps: 200_000_000
+# Paper: 1,501 cycles of ~100K transitions.
+train.total_timesteps: 150_000_000
 train.checkpoint_interval: 100
 train.compile: true
+train.evaluation_interval_epochs: 100
+train.evaluation_benchmarks: nuplan_single
 
 wandb: True
-wandb_project: hift-finetune
-wandb_group: hift-finetune
+wandb_project: shift-experiments
+wandb_group: shift

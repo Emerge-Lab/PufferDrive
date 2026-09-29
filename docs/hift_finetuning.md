@@ -55,7 +55,7 @@ puffer train puffer_drive \
     train.kl_ref_coef=0.02 train.learning_rate=1e-4
 ```
 
-`scripts/cluster_configs/hift_finetune.yaml` bundles these overrides for
+`scripts/cluster_configs/shift/shift.yaml` bundles these overrides for
 `submit_cluster.py`. Delete the checkpoint's sibling `trainer_state.pt` first if
 you want a fresh optimizer rather than a resumed one.
 
@@ -70,3 +70,60 @@ Notes:
 - With `kl_ref_coef` too small the fine-tune drifts into BC-only behaviour
   (comfortable but unsafe); too large and it stops learning. `2e-2` is the paper's
   operating point for `1500` cycles.
+
+## Experiment matrix
+
+One program config per arm lives in `scripts/cluster_configs/shift/`, and
+`scripts/launch_shift_experiments.sh <arm>` submits it with the seed sweep.
+All arms share the policy architecture, the discrete jerk action space, and
+the PPO update; they differ only in the columns below (Table A3 of the paper).
+
+| Arm | Config | Environment | Rewards | Warm start | KL anchor | What it isolates |
+|---|---|---|---|---|---|---|
+| Self-play | evaluate the pretrained checkpoint | – | – | – | – | the baseline |
+| SHIFT | `shift.yaml` | log replay | RL + similarity | self-play | `0.02`, `D_KL(pi \|\| pi_pre)` | the method |
+| Extra self-play, matched data | `selfplay_extended.yaml` + `train.total_timesteps` of SHIFT | self-play | RL | self-play | none | more RL on the same budget |
+| Extra self-play, matched cycles | `selfplay_extended.yaml` + SHIFT epochs x steps per epoch | self-play | RL | self-play | none | more RL for the same cycle count |
+| BC only | `bc_only.yaml` | log replay | similarity only (`expert_similarity_only`) | none | none | imitation without safety terms |
+| BC+RL | `bc_rl.yaml` | log replay | RL + similarity | none | none | the value of self-play pretraining |
+| HR-PPO | `hrppo_anchor_bc.yaml` then `hrppo.yaml` | self-play | sparse: goal, collision, off-road | none | `0.075`, `D_KL(pi_bc \|\| pi)` | the IL-anchored self-play pipeline |
+
+Evaluate every arm on the same replay benchmark, which reports ADE and FDE next
+to the safety metrics:
+
+```bash
+puffer eval puffer_drive nuplan_single load_model_path=<run>/models/model_puffer_drive_XXXXXX.pt
+```
+
+`losses/reference_kl` and `environment/reward_components/expert_similarity` in
+W&B show whether the anchor and the similarity term are doing anything.
+
+## HR-PPO: a proper supervised anchor
+
+HR-PPO ("Human-like autonomy emerges from self-play and a pinch of human data")
+anchors self-play to a behavior-cloning policy trained by supervised learning
+on logged actions, with the reverse KL added to the PPO loss:
+
+`L = L_PPO + lambda * E_o[D_KL(pi_bc(.|o) || pi_theta(.|o))]`, `lambda = 0.075`.
+
+That is a different reference from the similarity-reward "BC only" arm, so the
+pipeline has two steps.
+
+1. **Anchor.** `puffer bc puffer_drive` with `env.sdc_controller=expert_tracking`.
+   The tracker drives the SDC through the sim's own jerk dynamics: at each step
+   it forward-simulates every discrete action, holds zero jerk for a short
+   horizon, and keeps the action whose poses stay closest to the log. It writes
+   that action back into the actions buffer as the label. On the bundled nuPlan
+   log it stays under 1 cm ADE while a zero-jerk policy drifts by metres, and it
+   uses the full spread of brake, coast, and accelerate bins. `puffer bc` then
+   fits the actor by cross-entropy with early stopping on a held-out split and
+   saves `models/model_puffer_drive_bc.pt` next to a `config.yaml`. Every
+   infraction behaviour must be `ignore` so a brush with the log's collision
+   margin does not freeze the tracked ego, and `dt` must match the log spacing.
+2. **Self-play.** `hrppo.yaml`: sparse rewards, no reward conditioning, from
+   scratch, `train.kl_ref_model_path` pointing at the anchor and
+   `train.kl_ref_direction=reference_to_policy`. The policy block must match the
+   anchor's so its weights load.
+
+The one place the sim departs from the paper's sparse reward is the collision
+penalty, which always adds a speed-scaled term on top of the coefficient.

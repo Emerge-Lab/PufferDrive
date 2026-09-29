@@ -1975,6 +1975,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_overspeed = (float) unpack(kwargs, "reward_overspeed");
     env->reward_ade = (float) unpack(kwargs, "reward_ade");
     env->reward_expert_similarity = (float) unpack(kwargs, "reward_expert_similarity");
+    env->expert_similarity_only = (int) unpack(kwargs, "expert_similarity_only");
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
@@ -2033,6 +2034,24 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->non_sdc_controller = (int) unpack(kwargs, "non_sdc_controller");
     env->non_vehicle_controller = (int) unpack(kwargs, "non_vehicle_controller");
     env->simulation_mode = (int) unpack(kwargs, "simulation_mode");
+    if (env->non_sdc_controller == CONTROLLER_EXPERT_TRACKING
+        || env->non_vehicle_controller == CONTROLLER_EXPERT_TRACKING) {
+        PyErr_SetString(PyExc_ValueError, "expert_tracking is only supported as sdc_controller");
+        return -1;
+    }
+    if (env->sdc_controller == CONTROLLER_EXPERT_TRACKING
+        && (env->simulation_mode != SIMULATION_MODE_REPLAY || env->action_type != ACTION_TYPE_DISCRETE)) {
+        PyErr_SetString(PyExc_ValueError, "expert_tracking requires replay mode and discrete actions");
+        return -1;
+    }
+    int behaviors_ignore = env->collision_behavior == INFRACTION_BEHAVIOR_IGNORE
+        && env->offroad_behavior == INFRACTION_BEHAVIOR_IGNORE
+        && env->traffic_light_behavior == INFRACTION_BEHAVIOR_IGNORE
+        && env->stop_sign_behavior == INFRACTION_BEHAVIOR_IGNORE;
+    if (env->sdc_controller == CONTROLLER_EXPERT_TRACKING && !behaviors_ignore) {
+        PyErr_SetString(PyExc_ValueError, "expert_tracking requires every infraction behavior to be ignore");
+        return -1;
+    }
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
     env->reward_log_sampling = (bool) unpack(kwargs, "reward_log_sampling");
@@ -2133,7 +2152,10 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "red_light_violation_rate", log->red_light_violation_rate);
     assign_to_dict(dict, "stop_sign_violation_rate", log->stop_sign_violation_rate);
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
-    // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
+    if (env->simulation_mode == SIMULATION_MODE_REPLAY) {
+        assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
+        assign_to_dict(dict, "final_displacement_error", log->final_displacement_error);
+    }
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
     assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
     assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);

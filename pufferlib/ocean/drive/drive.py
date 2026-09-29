@@ -35,6 +35,7 @@ class Drive(pufferlib.PufferEnv):
         reward_overspeed=0.05,
         reward_ade=0.0,
         reward_expert_similarity=0.0,
+        expert_similarity_only=False,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
         num_goals=3,
@@ -153,6 +154,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_overspeed = reward_overspeed
         self.reward_ade = reward_ade
         self.reward_expert_similarity = reward_expert_similarity
+        self.expert_similarity_only = bool(expert_similarity_only)
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
@@ -328,6 +330,7 @@ class Drive(pufferlib.PufferEnv):
             "policy": binding.CONTROLLER_POLICY,
             "replay": binding.CONTROLLER_REPLAY,
             "idm": binding.CONTROLLER_IDM,
+            "expert_tracking": binding.CONTROLLER_EXPERT_TRACKING,
         }
         if self.non_vehicle_controller_str == "auto":
             if self.non_sdc_controller_str == "idm":
@@ -452,6 +455,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_overspeed": self.reward_overspeed,
             "reward_ade": self.reward_ade,
             "reward_expert_similarity": self.reward_expert_similarity,
+            "expert_similarity_only": int(self.expert_similarity_only),
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,

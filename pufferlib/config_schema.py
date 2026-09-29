@@ -134,6 +134,7 @@ class Controller(Enum):
     policy = 1
     replay = 2
     idm = 3
+    expert_tracking = 4
 
 
 class NonVehicleController(Enum):
@@ -205,6 +206,11 @@ class VectorBackend(Enum):
     Serial = 1
     Multiprocessing = 2
     Ray = 3
+
+
+class KLDirection(Enum):
+    policy_to_reference = "policy_to_reference"
+    reference_to_policy = "reference_to_policy"
 
 
 class ActionSelection(Enum):
@@ -304,6 +310,7 @@ class DriveEnvConfig:
     reward_overspeed: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_ade: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_expert_similarity: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    expert_similarity_only: bool = MISSING
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
@@ -398,6 +405,8 @@ class TrainingConfig:
     normalize_rewards: bool = MISSING
     ent_coef: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     kl_ref_coef: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    kl_ref_direction: KLDirection = MISSING
+    kl_ref_model_path: str | None = MISSING
     use_value_bootstrapping: bool = MISSING
     adam_beta1: float = _constrained_field(PROBABILITY_CONSTRAINT)
     adam_beta2: float = _constrained_field(PROBABILITY_CONSTRAINT)
@@ -423,6 +432,16 @@ class TrainingConfig:
     adv_filter_threshold_scale: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     # Derived by load_config from rnn_name and intentionally absent from YAML.
     use_rnn: bool = MISSING
+
+
+@dataclass
+class BCConfig:
+    num_steps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    batch_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    learning_rate: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    max_epochs: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    patience: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    val_fraction: float = _constrained_field(PROBABILITY_CONSTRAINT)
 
 
 @dataclass
@@ -472,6 +491,7 @@ class PufferDriveConfig:
     policy: DrivePolicyConfig = MISSING
     rnn: RecurrentConfig = MISSING
     train: TrainingConfig = MISSING
+    bc: BCConfig = MISSING
     sweep: dict = MISSING
     eval: EvaluationConfig | None = None
     controlled_exp: dict = MISSING
@@ -584,10 +604,30 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.static_expert_min_motion_m", "is only supported in replay mode")
     if env["reward_expert_similarity"] != 0 and env["simulation_mode"] != "replay":
         _raise_config_error(context, "env.reward_expert_similarity", "is only supported in replay mode")
-    train = config["train"]
-    if train["kl_ref_coef"] > 0 and not config["load_model_path"] and config["load_id"] is None:
+    if env["expert_similarity_only"] and (env["simulation_mode"] != "replay" or env["reward_expert_similarity"] == 0):
         _raise_config_error(
-            context, "train.kl_ref_coef", "requires load_model_path or load_id for the frozen reference"
+            context, "env.expert_similarity_only", "requires replay mode and a nonzero env.reward_expert_similarity"
+        )
+    if env["sdc_controller"] == "expert_tracking" and (
+        env["simulation_mode"] != "replay"
+        or env["control_mode"] != "control_sdc_only"
+        or env["action_type"] != "discrete"
+    ):
+        _raise_config_error(
+            context, "env.sdc_controller", "expert_tracking requires replay mode, control_sdc_only and discrete actions"
+        )
+    infraction_behaviors = ("collision_behavior", "offroad_behavior", "traffic_light_behavior", "stop_sign_behavior")
+    if env["sdc_controller"] == "expert_tracking" and any(env[key] != "ignore" for key in infraction_behaviors):
+        _raise_config_error(context, "env.sdc_controller", "expert_tracking requires every *_behavior to be ignore")
+    if env["non_sdc_controller"] == "expert_tracking":
+        _raise_config_error(context, "env.non_sdc_controller", "expert_tracking is only supported as sdc_controller")
+    train = config["train"]
+    has_reference = config["load_model_path"] or config["load_id"] is not None or train["kl_ref_model_path"]
+    if train["kl_ref_coef"] > 0 and not has_reference:
+        _raise_config_error(
+            context,
+            "train.kl_ref_coef",
+            "requires load_model_path, load_id or train.kl_ref_model_path for the reference",
         )
     if train["kl_ref_coef"] > 0 and config["rnn_name"] is not None:
         _raise_config_error(context, "train.kl_ref_coef", "is not supported with a recurrent policy")
@@ -638,7 +678,7 @@ def _validate_cross_field_constraints(config, context):
         not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip()
     ):
         _raise_config_error(context, "train.evaluation_benchmarks", "must be a non-empty string")
-    if not context.startswith("evaluation") and context != "simulation profiling":
+    if not context.startswith("evaluation") and context not in ("simulation profiling", "behavior cloning"):
         for field_name in ("batch_size", "bptt_horizon"):
             if train[field_name] != "auto":
                 _validate_value_constraint(train[field_name], POSITIVE_INT_CONSTRAINT, context, f"train.{field_name}")

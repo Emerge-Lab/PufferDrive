@@ -100,7 +100,9 @@ env:
   # options: "control_vehicles", "control_agents", "control_tracks_to_predict", "control_sdc_only"
   control_mode: control_vehicles
   # Controller used by agent 0, the canonical SDC/target.
-  # options: "static", "policy", "replay", "idm"
+  # options: "static", "policy", "replay", "idm", "expert_tracking"
+  # expert_tracking drives the SDC with the discrete action that best reproduces the next logged pose
+  # (replay mode, discrete actions); the chosen action is written back into the actions buffer as a BC label.
   sdc_controller: policy
   # Controller used by non-SDC vehicles.
   # options: "static", "policy", "replay", "idm"
@@ -150,6 +152,8 @@ env:
   reward_ade: 0.0
   # Quadratic penalty on the ego-to-logged-expert position error (replay mode only)
   reward_expert_similarity: 0.0
+  # BC-only training: the self-play reward terms are still logged but the agent only receives the similarity reward
+  expert_similarity_only: false
   # --- Map ---
   # Path to map used for training
   map_dir: pufferlib/resources/drive/binaries/carla
@@ -257,8 +261,12 @@ train:
   max_grad_norm: 0.5
   normalize_rewards: false
   ent_coef: 0.01
-  # Forward KL penalty D_KL(pi || pi_ref) against the frozen loaded checkpoint; 0 disables
+  # KL penalty coefficient against a frozen reference policy; 0 disables
   kl_ref_coef: 0.0
+  # Options: policy_to_reference (D_KL(pi || pi_ref), HIFT-PPO), reference_to_policy (D_KL(pi_ref || pi), HR-PPO)
+  kl_ref_direction: policy_to_reference
+  # Checkpoint for the reference policy; null uses a frozen copy of the loaded warm-start checkpoint
+  kl_ref_model_path: null
   # enable value bootstrap to simulate infinite time horizon
   use_value_bootstrapping: true
   # ---
@@ -288,6 +296,16 @@ train:
   adv_filter_enabled: true
   adv_filter_ewma_beta: 0.25
   adv_filter_threshold_scale: 0.01
+# Behavior cloning (puffer bc): fits the actor by cross-entropy on expert_tracking labels from replay logs.
+bc:
+  # Environment steps collected across all sub-envs before training
+  num_steps: 20000
+  batch_size: 2048
+  learning_rate: 1.0e-4
+  max_epochs: 200
+  # Stop when the held-out loss has not improved for this many epochs
+  patience: 10
+  val_fraction: 0.05
 sweep:
   method: Protein
   metric: score

@@ -607,7 +607,10 @@ class PuffeRL:
             with torch.no_grad(), self.amp_context:
                 reference_logits, _ = self.reference_policy(mb_obs, state)
             reference_logits = logits_to_float(reference_logits)
-            reference_kl = pufferlib.pytorch.kl_divergence_to_reference(logits, reference_logits).mean()
+            if config["kl_ref_direction"] == "reference_to_policy":
+                reference_kl = pufferlib.pytorch.kl_divergence_to_reference(reference_logits, logits).mean()
+            else:
+                reference_kl = pufferlib.pytorch.kl_divergence_to_reference(logits, reference_logits).mean()
             loss = loss + self.kl_ref_coef * reference_kl
             stats["reference_kl"] = reference_kl.detach()
 
@@ -1510,6 +1513,11 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     reference_policy = None
     if args["train"]["kl_ref_coef"] > 0:
         reference_policy = copy.deepcopy(base_policy(policy))
+        if args["train"]["kl_ref_model_path"]:
+            reference_state = torch.load(
+                args["train"]["kl_ref_model_path"], map_location=torch_device(args["train"]["device"])
+            )
+            reference_policy.load_state_dict(clean_policy_state_dict(reference_state))
 
     if "LOCAL_RANK" in os.environ:
         args["train"]["device"] = "cuda"
@@ -2561,7 +2569,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, bc, sweep, controlled_exp, autotune, profile] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -2574,6 +2582,10 @@ def main():
             raise pufferlib.APIUsageError("Usage: puffer eval [env_name] [benchmark_name] [optional args]")
         benchmark_name = sys.argv.pop(1)
         eval(env_name=env_name, benchmark_names=benchmark_name)
+    elif mode == "bc":
+        from pufferlib.bc import bc
+
+        bc(env_name=env_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "controlled_exp":

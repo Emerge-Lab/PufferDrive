@@ -90,6 +90,7 @@
 #define CONTROLLER_POLICY 1
 #define CONTROLLER_REPLAY 2
 #define CONTROLLER_IDM 3
+#define CONTROLLER_EXPERT_TRACKING 4
 
 // Episode generation
 #define SIMULATION_MODE_GIGAFLOW 0
@@ -292,6 +293,11 @@ static const int ROAD_OFFSETS[25][2]
 #define MULTI_LANE_THRESHOLD (LANE_WIDTH / 2.0f + LANE_MARGIN) // 2.05m
 #define MULTI_LANE_FULL_SCORE_TIME 3.4f                        // seconds
 #define MULTI_LANE_HALF_SCORE_TIME 5.7f                        // seconds
+
+// Expert tracking: heading error (radians) is weighed as this many meters of position error
+#define EXPERT_TRACKING_HEADING_WEIGHT_M 1.0f
+// Expert tracking: candidate is applied once, then zero jerk is held; pose error is summed over this many steps
+#define EXPERT_TRACKING_HORIZON_STEPS 5
 
 // Stopped-agent detection
 #define AGENT_STOPPED_SPEED_THRESHOLD 0.2f

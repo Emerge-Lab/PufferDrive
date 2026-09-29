@@ -1,0 +1,50 @@
+# HR-PPO anchor: supervised behavior cloning on replay logs (puffer bc).
+# The SDC runs the expert_tracking controller, which drives the sim's own jerk
+# dynamics with the discrete action that best reproduces the next logged pose
+# and writes that action back as the label. The actor is then fit by
+# cross-entropy on (observation, action) pairs.
+#
+# Launch with the bc entry point instead of train:
+#   python scripts/submit_cluster.py ... --program_config scripts/cluster_configs/shift/hrppo_anchor_bc.yaml \
+#       --main "-m pufferlib.pufferl bc puffer_drive" --args env.map_dir=<dir> env.num_maps=<n>
+#
+# The policy block must match shift/hrppo.yaml exactly so the anchor loads as
+# train.kl_ref_model_path there (no reward conditioning: HR-PPO uses sparse rewards).
+
+env.simulation_mode: replay
+env.control_mode: control_sdc_only
+env.sdc_controller: expert_tracking
+env.non_sdc_controller: replay
+env.non_vehicle_controller: replay
+env.goal_source: gt
+env.init_mode: create_all_valid
+env.action_type: discrete
+env.dynamics_model: jerk
+# Replay logs are stored at 10 Hz; the tracker targets the next logged pose, so dt must match.
+env.dt: 0.1
+env.max_agents_per_env: 1
+env.num_agents: 32
+env.init_step: 0
+env.termination_mode: false
+# Infractions in the human log must not freeze the tracked ego.
+env.collision_behavior: ignore
+env.offroad_behavior: ignore
+env.traffic_light_behavior: ignore
+env.stop_sign_behavior: ignore
+env.reward_conditioning: false
+env.reward_randomization: false
+env.phantom_braking_prob: 0
+env.partner_blindness_prob: 0
+
+policy.action_type: discrete
+
+# 600 steps x 32 envs at 10 Hz is about 30 minutes of human driving, the paper's
+# "pinch". Scale bc.num_steps for the 3 h / 30 h ablations.
+bc.num_steps: 600
+bc.batch_size: 2048
+bc.learning_rate: 0.0001
+bc.max_epochs: 5000
+bc.patience: 50
+bc.val_fraction: 0.05
+
+wandb: False
