@@ -131,6 +131,7 @@ class ObsReplayCapture:
             "obs_norm_road_seg_length_m": float(env.obs_norm_road_seg_length_m),
             "obs_norm_road_seg_width_m": float(env.obs_norm_road_seg_width_m),
             "obs_partner_relative_velocity": bool(env.obs_partner_relative_velocity),
+            "obs_lane_speed_limit": bool(env.obs_lane_speed_limit),
             "obs_goal_lane_distance": bool(env.obs_goal_lane_distance),
             "ego_features": int(env.ego_features),
             "num_reward_coefs": int(env.num_reward_coefs),

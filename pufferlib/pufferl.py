@@ -2503,6 +2503,8 @@ def render_training_replays(env_name, args, policy, epoch, global_step, run_dir)
     # Fixed-length episodes: eval-mode summaries flush on the resample boundary.
     env_config["termination_mode"] = False
     env_config["compute_eval_metrics"] = True
+    # Without it eval mode spawns max_agents_per_env eval-sized cars per map, not the training distribution.
+    env_config["eval_training_render"] = True
     env_config["num_agents"] = env_config["max_agents_per_env"]
     run_args["eval"]["action_selection"] = pufferlib.pytorch.ACTION_SELECT_SAMPLE
     capture_observations = run_args["eval"]["capture_observations"]
