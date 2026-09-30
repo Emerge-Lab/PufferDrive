@@ -52,6 +52,9 @@ env:
   reset_accel_on_stop: true
   # Time delta between steps in seconds
   dt: 0.3
+  # PDM rollout horizon and planning interval in seconds
+  pdm_horizon: 4.0
+  pdm_planning_dt: 0.1
   # Base forward speed cap
   base_max_speed_mps: 20.0
   # Speed cap when reward_randomization is off (eval); null = base_max_speed_mps. Sets C_vel = max_speed_mps / base_max_speed_mps (training range [0.667, 1.5] -> [13.3, 30] m/s)
@@ -106,13 +109,13 @@ env:
   # options: "control_vehicles", "control_agents", "control_tracks_to_predict", "control_sdc_only"
   control_mode: control_vehicles
   # Controller used by agent 0, the canonical SDC/target.
-  # options: "static", "policy", "replay", "idm"
+  # options: "static", "policy", "replay", "idm", "pdm"
   sdc_controller: policy
   # Controller used by non-SDC vehicles.
-  # options: "static", "policy", "replay", "idm"
+  # options: "static", "policy", "replay", "idm", "pdm"
   non_sdc_controller: policy
-  # Controller used by non-vehicle agents. "auto" follows non_sdc_controller unless it is "idm", then it uses "replay".
-  # options: "auto", "static", "policy", "replay", "idm"
+  # Controller used by non-vehicle agents. "auto" uses "replay" for IDM/PDM, otherwise follows non_sdc_controller.
+  # options: "auto", "static", "policy", "replay", "idm", "pdm"
   non_vehicle_controller: auto
   # Per-agent override, independent of the controllers above: agents flagged mark_as_expert
   # in the scenario data are forced to log-replay (1) or follow their controller setting (0)

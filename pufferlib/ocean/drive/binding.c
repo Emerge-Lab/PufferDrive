@@ -2036,6 +2036,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
     env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
     env->dt = (float) unpack(kwargs, "dt");
+    env->pdm_horizon_seconds = (float) unpack(kwargs, "pdm_horizon");
+    env->pdm_planning_dt_seconds = (float) unpack(kwargs, "pdm_planning_dt");
     env->base_max_speed_mps = (float) unpack(kwargs, "base_max_speed_mps");
     env->max_speed_mps = (float) unpack(kwargs, "max_speed_mps");
     if (!(env->max_speed_mps > 0.0f) || !isfinite(env->max_speed_mps)) {

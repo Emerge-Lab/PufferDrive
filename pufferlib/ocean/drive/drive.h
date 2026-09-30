@@ -209,6 +209,8 @@ struct Drive {
     int sdc_controller;
     int non_sdc_controller;
     int non_vehicle_controller;
+    float pdm_horizon_seconds;
+    float pdm_planning_dt_seconds;
     int replay_expert_agents;
     int simulation_mode;
     int termination_mode;
@@ -4704,6 +4706,7 @@ static void apply_pose_noise(Drive *env, Agent *agent) {
 }
 
 #include "idm.h"
+#include "pdm.h"
 
 void c_reset(Drive *env) {
     if (env->timestep == 0) {
@@ -4836,6 +4839,8 @@ void c_step(Drive *env) {
         Agent *agent = &env->agents[background_idx];
         if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, background_idx);
+        } else if (agent->controller == CONTROLLER_PDM) {
+            move_pdm(env, background_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
             move_expert(env, background_idx);
         }
@@ -4854,6 +4859,8 @@ void c_step(Drive *env) {
             }
         } else if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, agent_idx);
+        } else if (agent->controller == CONTROLLER_PDM) {
+            move_pdm(env, agent_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
             move_expert(env, agent_idx);
         }
