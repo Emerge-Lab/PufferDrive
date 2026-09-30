@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name train_puffer
-#SBATCH --nodes 8                        # Number of nodes requested
+#SBATCH --nodes 4                        # Number of nodes requested
 #SBATCH --ntasks-per-node 1              # Run 1 srun task per node (which fires up torchrun)
 #SBATCH --gres gpu:8                     # GPUs per node
 #SBATCH --cpus-per-task 144
 #SBATCH --mem=1007G
-#SBATCH --time 3-00:00
+#SBATCH --time 6-00:00
 #SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.out
 #SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.err
 #SBATCH --partition dev
@@ -98,7 +98,7 @@ fi
 echo "Training done, evaluating ${MODEL_PATH}"
 .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 40000 \
-    --num-nodes 8 \
+    --num-nodes 4 \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     vec.num_envs=64 \
     eval.reward_comfort=0.0 \
@@ -116,7 +116,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     load_model_path=${MODEL_PATH} \
     wandb=True
 
-# nuPlan (reactive and non-reactive), longest6 and AlpaSim evals need one 8-GPU node each: submit them as their own jobs so this 8-node allocation ends now.
+# nuPlan (reactive and non-reactive), longest6 and AlpaSim evals need one 8-GPU node each: submit them as their own jobs so this 4-node allocation ends now.
 echo "CARLA eval done, submitting nuPlan reactive eval for ${MODEL_PATH}"
 RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh \
     || echo "nuPlan eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh"
