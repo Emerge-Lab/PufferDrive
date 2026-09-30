@@ -1641,7 +1641,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     # Debug hook: force an initial checkpoint (epoch 0, before any training
     # step) and submit the co-sim benchmarks against it (fire-and-forget --
     # see run_cosim_debug_benchmarks), so the SLURM wiring can be verified
-    # without stalling training on a real CARLA/nuPlan run. Each benchmark's
+    # without stalling training on a real CARLA run. Each benchmark's
     # own orchestrator job logs its result to wandb once it's ready, whenever
     # that is -- independent of this process's lifetime.
     if training_evaluation_scheduled and args["train"]["cosim_debug_evals"] and is_rank0:
@@ -2581,7 +2581,7 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
 # train()), not the periodic eval cadence. Debug hook: promote to an
 # eval.cosim_benchmarks config once the wiring itself has been exercised
 # end to end.
-COSIM_DEBUG_BENCHMARKS = ("carla_cosim", "nuplan_cosim")
+COSIM_DEBUG_BENCHMARKS = ("carla_cosim",)
 
 
 def run_cosim_debug_benchmarks(env_name, args, checkpoint_path, label):
@@ -2589,11 +2589,11 @@ def run_cosim_debug_benchmarks(env_name, args, checkpoint_path, label):
     COSIM_DEBUG_BENCHMARKS against `checkpoint_path` and return immediately.
     Each benchmark gets its own orchestrator SLURM job (see
     cosim_evaluator.submit_cosim_benchmark_async) that submits the real
-    CARLA/nuPlan work, waits for it, and logs the result to wandb itself --
+    CARLA work, waits for it, and logs the result to wandb itself --
     so results reach wandb whenever they're ready, independent of whether
     this training process is still running. Failures are non-fatal (each
-    co-sim run depends on external infra -- a CARLA server, the nuPlan
-    devkit -- that training itself doesn't own)."""
+    co-sim run depends on external infra -- a CARLA server -- that
+    training itself doesn't own)."""
     eval_config = args["eval"]
     try:
         _, benchmarks = drive_benchmark.load_benchmark_config(

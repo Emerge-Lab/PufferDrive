@@ -137,7 +137,7 @@ def load_benchmark_config(config_path, selected_names, map_dir_override=None, nu
     selected_benchmark_configs = []
     for name in selected_names:
         benchmark = configured_benchmarks[name]
-        if benchmark.get("simulation_mode") in ("carla_cosim", "nuplan_cosim"):
+        if benchmark.get("simulation_mode") == "carla_cosim":
             from pufferlib.ocean.evaluation_utils.cosim_evaluator import parse_cosim_benchmark
 
             resolved_benchmarks.append(parse_cosim_benchmark(name, benchmark))

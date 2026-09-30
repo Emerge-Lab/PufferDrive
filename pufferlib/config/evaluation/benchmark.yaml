@@ -142,15 +142,3 @@ benchmarks:
     route_ids: [0, 1, 2]
     base_carla_port: 2000
     compute_config: scripts/cluster_configs/nyu_greene.yaml
-
-  - name: nuplan_cosim
-    simulation_mode: nuplan_cosim
-    scenario_filters: [nuplan_shard_00]
-    challenges:
-      - closed_loop_nonreactive_agents_pufferdrive
-      - closed_loop_reactive_agents_pufferdrive
-    # ray_distributed (the devkit's default) sizes its worker pool from the
-    # node's total CPU count, not this job's actual allocation, and OOMed on
-    # the debug run (2026-08-14) -- see run_nuplan_planner.sh's own header.
-    worker: sequential
-    compute_config: scripts/cluster_configs/nyu_greene.yaml

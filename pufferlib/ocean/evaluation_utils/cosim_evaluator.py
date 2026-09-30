@@ -1,4 +1,4 @@
-"""Evaluator for the CARLA and nuPlan closed-loop co-simulation benchmarks.
+"""Evaluator for the CARLA closed-loop co-simulation benchmark.
 """
 
 import contextlib
@@ -16,16 +16,10 @@ from pufferlib.ocean.evaluation_utils.evaluation_utils import (
     _require_mapping,
 )
 
-COSIM_SIMULATION_MODES = ("carla_cosim", "nuplan_cosim")
-
-DEFAULT_NUPLAN_CHALLENGES = (
-    "closed_loop_nonreactive_agents_pufferdrive",
-    "closed_loop_reactive_agents_pufferdrive",
-)
+COSIM_SIMULATION_MODES = ("carla_cosim",)
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(pufferlib.__file__)))
 CARLA_LEADERBOARD_SCRIPT = os.path.join(_REPO_ROOT, "pufferlib/ocean/cosim/carla/run_leaderboard.sh")
-NUPLAN_PLANNER_SCRIPT = os.path.join(_REPO_ROOT, "pufferlib/ocean/cosim/nuplan/run_nuplan_planner.sh")
 CARLA_PORT_STRIDE = 20  # distinct CARLA_PORT per route job, guards against two landing on one node
 
 
@@ -34,8 +28,6 @@ def parse_cosim_benchmark(name, benchmark):
     simulation_mode = benchmark.get("simulation_mode")
     if simulation_mode == "carla_cosim":
         return _parse_carla_benchmark(name, benchmark)
-    if simulation_mode == "nuplan_cosim":
-        return _parse_nuplan_benchmark_config(name, benchmark)
     raise pufferlib.APIUsageError(f"Benchmark {name} has unsupported cosim simulation_mode: {simulation_mode}")
 
 
@@ -52,32 +44,6 @@ def _parse_carla_benchmark(name, benchmark):
         "base_carla_port": _positive_int(benchmark.get("base_carla_port", 2000), f"Benchmark {name} base_carla_port"),
         "device": benchmark.get("device"),
         "dynamics_source": benchmark.get("dynamics_source"),
-        "compute_config": benchmark.get("compute_config"),
-    }
-
-
-def _parse_nuplan_benchmark_config(name, benchmark):
-    scenario_filters = benchmark.get("scenario_filters")
-    if (
-        not isinstance(scenario_filters, list)
-        or not scenario_filters
-        or any(not isinstance(s, str) or not s for s in scenario_filters)
-    ):
-        raise pufferlib.APIUsageError(f"Benchmark {name} scenario_filters must be a non-empty list of strings")
-    challenges = benchmark.get("challenges", list(DEFAULT_NUPLAN_CHALLENGES))
-    if not isinstance(challenges, list) or not challenges:
-        raise pufferlib.APIUsageError(f"Benchmark {name} challenges must be a non-empty list of strings")
-
-    return {
-        "name": name,
-        "simulation_mode": "nuplan_cosim",
-        "scenario_filters": scenario_filters,
-        "challenges": challenges,
-        "worker": benchmark.get("worker"),
-        "threads_per_node": benchmark.get("threads_per_node"),
-        "limit_total_scenarios": benchmark.get("limit_total_scenarios"),
-        "debug_bev": bool(benchmark.get("debug_bev", False)),
-        "nuplan_env": _require_mapping(benchmark.get("nuplan_env", {}), f"Benchmark {name} nuplan_env"),
         "compute_config": benchmark.get("compute_config"),
     }
 
@@ -316,117 +282,6 @@ def _run_carla_benchmark(benchmark, checkpoint_path, output_dir, executor):
     return rows
 
 
-# ─── nuPlan: one SLURM job per scenario_filter shard, via run_nuplan_planner.sh
-def _run_nuplan_shard_job(subdir, checkpoint_path, script_path, scenario_filter, challenges, nuplan_env, worker,
-                           threads_per_node, limit_total_scenarios, debug_bev):
-    """Runs inside the SLURM job: run_nuplan_planner.sh loops the given
-    CHALLENGES itself against nuPlan's unmodified run_simulation.py, writing
-    aggregator_metric/*.parquet (one file per challenge, from nuPlan's own
-    weighted-average metric aggregator) under GROUP=subdir."""
-    env = os.environ.copy()
-    env.update(nuplan_env)
-    env["CKPT"] = checkpoint_path
-    env["SPLIT"] = scenario_filter
-    env["CHALLENGES"] = " ".join(challenges)
-    env["GROUP"] = subdir
-    env["COSIM_DEBUG_BEV"] = "1" if debug_bev else "0"
-    if worker:
-        env["WORKER"] = worker
-    if threads_per_node:
-        env["THREADS_PER_NODE"] = str(threads_per_node)
-    if limit_total_scenarios:
-        env["LIMIT_TOTAL_SCENARIOS"] = str(limit_total_scenarios)
-
-    returncode = _run_script(["bash", script_path], env, subdir)
-    try:
-        rows = _read_nuplan_aggregator_scores(subdir, scenario_filter)
-    except RuntimeError:
-        if returncode != 0:
-            raise RuntimeError(
-                f"run_nuplan_planner.sh failed (exit {returncode}) for scenario_filter={scenario_filter}; see {subdir}"
-            )
-        raise
-    if returncode != 0:
-        print(
-            f"[cosim_eval] run_nuplan_planner.sh exited {returncode} for scenario_filter={scenario_filter}, but "
-            f"aggregator_metric data was still produced and will be used (a later, non-scoring step -- e.g. "
-            f"carl_nuplan's csv_main_callback -- likely failed after scoring completed); see {subdir}"
-        )
-    return rows
-
-
-def _read_nuplan_aggregator_scores(group_dir, scenario_filter):
-    """Per-scenario 'score' rows from nuPlan's own aggregator parquet output
-    (nuplan/planning/metrics/aggregator/weighted_average_metric_aggregator.py);
-    drops the synthetic 'final_score' row -- this module recomputes the mean
-    itself so it uses the same reduction as the native benchmark reports.
-    run_nuplan_planner.sh writes these under
-    group_dir/simulation/<challenge>/<run_timestamp>/aggregator_metric/ (one
-    subtree per challenge, per nuPlan's own run_simulation.py layout) --
-    NOT directly under group_dir -- so this walks that structure rather
-    than assuming a flat aggregator_metric/ next to group_dir."""
-    simulation_dir = os.path.join(group_dir, "simulation")
-    aggregator_dirs = []
-    for challenge_name in sorted(os.listdir(simulation_dir)) if os.path.isdir(simulation_dir) else []:
-        challenge_dir = os.path.join(simulation_dir, challenge_name)
-        if not os.path.isdir(challenge_dir):
-            continue
-        for run_timestamp in sorted(os.listdir(challenge_dir)):
-            candidate = os.path.join(challenge_dir, run_timestamp, "aggregator_metric")
-            if os.path.isdir(candidate):
-                aggregator_dirs.append((challenge_name, candidate))
-    if not aggregator_dirs:
-        raise RuntimeError(f"nuPlan produced no aggregator_metric output under {group_dir}")
-
-    frames = []
-    for challenge_name, aggregator_dir in aggregator_dirs:
-        for filename in os.listdir(aggregator_dir):
-            if not filename.endswith(".parquet"):
-                continue
-            df = pd.read_parquet(os.path.join(aggregator_dir, filename))
-            df = df[df["scenario"] != "final_score"]
-            df["scenario_filter"] = scenario_filter
-            df["challenge"] = challenge_name
-            frames.append(df)
-    if not frames:
-        raise RuntimeError(f"nuPlan aggregator_metric directories have no parquet files under {group_dir}")
-    return pd.concat(frames, ignore_index=True).to_dict(orient="records")
-
-
-def _submit_nuplan_jobs(benchmark, checkpoint_path, output_dir, executor):
-    jobs = []
-    with _clean_slurm_env():
-        for scenario_filter in benchmark["scenario_filters"]:
-            subdir = os.path.join(output_dir, scenario_filter)
-            jobs.append(
-                executor.submit(
-                    _run_nuplan_shard_job,
-                    subdir,
-                    checkpoint_path,
-                    NUPLAN_PLANNER_SCRIPT,
-                    scenario_filter,
-                    benchmark["challenges"],
-                    benchmark["nuplan_env"],
-                    benchmark["worker"],
-                    benchmark["threads_per_node"],
-                    benchmark["limit_total_scenarios"],
-                    benchmark["debug_bev"],
-                )
-            )
-    print(
-        f"[cosim_eval] submitted {len(jobs)} nuPlan shard jobs (run_nuplan_planner.sh) for benchmark {benchmark['name']}"
-    )
-    return jobs
-
-
-def _run_nuplan_benchmark(benchmark, checkpoint_path, output_dir, executor):
-    jobs = _submit_nuplan_jobs(benchmark, checkpoint_path, output_dir, executor)
-    rows = []
-    for job in jobs:
-        rows.extend(job.result())
-    return rows
-
-
 # ─── result aggregation + wandb ──────────────────────────────────────────────
 def _summarize_rows(rows):
     df = pd.DataFrame(rows)
@@ -502,8 +357,8 @@ def _prepare_cosim_submission(benchmark, base_args, output_dir):
 
 def _run_cosim_benchmark_job(benchmark, base_args, output_dir):
     """Runs inside its own detached SLURM job (an orchestrator -- it submits
-    and waits on the real CARLA/nuPlan work, it doesn't do that work itself):
-    blocks until every route/shard job finishes (including CARLA's
+    and waits on the real CARLA work, it doesn't do that work itself):
+    blocks until every route job finishes (including CARLA's
     retry-on-crash), then logs to wandb. Because this orchestrator is its own
     SLURM job with its own time budget, wandb gets the result whenever the
     real work finishes -- even long after the training process that
@@ -518,7 +373,7 @@ def submit_cosim_benchmark_async(benchmark, base_args, output_dir, orchestrator_
     not need to still be running to see the result reach wandb -- the
     orchestrator does that itself, independently. The orchestrator needs no
     GPU (it only submits/waits on the real jobs), just a generous time
-    budget to cover CARLA/nuPlan's queue wait + runtime."""
+    budget to cover CARLA's queue wait + runtime."""
     checkpoint_path = base_args.get("load_model_path")
     if not isinstance(checkpoint_path, str) or not os.path.isfile(checkpoint_path):
         raise pufferlib.APIUsageError(
@@ -532,14 +387,14 @@ def submit_cosim_benchmark_async(benchmark, base_args, output_dir, orchestrator_
     with _clean_slurm_and_wandb_env():
         job = executor.submit(_run_cosim_benchmark_job, benchmark, base_args, output_dir)
     print(
-        f"[cosim_eval] submitted orchestrator for benchmark {benchmark['name']}: will submit the real CARLA/nuPlan "
+        f"[cosim_eval] submitted orchestrator for benchmark {benchmark['name']}: will submit the real CARLA "
         f"jobs and log to wandb once they finish, independent of this process; see {output_dir}"
     )
     return job
 
 
 def run_cosim_benchmark(benchmark, base_args, output_dir, log_to_wandb=True):
-    """Submit, wait for, and aggregate a carla_cosim or nuplan_cosim benchmark.
+    """Submit, wait for, and aggregate a carla_cosim benchmark.
     Returns {"episodes": [...], "summary": {...}} -- same shape pufferl.py's
     eval() already expects from the native gigaflow/replay benchmarks. This
     blocks until every job finishes -- use submit_cosim_benchmark instead for
@@ -550,10 +405,7 @@ def run_cosim_benchmark(benchmark, base_args, output_dir, log_to_wandb=True):
     would otherwise tear down that already-active run."""
     checkpoint_path, executor = _prepare_cosim_submission(benchmark, base_args, output_dir)
 
-    if benchmark["simulation_mode"] == "carla_cosim":
-        rows = _run_carla_benchmark(benchmark, checkpoint_path, output_dir, executor)
-    else:
-        rows = _run_nuplan_benchmark(benchmark, checkpoint_path, output_dir, executor)
+    rows = _run_carla_benchmark(benchmark, checkpoint_path, output_dir, executor)
 
     summary = _write_cosim_report(rows, output_dir)
     if log_to_wandb:
