@@ -13,11 +13,18 @@ set -u
 
 export PD=/home/bjaeger/PufferDrive
 export PY=$(conda info --base)/envs/carl_nuplan/bin/python
-# Overridable env: RUN_DIR (3_train_64GPU_multinode_slurm.sh submits this job with RUN_DIR=<its run dir>)
+# Overridable env: RUN_DIR (3_train_64GPU_multinode_slurm.sh submits this job with RUN_DIR=<its run dir>), CHALLENGES
 RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0041_1000}
 # the planner finds config.yaml next to final_model.pt (or one level above a models/*.pt)
 export CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || { echo "missing $CKPT"; exit 1; }
+# reactive = IDM agents (CLS-R), nonreactive = log-replay agents (CLS-NR)
+export CHALLENGES=${CHALLENGES:-closed_loop_reactive_agents_pufferdrive}
+case "$CHALLENGES" in
+    closed_loop_reactive_agents_pufferdrive) CHALLENGE_TAG="" ;;
+    closed_loop_nonreactive_agents_pufferdrive) CHALLENGE_TAG="_nonreactive" ;;
+    *) echo "CHALLENGES must be closed_loop_reactive_agents_pufferdrive or closed_loop_nonreactive_agents_pufferdrive"; exit 1 ;;
+esac
 echo "Evaluating checkpoint: $CKPT"
 export CITY_BIN_DIR=/home/shared/data/nuplan/PufferDrive
 # shell env still exports the pre-rename nuPlan casing; pin the renamed paths here
@@ -32,7 +39,6 @@ export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_TH
 export COSIM_OBS_HTML=infractions  # obs replays (what the policy saw) only for collision/offroad/wrong-way/no-progress scenarios; all|failures|infractions|0
 # carl_visualization_callback: nuPlan ground-truth video per scenario -> $GROUP/simulation/<challenge>/<ts>/visualization
 export CALLBACKS="[simulation_log_callback, carl_visualization_callback]"
-export CHALLENGES=closed_loop_reactive_agents_pufferdrive
 export WORKER=ray_distributed
 # Per-worker memory is small now (1 policy agent + partner slots, light buffers sized to the scenario), so this is CPU-bound.
 export THREADS_PER_NODE=128
@@ -58,7 +64,7 @@ ABLATION_TAG=""
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && ABLATION_TAG="${ABLATION_TAG}_slots${OBS_SLOTS_PARTNERS_N}"
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && ABLATION_TAG="${ABLATION_TAG}_margin${EVAL_PERCEIVED_SIZE_MARGIN_M}"
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
-export GROUP=$RUN_DIR/eval/nuplan_val14_${GOAL_SOURCE}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}_${GOAL_SOURCE}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
 PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
 

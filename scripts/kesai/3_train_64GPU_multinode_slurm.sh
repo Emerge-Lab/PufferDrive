@@ -115,10 +115,13 @@ echo "Training done, evaluating ${MODEL_PATH}"
     load_model_path=${MODEL_PATH} \
     wandb=True
 
-# nuPlan, longest6 and AlpaSim evals need one 8-GPU node each: submit them as their own jobs so this 8-node allocation ends now.
-echo "CARLA eval done, submitting nuPlan eval for ${MODEL_PATH}"
+# nuPlan (reactive and non-reactive), longest6 and AlpaSim evals need one 8-GPU node each: submit them as their own jobs so this 8-node allocation ends now.
+echo "CARLA eval done, submitting nuPlan reactive eval for ${MODEL_PATH}"
 RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh \
     || echo "nuPlan eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh"
+echo "Submitting nuPlan non-reactive eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh \
+    || echo "nuPlan non-reactive eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh"
 echo "Submitting longest6 eval for ${MODEL_PATH}"
 RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6.sh \
     || echo "longest6 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6.sh"

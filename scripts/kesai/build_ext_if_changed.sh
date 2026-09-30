@@ -5,6 +5,10 @@ REPO_DIR=$1
 # .so files are tagged per python version; track builds per interpreter
 PYTHON_TAG=$(python -c 'import sys; print("cp%d%d" % sys.version_info[:2])')
 BUILD_HASH_FILE=${REPO_DIR}/experiments/logs/build_source_hash_${PYTHON_TAG}
+# jobs of one interpreter that start together (e.g. both nuPlan evals) would otherwise build into the same files at once
+mkdir -p "$(dirname "${BUILD_HASH_FILE}")"
+exec 9> "${BUILD_HASH_FILE}.lock"
+flock 9
 
 SOURCE_HASH=$({ find ${REPO_DIR}/pufferlib \( -name '*.c' -o -name '*.h' \) -type f; echo ${REPO_DIR}/setup.py; } | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
 
