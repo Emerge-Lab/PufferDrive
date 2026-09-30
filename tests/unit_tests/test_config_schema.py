@@ -438,6 +438,54 @@ class TestConfigSchema(unittest.TestCase):
         validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
 
     @patch("sys.argv", ["pufferl.py"])
+    def test_trajectory_baseline_is_off_by_default_and_accepted_on_jerk_continuous(self):
+        args = load_config("puffer_drive")
+        self.assertIs(args["env"]["trajectory_baseline"], False)
+        self.assertEqual(args["env"]["dynamics_model"], "jerk")
+        self.assertEqual(args["env"]["action_type"], "continuous")
+        args["env"]["trajectory_baseline"] = True
+
+        validated = normalize_puffer_drive_config(args, "test")
+        validate_puffer_drive_config(validated, "test")
+        self.assertIs(validated["env"]["trajectory_baseline"], True)
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_trajectory_baseline_rejects_trajectory_training(self):
+        """trajectory_training forces the spline action type, whose own curve would overwrite the fitted one."""
+        args = load_config("puffer_drive")
+        args["env"]["trajectory_baseline"] = True
+        args["trajectory_training"] = True
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "cannot be combined with trajectory_training"):
+            validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_trajectory_baseline_requires_jerk_dynamics_and_continuous_actions(self):
+        """The fit reads the jerk model's end-of-step state, which only a continuous jerk action produces."""
+        for field, value in (("dynamics_model", "classic"), ("action_type", "discrete")):
+            with self.subTest(field=field, value=value):
+                args = load_config("puffer_drive")
+                args["env"]["trajectory_baseline"] = True
+                args["env"][field] = value
+                args["policy"]["action_type"] = "discrete"
+
+                with self.assertRaisesRegex(
+                    pufferlib.APIUsageError, "requires env.dynamics_model 'jerk' and env.action_type 'continuous'"
+                ):
+                    validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_trajectory_baseline_requires_horizon_past_dt(self):
+        """The viewer samples the fitted curve from dt to spline_horizon_seconds."""
+        args = load_config("puffer_drive")
+        args["env"]["trajectory_baseline"] = True
+        args["env"]["dt"] = 0.3
+        args["env"]["spline_horizon_seconds"] = 0.3
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "must exceed env.dt"):
+            validate_puffer_drive_config(normalize_puffer_drive_config(args, "test"), "test")
+
+    @patch("sys.argv", ["pufferl.py"])
     def test_spline_env_action_type_requires_matching_policy_action_type(self):
         """env.action_type can be set to 'spline' directly, bypassing trajectory_training
         entirely -- there is no discrete/continuous-style bridging table for spline, so a

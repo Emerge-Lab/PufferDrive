@@ -254,6 +254,7 @@ class DriveEnvConfig:
     reset_accel_on_stop: bool = MISSING
     spline_horizon_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     spline_consistency_lag_count: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    trajectory_baseline: bool = MISSING
     dt: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     base_max_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     spawn_initial_speed: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
@@ -633,6 +634,22 @@ def _validate_cross_field_constraints(config, context):
     # Spline dynamics decodes six floats per agent from the spline action buffer; nothing else feeds it.
     if env["dynamics_model"] == "spline" and env["action_type"] != "spline":
         _raise_config_error(context, "env.dynamics_model", "'spline' requires env.action_type to be 'spline'")
+    if env["trajectory_baseline"]:
+        # trajectory_training forces the spline action type, whose own curve would collide with the fitted one
+        if config["trajectory_training"]:
+            _raise_config_error(context, "env.trajectory_baseline", "cannot be combined with trajectory_training")
+        if env["dynamics_model"] != "jerk" or env["action_type"] != "continuous":
+            _raise_config_error(
+                context,
+                "env.trajectory_baseline",
+                "requires env.dynamics_model 'jerk' and env.action_type 'continuous'",
+            )
+        if not env["spline_horizon_seconds"] > env["dt"]:
+            _raise_config_error(
+                context,
+                "env.spline_horizon_seconds",
+                "must exceed env.dt when env.trajectory_baseline is on (the fitted curve is drawn from dt to it)",
+            )
     if env["action_type"] == "spline":
         if env["dynamics_model"] not in ("jerk", "spline"):
             _raise_config_error(

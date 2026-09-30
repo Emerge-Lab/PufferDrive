@@ -949,6 +949,7 @@ def encode_interactive_replay(scenario, replay):
         "obs_scale": observation_scale,
         "action_type": env_cfg.get("action_type", "continuous"),
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
+        "trajectory_baseline": bool(env_cfg.get("trajectory_baseline", False)),
         "num_goals": int(env_cfg["num_goals"]),
         "reward_conditioning": bool(env_cfg["reward_conditioning"]),
         "obs_slots_partners_n": int(env_cfg["obs_slots_partners_n"]),
@@ -1365,7 +1366,7 @@ self.onmessage = async event => {
             ctx.setLineDash([]);
         }
         function drawPredictedPath(f) {
-            if (!showPredictedPath || H.action_type !== "spline") return;
+            if (!showPredictedPath || !(H.action_type === "spline" || H.trajectory_baseline)) return;
             const ego = agentAt(f, 0); // EGO_IDX = 0, matches constants.h
             if (!ego) return;
             const base = (f * H.agent_cap) * F.af + H.agent_path_field, n = H.agent_path_sample_count;
@@ -1401,7 +1402,7 @@ self.onmessage = async event => {
         function toggleObsMode(e){ if(e) e.stopPropagation(); obsMode=(obsMode+1)%OBS_MODES.length; document.getElementById('obsModeBtn').textContent=OBS_MODES[obsMode]; draw(true); }
         function toggleObsSize(e){ if(e) e.stopPropagation(); const p=document.getElementById('obs-container'), b=e ? e.currentTarget : null; obsExpanded=!obsExpanded; p.style.width=obsExpanded?'680px':'390px'; p.style.height=obsExpanded?'680px':'390px'; if(b) b.textContent=obsExpanded?'Collapse':'Expand'; resizeObsCanvas(); draw(true); }
         function searchAgent(){ const id=parseInt(document.getElementById('agentSearch').value); if(!isNaN(id)){ followedId=id; play=false; updateBtn(); draw(true); } }
-        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } if(e.code === 'KeyP' && H.action_type === 'spline'){ showPredictedPath=!showPredictedPath; draw(true); } });
+        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } if(e.code === 'KeyP' && (H.action_type === 'spline' || H.trajectory_baseline)){ showPredictedPath=!showPredictedPath; draw(true); } });
         c.onwheel = e => { e.preventDefault(); cam.z *= Math.exp(-e.deltaY * .001); draw(true); };
         c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), wx=(e.clientX-r.left-c.width/2)/cam.z+cam.x, wy=(e.clientY-r.top-c.height/2)/-cam.z+cam.y; let hit=null, agents=getFrameAgents(Math.floor(step)); if(!isEgoCam) for(const a of agents) if(Math.hypot(wx-a.x, wy-a.y) < Math.max(a.l,3)){ hit=a.id; break; } if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; } draw(true); };
         window.onmouseup = () => cam.drag = false;

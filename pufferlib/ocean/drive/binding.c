@@ -2034,6 +2034,36 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     // Shared with the C test fixture (drive_fixture.h), which never goes through this
     // function — the formula must live in drive.h, not inline here.
     init_spline_dynamics_fields(env);
+    env->trajectory_baseline = (int) unpack(kwargs, "trajectory_baseline");
+    if (PyErr_Occurred()) {
+        return -1;
+    }
+    if (env->trajectory_baseline != 0 && env->trajectory_baseline != 1) {
+        PyErr_Format(PyExc_ValueError, "trajectory_baseline must be 0 or 1. Got: %d", env->trajectory_baseline);
+        return -1;
+    }
+    // the fit reads the jerk model's end-of-step state, which only a continuous jerk action produces
+    if (env->trajectory_baseline
+        && (env->dynamics_model != DYNAMICS_MODEL_JERK || env->action_type != ACTION_TYPE_CONTINUOUS)) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "trajectory_baseline requires dynamics_model jerk and action_type continuous. Got dynamics_model: %d, "
+            "action_type: %d",
+            env->dynamics_model,
+            env->action_type);
+        return -1;
+    }
+    if (env->trajectory_baseline && !(env->spline_horizon_seconds > env->dt)) {
+        char error_msg[160];
+        snprintf(
+            error_msg,
+            sizeof(error_msg),
+            "trajectory_baseline requires spline_horizon_seconds > dt. Got spline_horizon_seconds: %g, dt: %g",
+            env->spline_horizon_seconds,
+            env->dt);
+        PyErr_SetString(PyExc_ValueError, error_msg);
+        return -1;
+    }
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");

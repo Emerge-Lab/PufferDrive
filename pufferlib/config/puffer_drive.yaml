@@ -61,6 +61,8 @@ env:
   # the original adjacent-pair-only behaviour; deeper lags catch slow drift that adjacent
   # differences miss. Capped by spline_horizon_seconds/dt and SPLINE_CONSISTENCY_MAX_LAG.
   spline_consistency_lag_count: 1
+  # View-only quintic fitted to every jerk step (jerk + continuous only), drawn from dt to spline_horizon_seconds
+  trajectory_baseline: false
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap

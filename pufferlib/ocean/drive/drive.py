@@ -61,6 +61,7 @@ class Drive(pufferlib.PufferEnv):
         reset_accel_on_stop=False,
         spline_horizon_seconds=1.5,
         spline_consistency_lag_count=1,
+        trajectory_baseline=False,
         simulation_mode="gigaflow",
         termination_mode=False,
         inactive_agent_threshold=0.4,
@@ -193,9 +194,19 @@ class Drive(pufferlib.PufferEnv):
         }[dynamics_model]
         if dynamics_model == "spline" and action_type != "spline":
             raise ValueError(f"dynamics_model 'spline' requires action_type 'spline', got {action_type!r}")
+        if trajectory_baseline and (dynamics_model != "jerk" or action_type != "continuous"):
+            raise ValueError(
+                "trajectory_baseline requires dynamics_model 'jerk' and action_type 'continuous', "
+                f"got {dynamics_model!r} and {action_type!r}"
+            )
+        if trajectory_baseline and not spline_horizon_seconds > dt:
+            raise ValueError(
+                f"trajectory_baseline requires spline_horizon_seconds > dt, got {spline_horizon_seconds!r} and {dt!r}"
+            )
         self.reset_accel_on_stop = reset_accel_on_stop
         self.spline_horizon_seconds = spline_horizon_seconds
         self.spline_consistency_lag_count = spline_consistency_lag_count
+        self.trajectory_baseline = bool(trajectory_baseline)
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
         self.max_scenarios_per_batch = max_scenarios_per_batch
@@ -434,6 +445,7 @@ class Drive(pufferlib.PufferEnv):
             "reset_accel_on_stop": self.reset_accel_on_stop,
             "spline_horizon_seconds": self.spline_horizon_seconds,
             "spline_consistency_lag_count": self.spline_consistency_lag_count,
+            "trajectory_baseline": self.trajectory_baseline,
             "reward_goal": self.reward_goal,
             "reward_collision": self.reward_collision,
             "reward_offroad": self.reward_offroad,

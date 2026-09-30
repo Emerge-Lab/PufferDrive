@@ -200,6 +200,7 @@ struct Drive {
     float spline_horizon_seconds;
     int spline_consistency_lag_count;   // how many past curves the consistency term compares against
     int spline_consistency_num_samples; // derived once at env-init from spline_horizon_seconds/dt
+    int trajectory_baseline;            // 0/1: fit a view-only quintic to every jerk step
     // Offset-limit fields below are also derived once at env-init (init_spline_dynamics_fields),
     // from spline_horizon_seconds/base_max_speed_mps/ACCEL_LONG_LIMIT/ACCEL_LAT_LIMIT, not config knobs.
     float spline_vel_fwd_offset_accel_mps;
@@ -4849,6 +4850,122 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     return;
 }
 
+// Stores the pre-step state as the quintic's c0..c2 (world frame); fit_baseline_trajectory adds c3..c5 after the move.
+static void begin_baseline_trajectory(const Drive *env, Agent *agent) {
+    if (!env->trajectory_baseline || agent->removed) {
+        return;
+    }
+    float accel_x, accel_y;
+    project_vector_from_ego_frame(agent, agent->accel_long, agent->accel_lat, &accel_x, &accel_y);
+    agent->spline_coefs_x[0] = agent->sim_x;
+    agent->spline_coefs_y[0] = agent->sim_y;
+    agent->spline_coefs_x[1] = agent->sim_vx;
+    agent->spline_coefs_y[1] = agent->sim_vy;
+    agent->spline_coefs_x[2] = 0.5f * accel_x;
+    agent->spline_coefs_y[2] = 0.5f * accel_y;
+}
+
+// Sum of |term| in one quintic evaluation: the scale that evaluation's float rounding error grows with.
+static inline float quintic_term_magnitude(const float coefs[6], float t, int order) {
+    float magnitude = 0.0f;
+    float t_power = 1.0f;
+    for (int power = order; power < 6; power++) {
+        float derivative_factor = 1.0f;
+        for (int factor = power; factor > power - order; factor--) {
+            derivative_factor *= (float) factor;
+        }
+        magnitude += derivative_factor * fabsf(coefs[power]) * t_power;
+        t_power *= t;
+    }
+    return magnitude;
+}
+
+static inline int quintic_matches(const float coefs[6], float t, int order, float expected) {
+    float error = fabsf(evaluate_quintic_derivative(coefs, t, order) - expected);
+    return error <= TRAJECTORY_FIT_RELATIVE_TOLERANCE * (quintic_term_magnitude(coefs, t, order) + fabsf(expected));
+}
+
+static inline int quintic_is_finite(const float coefs[6]) {
+    for (int coef_idx = 0; coef_idx < 6; coef_idx++) {
+        if (!isfinite(coefs[coef_idx])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+// Compared in the ego frame, so fitting the end accel with the wrong heading cannot pass as a match.
+static inline int quintic_end_accel_matches_ego(const Agent *agent, float t) {
+    float fit_accel_long, fit_accel_lat;
+    project_vector_to_ego_frame(
+        agent,
+        evaluate_quintic_derivative(agent->spline_coefs_x, t, 2),
+        evaluate_quintic_derivative(agent->spline_coefs_y, t, 2),
+        &fit_accel_long,
+        &fit_accel_lat);
+    float magnitude = quintic_term_magnitude(agent->spline_coefs_x, t, 2)
+        + quintic_term_magnitude(agent->spline_coefs_y, t, 2) + fabsf(agent->accel_long) + fabsf(agent->accel_lat);
+    float tolerance = TRAJECTORY_FIT_RELATIVE_TOLERANCE * magnitude;
+    return fabsf(fit_accel_long - agent->accel_long) <= tolerance
+        && fabsf(fit_accel_lat - agent->accel_lat) <= tolerance;
+}
+
+// View-only quintic through the pre-step state (c0..c2) and the jerk model's state at dt; the sim never reads it.
+static void fit_baseline_trajectory(const Drive *env, Agent *agent) {
+    if (!env->trajectory_baseline || agent->removed) {
+        return;
+    }
+    assert(env->dynamics_model == DYNAMICS_MODEL_JERK && env->action_type == ACTION_TYPE_CONTINUOUS);
+    float dt = env->dt;
+    float *coefs_x = agent->spline_coefs_x;
+    float *coefs_y = agent->spline_coefs_y;
+    float end_accel_x, end_accel_y;
+    project_vector_from_ego_frame(agent, agent->accel_long, agent->accel_lat, &end_accel_x, &end_accel_y);
+    solve_quintic_coefficients(
+        coefs_x[0],
+        coefs_x[1],
+        2.0f * coefs_x[2],
+        agent->sim_x,
+        agent->sim_vx,
+        end_accel_x,
+        dt,
+        &coefs_x[3],
+        &coefs_x[4],
+        &coefs_x[5]);
+    solve_quintic_coefficients(
+        coefs_y[0],
+        coefs_y[1],
+        2.0f * coefs_y[2],
+        agent->sim_y,
+        agent->sim_vy,
+        end_accel_y,
+        dt,
+        &coefs_y[3],
+        &coefs_y[4],
+        &coefs_y[5]);
+
+    assert(quintic_is_finite(coefs_x) && quintic_is_finite(coefs_y));
+    assert(quintic_matches(coefs_x, dt, 0, agent->sim_x) && quintic_matches(coefs_y, dt, 0, agent->sim_y));
+    assert(quintic_matches(coefs_x, dt, 1, agent->sim_vx) && quintic_matches(coefs_y, dt, 1, agent->sim_vy));
+    assert(quintic_end_accel_matches_ego(agent, dt));
+}
+
+// A just-reset car has no step to fit yet, so its curve collapses onto the car instead of keeping a stale one.
+static void reset_baseline_trajectories(Drive *env) {
+    if (!env->trajectory_baseline) {
+        return;
+    }
+    for (int i = 0; i < env->active_agent_count; i++) {
+        Agent *agent = &env->agents[env->active_agent_indices[i]];
+        for (int coef_idx = 1; coef_idx < 6; coef_idx++) {
+            agent->spline_coefs_x[coef_idx] = 0.0f;
+            agent->spline_coefs_y[coef_idx] = 0.0f;
+        }
+        agent->spline_coefs_x[0] = agent->sim_x;
+        agent->spline_coefs_y[0] = agent->sim_y;
+    }
+}
+
 #include "idm.h"
 
 void c_reset(Drive *env) {
@@ -4862,6 +4979,7 @@ void c_reset(Drive *env) {
             sample_erratic_flags(env, &env->agents[agent_idx]);
             compute_metrics(env, agent_idx, x);
         }
+        reset_baseline_trajectories(env);
         compute_observations(env);
         return;
     }
@@ -4907,6 +5025,7 @@ void c_reset(Drive *env) {
             generate_reward_coefs(env, agent);
             compute_metrics(env, agent_idx, x);
         }
+        reset_baseline_trajectories(env);
         compute_observations(env);
         return;
     }
@@ -4950,6 +5069,7 @@ void c_reset(Drive *env) {
         }
         compute_metrics(env, agent_idx, x);
     }
+    reset_baseline_trajectories(env);
     compute_observations(env);
 }
 
@@ -4997,7 +5117,9 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
         if (agent->controller == CONTROLLER_POLICY) {
+            begin_baseline_trajectory(env, agent);
             move_dynamics(env, i, agent_idx);
+            fit_baseline_trajectory(env, agent);
         } else if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, agent_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {

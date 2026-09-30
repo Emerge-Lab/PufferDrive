@@ -776,7 +776,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_f32[f32_base + 11] = a->jerk_lat;
             agent_f32[f32_base + AGENT_F32_GOAL_RADIUS_IDX] = a->reward_coefs[REWARD_COEF_GOAL_RADIUS];
 
-            if (i == EGO_IDX && drive->action_type == ACTION_TYPE_SPLINE) {
+            if (i == EGO_IDX && (drive->action_type == ACTION_TYPE_SPLINE || drive->trajectory_baseline)) {
                 // curve was fit at the pre-step pose; start one dt in so it begins at the car's current pose
                 float path_sample_dt = (drive->spline_horizon_seconds - drive->dt) / (AGENT_F32_PATH_SAMPLES - 1);
                 for (int sample_idx = 0; sample_idx < AGENT_F32_PATH_SAMPLES; sample_idx++) {

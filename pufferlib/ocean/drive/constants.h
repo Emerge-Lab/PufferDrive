@@ -154,6 +154,8 @@ static const float JERK_LAT[NUM_JERK_LAT_ACTIONS] = {-4.0f, 0.0f, 4.0f};
 #define SPLINE_MIN_ARC_M 1e-4f
 // Spline dynamics action per ego axis: (accel change over dt, jerk at T/2, jerk at T)
 #define SPLINE_CHANNELS_PER_AXIS 3
+// Baseline fit check: allowed float error as a fraction of the summed quintic term magnitudes
+#define TRAJECTORY_FIT_RELATIVE_TOLERANCE 1e-4f
 
 // Discrete action space, DYNAMICS_MODEL_CLASSIC
 #define NUM_ACCELERATION_ACTIONS 7
