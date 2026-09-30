@@ -1,0 +1,32 @@
+pufferdrive_planner:
+  _target_: pufferlib.ocean.cosim.nuplan.planner.PufferDrivePlanner
+  _convert_: 'all'
+
+  checkpoint_path: ???
+  bin_cache_dir: ${oc.env:NUPLAN_EXP_ROOT}/pufferdrive_bin_cache
+  # Whole-city map-only bins -- the only map source, no fallback.
+  city_bin_dir: ???
+  device: "cpu"
+  map_radius: 400.0 # TODO: load from config
+  goal_spacing: 20.0 # TODO: load from config
+  goal_source: route # route (lane-graph route goal windows) | roadblock (route roadblock centroid windows) | roadblock_lane (roadblock goals on the lane continuing the ego lane)
+  num_agents: 64 # TODO: load from config
+  horizon_seconds: 8.0 # nuplan default
+  deterministic: true
+  # Ablations (defaults = off). sliding_goal_window: refill the goal window after every consumed goal so
+  # the policy never sees a window-final (speed-gated) goal before the route end. Start-up jerk caps
+  # [m/s^3, 0 = off] bound the ego's longitudinal jerk for the first startup_jerk_cap_seconds: nuPlan's
+  # ego_lon_jerk extrapolates at the trajectory edges, ~2x the raw jerk of a ramp that starts at t=0.
+  sliding_goal_window: false
+  startup_jerk_cap_seconds: 1.5
+  startup_accel_jerk_cap_mps3: 0.0
+  startup_brake_jerk_cap_mps3: 0.0
+  # eval hack: grow pedestrian/bicycle partner boxes to at least this size [m] in the policy's obs (training min 0.8); 0 = off
+  pedestrian_min_size_m: 0.0
+  env_overrides:
+    obs_slots_partners_n: 40 # GIGAFLOW eval value (Table A4); slots are max-pooled, so any checkpoint transfers
+    stop_signs_enabled: false # nuPlan city bins export TURN_STOP zones as stop signs; keep them out of the obs
+  # Write the interactive pufferlib.viz observation replay (exact policy input/outputs) per scenario
+  obs_html_dir: null
+  obs_html_max_steps: 800
+  obs_html_render: true  # false: save .replay.zlib only, render later (scripts/eval/render_obs_html.py)

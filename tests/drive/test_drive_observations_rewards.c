@@ -21,6 +21,77 @@ static int test_observation_size_formula(void) {
     env.obs_partner_relative_velocity = 1;
     expected += 2 * PARTNER_RELATIVE_VELOCITY_FEATURES;
     EXPECT_EQ_INT(compute_observation_size(&env), expected);
+
+    env.obs_lane_speed_limit = 1;
+    expected += 5 * LANE_SPEED_LIMIT_FEATURES;
+    EXPECT_EQ_INT(compute_observation_size(&env), expected);
+    return 0;
+}
+
+static int check_lane_speed_limit_column(int lane_slots_kept, int boundary_slots_kept) {
+    const float forced_limit_mps = 12.5f;
+    srand(21);
+    Drive plain = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 4, 0);
+    plain.obs_slots_lane_kept = lane_slots_kept;
+    plain.obs_slots_boundary_kept = boundary_slots_kept;
+    allocate(&plain);
+    c_reset(&plain);
+    srand(21);
+    Drive with_limit = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 4, 0);
+    with_limit.obs_slots_lane_kept = lane_slots_kept;
+    with_limit.obs_slots_boundary_kept = boundary_slots_kept;
+    with_limit.obs_lane_speed_limit = 1;
+    allocate(&with_limit);
+    c_reset(&with_limit);
+
+    EXPECT_EQ_INT(with_limit.active_agent_count, plain.active_agent_count);
+    int plain_size = compute_observation_size(&plain);
+    int limit_size = compute_observation_size(&with_limit);
+    EXPECT_EQ_INT(limit_size - plain_size, plain.obs_slots_lane_kept * LANE_SPEED_LIMIT_FEATURES);
+    int lane_base = EGO_FEATURES + plain.num_goals * GOAL_FEATURES + plain.obs_slots_partners_n * PARTNER_FEATURES;
+    int limit_row_features = LANE_FEATURES + LANE_SPEED_LIMIT_FEATURES;
+    int plain_tail = lane_base + plain.obs_slots_lane_kept * LANE_FEATURES;
+    int limit_tail = lane_base + plain.obs_slots_lane_kept * limit_row_features;
+
+    for (int agent_idx = 0; agent_idx < plain.active_agent_count; agent_idx++) {
+        const float *plain_obs = &plain.observations[agent_idx * plain_size];
+        const float *limit_obs = &with_limit.observations[agent_idx * limit_size];
+        int lane_count = (int) limit_obs[limit_size - OBS_VALID_COUNT_FEATURES];
+        EXPECT_TRUE(lane_count > 0);
+        EXPECT_EQ_INT(memcmp(plain_obs, limit_obs, lane_base * sizeof(float)), 0);
+        EXPECT_EQ_INT(
+            memcmp(&plain_obs[plain_tail], &limit_obs[limit_tail], (plain_size - plain_tail) * sizeof(float)),
+            0);
+        for (int row = 0; row < plain.obs_slots_lane_kept; row++) {
+            const float *plain_row = &plain_obs[lane_base + row * LANE_FEATURES];
+            const float *limit_row = &limit_obs[lane_base + row * limit_row_features];
+            EXPECT_EQ_INT(memcmp(plain_row, limit_row, LANE_FEATURES * sizeof(float)), 0);
+            EXPECT_TRUE(row < lane_count ? limit_row[LANE_FEATURES] > 0.0f : limit_row[LANE_FEATURES] == 0.0f);
+        }
+    }
+
+    for (int road_idx = 0; road_idx < with_limit.num_road_elements; road_idx++) {
+        with_limit.lane_speed_limit_mps[road_idx] = forced_limit_mps;
+    }
+    compute_observations(&with_limit);
+    for (int agent_idx = 0; agent_idx < with_limit.active_agent_count; agent_idx++) {
+        const float *limit_obs = &with_limit.observations[agent_idx * limit_size];
+        int lane_count = (int) limit_obs[limit_size - OBS_VALID_COUNT_FEATURES];
+        for (int row = 0; row < with_limit.obs_slots_lane_kept; row++) {
+            float expected = row < lane_count ? forced_limit_mps / with_limit.obs_norm_speed_mps : 0.0f;
+            EXPECT_NEAR(limit_obs[lane_base + row * limit_row_features + LANE_FEATURES], expected, 1e-6f);
+        }
+    }
+
+    free_allocated(&plain);
+    free_allocated(&with_limit);
+    return 0;
+}
+
+static int test_lane_speed_limit_column(void) {
+    EXPECT_EQ_INT(check_lane_speed_limit_column(32, 32), 0);
+    // fewer kept than observed slots enables road dropout (buffered + subsampled rows)
+    EXPECT_EQ_INT(check_lane_speed_limit_column(12, 16), 0);
     return 0;
 }
 
@@ -243,9 +314,63 @@ static int test_reward_lane_align_wrong_way(void) {
     return 0;
 }
 
+static int test_lane_goal_distance_obs_unreachable_reads_far(void) {
+    const float norm_m = LANE_GRAPH_DISTANCE_NORM_M;
+    float dest[2];
+
+    write_lane_goal_distance_obs(0.25f * norm_m, 0.5f * norm_m, dest);
+    EXPECT_NEAR(dest[0], 0.25f, 1e-6f);
+    EXPECT_NEAR(dest[1], -0.25f, 1e-6f);
+
+    // Unreachable lane next to an ego lane 3 norms from the goal: must read worse than ego, not closer.
+    write_lane_goal_distance_obs(INFINITY, 3.0f * norm_m, dest);
+    EXPECT_NEAR(dest[0], 1.0f, 1e-6f);
+    EXPECT_NEAR(dest[1], 1.0f, 1e-6f);
+
+    write_lane_goal_distance_obs(3.0f * norm_m, INFINITY, dest);
+    EXPECT_NEAR(dest[0], 1.0f, 1e-6f);
+    EXPECT_NEAR(dest[1], -1.0f, 1e-6f);
+
+    write_lane_goal_distance_obs(INFINITY, INFINITY, dest);
+    EXPECT_NEAR(dest[0], 1.0f, 1e-6f);
+    EXPECT_NEAR(dest[1], 0.0f, 1e-6f);
+
+    write_lane_goal_distance_obs(0.25f * norm_m, -1.0f, dest);
+    EXPECT_NEAR(dest[0], 0.25f, 1e-6f);
+    EXPECT_NEAR(dest[1], 0.0f, 1e-6f);
+
+    write_lane_goal_distance_obs(-1.0f, 0.5f * norm_m, dest);
+    EXPECT_NEAR(dest[0], 0.0f, 1e-6f);
+    EXPECT_NEAR(dest[1], 0.0f, 1e-6f);
+    return 0;
+}
+
+static int test_lane_graph_distance_to_goal_sentinels(void) {
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
+    EXPECT_TRUE(env.lane_graph.n_lanes >= 2);
+    int lane_idx = env.lane_graph.lane_ids[0];
+    int goal_graph_idx = 1;
+    float *stored_distance_m = &env.lane_graph.distances[0 * env.lane_graph.n_lanes + goal_graph_idx];
+
+    *stored_distance_m = 123.0f;
+    EXPECT_NEAR(lane_graph_distance_to_goal_m(&env, lane_idx, goal_graph_idx), 123.0f, 1e-6f);
+    *stored_distance_m = INFINITY;
+    EXPECT_TRUE(isinf(lane_graph_distance_to_goal_m(&env, lane_idx, goal_graph_idx)));
+    *stored_distance_m = -1.0f;
+    EXPECT_TRUE(isinf(lane_graph_distance_to_goal_m(&env, lane_idx, goal_graph_idx)));
+    EXPECT_TRUE(lane_graph_distance_to_goal_m(&env, -1, goal_graph_idx) < 0.0f);
+    EXPECT_TRUE(lane_graph_distance_to_goal_m(&env, env.num_road_elements, goal_graph_idx) < 0.0f);
+
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
+    RUN_TEST(test_lane_goal_distance_obs_unreachable_reads_far);
+    RUN_TEST(test_lane_graph_distance_to_goal_sentinels);
     RUN_TEST(test_observation_size_formula);
+    RUN_TEST(test_lane_speed_limit_column);
     RUN_TEST(test_observation_zero_fill_and_valid_counts);
     RUN_TEST(test_reward_terminal_components);
     RUN_TEST(test_reward_goal_speed_gating);

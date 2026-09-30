@@ -3,6 +3,27 @@ import numbers
 import numpy as np
 
 
+EPISODE_COUNT_KEY = "n"
+EPISODE_SUM_KEYS = (EPISODE_COUNT_KEY, "total_distance_travelled_sum", "total_infraction_count")
+
+
+def accumulate_environment_metric(metric_sums, key, value, weight):
+    """Per-key [weighted_sum, weight_sum]; episode-count and window-sum keys accumulate plain sums."""
+    values = value.tolist() if isinstance(value, np.ndarray) else value
+    if not isinstance(values, (list, tuple)):
+        values = [values]
+    for item in values:
+        if not isinstance(item, numbers.Number):
+            continue
+        entry = metric_sums.setdefault(key, [0.0, 0.0])
+        if key in EPISODE_SUM_KEYS:
+            entry[0] += float(item)
+            entry[1] += 1
+        else:
+            entry[0] += float(item) * weight
+            entry[1] += weight
+
+
 def environment_metric_sums(metric_lists):
     """Per-key [value_sum, sample_count] over the collected log dicts."""
     metric_sums = {}
@@ -19,6 +40,9 @@ def finalize_environment_metrics(metric_sums):
     total_infractions = metric_sums.get("total_infraction_count")
     for key, (value_sum, value_count) in metric_sums.items():
         if key in ("total_distance_travelled_sum", "total_infraction_count"):
+            continue
+        if key == EPISODE_COUNT_KEY:
+            reduced_metrics[key] = value_sum
             continue
         reduced_metrics[key] = value_sum / max(value_count, 1)
 

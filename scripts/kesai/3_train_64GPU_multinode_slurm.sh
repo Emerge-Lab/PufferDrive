@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name train_puffer
-#SBATCH --nodes 8                        # Number of nodes requested
+#SBATCH --nodes 4                        # Number of nodes requested
 #SBATCH --ntasks-per-node 1              # Run 1 srun task per node (which fires up torchrun)
 #SBATCH --gres gpu:8                     # GPUs per node
 #SBATCH --cpus-per-task 144
 #SBATCH --mem=1007G
-#SBATCH --time 3-00:00
+#SBATCH --time 6-00:00
 #SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.out
 #SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.err
 #SBATCH --partition dev
@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0036_${SEED}
+export RUN_NAME=k_scaled_0044_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -58,7 +58,7 @@ srun torchrun \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine \
+    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop \
     env.num_maps=128 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
@@ -73,8 +73,15 @@ srun torchrun \
     env.goal_speed_randomization=false \
     env.goal_reach_requires_speed=true \
     env.obs_partner_relative_velocity=true \
+    env.obs_lane_heading_signed=true \
+    env.obs_lane_speed_limit=true \
+    env.stop_signs_enabled=true \
     env.pose_noise_xy_m=0.025 \
     env.pose_noise_yaw_deg=0.25 \
+    env.speed_limit_random_prob=1.0 \
+    env.stagger_first_episode=true \
+    env.resample_frequency=0 \
+    env.conditioning_speed_scale=2.0 \
     policy.mask_padded_features=true \
     train.evaluation_benchmarks=carla_fast \
     train.final_model_name=${FINAL_MODEL_NAME} \
@@ -91,7 +98,7 @@ fi
 echo "Training done, evaluating ${MODEL_PATH}"
 .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 40000 \
-    --num-nodes 8 \
+    --num-nodes 4 \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     vec.num_envs=64 \
     eval.reward_comfort=0.0 \
@@ -100,6 +107,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=200 \
     env.disable_red_light_infractions=1 \
+    env.disable_stop_sign_infractions=1 \
     env.traffic_light_junction_phases=0 \
     env.eval_standstill_jerk_deadband_mps3=1.5 \
     eval.render_filter=all_infractions \
@@ -108,20 +116,19 @@ echo "Training done, evaluating ${MODEL_PATH}"
     load_model_path=${MODEL_PATH} \
     wandb=True
 
-python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
-    env.map_dir=/home/shared/data/nuPlan/PufferDrive \
-    vec.num_envs=64 \
-    eval.num_agents=300 \
-    eval.reward_comfort=0.0 \
-    eval.reward_lane_center=0.0075 \
-    env.eval_perceived_size_margin_m=0.0 \
-    eval.disable_red_light_infractions=1 \
-    eval.render_filter=all_infractions \
-    eval.capture_observations=true \
-    eval.output_name=${RUN_NAME} \
-    load_model_path=${MODEL_PATH} \
-    wandb=True
-
+# nuPlan (reactive and non-reactive), longest6 and AlpaSim evals need one 8-GPU node each: submit them as their own jobs so this 4-node allocation ends now.
+echo "CARLA eval done, submitting nuPlan reactive eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh \
+    || echo "nuPlan eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh"
+echo "Submitting nuPlan non-reactive eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh \
+    || echo "nuPlan non-reactive eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh"
+echo "Submitting longest6 eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6.sh \
+    || echo "longest6 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6.sh"
+echo "Submitting AlpaSim eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
+    || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
 
 end=$(date +%s)
 runtime=$((end-start))

@@ -118,6 +118,48 @@ static int test_training_lights_stay_exclusive_unless_removed(void) {
     return 0;
 }
 
+// Junction fully off while the standalone light is not: individual removal alone needs three 20% draws to line up.
+static int count_junction_only_off_episodes(int junction_phases, int seed_count) {
+    TrafficControlElement lights[LIGHT_COUNT];
+    int junction_only_off_count = 0;
+    for (int seed = 0; seed < seed_count; seed++) {
+        Drive env = drive_test_lights_env(lights, 0);
+        env.traffic_light_junction_phases = junction_phases;
+        rng_seed(&env.rng_state, (uint64_t) seed);
+        generate_traffic_light_states(&env);
+        int off_lights = 0;
+        for (int i = 0; i < LIGHT_COUNT; i++) {
+            off_lights += count_state(lights[i].states, TRAFFIC_CONTROL_STATE_OFF) == STATE_COUNT;
+        }
+        int standalone_off = count_state(lights[3].states, TRAFFIC_CONTROL_STATE_OFF) == STATE_COUNT;
+        junction_only_off_count += off_lights == 3 && !standalone_off;
+    }
+    return junction_only_off_count;
+}
+
+// Expected rate per episode: 0.8 (no episode disable) * ~0.206 (group removed) * 0.8 (standalone kept) ~= 13%.
+static int test_training_group_removal_turns_off_whole_junction(void) {
+    for (int junction_phases = 0; junction_phases <= 1; junction_phases++) {
+        int junction_only_off_count = count_junction_only_off_episodes(junction_phases, 500);
+        EXPECT_TRUE(junction_only_off_count >= 40);
+        EXPECT_TRUE(junction_only_off_count <= 100);
+    }
+    return 0;
+}
+
+static int test_eval_never_removes_lights(void) {
+    TrafficControlElement lights[LIGHT_COUNT];
+    for (int seed = 0; seed < 50; seed++) {
+        Drive env = drive_test_lights_env(lights, 1);
+        rng_seed(&env.rng_state, (uint64_t) seed);
+        generate_traffic_light_states(&env);
+        for (int i = 0; i < LIGHT_COUNT; i++) {
+            EXPECT_EQ_INT(count_state(lights[i].states, TRAFFIC_CONTROL_STATE_OFF), 0);
+        }
+    }
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_junction_lights_never_green_together);
@@ -125,5 +167,7 @@ int main(void) {
     RUN_TEST(test_standalone_light_keeps_single_phase_cycle);
     RUN_TEST(test_junction_phases_disabled_makes_every_light_standalone);
     RUN_TEST(test_training_lights_stay_exclusive_unless_removed);
+    RUN_TEST(test_training_group_removal_turns_off_whole_junction);
+    RUN_TEST(test_eval_never_removes_lights);
     return test_summary(failures);
 }

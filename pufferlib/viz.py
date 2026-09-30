@@ -119,6 +119,7 @@ def _obs_scales(
     obs_norm_veh_length_m=15.0,
     obs_norm_road_seg_length_m=5.0,
     obs_norm_road_seg_width_m=5.0,
+    obs_norm_speed_mps=60.0,
 ):
     env_cfg = env_cfg or {}
     obs_norm_goal_offset_m = float(env_cfg.get("obs_norm_goal_offset_m", obs_norm_goal_offset_m))
@@ -127,6 +128,7 @@ def _obs_scales(
     obs_norm_veh_length_m = float(env_cfg.get("obs_norm_veh_length_m", obs_norm_veh_length_m))
     obs_norm_road_seg_length_m = float(env_cfg.get("obs_norm_road_seg_length_m", obs_norm_road_seg_length_m))
     obs_norm_road_seg_width_m = float(env_cfg.get("obs_norm_road_seg_width_m", obs_norm_road_seg_width_m))
+    obs_norm_speed_mps = float(env_cfg.get("obs_norm_speed_mps", obs_norm_speed_mps))
     inverse_xy_scale = None if obs_norm_xy_offset_m == 0 else 1.0 / obs_norm_xy_offset_m
     return {
         "obs_norm_goal_offset_m": obs_norm_goal_offset_m,
@@ -136,6 +138,7 @@ def _obs_scales(
         "goal_to_position": 1.0 if inverse_xy_scale is None else obs_norm_goal_offset_m * inverse_xy_scale,
         "road_length_to_position": 1.0 if inverse_xy_scale is None else obs_norm_road_seg_length_m * inverse_xy_scale,
         "road_width_to_position": 1.0 if inverse_xy_scale is None else obs_norm_road_seg_width_m * inverse_xy_scale,
+        "speed_to_mps": obs_norm_speed_mps,
     }
 
 
@@ -483,6 +486,7 @@ def unpack_obs(
     obs_dropout_boundary: float = 0.0,
     agent_idx: int = 0,
     obs_partner_relative_velocity: bool = False,
+    obs_lane_speed_limit: bool = False,
 ):
     """
     Unpack the flattened observation into ego, map, partner, and traffic-control views.
@@ -502,7 +506,7 @@ def unpack_obs(
         binding.PARTNER_RELATIVE_VELOCITY_FEATURES if obs_partner_relative_velocity else 0
     )
     # Road obs
-    lane_feature_size = binding.LANE_FEATURES
+    lane_feature_size = binding.LANE_FEATURES + (binding.LANE_SPEED_LIMIT_FEATURES if obs_lane_speed_limit else 0)
     boundary_feature_size = binding.BOUNDARY_FEATURES
     # Traffic control obs
     traffic_control_feature_size = binding.TRAFFIC_CONTROL_FEATURES
@@ -586,6 +590,7 @@ def plot_observation(
     true_length_m=None,
     true_width_m=None,
     obs_partner_relative_velocity=False,
+    obs_lane_speed_limit=False,
 ) -> np.ndarray:
     """Plot observation in ego-centric frame.
 
@@ -607,6 +612,7 @@ def plot_observation(
         obs_dropout_boundary=obs_dropout_boundary,
         agent_idx=agent_idx,
         obs_partner_relative_velocity=obs_partner_relative_velocity,
+        obs_lane_speed_limit=obs_lane_speed_limit,
     )
     scales = _obs_scales(
         obs_norm_goal_offset_m=obs_norm_goal_offset_m,
@@ -951,6 +957,8 @@ def encode_interactive_replay(scenario, replay):
         chunks["obs_scale"] = observation_scale_per_dim.astype(np.float32)
     if replay.get("policy_probs") is not None:
         chunks["policy_probs"] = replay["policy_probs"].astype(np.float32, copy=False)
+    if replay.get("action_index") is not None:  # discrete class behind a continuous executed action (-1: none)
+        chunks["action_index"] = replay["action_index"].astype(np.int32, copy=False)
     if replay.get("policy_mean") is not None:
         chunks["policy_mean"] = replay["policy_mean"].astype(np.float32, copy=False)
         chunks["policy_std"] = replay["policy_std"].astype(np.float32, copy=False)
@@ -969,6 +977,13 @@ def encode_interactive_replay(scenario, replay):
     active_count = int(replay["raw_action"].shape[1])
     init_step = int(env_cfg.get("init_step", 0))
     ghost = np.zeros((frame_count, max(1, active_count), 5), dtype=np.float32)
+    explicit_ghost = replay.get("ghost_f32")
+    if explicit_ghost is not None:  # co-sim: the logged trajectory lives outside the bin scenario
+        explicit_ghost = np.asarray(explicit_ghost, dtype=np.float32)
+        if explicit_ghost.shape != ghost.shape:
+            raise ValueError(f"ghost_f32 shape {explicit_ghost.shape} != expected {ghost.shape}")
+        ghost = explicit_ghost
+        active_indices = []
     for slot in range(min(active_count, len(active_indices))):
         agent_idx = active_indices[slot]
         if agent_idx < 0 or agent_idx >= len(agents):
@@ -1013,7 +1028,9 @@ def encode_interactive_replay(scenario, replay):
         "reward_coef_count": int(binding.NUM_REWARD_COEFS),
         "partner_features": int(binding.PARTNER_FEATURES)
         + (int(binding.PARTNER_RELATIVE_VELOCITY_FEATURES) if env_cfg.get("obs_partner_relative_velocity") else 0),
-        "lane_features": int(binding.LANE_FEATURES),
+        "lane_features": int(binding.LANE_FEATURES)
+        + (int(binding.LANE_SPEED_LIMIT_FEATURES) if env_cfg.get("obs_lane_speed_limit") else 0),
+        "lane_speed_limit_idx": int(binding.LANE_FEATURES) if env_cfg.get("obs_lane_speed_limit") else -1,
         "boundary_features": int(binding.BOUNDARY_FEATURES),
         "traffic_features": int(binding.TRAFFIC_CONTROL_FEATURES),
         "lane_count": int(lane_count),
@@ -1082,6 +1099,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         .perturbation-line { width:28px; height:0; border-top:3px solid; }
         .perturbation-line.blindness { border-color:#6d28d9; border-top-style:dashed; }
         .perturbation-line.phantom-braking { border-color:#b45309; }
+        .perturbation-line.human-log { border-color:#ff0000; }
         /* Agent panel: dark instrument-cluster surface in both themes — scoped variable overrides restyle all children. */
         #hud-telemetry { --border:#4a5468; --muted:#aab3c5; --field:rgba(255,255,255,.07); --accent:#7cbcff; position:absolute; top:14px; right:14px; width:372px; max-height:calc(100vh - 90px); padding:12px 14px; overflow-y:auto; display:none; background:rgba(54,62,77,.95); color:#eef1f6; }
         [data-theme="dark"] #hud-telemetry { background:rgba(48,56,70,.95); }
@@ -1116,6 +1134,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         #obs-title span { flex:1; }
         .obs-tool { padding:3px 8px; border:1px solid var(--border); border-radius:5px; background:transparent; color:var(--muted); font-size:9.5px; font-weight:600; letter-spacing:.05em; cursor:pointer; }
         .obs-tool:hover { color:var(--accent); border-color:var(--accent); }
+        .obs-tool.on { color:var(--accent); border-color:var(--accent); }
         #obs-canvas { width:100%; height:100%; background:#fff; }
     </style>
 </head>
@@ -1131,6 +1150,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
                 <div class="label">Active perturbations</div>
                 <div class="perturbation-key"><span class="perturbation-line blindness"></span><span>Partner blindness</span></div>
                 <div class="perturbation-key"><span class="perturbation-line phantom-braking"></span><span>Phantom braking</span></div>
+                <div class="perturbation-key" id="ghost-key" style="display:none"><span class="perturbation-line human-log"></span><span>Human driver (log) &middot; G toggles</span></div>
             </div>
             <button type="button" class="toggle-header is-collapsed" id="overrides-header" data-target="overrides-body"><span>Eval overrides</span><span>&#9662;</span></button>
             <div id="overrides-body" class="grid toggle-body is-collapsed"></div>
@@ -1166,12 +1186,12 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <button type="button" class="toggle-header" data-target="metrics-grid"><span>Metrics</span><span>&#9662;</span></button>
             <div id="metrics-grid" class="grid toggle-body"></div>
         </div>
-        <div id="obs-container" class="panel"><div id="obs-title"><span>Ego-centric observation (dashed = true footprint)</span><button type="button" class="obs-tool" onclick="resetObsZoom(event)">1x</button><button type="button" id="obsModeBtn" class="obs-tool" onclick="toggleObsMode(event)">BOTH</button><button type="button" class="obs-tool" onclick="toggleObsSize(event)">Expand</button></div><canvas id="obs-canvas"></canvas></div>
+        <div id="obs-container" class="panel"><div id="obs-title"><span>Ego-centric observation (dashed = true footprint)</span><button type="button" class="obs-tool" onclick="resetObsZoom(event)">1x</button><button type="button" id="obsModeBtn" class="obs-tool" onclick="toggleObsMode(event)">BOTH</button><button type="button" id="obsLimitBtn" class="obs-tool on" onclick="toggleObsLimits(event)" title="Speed limits the policy observes: its own lane and, when present, the per-lane column">km/h</button><button type="button" class="obs-tool" onclick="toggleObsSize(event)">Expand</button></div><canvas id="obs-canvas"></canvas></div>
         <div id="controls" class="panel">
             <button id="btnPlay" class="btn icon" onclick="toggle()"></button>
             <span class="mono step-counter"><span id="stepNow">0</span><span class="dim"> / </span><span id="stepTotal">0</span></span>
             <input id="sld" type="range" min="0" value="0" step="1">
-            <select id="speedSel" onchange="changeSpeed()"><option value="0.25">0.25x</option><option value="1">1x</option><option value="2">2x</option><option value="4" selected>4x</option><option value="8">8x</option></select>
+            <select id="speedSel" onchange="changeSpeed()"><option value="0.25">0.25x</option><option value="1">1x</option><option value="2">2x</option><option value="4" selected>4x</option><option value="8">8x</option><option value="16">16x</option></select>
             <input type="number" id="agentSearch" placeholder="agent id" onkeydown="if(event.key==='Enter') searchAgent()">
         </div>
     </div>
@@ -1185,7 +1205,7 @@ __PAYLOAD_CHUNKS__
         // Order must match the REWARD_COEF_* indices in constants.h.
         const COEF_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","throttle","steer","acc","speed"];
         const REWARD_LABELS = ["collision","offroad","red light","stop sign","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed","ADE"];
-        const EGO_OBS_LABELS = ["speed","width","length","steer","accel lon","accel lat","lane dist","lane angle cos","speed limit","stopped","lane curvature"];
+        const EGO_OBS_LABELS = ["speed","width","length","steer","accel lon","accel lat","lane dist","lane angle (cos | err/pi)","speed limit","stopped","lane curvature"];
         const EGO_COND_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","C_throttle","C_steer","C_acc","C_vel"];
         const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
         const JLONG = [-15,-4,0,4], JLAT = [-4,0,4];
@@ -1204,10 +1224,12 @@ __PAYLOAD_CHUNKS__
         const dpr = window.devicePixelRatio || 1;
         let step = 0, play = false, speed = 4, lastTick = 0;
         let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0};
-        let followedId = null, isEgoCam = false, darkMode = false, showGhost = false;
-        let obsZoom = 2.2, obsExpanded = false, obsMode = 2;
+        let followedId = null, isEgoCam = false, darkMode = false, showGhost = false, ghostPaths = [];
+        const OBS_ZOOM_DEFAULT = 2.2, OBS_ZOOM_MIN = .45, OBS_ZOOM_MAX = 8;
+        let obsZoom = OBS_ZOOM_DEFAULT, obsExpanded = false, obsMode = 2, obsShowLimits = true;
         let expertAgentIndices = new Set();
         const OBS_MODES = ["ALL","POOL","BOTH"];
+        const EGO_LANE_SPEED_LIMIT_FEATURE = 8, MPS_TO_KMH = 3.6, SAME_LIMIT_LABEL_SPACING_PX = 100;
 
         function chunk(name) {
             const m = H.chunks[name], start = H.dataStart + m.offset, n = m.nbytes / ({float32:4,int32:4,int16:2,uint8:1}[m.dtype]);
@@ -1312,7 +1334,10 @@ self.onmessage = async event => {
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
             document.getElementById('meta-agents').textContent = H.active_count + ' / ' + H.total_agents;
-            showGhost = (H.active_count === 1) && !!(H.chunks && H.chunks.ghost_f32);
+            buildGhostPaths();
+            const hasGhost = ghostPaths.length > 0 && C.ghost_f32.some((v, i) => i % 5 === 4 && v > 0);
+            showGhost = (H.active_count === 1) && hasGhost;
+            document.getElementById('ghost-key').style.display = hasGhost ? '' : 'none';
             const ov = H.eval_overrides || {}, ovKeys = Object.keys(ov);
             if (ovKeys.length) document.getElementById('overrides-body').innerHTML = ovKeys.map(k=>`<div class="item"><span class="name">${k}</span><span class="num">${ov[k]}</span></div>`).join('');
             else document.getElementById('overrides-header').style.display = 'none';
@@ -1420,9 +1445,17 @@ self.onmessage = async event => {
             return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], partnerBlindnessActive:C.agent_i32[ib+8] === 1, phantomBrakingActive:C.agent_i32[ib+9] === 1, x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], goalRadius:goalRadius, c:agentColor};
         }
         function getFrameAgents(frame) { const out = []; for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a) out.push(a); } return out; }
+        function buildGhostPaths() {
+            ghostPaths = [];
+            if (!C.ghost_f32) return;
+            const N = H.chunks.ghost_f32.shape[1];
+            for (let j=0;j<N;j++) { const p = new Path2D(); let started = false; for (let f=0; f<H.frames; f++) { const b=(f*N+j)*5; if (C.ghost_f32[b+4] <= 0) { started = false; continue; } if (started) p.lineTo(C.ghost_f32[b], C.ghost_f32[b+1]); else p.moveTo(C.ghost_f32[b], C.ghost_f32[b+1]); started = true; } ghostPaths.push(p); }
+        }
         function drawGhosts(f) {
             if (!showGhost || !C.ghost_f32) return;
             const N = H.chunks.ghost_f32.shape[1];
+            ctx.strokeStyle = 'rgba(255,0,0,.55)'; ctx.lineWidth = .35; ctx.setLineDash([]);
+            for (const p of ghostPaths) ctx.stroke(p);
             ctx.strokeStyle = '#ff0000'; ctx.fillStyle = 'rgba(255,0,0,.22)'; ctx.lineWidth = .28; ctx.setLineDash([.6,.4]);
             for (let j=0;j<N;j++) { const b=(f*N+j)*5, w=C.ghost_f32[b+4]; if (w <= 0) continue; ctx.save(); ctx.translate(C.ghost_f32[b], C.ghost_f32[b+1]); ctx.rotate(C.ghost_f32[b+2]); ctx.beginPath(); ctx.rect(-C.ghost_f32[b+3]/2, -w/2, C.ghost_f32[b+3], w); ctx.fill(); ctx.stroke(); ctx.restore(); }
             ctx.setLineDash([]);
@@ -1432,6 +1465,7 @@ self.onmessage = async event => {
             const db = (frame * H.traffic_cap + idx) * F.tf;
             if (!C.traffic_i16[db]) return null;
             const sb = idx * 6, type = C.traffic_types[idx] || C.traffic_i16[db+1], state = C.traffic_i16[db+2];
+            if (!type) return null;
             return {type, state, stop_line:Array.from(C.traffic_stop_lines.subarray(sb, sb + 6))};
         }
         function trafficColor(t) { return t.state === 1 ? "#ff0000" : t.state === 2 ? "#ffff00" : t.state === 3 ? "#00ff00" : "#888888"; }
@@ -1447,8 +1481,9 @@ self.onmessage = async event => {
         function toggleTheme(){ darkMode=!darkMode; document.documentElement.setAttribute('data-theme', darkMode?'dark':'light'); draw(true); }
         function toggleGlobalPanel(){ const p=document.getElementById('hud-global'), collapsed=!p.classList.contains('collapsed'); p.classList.toggle('collapsed', collapsed); document.getElementById('globalChevron').innerHTML=collapsed?'&#9656;':'&#9662;'; }
         function toggleCamMode(){ if(followedId !== null){ isEgoCam=!isEgoCam; draw(true); } }
-        function resetObsZoom(e){ if(e) e.stopPropagation(); obsZoom=2.2; draw(true); }
+        function resetObsZoom(e){ if(e) e.stopPropagation(); obsZoom=OBS_ZOOM_DEFAULT; draw(true); }
         function toggleObsMode(e){ if(e) e.stopPropagation(); obsMode=(obsMode+1)%OBS_MODES.length; document.getElementById('obsModeBtn').textContent=OBS_MODES[obsMode]; draw(true); }
+        function toggleObsLimits(e){ if(e) e.stopPropagation(); obsShowLimits=!obsShowLimits; document.getElementById('obsLimitBtn').classList.toggle('on', obsShowLimits); draw(true); }
         function toggleObsSize(e){ if(e) e.stopPropagation(); const p=document.getElementById('obs-container'), b=e ? e.currentTarget : null; obsExpanded=!obsExpanded; p.style.width=obsExpanded?'680px':'390px'; p.style.height=obsExpanded?'680px':'390px'; if(b) b.textContent=obsExpanded?'Collapse':'Expand'; resizeObsCanvas(); draw(true); }
         function searchAgent(){ const id=parseInt(document.getElementById('agentSearch').value); if(!isNaN(id)){ followedId=id; play=false; updateBtn(); draw(true); } }
         document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } });
@@ -1456,7 +1491,7 @@ self.onmessage = async event => {
         c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), wx=(e.clientX-r.left-c.width/2)/cam.z+cam.x, wy=(e.clientY-r.top-c.height/2)/-cam.z+cam.y; let hit=null, agents=getFrameAgents(Math.floor(step)); if(!isEgoCam) for(const a of agents) if(Math.hypot(wx-a.x, wy-a.y) < Math.max(a.l,3)){ hit=a.id; break; } if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; } draw(true); };
         window.onmouseup = () => cam.drag = false;
         c.onmousemove = e => { if(cam.drag && !isEgoCam){ cam.x -= (e.clientX-cam.lx)/cam.z; cam.y -= (e.clientY-cam.ly)/-cam.z; cam.lx=e.clientX; cam.ly=e.clientY; draw(true); } };
-        obsC.addEventListener('wheel', e => { e.preventDefault(); obsZoom = Math.max(.45, Math.min(8, obsZoom * Math.exp(-e.deltaY * .001))); draw(true); }, {passive:false});
+        obsC.addEventListener('wheel', e => { e.preventDefault(); obsZoom = Math.max(OBS_ZOOM_MIN, Math.min(OBS_ZOOM_MAX, obsZoom * Math.exp(-e.deltaY * .001))); draw(true); }, {passive:false});
         function dragPanel(handleId, panelId) { const h=document.getElementById(handleId), p=document.getElementById(panelId); let on=false,sx=0,sy=0,sl=0,st=0; h.addEventListener('mousedown', e => { if(e.target.closest('button')) return; on=true; sx=e.clientX; sy=e.clientY; const r=p.getBoundingClientRect(); sl=r.left; st=r.top; p.style.right='auto'; p.style.bottom='auto'; p.style.left=sl+'px'; p.style.top=st+'px'; }); window.addEventListener('mousemove', e => { if(on){ p.style.left=(sl+e.clientX-sx)+'px'; p.style.top=(st+e.clientY-sy)+'px'; }}); window.addEventListener('mouseup', () => on=false); }
         dragPanel('obs-title','obs-container');
         document.querySelectorAll('.obs-tool').forEach(btn => {
@@ -1481,6 +1516,43 @@ self.onmessage = async event => {
         function heatColor(t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); const f = t * (HEAT_STOPS.length - 1), i = Math.floor(f), k = f - i, a = HEAT_STOPS[i], b = HEAT_STOPS[Math.min(i + 1, HEAT_STOPS.length - 1)]; return `rgb(${Math.round(a[0]+(b[0]-a[0])*k)},${Math.round(a[1]+(b[1]-a[1])*k)},${Math.round(a[2]+(b[2]-a[2])*k)})`; }
         function poolColor(t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); const f = t * (POOL_STOPS.length - 1), i = Math.floor(f), k = f - i, a = POOL_STOPS[i], b = POOL_STOPS[Math.min(i + 1, POOL_STOPS.length - 1)]; return `rgb(${Math.round(a[0]+(b[0]-a[0])*k)},${Math.round(a[1]+(b[1]-a[1])*k)},${Math.round(a[2]+(b[2]-a[2])*k)})`; }
         function drawPoolLegend(maxN) { const w = 116*dpr, h = 9*dpr, x = obsC.width - w - 12*dpr, y = obsC.height - 20*dpr, grad = obsCtx.createLinearGradient(x, 0, x+w, 0); for (let i=0;i<=10;i++) grad.addColorStop(i/10, poolColor(i/10)); obsCtx.fillStyle = grad; obsCtx.fillRect(x, y, w, h); obsCtx.strokeStyle = "rgba(0,0,0,.45)"; obsCtx.lineWidth = dpr; obsCtx.strokeRect(x, y, w, h); obsCtx.fillStyle = "#111"; obsCtx.font = `bold ${9.5*dpr}px system-ui`; obsCtx.textAlign = "left"; obsCtx.fillText("pool wins  1", x, y - 4*dpr); obsCtx.textAlign = "right"; obsCtx.fillText(maxN, x+w, y - 4*dpr); }
+        const LIMIT_PILL_STYLES = {same: ["rgba(255,255,255,.55)", "rgba(0,0,0,.2)", "#444"], differs: ["rgba(255,237,213,.6)", "rgba(194,65,12,.8)", "#9a3412"], ego: ["rgba(255,255,255,.95)", "rgba(0,0,0,.45)", "#111"]};
+        function drawLimitPill(x, y, w, h, text, style) {
+            const [fill, stroke, ink] = LIMIT_PILL_STYLES[style];
+            obsCtx.beginPath();
+            if (obsCtx.roundRect) obsCtx.roundRect(x - w/2, y - h/2, w, h, h/2); else obsCtx.rect(x - w/2, y - h/2, w, h);
+            obsCtx.fillStyle = fill;
+            obsCtx.strokeStyle = stroke;
+            obsCtx.lineWidth = dpr;
+            obsCtx.fill(); obsCtx.stroke();
+            obsCtx.fillStyle = ink;
+            obsCtx.fillText(text, x, y);
+        }
+        function drawSpeedLimits(frame, scale) {
+            const cx = obsC.width/2, cy = obsC.height/2, h = 13*dpr, gap = 2*dpr, top = document.getElementById('obs-title').offsetHeight*dpr;
+            const egoLimit = frame.ego.limit, egoKmh = egoLimit === null || egoLimit < 0 ? null : Math.round(egoLimit * MPS_TO_KMH);
+            obsCtx.save();
+            obsCtx.font = `600 ${9*dpr}px system-ui`; obsCtx.textAlign = "center"; obsCtx.textBaseline = "middle";
+            const differs = r => egoKmh !== null && Math.round(r[7] * MPS_TO_KMH) !== egoKmh;
+            const lanes = frame.lanes.filter(r => r[7] !== null).sort((a, b) => (differs(b) - differs(a)) || ((a[0]*a[0] + a[1]*a[1]) - (b[0]*b[0] + b[1]*b[1])));
+            const zoomIn = Math.min(1, Math.max(0, Math.log(obsZoom / OBS_ZOOM_DEFAULT) / Math.log(OBS_ZOOM_MAX / OBS_ZOOM_DEFAULT)));
+            const sameValueSpacing = SAME_LIMIT_LABEL_SPACING_PX * dpr * (1 - zoomIn), labelEveryLane = zoomIn >= 1;
+            const placed = [];
+            // limit changes first, then nearest; thinning fades with zoom and is off at max zoom so every visible element is labelled
+            for (const r of lanes) {
+                const kmh = Math.round(r[7] * MPS_TO_KMH), text = String(kmh), x = cx + r[0]*scale, y = cy - r[1]*scale, w = obsCtx.measureText(text).width + 8*dpr;
+                if (x < w/2 || x > obsC.width - w/2 || y < top + h/2 || y > obsC.height - h/2) continue;
+                if (!labelEveryLane && placed.some(p => Math.abs(p.x - x) < (p.w + w)/2 + gap && Math.abs(p.y - y) < h + gap)) continue;
+                if (placed.some(p => p.kmh === kmh && Math.hypot(p.x - x, p.y - y) < sameValueSpacing)) continue;
+                placed.push({x, y, w, kmh, text, style: differs(r) ? "differs" : "same"});
+            }
+            for (let i = placed.length - 1; i >= 0; i--) drawLimitPill(placed[i].x, placed[i].y, placed[i].w, h, placed[i].text, placed[i].style);
+            if (egoLimit !== null) {
+                const text = egoKmh === null ? "ego off lane" : `ego lane ${egoKmh} km/h`, w = obsCtx.measureText(text).width + 12*dpr;
+                drawLimitPill(12*dpr + w/2, obsC.height - 12*dpr - h/2, w, h, text, "ego");
+            }
+            obsCtx.restore();
+        }
         function obsRow(frame, slot) {
             const D = H.obs_dim, S = C.obs_scale, raw = C.obs, row = new Float32Array(D);
             if (H.obs_layout === "agent_dim_frame_delta") { const T = H.frames, base = slot * D * T + frame; for (let k = 0; k < D; k++) row[k] = raw[base + k * T] * S[k]; }
@@ -1526,11 +1598,12 @@ self.onmessage = async event => {
             const trafficStart = p;
             const rot = (x,y) => [-y,x];
             const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
-            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(v(o),v(o+1)), cs=rot(v(o+4),v(o+5)); out.push([xy[0],xy[1],v(o+3)*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i),feat===LF?v(o+6)*(H.scales.road_width_to_position||0):0]); } return out; };
+            const limitIdx = H.lane_speed_limit_idx, speedScale = H.scales.speed_to_mps;
+            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(v(o),v(o+1)), cs=rot(v(o+4),v(o+5)); out.push([xy[0],xy[1],v(o+3)*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i),feat===LF?v(o+6)*(H.scales.road_width_to_position||0):0,feat===LF && limitIdx >= 0 ? v(o+limitIdx)*speedScale : null]); } return out; };
             const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(v(o),v(o+1)), h=Math.atan2(v(o+6),v(o+5)); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:v(o+3)*H.scales.veh_len_to_position,w:v(o+4)*H.scales.veh_width_to_position,h:h,pool:poolAt("pool_partner",frame,slot,i)}); }
             const gps = []; for(let i=0;i<H.num_goals;i++){ const o=targetStart+i*H.goal_features; if(zero(o,H.goal_features)) continue; let scale=H.scales.goal_to_position, xy=rot(v(o)*scale, v(o+1)*scale); gps.push(xy); }
             const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(v(o),v(o+1)), b=rot(v(o+2),v(o+3)); controls.push({type:Math.round(v(o+5)), state:Math.round(v(o+6)), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
-            return {ego:{w:v(egoStart+1)*H.scales.veh_width_to_position,l:v(egoStart+2)*H.scales.veh_len_to_position}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane",LF), bounds:roads(boundsStart,H.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
+            return {ego:{w:v(egoStart+1)*H.scales.veh_width_to_position,l:v(egoStart+2)*H.scales.veh_len_to_position,limit:speedScale ? v(egoStart+EGO_LANE_SPEED_LIMIT_FEATURE)*speedScale : null}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane",LF), bounds:roads(boundsStart,H.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
         }
         function drawObs(frame, trueSize) {
             resizeObsCanvas();
@@ -1549,11 +1622,12 @@ self.onmessage = async event => {
             if(showAll){ obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=3*px; for(const r of frame.bounds){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } }
             if(showPool){ for(const r of frame.lanes.concat(frame.bounds)){ if(r[5] > 0){ obsCtx.strokeStyle=poolColor(r[5]/poolMax); obsCtx.lineWidth=pw(r[5]/poolMax); obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } } }
             for(const g of frame.gps){ obsCtx.fillStyle="magenta"; obsCtx.beginPath(); obsCtx.arc(g[0],g[1],5*px,0,7); obsCtx.fill(); }
-            for(const t of frame.traffic_controls){ if(showAll){ obsCtx.strokeStyle = bothMode ? "#000" : (t.type === 1 ? trafficColor({state:t.state}) : (t.type === 2 ? "#cc0000" : "#ffd700")); obsCtx.lineWidth=2.5*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } if(showPool && t.pool > 0){ obsCtx.strokeStyle=poolColor(t.pool/poolMax); obsCtx.lineWidth=pw(t.pool/poolMax)+0.8*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } }
+            for(const t of frame.traffic_controls){ if(showAll){ obsCtx.strokeStyle = bothMode ? "#000" : (t.type === 1 || t.type === 2 ? trafficColor({state:t.state}) : "#ffd700"); obsCtx.lineWidth=2.5*px; obsCtx.setLineDash(t.type === 2 ? [6*px, 4*px] : []); obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); obsCtx.setLineDash([]); } if(showPool && t.pool > 0){ obsCtx.strokeStyle=poolColor(t.pool/poolMax); obsCtx.lineWidth=pw(t.pool/poolMax)+0.8*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } }
             for(const p of frame.partners){ const win = showPool && p.pool > 0; if(!showAll && !win) continue; obsCtx.save(); obsCtx.translate(p.x,p.y); obsCtx.rotate(p.h); if(showAll){ obsCtx.fillStyle=bothMode?"rgba(0,0,0,.55)":"rgba(136,136,136,.8)"; obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-p.l/2,-p.w/2,p.l,p.w); obsCtx.fill(); obsCtx.stroke(); } if(win){ obsCtx.strokeStyle=poolColor(p.pool/poolMax); obsCtx.lineWidth=pw(p.pool/poolMax); obsCtx.strokeRect(-p.l/2,-p.w/2,p.l,p.w); } obsCtx.restore(); }
             if(frame.ego){ obsCtx.save(); obsCtx.rotate(Math.PI/2); obsCtx.fillStyle="rgba(0,102,255,.8)"; obsCtx.strokeStyle="#000"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-frame.ego.l/2,-frame.ego.w/2,frame.ego.l,frame.ego.w); obsCtx.fill(); obsCtx.stroke(); if(trueSize){ obsCtx.strokeStyle="#ffd700"; obsCtx.setLineDash([3*px,2*px]); obsCtx.strokeRect(-trueSize.l/2,-trueSize.w/2,trueSize.l,trueSize.w); obsCtx.setLineDash([]); } obsCtx.restore(); }
             obsCtx.restore();
             if(showPool && poolMax > 1) drawPoolLegend(poolMax);
+            if(obsShowLimits) drawSpeedLimits(frame, scale);
         }
         let panelKey = null, refs = null, lastWarnKey = "";
         function ensurePanels() {
@@ -1597,6 +1671,11 @@ self.onmessage = async event => {
                 html += '<div class="heat-lab"></div>' + cols.map(v=>`<div class="heat-lab">${v.toFixed(1)}</div>`).join('');
                 for (let r=0;r<rows.length;r++) { html += `<div class="heat-lab">${rows[r].toFixed(1)}</div>`; for (let cI=0;cI<cols.length;cI++) html += '<div class="heat-cell"></div>'; }
                 html += `</div><div class="heat-cap">${jerk ? 'jerk_long &#8595; / jerk_lat &#8594;' : 'accel &#8595; / steer &#8594;'}</div>`;
+                if (C.action_index && actionDims === 2) {
+                    // continuous env driven by the distribution mean: the grid highlights the argmax, these are the executed values
+                    labels = jerk ? ["jerk_long","jerk_lat"] : ["accel","steer"];
+                    labels.forEach(l => html += `<div class="item"><span class="name">executed ${l} (mean)</span><span class="num pol-act">-</span></div>`);
+                }
             } else {
                 labels = H.action_type === "continuous" ? (H.dynamics_model === "jerk" ? ["jerk_long","jerk_lat"] : ["accel","steer"]) : Array.from({length:actionDims}, (_,i)=>`p${i}`);
                 labels.forEach(l => html += `<div class="item"><span class="name">${l}</span><span class="num pol-act">-</span></div>`);
@@ -1624,7 +1703,7 @@ self.onmessage = async event => {
             refs.polE.textContent = C.entropy[s].toFixed(3);
             const ab = s * refs.actionDims;
             if (refs.discrete) {
-                const n = refs.heat.length, pb = s * n, selected = Math.round(C.raw_action[ab]);
+                const n = refs.heat.length, pb = s * n, selected = C.action_index ? C.action_index[s] : Math.round(C.raw_action[ab]);
                 let maxP = 1e-9;
                 for (let i=0;i<n;i++) maxP = Math.max(maxP, C.policy_probs[pb+i]);
                 for (let i=0;i<n;i++){
@@ -1635,6 +1714,11 @@ self.onmessage = async event => {
                     cell.style.color = t > 0.6 ? '#0d1420' : '#c4cddc';
                     cell.classList.toggle('selected', i===selected);
                     cell.title = (prob*100).toFixed(1)+'%';
+                }
+                for (let i=0;i<refs.acts.length;i++) {
+                    const clip = C.clipped_action[ab+i];
+                    const scaled = H.dynamics_model === "jerk" ? (i===0 ? (clip < 0 ? clip*15 : clip*4) : clip*4) : (i===0 ? clip*4 : clip*.667);
+                    refs.acts[i].textContent = scaled.toFixed(2) + ' / ' + clip.toFixed(2);
                 }
                 return;
             }
@@ -1754,12 +1838,43 @@ def render_interactive_replay_zlib(replay_path, filename):
     _render_interactive_replay_payload(compressed_payload, filename)
 
 
-def build_gallery_index(folder_path=".", file_metrics=None):
+def read_replay_zlib(replay_path):
+    """-> (header dict, chunk name -> ndarray view) of a saved .replay.zlib."""
+    with open(replay_path, "rb") as replay_file:
+        raw = zlib.decompress(replay_file.read())
+    header_len = struct.unpack("<I", raw[:4])[0]
+    header = json.loads(raw[4 : 4 + header_len])
+    data_start = 4 + header_len + ((-(4 + header_len)) % 4)
+    chunks = {}
+    for name, meta in header["chunks"].items():
+        start = data_start + meta["offset"]
+        chunks[name] = np.frombuffer(
+            raw, dtype=meta["dtype"], count=meta["nbytes"] // np.dtype(meta["dtype"]).itemsize, offset=start
+        ).reshape(meta["shape"])
+    return header, chunks
+
+
+def set_replay_ghost(replay_path, ghost_f32):
+    """Overwrite the ghost (logged trajectory) chunk of a saved .replay.zlib in place; shape must match."""
+    header, chunks = read_replay_zlib(replay_path)
+    ghost_f32 = np.asarray(ghost_f32, dtype=np.float32)
+    if "ghost_f32" not in chunks or chunks["ghost_f32"].shape != ghost_f32.shape:
+        raise ValueError(
+            f"{replay_path}: ghost chunk shape {chunks.get('ghost_f32', np.empty(0)).shape} != {ghost_f32.shape}"
+        )
+    chunks["ghost_f32"] = ghost_f32
+    header = {key: value for key, value in header.items() if key != "chunks"}
+    with open(replay_path, "wb") as replay_file:
+        replay_file.write(_pack_replay_binary(header, chunks))
+
+
+def build_gallery_index(folder_path=".", file_metrics=None, links=None):
     """Build an index.html navigator for per-episode replay HTMLs in folder_path.
 
     If `file_metrics` is a dict mapping `<html basename> -> {metric_name: value}`,
     the index exposes a filter for each supported infraction present in the
     metrics. Previous/next navigation follows the active filtered list.
+    `links` ([(label, href), ...]) are shown under the title, e.g. a run's report.
     """
     files = [f for f in os.listdir(folder_path) if f != "index.html" and f.endswith(".html")]
 
@@ -1779,6 +1894,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
         ("collision", "collision_rate", "Collisions"),
         ("atfault", "at_fault_collision_rate", "At-fault collisions"),
         ("redlight", "red_light_violation_rate", "Red-light violations"),
+        ("stopsign", "stop_sign_violation_rate", "Stop-sign violations"),
     )
     available_failure_filters = [
         failure_filter for failure_filter in FAILURE_FILTERS if failure_filter[1] in present_metrics
@@ -1855,6 +1971,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             --collision: #b42318;
             --atfault: #7e22ce;
             --redlight: #d92d20;
+            --stopsign: #0e7490;
         }
 
         * { box-sizing: border-box; }
@@ -1902,6 +2019,16 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             font-size: 20px;
             font-weight: 700;
         }
+
+        .brand-link {
+            margin-top: 2px;
+            color: var(--accent);
+            font-size: 12px;
+            font-weight: 600;
+            text-decoration: none;
+        }
+
+        .brand-link:hover { text-decoration: underline; }
 
         .top-section {
             min-width: 0;
@@ -1953,6 +2080,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
         .collision-dot { background: var(--collision); }
         .atfault-dot { background: var(--atfault); }
         .redlight-dot { background: var(--redlight); }
+        .stopsign-dot { background: var(--stopsign); }
 
         select {
             cursor: pointer;
@@ -2183,6 +2311,11 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             color: var(--redlight);
         }
 
+        .scenario-badge.stopsign {
+            border-left: 3px solid var(--stopsign);
+            color: var(--stopsign);
+        }
+
         #viewer {
             flex: 1 1 auto;
             width: 100%;
@@ -2244,6 +2377,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             <div class="brand">
                 <span class="brand-kicker">PufferDrive</span>
                 <span class="brand-title">Replay index</span>
+                __BRAND_LINKS__
             </div>
             __CATEGORY_FILTER_UI__
             <section class="top-section browse-section">
@@ -2319,6 +2453,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             if (selectedOption.dataset.collision === 'true') addFailureBadge('Collision', 'collision');
             if (selectedOption.dataset.atfault === 'true') addFailureBadge('At-fault collision', 'atfault');
             if (selectedOption.dataset.redlight === 'true') addFailureBadge('Red-light violation', 'redlight');
+            if (selectedOption.dataset.stopsign === 'true') addFailureBadge('Stop-sign violation', 'stopsign');
             if (!currentFailures.childElementCount) {
                 const badge = document.createElement('span');
                 badge.className = 'scenario-badge';
@@ -2394,10 +2529,12 @@ def build_gallery_index(folder_path=".", file_metrics=None):
 </html>
     """
 
+    links_html = "".join(f'<a class="brand-link" href="{href}">{label}</a>' for label, href in (links or []))
     final_html = (
         html_content.replace("__OPTIONS__", options_html)
         .replace("__FIRST__", files[0])
         .replace("__CATEGORY_FILTER_UI__", category_filter_ui)
+        .replace("__BRAND_LINKS__", links_html)
     )
 
     index_path = os.path.join(folder_path, "index.html")

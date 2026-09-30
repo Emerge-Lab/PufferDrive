@@ -33,7 +33,7 @@ static void add_entity_to_grid(
     int grid_index,
     int entity_idx,
     int geometry_idx,
-    int valid_for_obs,
+    int obs_kind,
     int *cell_entities_insert_index) {
     if (grid_index == -1) {
         return;
@@ -52,11 +52,51 @@ static void add_entity_to_grid(
 
     env->grid_map->cells[grid_index][count].entity_idx = entity_idx;
     env->grid_map->cells[grid_index][count].geometry_idx = geometry_idx;
-    env->grid_map->cells[grid_index][count].valid_for_obs = valid_for_obs;
+    env->grid_map->cells[grid_index][count].obs_kind = obs_kind;
     cell_entities_insert_index[grid_index] = count + 1;
 }
 
+// Build after loading lane widths and before sharing the immutable road elements.
+static void cache_road_observation_geometry(Drive *env) {
+    for (int road_idx = 0; road_idx < env->num_road_elements; road_idx++) {
+        RoadMapElement *road = &env->road_elements[road_idx];
+        if (!is_road_grid_candidate(road->type)) {
+            continue;
+        }
+        if (road->segment_size < 0) {
+            raise_error_with_message(ERROR_INVALID_ARGUMENT, "Negative point count for road %d", road_idx);
+        }
+        if (road->segment_size < 2) {
+            continue;
+        }
+        size_t segment_count = (size_t) road->segment_size - 1;
+        if (segment_count > SIZE_MAX / sizeof(RoadObservationSegment)) {
+            raise_error_with_message(ERROR_INVALID_ARGUMENT, "Road %d geometry cache is too large", road_idx);
+        }
+        road->observation_segments = (RoadObservationSegment *) calloc(segment_count, sizeof(RoadObservationSegment));
+        if (road->observation_segments == NULL) {
+            raise_error_with_message(ERROR_MEMORY_ALLOCATION, "Failed to cache geometry for road %d", road_idx);
+        }
+        int has_lane_width = is_road_lane(road->type);
+        for (int segment_idx = 0; segment_idx < road->segment_size - 1; segment_idx++) {
+            RoadObservationSegment *segment = &road->observation_segments[segment_idx];
+            // Preserve the observation formulas and float rounding, including zero-length segments.
+            segment->mid_x_m = (road->x[segment_idx] + road->x[segment_idx + 1]) / 2.0f;
+            segment->mid_y_m = (road->y[segment_idx] + road->y[segment_idx + 1]) / 2.0f;
+            segment->mid_z_m = (road->z[segment_idx] + road->z[segment_idx + 1]) / 2.0f;
+            float half_dx_m = road->x[segment_idx + 1] - segment->mid_x_m;
+            float half_dy_m = road->y[segment_idx + 1] - segment->mid_y_m;
+            segment->half_length_m = sqrtf(half_dx_m * half_dx_m + half_dy_m * half_dy_m);
+            segment->direction_x = segment->half_length_m > 0.0f ? half_dx_m / segment->half_length_m : half_dx_m;
+            segment->direction_y = segment->half_length_m > 0.0f ? half_dy_m / segment->half_length_m : half_dy_m;
+            segment->width_m
+                = has_lane_width ? 0.5f * (road->widths[segment_idx] + road->widths[segment_idx + 1]) : 0.0f;
+        }
+    }
+}
+
 static int init_grid_map(Drive *env) {
+    cache_road_observation_geometry(env);
     env->grid_map = (GridMap *) calloc(1, sizeof(GridMap));
 
     float top_left_x = 0.0f, top_left_y = 0.0f, bottom_right_x = 0.0f, bottom_right_y = 0.0f;
@@ -137,12 +177,29 @@ static int init_grid_map(Drive *env) {
             env->grid_map->cell_entities_count[grid_index]++;
         }
     }
+    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
+        int count = env->grid_map->cell_entities_count[grid_index];
+        if (count > MAX_ENTITIES_PER_CELL) {
+            fprintf(
+                stderr,
+                "[ERROR] -> Grid cell %d holds %d road entities, exceeding MAX_ENTITIES_PER_CELL %d\n",
+                grid_index,
+                count,
+                MAX_ENTITIES_PER_CELL);
+            return 1;
+        }
+    }
     // Allocate grid cells based on counts
     int *cell_entities_insert_index = (int *) calloc(grid_cell_count, sizeof(int));
     for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
+        env->grid_map->total_entities += env->grid_map->cell_entities_count[grid_index];
+    }
+    env->grid_map->entity_pool = (GridMapEntity *) calloc(env->grid_map->total_entities + 1, sizeof(GridMapEntity));
+    int pool_offset = 0;
+    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
         int count = env->grid_map->cell_entities_count[grid_index];
-        env->grid_map->total_entities += count;
-        env->grid_map->cells[grid_index] = (GridMapEntity *) calloc(count, sizeof(GridMapEntity));
+        env->grid_map->cells[grid_index] = count > 0 ? &env->grid_map->entity_pool[pool_offset] : NULL;
+        pool_offset += count;
     }
     // Track which grid cells have drivable lanes
     bool *drivable_grid_seen = (bool *) calloc(grid_cell_count, sizeof(bool));
@@ -151,8 +208,9 @@ static int init_grid_map(Drive *env) {
             continue;
         }
         RoadMapElement *element = &env->road_elements[i];
+        int is_lane = is_road_lane(element->type);
         int obs_stride = 1;
-        if (is_road_lane(element->type)) {
+        if (is_lane) {
             obs_stride = env->obs_lane_stride;
         } else if (is_road_edge(element->type)) {
             obs_stride = env->obs_boundary_stride;
@@ -166,8 +224,10 @@ static int init_grid_map(Drive *env) {
                 float heading_dev = fabsf(normalize_heading(element->headings[j] - element->headings[last_kept_idx]));
                 valid_for_obs = j - last_kept_idx >= obs_stride || heading_dev > OBS_STRIDE_HEADING_THRESHOLD;
             }
+            int obs_kind = OBS_ENTITY_NONE;
             if (valid_for_obs) {
                 last_kept_idx = j;
+                obs_kind = is_lane ? OBS_ENTITY_LANE : OBS_ENTITY_EDGE;
             }
             float x_center = (element->x[j] + element->x[j + 1]) / 2;
             float y_center = (element->y[j] + element->y[j + 1]) / 2;
@@ -175,7 +235,7 @@ static int init_grid_map(Drive *env) {
             if (grid_index == -1) {
                 continue;
             }
-            add_entity_to_grid(env, grid_index, i, j, valid_for_obs, cell_entities_insert_index);
+            add_entity_to_grid(env, grid_index, i, j, obs_kind, cell_entities_insert_index);
             if (is_drivable_road_lane(element->type) && !drivable_grid_seen[grid_index]) {
                 drivable_grid_seen[grid_index] = true;
                 env->grid_map->num_drivable_grid_cell++;
@@ -229,60 +289,66 @@ static void init_neighbor_offsets(Drive *env) {
     }
 }
 
-static void cache_neighbor_offsets(Drive *env) {
-    int count = 0;
-    int cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
-    env->grid_map->neighbor_cache_entities = (GridMapEntity **) calloc(cell_count, sizeof(GridMapEntity *));
-    env->grid_map->neighbor_cache_count = (int *) calloc(cell_count + 1, sizeof(int));
-    for (int i = 0; i < cell_count; i++) {
-        int cell_x = i % env->grid_map->grid_cols; // Convert to 2D coordinates
-        int cell_y = i / env->grid_map->grid_cols;
-        int current_cell_neighbor_count = 0;
-        for (int j = 0; j < env->grid_map->vision_range * env->grid_map->vision_range; j++) {
-            int x = cell_x + env->neighbor_offsets[j * 2];
-            int y = cell_y + env->neighbor_offsets[j * 2 + 1];
-            int grid_index = env->grid_map->grid_cols * y + x;
-            if (x < 0 || x >= env->grid_map->grid_cols || y < 0 || y >= env->grid_map->grid_rows) {
-                continue;
-            }
-            int grid_count = env->grid_map->cell_entities_count[grid_index];
-            current_cell_neighbor_count += grid_count;
-        }
-        env->grid_map->neighbor_cache_count[i] = current_cell_neighbor_count;
-        count += current_cell_neighbor_count;
-        if (current_cell_neighbor_count == 0) {
-            env->grid_map->neighbor_cache_entities[i] = NULL;
+// Spiral-order entity_pool indices of a cell's vision window, observed lanes first then edges; NULL dest only counts.
+// lane_count is written by the counting call and read by the filling call to place the edge block.
+static int collect_neighbor_pool_indices(Drive *env, int cell_idx, uint16_t *dest, int *lane_count) {
+    GridMap *grid = env->grid_map;
+    int cell_x = cell_idx % grid->grid_cols;
+    int cell_y = cell_idx / grid->grid_cols;
+    int window_size = grid->vision_range * grid->vision_range;
+    int lanes_seen = 0;
+    int edges_seen = 0;
+    for (int j = 0; j < window_size; j++) {
+        int x = cell_x + env->neighbor_offsets[j * 2];
+        int y = cell_y + env->neighbor_offsets[j * 2 + 1];
+        if (x < 0 || x >= grid->grid_cols || y < 0 || y >= grid->grid_rows) {
             continue;
         }
-        env->grid_map->neighbor_cache_entities[i]
-            = (GridMapEntity *) calloc(current_cell_neighbor_count, sizeof(GridMapEntity));
-    }
-
-    env->grid_map->neighbor_cache_count[cell_count] = count;
-    for (int i = 0; i < cell_count; i++) {
-        int cell_x = i % env->grid_map->grid_cols;
-        int cell_y = i / env->grid_map->grid_cols;
-        int base_index = 0;
-        for (int j = 0; j < env->grid_map->vision_range * env->grid_map->vision_range; j++) {
-            int x = cell_x + env->neighbor_offsets[j * 2];
-            int y = cell_y + env->neighbor_offsets[j * 2 + 1];
-            int grid_index = env->grid_map->grid_cols * y + x;
-            if (x < 0 || x >= env->grid_map->grid_cols || y < 0 || y >= env->grid_map->grid_rows) {
+        int grid_index = grid->grid_cols * y + x;
+        int cell_entity_count = grid->cell_entities_count[grid_index];
+        int first_pool_idx = (int) (grid->cells[grid_index] - grid->entity_pool);
+        for (int e = 0; e < cell_entity_count; e++) {
+            int obs_kind = grid->cells[grid_index][e].obs_kind;
+            if (obs_kind == OBS_ENTITY_NONE) {
                 continue;
             }
-            int grid_count = env->grid_map->cell_entities_count[grid_index];
-            // Skip if no entities or source is NULL
-            if (grid_count == 0 || env->grid_map->cells[grid_index] == NULL) {
-                continue;
+            int is_lane = obs_kind == OBS_ENTITY_LANE;
+            if (dest != NULL) {
+                dest[is_lane ? lanes_seen : *lane_count + edges_seen] = (uint16_t) (first_pool_idx + e);
             }
-            // Copy grid_count pairs (entity_idx, geometry_idx) at once
-            memcpy(
-                &env->grid_map->neighbor_cache_entities[i][base_index],
-                env->grid_map->cells[grid_index],
-                grid_count * sizeof(GridMapEntity));
-            base_index += grid_count;
+            lanes_seen += is_lane;
+            edges_seen += !is_lane;
         }
     }
+    *lane_count = lanes_seen;
+    return lanes_seen + edges_seen;
+}
+
+static void cache_neighbor_offsets(Drive *env) {
+    GridMap *grid = env->grid_map;
+    int cell_count = grid->grid_cols * grid->grid_rows;
+    if (grid->total_entities > UINT16_MAX) {
+        raise_error_with_message(
+            ERROR_INVALID_ARGUMENT,
+            "%d grid entities exceed the uint16 neighbor cache index",
+            grid->total_entities);
+    }
+    grid->neighbor_cache_pool_idx = (uint16_t **) calloc(cell_count, sizeof(uint16_t *));
+    grid->neighbor_cache_count = (int *) calloc(cell_count + 1, sizeof(int));
+    grid->neighbor_cache_lane_count = (int *) calloc(cell_count, sizeof(int));
+    int total_count = 0;
+    for (int i = 0; i < cell_count; i++) {
+        int neighbor_count = collect_neighbor_pool_indices(env, i, NULL, &grid->neighbor_cache_lane_count[i]);
+        grid->neighbor_cache_count[i] = neighbor_count;
+        total_count += neighbor_count;
+        if (neighbor_count == 0) {
+            grid->neighbor_cache_pool_idx[i] = NULL;
+            continue;
+        }
+        grid->neighbor_cache_pool_idx[i] = (uint16_t *) malloc(neighbor_count * sizeof(uint16_t));
+        collect_neighbor_pool_indices(env, i, grid->neighbor_cache_pool_idx[i], &grid->neighbor_cache_lane_count[i]);
+    }
+    grid->neighbor_cache_count[cell_count] = total_count;
 }
 
 static int get_neighbors_entities(
@@ -320,6 +386,64 @@ static int get_neighbors_entities(
     return entity_list_count;
 }
 
+// Walks one obs kind of the spiral neighborhood of a query point: the kind's block of cached pool indices, or the
+// scratch list filtered by kind.
+typedef struct NeighborCursor {
+    const GridMapEntity *entities;
+    const uint16_t *pool_indices;
+    int count;
+    int pos;
+    int obs_kind;
+} NeighborCursor;
+
+// Uncached path only: spiral neighborhood of a query point into the scratch list, shared by both obs kinds.
+static int fill_neighbor_scratch(Drive *env, float x, float y) {
+    if (env->use_neighbor_cache) {
+        return 0;
+    }
+    return get_neighbors_entities(
+        env,
+        x,
+        y,
+        env->obs_neighbor_scratch,
+        env->grid_map->total_entities,
+        (const int (*)[2]) env->neighbor_offsets,
+        env->grid_map->vision_range * env->grid_map->vision_range);
+}
+
+static NeighborCursor neighbor_cursor_begin(Drive *env, float x, float y, int obs_kind, int scratch_count) {
+    NeighborCursor cursor = {0};
+    cursor.obs_kind = obs_kind;
+    if (!env->use_neighbor_cache) {
+        cursor.entities = env->obs_neighbor_scratch;
+        cursor.count = scratch_count;
+        return cursor;
+    }
+    int grid_idx = get_grid_index(env, x, y);
+    if (grid_idx < 0 || grid_idx >= env->grid_map->grid_cols * env->grid_map->grid_rows) {
+        return cursor;
+    }
+    int lane_count = env->grid_map->neighbor_cache_lane_count[grid_idx];
+    int total_count = env->grid_map->neighbor_cache_count[grid_idx];
+    const uint16_t *pool_indices = env->grid_map->neighbor_cache_pool_idx[grid_idx];
+    cursor.pool_indices = obs_kind == OBS_ENTITY_LANE ? pool_indices : pool_indices + lane_count;
+    cursor.count = obs_kind == OBS_ENTITY_LANE ? lane_count : total_count - lane_count;
+    return cursor;
+}
+
+static inline const GridMapEntity *neighbor_cursor_next(Drive *env, NeighborCursor *cursor) {
+    for (int k = cursor->pos; k < cursor->count; k++) {
+        cursor->pos = k + 1;
+        if (cursor->pool_indices != NULL) {
+            return &env->grid_map->entity_pool[cursor->pool_indices[k]];
+        }
+        if (cursor->entities[k].obs_kind == cursor->obs_kind) {
+            return &cursor->entities[k];
+        }
+    }
+    return NULL;
+}
+
 // ========================================
 // Map Loading Functions
 // ========================================
@@ -328,6 +452,8 @@ static int get_neighbors_entities(
 #define TRAFFIC_PHASE_SECTION_TAG_LEN 8
 #define LANE_WIDTH_SECTION_TAG "LANEWID1"
 #define LANE_WIDTH_SECTION_TAG_LEN 8
+#define SPEED_ZONE_SECTION_TAG "SPDZONE1"
+#define SPEED_ZONE_SECTION_TAG_LEN 8
 
 // Optional tail section; files written before it existed end right after the metadata.
 static int load_traffic_phase_section(FILE *file, Drive *drive) {
@@ -405,9 +531,48 @@ static int load_lane_width_section(FILE *file, Drive *drive) {
             }
         }
     }
+    return 0;
+}
+
+// Optional tail section; files without it get -1 (no zone) for every lane.
+static int load_speed_zone_section(FILE *file, Drive *drive) {
+    char tag[SPEED_ZONE_SECTION_TAG_LEN];
+    size_t tag_bytes_read = fread(tag, sizeof(char), SPEED_ZONE_SECTION_TAG_LEN, file);
+    int has_section = tag_bytes_read == SPEED_ZONE_SECTION_TAG_LEN
+        && memcmp(tag, SPEED_ZONE_SECTION_TAG, SPEED_ZONE_SECTION_TAG_LEN) == 0;
+    if (tag_bytes_read != 0 && !has_section) {
+        printf(
+            "[ERROR] -> Unexpected bytes after %s section (expected EOF or %s).\n",
+            LANE_WIDTH_SECTION_TAG,
+            SPEED_ZONE_SECTION_TAG);
+        return -1;
+    }
+    int lane_count = 0;
+    for (int i = 0; i < drive->num_road_elements; i++) {
+        lane_count += is_road_lane(drive->road_elements[i].type);
+    }
+    drive->num_speed_zones = 0;
+    for (int i = 0; i < drive->num_road_elements; i++) {
+        RoadMapElement *road = &drive->road_elements[i];
+        road->speed_zone_idx = -1;
+        if (!is_road_lane(road->type) || !has_section) {
+            continue;
+        }
+        if (fread(&road->speed_zone_idx, sizeof(int), 1, file) != 1) {
+            printf("[ERROR] -> Truncated %s section at lane %d.\n", SPEED_ZONE_SECTION_TAG, i);
+            return -1;
+        }
+        if (road->speed_zone_idx < -1 || road->speed_zone_idx >= lane_count) {
+            printf("[ERROR] -> Lane %d has invalid speed zone %d.\n", i, road->speed_zone_idx);
+            return -1;
+        }
+        if (road->speed_zone_idx + 1 > drive->num_speed_zones) {
+            drive->num_speed_zones = road->speed_zone_idx + 1;
+        }
+    }
     char trailing_byte;
     if (fread(&trailing_byte, sizeof(char), 1, file) == 1) {
-        printf("[ERROR] -> Trailing bytes after %s section.\n", LANE_WIDTH_SECTION_TAG);
+        printf("[ERROR] -> Trailing bytes after %s section.\n", SPEED_ZONE_SECTION_TAG);
         return -1;
     }
     return 0;
@@ -831,6 +996,10 @@ int load_map_binary(const char *filename, Drive *drive) {
         fclose(file);
         return -1;
     }
+    if (load_speed_zone_section(file, drive) != 0) {
+        fclose(file);
+        return -1;
+    }
 
     fclose(file);
     return 0;
@@ -881,19 +1050,18 @@ static void free_grid_map(GridMap *grid_map) {
         return;
     }
     int grid_cell_count = grid_map->grid_cols * grid_map->grid_rows;
-    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
-        free(grid_map->cells[grid_index]);
-    }
+    free(grid_map->entity_pool);
     free(grid_map->cells);
     free(grid_map->cell_entities_count);
     free(grid_map->grid_index_drivable);
-    if (grid_map->neighbor_cache_entities != NULL) {
+    if (grid_map->neighbor_cache_pool_idx != NULL) {
         for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
-            free(grid_map->neighbor_cache_entities[grid_index]);
+            free(grid_map->neighbor_cache_pool_idx[grid_index]);
         }
     }
-    free(grid_map->neighbor_cache_entities);
+    free(grid_map->neighbor_cache_pool_idx);
     free(grid_map->neighbor_cache_count);
+    free(grid_map->neighbor_cache_lane_count);
     free(grid_map);
 }
 
@@ -993,7 +1161,7 @@ static int preload_map_cache(Drive *config, const char **map_files, int num_map_
         if (shared != NULL) {
             env.grid_map = shared->grid_map;
             env.neighbor_offsets = shared->neighbor_offsets;
-            if (env.use_neighbor_cache && env.grid_map->neighbor_cache_entities == NULL) {
+            if (env.use_neighbor_cache && env.grid_map->neighbor_cache_pool_idx == NULL) {
                 cache_neighbor_offsets(&env);
             }
             shared->ref_count++;

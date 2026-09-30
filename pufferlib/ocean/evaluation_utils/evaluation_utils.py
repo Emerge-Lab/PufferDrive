@@ -24,6 +24,7 @@ FAILURE_RENDER_FILTER_COLUMNS = (
     "at_fault_collision_rate",
     "offroad_rate",
     "red_light_violation_rate",
+    "stop_sign_violation_rate",
 )
 
 
@@ -54,6 +55,12 @@ def _load_yaml_mapping(path, label):
     except yaml.YAMLError as exc:
         raise pufferlib.APIUsageError(f"{label.capitalize()} is invalid YAML: {path}") from exc
     return _require_mapping(value, label)
+
+
+def _positive_int(value, label):
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise pufferlib.APIUsageError(f"{label} must be a positive integer")
+    return value
 
 
 def _resolve_map_indices(map_dir, map_names):
@@ -130,6 +137,11 @@ def load_benchmark_config(config_path, selected_names, map_dir_override=None, nu
     selected_benchmark_configs = []
     for name in selected_names:
         benchmark = configured_benchmarks[name]
+        if benchmark.get("simulation_mode") == "carla_cosim":
+            from pufferlib.ocean.evaluation_utils.cosim_evaluator import parse_cosim_benchmark
+
+            resolved_benchmarks.append(parse_cosim_benchmark(name, benchmark))
+            continue
         if num_scenarios_override is not None:
             benchmark = {**benchmark, "num_scenarios": num_scenarios_override}
         if map_dir_override is not None:
@@ -228,6 +240,7 @@ def _build_benchmark_args(base_args, benchmark, environment_config):
             "goal_source",
             "obs_slots_partners_n",
             "disable_red_light_infractions",
+            "disable_stop_sign_infractions",
         ):
             override_value = args["eval"].get(override_key)
             if override_value is not None:

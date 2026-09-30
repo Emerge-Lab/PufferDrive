@@ -247,6 +247,10 @@ To add a metric to the report: add its key to `TREND_METRICS` /
 | `collision_behavior` | `1` | `0` ignore, `1` stop, `2` remove |
 | `offroad_behavior` | `1` | Same options |
 | `traffic_light_behavior` | `1` | Same options |
+| `stop_sign_behavior` | `1` | Same options |
+| `traffic_lights_enabled` | `True` | Observe and enforce traffic lights |
+| `stop_signs_enabled` | `False` | Observe and enforce stop signs (CaRL RunStopSign2 semantics, penalised with `reward_stop_line`) |
+| `yield_signs_enabled` | `False` | Observe yield signs |
 | `control_mode` | `"control_vehicles"` | `"control_vehicles"`, `"control_agents"`, `"control_sdc_only"` |
 | `reward_conditioning` | `False` | Condition policy on reward weights |
 | `reward_randomization` | `False` | Randomize reward weights each episode |

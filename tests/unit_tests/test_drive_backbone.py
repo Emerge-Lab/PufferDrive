@@ -23,9 +23,10 @@ def test_encode_and_pool_masks_padded_objects():
 
     pooled = backbone._encode_and_pool(objects, valid_counts, encoder)
 
-    # Dense encode keeps shapes static; padded rows are masked out of the pool instead
+    # Dense encode (static shapes for torch.compile): every row reaches the encoder once.
     assert len(encoded_inputs) == 1
-    torch.testing.assert_close(encoded_inputs[0], objects)
+    assert encoded_inputs[0].shape == objects.shape
+    # Padded rows never win the max-pool; an all-padded row pools to zeros.
     torch.testing.assert_close(
         pooled,
         torch.tensor(
@@ -36,3 +37,11 @@ def test_encode_and_pool_masks_padded_objects():
             ]
         ),
     )
+
+
+def test_encode_and_pool_without_masking_pools_every_row():
+    backbone = object.__new__(DriveBackbone)
+    backbone.mask_padded_features = False
+    objects = torch.tensor([[[1.0, 10.0], [2.0, 3.0], [100.0, 100.0]]])
+    pooled = backbone._encode_and_pool(objects, torch.tensor([2]), lambda x: x)
+    torch.testing.assert_close(pooled, torch.tensor([[100.0, 100.0]]))
