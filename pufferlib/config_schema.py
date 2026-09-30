@@ -134,16 +134,18 @@ class Controller(Enum):
     policy = 1
     replay = 2
     idm = 3
+    pdm = 4
 
 
 class NonVehicleController(Enum):
     # "auto" is config-side only: drive.py resolves it to a Controller
-    # (replay when non_sdc_controller is idm, else non_sdc_controller).
+    # (replay when non_sdc_controller is idm or pdm, else non_sdc_controller).
     auto = -1
     static = 0
     policy = 1
     replay = 2
     idm = 3
+    pdm = 4
 
 
 class InitMode(Enum):
@@ -249,6 +251,8 @@ class DriveEnvConfig:
     dynamics_model: DynamicsModel = MISSING
     reset_accel_on_stop: bool = MISSING
     dt: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    pdm_horizon: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    pdm_planning_dt: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     base_max_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     max_speed_mps: float | None = _constrained_field(POSITIVE_NUMBER_CONSTRAINT, default=None)
     spawn_initial_speed: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)

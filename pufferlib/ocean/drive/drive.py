@@ -51,6 +51,8 @@ class Drive(pufferlib.PufferEnv):
         capture_replay=False,
         replay_worker_idx=0,
         dt=0.1,
+        pdm_horizon=4.0,
+        pdm_planning_dt=0.1,
         base_max_speed_mps=20.0,
         max_speed_mps=None,
         spawn_initial_speed=0.0,
@@ -139,6 +141,12 @@ class Drive(pufferlib.PufferEnv):
         phantom_braking_freeze_steering=True,
     ):
         self.dt = dt
+        self.pdm_horizon = float(pdm_horizon)
+        self.pdm_planning_dt = float(pdm_planning_dt)
+        if not np.isfinite(self.pdm_horizon) or self.pdm_horizon <= 0.0:
+            raise ValueError(f"pdm_horizon must be a positive finite number of seconds. Got: {pdm_horizon}")
+        if not np.isfinite(self.pdm_planning_dt) or self.pdm_planning_dt <= 0.0:
+            raise ValueError(f"pdm_planning_dt must be a positive finite number of seconds. Got: {pdm_planning_dt}")
         self.base_max_speed_mps = float(base_max_speed_mps)
         self.max_speed_mps = self.base_max_speed_mps if max_speed_mps is None else float(max_speed_mps)
         self.spawn_initial_speed = float(spawn_initial_speed)
@@ -366,9 +374,10 @@ class Drive(pufferlib.PufferEnv):
             "policy": binding.CONTROLLER_POLICY,
             "replay": binding.CONTROLLER_REPLAY,
             "idm": binding.CONTROLLER_IDM,
+            "pdm": binding.CONTROLLER_PDM,
         }
         if self.non_vehicle_controller_str == "auto":
-            if self.non_sdc_controller_str == "idm":
+            if self.non_sdc_controller_str in ("idm", "pdm"):
                 self.non_vehicle_controller_str = "replay"
             else:
                 self.non_vehicle_controller_str = self.non_sdc_controller_str
@@ -518,6 +527,8 @@ class Drive(pufferlib.PufferEnv):
             "stop_signs_enabled": self.stop_signs_enabled,
             "yield_signs_enabled": self.yield_signs_enabled,
             "dt": self.dt,
+            "pdm_horizon": self.pdm_horizon,
+            "pdm_planning_dt": self.pdm_planning_dt,
             "base_max_speed_mps": self.base_max_speed_mps,
             "max_speed_mps": self.max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,
