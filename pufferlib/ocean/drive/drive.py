@@ -121,6 +121,7 @@ class Drive(pufferlib.PufferEnv):
         obs_slots_partners_n=16,
         obs_partner_relative_velocity=False,
         obs_lane_heading_signed=False,
+        obs_lane_speed_limit=False,
         obs_slots_traffic_controls_n=4,
         traffic_lights_enabled=True,
         stop_signs_enabled=False,
@@ -306,6 +307,7 @@ class Drive(pufferlib.PufferEnv):
         self.obs_slots_partners_n = obs_slots_partners_n
         self.obs_partner_relative_velocity = int(bool(obs_partner_relative_velocity))
         self.obs_lane_heading_signed = int(bool(obs_lane_heading_signed))
+        self.obs_lane_speed_limit = int(bool(obs_lane_speed_limit))
         self.traffic_lights_enabled = traffic_lights_enabled
         self.stop_signs_enabled = stop_signs_enabled
         self.yield_signs_enabled = yield_signs_enabled
@@ -351,7 +353,9 @@ class Drive(pufferlib.PufferEnv):
         self.partner_features = binding.PARTNER_FEATURES + (
             binding.PARTNER_RELATIVE_VELOCITY_FEATURES if self.obs_partner_relative_velocity else 0
         )
-        self.lane_features = binding.LANE_FEATURES
+        self.lane_features = binding.LANE_FEATURES + (
+            binding.LANE_SPEED_LIMIT_FEATURES if self.obs_lane_speed_limit else 0
+        )
         self.boundary_features = binding.BOUNDARY_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
         self.obs_valid_count_features = binding.OBS_VALID_COUNT_FEATURES
@@ -573,6 +577,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_partners_n": self.obs_slots_partners_n,
             "obs_partner_relative_velocity": self.obs_partner_relative_velocity,
             "obs_lane_heading_signed": self.obs_lane_heading_signed,
+            "obs_lane_speed_limit": self.obs_lane_speed_limit,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_lights_enabled": self.traffic_lights_enabled,
             "stop_signs_enabled": self.stop_signs_enabled,

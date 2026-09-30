@@ -198,6 +198,8 @@ env:
   obs_partner_relative_velocity: false
   # Ego lane-angle slot: true = signed heading error theta_f / pi (GIGAFLOW B.1), false = cos(theta_f)
   obs_lane_heading_signed: false
+  # Append each lane segment's speed limit (/ obs_norm_speed_mps) to its lane row so limit changes ahead are visible
+  obs_lane_speed_limit: false
   obs_slots_traffic_controls_n: 4
   # Fraction of segment observation slots to drop (reduces obs size)
   obs_dropout_lane: 0.5

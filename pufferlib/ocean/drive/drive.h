@@ -281,6 +281,7 @@ struct Drive {
     int obs_slots_partners_n;
     int obs_partner_relative_velocity;
     int obs_lane_heading_signed;
+    int obs_lane_speed_limit;
     int obs_slots_traffic_controls_n;
     int traffic_lights_enabled;
     int stop_signs_enabled;
@@ -2913,15 +2914,17 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->active_agent = 1;
     agent->mark_as_expert = 0;
 
-    float spawn_length, spawn_width;
+    float spawn_length, spawn_width, spawn_edge_clearance_m;
     if (env->eval_mode && !env->eval_training_render) {
         // Eval: uniform random car-sized boxes
         spawn_length = sample_uniform(&env->rng_state, 2.0f, 5.5f);
         spawn_width = sample_uniform(&env->rng_state, 1.5f, 2.5f);
+        spawn_edge_clearance_m = EVAL_SPAWN_EDGE_CLEARANCE_M;
     } else {
         // Training: random size
         spawn_length = sample_uniform(&env->rng_state, 0.8f, 7.0f);
         spawn_width = sample_uniform(&env->rng_state, 0.8f, 3.0f);
+        spawn_edge_clearance_m = 0.0f;
     }
     if (spawn_width > spawn_length) {
         spawn_width = spawn_length;
@@ -3001,7 +3004,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
             continue;
         }
 
-        if (check_spawn_offroad(env, &tmp_agent, 0.0f)) {
+        if (check_spawn_offroad(env, &tmp_agent, spawn_edge_clearance_m)) {
             env->spawn_reject_counts[SPAWN_REJECT_OFFROAD]++;
             continue;
         }
@@ -3714,9 +3717,13 @@ static inline int partner_feature_count(const Drive *env) {
     return PARTNER_FEATURES + (env->obs_partner_relative_velocity ? PARTNER_RELATIVE_VELOCITY_FEATURES : 0);
 }
 
+static inline int lane_feature_count(const Drive *env) {
+    return LANE_FEATURES + (env->obs_lane_speed_limit ? LANE_SPEED_LIMIT_FEATURES : 0);
+}
+
 static int compute_observation_size(Drive *env) {
     return EGO_FEATURES + partner_feature_count(env) * env->obs_slots_partners_n
-        + LANE_FEATURES * env->obs_slots_lane_kept + BOUNDARY_FEATURES * env->obs_slots_boundary_kept
+        + lane_feature_count(env) * env->obs_slots_lane_kept + BOUNDARY_FEATURES * env->obs_slots_boundary_kept
         + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
         + env->reward_conditioning * NUM_REWARD_COEFS + env->num_goals * GOAL_FEATURES;
 }
@@ -4866,7 +4873,7 @@ static int write_road_obs_rows(
     int goal_graph_idx,
     float ego_dist_to_goal_m) {
     int is_lane = neighbor_cursor->obs_kind == OBS_ENTITY_LANE;
-    int segment_features = is_lane ? LANE_FEATURES : BOUNDARY_FEATURES;
+    int segment_features = is_lane ? lane_feature_count(env) : BOUNDARY_FEATURES;
     int rows_written = 0;
 
     for (const GridMapEntity *entity = neighbor_cursor_next(env, neighbor_cursor);
@@ -4904,6 +4911,9 @@ static int write_road_obs_rows(
                 = goal_graph_idx >= 0 ? lane_graph_distance_to_goal_m(env, entity_idx, goal_graph_idx) : -1.0f;
             write_lane_goal_distance_obs(lane_dist_m, ego_dist_to_goal_m, &row[7]);
         }
+        if (is_lane && env->obs_lane_speed_limit) {
+            row[LANE_FEATURES] = env->lane_speed_limit_mps[entity_idx] / env->obs_norm_speed_mps;
+        }
     }
     return rows_written;
 }
@@ -4924,11 +4934,12 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         ego_dist_to_goal_m = lane_graph_distance_to_goal_m(env, ego->current_lane_idx, goal_graph_idx);
     }
 
+    int lane_row_features = lane_feature_count(env);
     int lane_obs_idx = obs_idx;
-    int boundary_obs_idx = lane_obs_idx + env->obs_slots_lane_kept * LANE_FEATURES;
+    int boundary_obs_idx = lane_obs_idx + env->obs_slots_lane_kept * lane_row_features;
     obs_idx = boundary_obs_idx + env->obs_slots_boundary_kept * BOUNDARY_FEATURES;
 
-    float lanes_buffer[env->obs_slots_lane_n * LANE_FEATURES];
+    float lanes_buffer[env->obs_slots_lane_n * lane_row_features];
     float boundaries_buffer[env->obs_slots_boundary_n * BOUNDARY_FEATURES];
     float *lane_obs_dest = env->road_dropout_enabled ? lanes_buffer : &obs[lane_obs_idx];
     float *boundary_obs_dest = env->road_dropout_enabled ? boundaries_buffer : &obs[boundary_obs_idx];
@@ -4946,18 +4957,18 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
             = (boundaries_found < env->obs_slots_boundary_kept) ? boundaries_found : env->obs_slots_boundary_kept;
         *lane_count = lanes_to_copy;
         *boundary_count = boundaries_to_copy;
-        subsample_road_observation_rows(&env->rng_state, lanes_buffer, lanes_found, lanes_to_copy, LANE_FEATURES);
+        subsample_road_observation_rows(&env->rng_state, lanes_buffer, lanes_found, lanes_to_copy, lane_row_features);
         subsample_road_observation_rows(
             &env->rng_state,
             boundaries_buffer,
             boundaries_found,
             boundaries_to_copy,
             BOUNDARY_FEATURES);
-        memcpy(&obs[lane_obs_idx], lanes_buffer, lanes_to_copy * LANE_FEATURES * sizeof(float));
+        memcpy(&obs[lane_obs_idx], lanes_buffer, lanes_to_copy * lane_row_features * sizeof(float));
         memset(
-            &obs[lane_obs_idx + lanes_to_copy * LANE_FEATURES],
+            &obs[lane_obs_idx + lanes_to_copy * lane_row_features],
             0,
-            (env->obs_slots_lane_kept - lanes_to_copy) * LANE_FEATURES * sizeof(float));
+            (env->obs_slots_lane_kept - lanes_to_copy) * lane_row_features * sizeof(float));
         memcpy(&obs[boundary_obs_idx], boundaries_buffer, boundaries_to_copy * BOUNDARY_FEATURES * sizeof(float));
         memset(
             &obs[boundary_obs_idx + boundaries_to_copy * BOUNDARY_FEATURES],
@@ -4969,9 +4980,9 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     *lane_count = lanes_found;
     *boundary_count = boundaries_found;
     memset(
-        &obs[lane_obs_idx + lanes_found * LANE_FEATURES],
+        &obs[lane_obs_idx + lanes_found * lane_row_features],
         0,
-        (env->obs_slots_lane_kept - lanes_found) * LANE_FEATURES * sizeof(float));
+        (env->obs_slots_lane_kept - lanes_found) * lane_row_features * sizeof(float));
     memset(
         &obs[boundary_obs_idx + boundaries_found * BOUNDARY_FEATURES],
         0,
@@ -5549,7 +5560,7 @@ void c_step(Drive *env) {
         Agent *agent = &env->agents[agent_idx];
         if (agent->controller == CONTROLLER_POLICY) {
             move_dynamics(env, i, agent_idx);
-            if ((env->pose_noise_xy_m > 0.0f || env->pose_noise_yaw_rad > 0.0f)
+            if (!agent->stopped && !agent->removed && (env->pose_noise_xy_m > 0.0f || env->pose_noise_yaw_rad > 0.0f)
                 && (!env->eval_mode || env->eval_training_render)) {
                 apply_pose_noise(env, agent);
             }

@@ -223,6 +223,29 @@ static int test_stagger_first_episode(void) {
     return 0;
 }
 
+static int test_eval_spawn_keeps_edge_clearance(void) {
+    const char *town04_map = DRIVE_TEST_REPO_ROOT "/pufferlib/resources/drive/binaries/carla/opendrive__Town04.bin";
+    const int reset_count = 8;
+    const int agent_count = 50;
+    Drive env = drive_test_env_config(town04_map, SIMULATION_MODE_GIGAFLOW, agent_count, 0);
+    env.eval_mode = 1;
+    allocate(&env);
+    c_reset(&env);
+    EXPECT_EQ_INT(env.active_agent_count, agent_count);
+
+    for (int reset_idx = 0; reset_idx < reset_count; reset_idx++) {
+        for (int i = 0; i < env.active_agent_count; i++) {
+            Agent *agent = &env.agents[env.active_agent_indices[i]];
+            EXPECT_EQ_INT(agent->removed, 0);
+            EXPECT_FALSE(check_spawn_offroad(&env, agent, EVAL_SPAWN_EDGE_CLEARANCE_M));
+        }
+        env.timestep = env.scenario_length;
+        c_reset(&env);
+    }
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_carla_gigaflow_load_step_log);
@@ -232,5 +255,6 @@ int main(void) {
     RUN_TEST(test_truncation_and_episode_log);
     RUN_TEST(test_short_early_reset_flags_and_logs);
     RUN_TEST(test_stagger_first_episode);
+    RUN_TEST(test_eval_spawn_keeps_edge_clearance);
     return test_summary(failures);
 }

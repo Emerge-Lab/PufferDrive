@@ -177,6 +177,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define COSIM_PARTNER_DEFAULT_WIDTH_M 2.0f
 #define COSIM_PARTNER_DEFAULT_HEIGHT_M 1.5f
 #define SPAWN_OFFROAD_SCALE_FACTOR 1.1f
+#define EVAL_SPAWN_EDGE_CLEARANCE_M 0.5f // Rear swing on a first full-lock turn must not clip the road edge
 // Replay self-play: logged vehicles failing these are created static instead of policy-controlled
 #define REPLAY_SPAWN_EDGE_CLEARANCE_M 0.5f                      // Car box must stay this far from the road edge
 #define REPLAY_SPAWN_LONGITUDINAL_CLEARANCE_M SPAWN_CLEARANCE_M // Gap needed to other cars in front of and behind
@@ -264,6 +265,7 @@ static const int ROAD_OFFSETS[25][2]
 
 #define EGO_FEATURES 11
 #define LANE_FEATURES 9
+#define LANE_SPEED_LIMIT_FEATURES 1 // appended per lane row when obs_lane_speed_limit is set
 #define BOUNDARY_FEATURES 6
 #define PARTNER_FEATURES 9
 #define PARTNER_RELATIVE_VELOCITY_FEATURES 2 // appended per partner row when obs_partner_relative_velocity is set

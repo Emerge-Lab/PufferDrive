@@ -330,6 +330,7 @@ class DriveEnvConfig:
     obs_slots_partners_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     obs_partner_relative_velocity: bool = MISSING
     obs_lane_heading_signed: bool = MISSING
+    obs_lane_speed_limit: bool = MISSING
     obs_slots_traffic_controls_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     obs_dropout_lane: float = _constrained_field(PROBABILITY_CONSTRAINT)
     obs_dropout_boundary: float = _constrained_field(PROBABILITY_CONSTRAINT)

@@ -1569,6 +1569,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     // Make constants accessible from Python
     PyModule_AddIntConstant(m, "MAX_ENTITIES_PER_CELL", MAX_ENTITIES_PER_CELL);
     PyModule_AddIntConstant(m, "LANE_FEATURES", LANE_FEATURES);
+    PyModule_AddIntConstant(m, "LANE_SPEED_LIMIT_FEATURES", LANE_SPEED_LIMIT_FEATURES);
     PyModule_AddObject(m, "LANE_CURVATURE_NORM", PyFloat_FromDouble(LANE_CURVATURE_NORM));
     PyModule_AddIntConstant(m, "BOUNDARY_FEATURES", BOUNDARY_FEATURES);
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);
