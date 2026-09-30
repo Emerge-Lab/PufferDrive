@@ -96,7 +96,7 @@ struct Agent {
     int displacement_sample_count;
     float distance_since_spawn;
     float seconds_stopped;
-    float lane_curvature; // 1/m at the closest segment of current lane, positive = left turn
+    float lane_curvature;         // 1/m at the closest segment of current lane, positive = left turn
     float lane_heading_error_rad; // agent heading minus lane heading, positive = agent points left of lane
     int comfort_violation_last_window_idx;
 
@@ -114,8 +114,8 @@ struct Agent {
     float gt_goal_y;               // Last valid ground-truth goal position y
     float gt_goal_z;               // Last valid ground-truth goal position z
 
-    int stopped; // 0/1 -> freeze if set
-    int removed; // 0/1 -> remove from sim if set
+    int stopped;                     // 0/1 -> freeze if set
+    int removed;                     // 0/1 -> remove from sim if set
     int first_collision_partner_idx; // agent index of the first collision partner this episode, -1 if none
     int stop_sign_target_idx;        // traffic element being approached, -1 if none
     int stop_sign_stop_completed;    // 0/1 -> stood still inside the target's trigger box
@@ -156,7 +156,7 @@ struct RoadMapElement {
     float *x;
     float *y;
     float *z;
-    float *headings; // Pre-computed heading for each segment
+    float *headings;                              // Pre-computed heading for each segment
     RoadObservationSegment *observation_segments; // Immutable; owned with the shared road geometry.
 
     // Lane specific info

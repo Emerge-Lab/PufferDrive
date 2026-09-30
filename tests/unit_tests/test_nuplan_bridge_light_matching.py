@@ -43,7 +43,10 @@ def test_max_distance_and_empty_map():
     assert match({"c": (1.5, 14.0, SOUTH)}) == {"c": 0}
     assert match({"c": (1.5, 17.0, SOUTH)}) == {}
     assert match({"c": (1.5, 17.0, SOUTH)}, max_dist_m=19.0) == {"c": 0}
-    assert nb.match_connectors_to_stop_lines({"c": (0.0, 0.0, 0.0)}, IDENTITY, STOP_LINES[:0], HEADINGS[:0], TYPES[:0]) == {}
+    assert (
+        nb.match_connectors_to_stop_lines({"c": (0.0, 0.0, 0.0)}, IDENTITY, STOP_LINES[:0], HEADINGS[:0], TYPES[:0])
+        == {}
+    )
 
 
 def test_point_to_segment_distance_clamps_to_endpoints():

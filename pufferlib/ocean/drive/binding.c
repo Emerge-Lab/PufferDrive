@@ -2121,7 +2121,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     if (env->stagger_first_episode
         && (env->init_step_min_horizon < 1 || env->init_step + env->init_step_min_horizon > env->scenario_length)) {
         PyErr_SetString(
-            PyExc_ValueError, "stagger_first_episode needs 1 <= init_step_min_horizon <= scenario_length - init_step");
+            PyExc_ValueError,
+            "stagger_first_episode needs 1 <= init_step_min_horizon <= scenario_length - init_step");
         return -1;
     }
     env->init_mode = (int) unpack(kwargs, "init_mode");

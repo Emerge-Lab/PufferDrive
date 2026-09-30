@@ -1129,7 +1129,8 @@ static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {
     }
     if (c_set_traffic_light_states(drive, states) != 0) {
         PyErr_SetString(
-            PyExc_ValueError, "vec_set_traffic_light_states: timestep outside the light state buffer or invalid state");
+            PyExc_ValueError,
+            "vec_set_traffic_light_states: timestep outside the light state buffer or invalid state");
         return NULL;
     }
     Py_RETURN_NONE;

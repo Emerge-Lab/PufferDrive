@@ -42,7 +42,14 @@ SCORED_METRICS = (
     ("speed_limit_compliance", "speed limit", "weight 4"),
     ("ego_is_comfortable", "comfort", "weight 2"),
 )
-COMFORT_METRICS = ("ego_lon_acceleration", "ego_lon_jerk", "ego_jerk", "ego_lat_acceleration", "ego_yaw_acceleration", "ego_yaw_rate")
+COMFORT_METRICS = (
+    "ego_lon_acceleration",
+    "ego_lon_jerk",
+    "ego_jerk",
+    "ego_lat_acceleration",
+    "ego_yaw_acceleration",
+    "ego_yaw_rate",
+)
 COMFORT_BOUNDS = {
     "ego_lon_acceleration": "-4.05..2.40 m/s^2",
     "ego_lon_jerk": "|j| <= 4.13 m/s^3",
@@ -100,7 +107,7 @@ def score_panel(token, row, comfort):
         lines.append(f'<div style="color:#ff6b6b;padding-left:14px">&#8627; {detail}</div>')
     return (
         '<details open style="position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:1000;'
-        'background:rgba(13,20,32,.93);color:#c4cddc;font:12px/1.5 ui-monospace,monospace;padding:6px 12px;'
+        "background:rgba(13,20,32,.93);color:#c4cddc;font:12px/1.5 ui-monospace,monospace;padding:6px 12px;"
         'border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,.4);max-width:640px">'
         f'<summary style="cursor:pointer;font-weight:600">nuPlan score {float(row["score"]):.2f} &middot; {row["scenario_type"]} &middot; {token}</summary>'
         + "".join(lines)
@@ -158,9 +165,18 @@ def main():
     rows = scenario_rows(args.group_dir)
     comfort = comfort_failures(args.group_dir)
     wanted = selected_tokens(rows, args.max_score, args.metric) | set(args.tokens)
-    jobs = [(token, replays[token], obs_dir / page_name(token, rows.get(token))) for token in sorted(wanted) if token in replays]
+    jobs = [
+        (token, replays[token], obs_dir / page_name(token, rows.get(token)))
+        for token in sorted(wanted)
+        if token in replays
+    ]
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
-        list(pool.map(lambda job: render_page(job[1], job[2], score_panel(job[0], rows.get(job[0]), comfort.get(job[0], []))), jobs))
+        list(
+            pool.map(
+                lambda job: render_page(job[1], job[2], score_panel(job[0], rows.get(job[0]), comfort.get(job[0], []))),
+                jobs,
+            )
+        )
     file_metrics = {html.name: gallery_metrics(rows.get(token)) for token, _, html in jobs}
     pruned = 0
     if args.prune:

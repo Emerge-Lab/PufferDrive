@@ -40,7 +40,17 @@ _orig_scenario_init = _scenario.NuPlanScenario.__init__
 _orig_gpkg_init = _gpkg.GPKGMapsDB.__init__
 
 
-def _scenario_init(self, data_root, log_file_load_path, initial_lidar_token, initial_lidar_timestamp, scenario_type, map_root, *args, **kwargs):
+def _scenario_init(
+    self,
+    data_root,
+    log_file_load_path,
+    initial_lidar_token,
+    initial_lidar_timestamp,
+    scenario_type,
+    map_root,
+    *args,
+    **kwargs,
+):
     _orig_scenario_init(
         self,
         remap_path(data_root),

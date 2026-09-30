@@ -217,8 +217,8 @@ struct Drive {
     float speed_limit_random_delta_mps;
     float speed_limit_random_min_mps;
     float speed_limit_random_max_mps;
-    float *lane_speed_limit_mps;       // per-episode effective limit per road element (zone-randomized)
-    float *speed_zone_offset_mps;      // num_speed_zones
+    float *lane_speed_limit_mps;        // per-episode effective limit per road element (zone-randomized)
+    float *speed_zone_offset_mps;       // num_speed_zones
     unsigned char *lane_limit_resolved; // scratch for junction-lane inheritance
     int dynamics_model;
     int reset_accel_on_stop;
@@ -266,11 +266,11 @@ struct Drive {
     float goal_speed;
     float min_goal_spacing;
     float max_goal_spacing;
-    float goal_heading_max_deg;    // 0 disables the successive-waypoint heading constraint
-    int goal_speed_randomization;  // 0 pins the goal-speed coef to goal_speed (paper: v_goal fixed)
+    float goal_heading_max_deg;     // 0 disables the successive-waypoint heading constraint
+    int goal_speed_randomization;   // 0 pins the goal-speed coef to goal_speed (paper: v_goal fixed)
     float conditioning_accel_scale; // eval C_acc: scales the positive accel cap (ACCEL_LONG_LIMIT[1]); 1.0 = paper eval
     float conditioning_speed_scale; // training C_vel ~ X(a): speed cap = base_max_speed_mps * [1/a, a]; 1.5 = paper
-    int goal_reach_requires_speed; // 1: final goal is consumed only below goal speed (paper semantics)
+    int goal_reach_requires_speed;  // 1: final goal is consumed only below goal speed (paper semantics)
     int num_goals;
     int goal_regen_mode;
     int goal_source;
@@ -3644,11 +3644,14 @@ void init(Drive *env) {
     env->logs_capacity = 0;
     if (env->speed_limit_random_prob > 0.0f && env->num_speed_zones <= 0) {
         raise_error_with_message(
-            ERROR_INVALID_ARGUMENT, "speed_limit_random_prob > 0 but map %s carries no speed zones", env->map_name);
+            ERROR_INVALID_ARGUMENT,
+            "speed_limit_random_prob > 0 but map %s carries no speed zones",
+            env->map_name);
     }
     env->lane_speed_limit_mps = (float *) malloc(env->num_road_elements * sizeof(float));
     env->lane_limit_resolved = (unsigned char *) calloc(env->num_road_elements, sizeof(unsigned char));
-    env->speed_zone_offset_mps = (float *) malloc((env->num_speed_zones > 0 ? env->num_speed_zones : 1) * sizeof(float));
+    env->speed_zone_offset_mps
+        = (float *) malloc((env->num_speed_zones > 0 ? env->num_speed_zones : 1) * sizeof(float));
     begin_episode_rng(env);
     sample_zone_speed_limits(env);
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
@@ -4383,7 +4386,8 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     if (current_lane_idx != -1 && env->lane_speed_limit_mps[current_lane_idx] > 0) {
         target_speed = env->lane_speed_limit_mps[current_lane_idx];
     }
-    agent->metrics_array[SPEED_LIMIT_IDX] = (agent->sim_speed > target_speed + env->overspeed_tolerance_mps) ? 1.0f : 0.0f;
+    agent->metrics_array[SPEED_LIMIT_IDX]
+        = (agent->sim_speed > target_speed + env->overspeed_tolerance_mps) ? 1.0f : 0.0f;
     if (env->compute_eval_metrics) {
         agent_log->speed_violation_sum += fmaxf(agent->sim_speed - target_speed, 0.0f) * env->dt;
     }
@@ -4947,9 +4951,21 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     NeighborCursor lane_cursor = neighbor_cursor_begin(env, ego->sim_x, ego->sim_y, OBS_ENTITY_LANE, scratch_count);
     NeighborCursor edge_cursor = neighbor_cursor_begin(env, ego->sim_x, ego->sim_y, OBS_ENTITY_EDGE, scratch_count);
     int lanes_found = write_road_obs_rows(
-        env, ego, &lane_cursor, lane_obs_dest, env->obs_slots_lane_n, goal_graph_idx, ego_dist_to_goal_m);
+        env,
+        ego,
+        &lane_cursor,
+        lane_obs_dest,
+        env->obs_slots_lane_n,
+        goal_graph_idx,
+        ego_dist_to_goal_m);
     int boundaries_found = write_road_obs_rows(
-        env, ego, &edge_cursor, boundary_obs_dest, env->obs_slots_boundary_n, goal_graph_idx, ego_dist_to_goal_m);
+        env,
+        ego,
+        &edge_cursor,
+        boundary_obs_dest,
+        env->obs_slots_boundary_n,
+        goal_graph_idx,
+        ego_dist_to_goal_m);
 
     if (env->road_dropout_enabled) {
         int lanes_to_copy = (lanes_found < env->obs_slots_lane_kept) ? lanes_found : env->obs_slots_lane_kept;

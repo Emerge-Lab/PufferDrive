@@ -9,7 +9,13 @@
 static int entries_of_3[2] = {0, 2};
 static int entries_of_4[1] = {3};
 
-static void make_element(RoadMapElement *road, int type, float speed_limit, int zone_idx, int *entries, int entry_count) {
+static void make_element(
+    RoadMapElement *road,
+    int type,
+    float speed_limit,
+    int zone_idx,
+    int *entries,
+    int entry_count) {
     *road = (RoadMapElement) {0};
     road->type = type;
     road->speed_limit = speed_limit;

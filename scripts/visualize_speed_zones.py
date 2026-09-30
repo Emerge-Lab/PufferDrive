@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Render the SPDZONE1 speed zones of PufferDrive map .bin files into one self-contained HTML inspector.
 
-    python scripts/visualize_speed_zones.py --bin-dir ~/ordnung/data/CARLA/puffer_bins_zones
-    python scripts/visualize_speed_zones.py --bin-dir <dir> --output zones.html --fragment   # no <html>/<body> wrapper
-    python scripts/visualize_speed_zones.py --bin-dir <dir> --draw-seed 3    # overlay one C-side random limit draw
+python scripts/visualize_speed_zones.py --bin-dir ~/ordnung/data/CARLA/puffer_bins_zones
+python scripts/visualize_speed_zones.py --bin-dir <dir> --output zones.html --fragment   # no <html>/<body> wrapper
+python scripts/visualize_speed_zones.py --bin-dir <dir> --draw-seed 3    # overlay one C-side random limit draw
 """
 
 import argparse
@@ -490,8 +490,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bin-dir", required=True, help="Directory of *.bin map files with a SPDZONE1 section")
     parser.add_argument("--output", default=None, help="Output .html (default: <bin-dir>/speed_zones.html)")
-    parser.add_argument("--fragment", action="store_true", help="Omit the <html>/<head>/<body> wrapper (artifact publishing)")
-    parser.add_argument("--draw-seed", type=int, default=None, help="Overlay one episode draw of the C speed-limit sampler")
+    parser.add_argument(
+        "--fragment", action="store_true", help="Omit the <html>/<head>/<body> wrapper (artifact publishing)"
+    )
+    parser.add_argument(
+        "--draw-seed", type=int, default=None, help="Overlay one episode draw of the C speed-limit sampler"
+    )
     parser.add_argument("--draw-delta-mps", type=float, default=9.72)
     parser.add_argument("--draw-min-mps", type=float, default=1.39)
     parser.add_argument("--draw-max-mps", type=float, default=36.11)
@@ -501,9 +505,14 @@ def main():
     bin_files = sorted(bin_dir.glob("*.bin"))
     if not bin_files:
         sys.exit(f"no .bin files in {bin_dir}")
-    draws = {
-        f: sample_limit_draw(f, args.draw_seed, args.draw_delta_mps, args.draw_min_mps, args.draw_max_mps) for f in bin_files
-    } if args.draw_seed is not None else {}
+    draws = (
+        {
+            f: sample_limit_draw(f, args.draw_seed, args.draw_delta_mps, args.draw_min_mps, args.draw_max_mps)
+            for f in bin_files
+        }
+        if args.draw_seed is not None
+        else {}
+    )
     maps = [collect_map(f, draws.get(f)) for f in bin_files]
     draw_note = (
         f"Random draw: episode seed {args.draw_seed}, one offset per zone uniform in ±{args.draw_delta_mps * MPS_TO_KMH:.0f} km/h, "
@@ -516,7 +525,9 @@ def main():
         print(f"warning: no SPDZONE1 section in {missing}", file=sys.stderr)
     output = pathlib.Path(args.output) if args.output else bin_dir / "speed_zones.html"
     output.write_text(build_html(maps, args.fragment, draw_note))
-    print(f"wrote {output} ({output.stat().st_size / 1e6:.1f} MB, {len(maps)} maps, {sum(len(m['zones']) for m in maps)} zones)")
+    print(
+        f"wrote {output} ({output.stat().st_size / 1e6:.1f} MB, {len(maps)} maps, {sum(len(m['zones']) for m in maps)} zones)"
+    )
 
 
 if __name__ == "__main__":

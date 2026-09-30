@@ -521,7 +521,6 @@ def main():
         gx, gy = goal_window.window[:, 0], goal_window.window[:, 1]
         obs = np.asarray(env.recompute_observations())
 
-
         if step % 10 == 0:
             el = ego.get_location()
             nl = min(lights, key=lambda lt: lt.get_location().distance(el)) if lights else None

@@ -23,7 +23,9 @@ class ObsReplayCapture:
         self.policy = policy
         self.out_stem = Path(out_stem)
         self.max_steps = int(max_steps)
-        self.ghost_trajectory = None if ghost_trajectory is None else np.asarray(ghost_trajectory, np.float32).reshape(-1, 5)
+        self.ghost_trajectory = (
+            None if ghost_trajectory is None else np.asarray(ghost_trajectory, np.float32).reshape(-1, 5)
+        )
         state = env.get_state()
         self.scenario = state[0] if isinstance(state, list) else state
         self.agent_cap = int(self.scenario["num_total_agents"])
@@ -97,7 +99,11 @@ class ObsReplayCapture:
         obs = np.asarray(obs, dtype=np.float32)
         frames["obs"].append(np.clip(obs, -OBS_CLIP, OBS_CLIP))
         frames["raw_action"].append(np.asarray(actions, dtype=np.float32).reshape(obs.shape[0], -1))
-        index = np.full(obs.shape[0], -1, np.int32) if action_index is None else np.asarray(action_index, np.int32).reshape(obs.shape[0])
+        index = (
+            np.full(obs.shape[0], -1, np.int32)
+            if action_index is None
+            else np.asarray(action_index, np.int32).reshape(obs.shape[0])
+        )
         frames["action_index"].append(index)
         frames["value"].append(aux.get("value", np.zeros(obs.shape[0], np.float32)))
         frames["entropy"].append(aux.get("entropy", np.zeros(obs.shape[0], np.float32)))
@@ -155,7 +161,9 @@ class ObsReplayCapture:
             + env.obs_slots_traffic_controls_n * binding.TRAFFIC_CONTROL_FEATURES
         )
         if obs_dim < viewer_dim or obs_dim - viewer_dim > OBS_TRAILING_COUNT_FEATURES:
-            raise RuntimeError(f"obs replay layout mismatch: obs has {obs_dim} columns, viewer layout expects {viewer_dim}")
+            raise RuntimeError(
+                f"obs replay layout mismatch: obs has {obs_dim} columns, viewer layout expects {viewer_dim}"
+            )
 
     def _cropped_scenario(self, agent_f32):
         """Road elements within ROAD_CROP_MARGIN_M of the ego's driven positions (agent_f32 x/y are the road frame)."""
@@ -221,7 +229,12 @@ class ObsReplayCapture:
         html_path = str(self.out_stem) + ".html"
         viz.save_interactive_replay_zlib(self._cropped_scenario(agent_f32), replay, zlib_path)
         if save_npz:
-            np.savez(str(self.out_stem) + ".npz", obs=replay["obs"], agent_f32=agent_f32, env_cfg_json=np.array(json.dumps(env_cfg)))
+            np.savez(
+                str(self.out_stem) + ".npz",
+                obs=replay["obs"],
+                agent_f32=agent_f32,
+                env_cfg_json=np.array(json.dumps(env_cfg)),
+            )
         if not render_html:
             return zlib_path
         render_replay_html(zlib_path)

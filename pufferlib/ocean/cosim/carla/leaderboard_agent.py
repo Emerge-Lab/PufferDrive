@@ -98,7 +98,9 @@ FAR_AWAY = 1.0e6  # park unused shadow-env agent slots out of observation range
 PARTNER_MAX_ABS_DZ_M = 20.0  # CARLA actors farther above/below the ego are hidden scenario props, not traffic
 DEFAULT_BASE_MAX_SPEED_MPS = 20.0  # Drive() defaults, for checkpoints whose config predates the keys
 DEFAULT_CONDITIONING_SPEED_SCALE = 1.5
-ROAD_RAY_HALF_SPAN_M = 5.0  # vertical ray around the waypoint z; the ego roof and underpass roads are filtered by label/nearest
+ROAD_RAY_HALF_SPAN_M = (
+    5.0  # vertical ray around the waypoint z; the ego roof and underpass roads are filtered by label/nearest
+)
 ROAD_RAY_LABELS = (carla.CityObjectLabel.Roads, carla.CityObjectLabel.RoadLines, carla.CityObjectLabel.Bridge)
 MAX_POLICY_STEPS = 100_000  # shadow-env episode cap (~1.4 h at the 0.05 s CARLA tick); sizes the light state buffers
 SCENARIO_LENGTH_MARGIN_STEPS = 2
@@ -683,7 +685,11 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             z, pitch_deg = surface
             pitch_rad = math.radians(pitch_deg)
             yaw_rad = math.radians(yaw_deg)
-            forward = (math.cos(yaw_rad) * math.cos(pitch_rad), math.sin(yaw_rad) * math.cos(pitch_rad), math.sin(pitch_rad))
+            forward = (
+                math.cos(yaw_rad) * math.cos(pitch_rad),
+                math.sin(yaw_rad) * math.cos(pitch_rad),
+                math.sin(pitch_rad),
+            )
         # Zero momentum before the teleport: CARLA's collision resolver reacts violently to a
         # physics body carrying velocity into a new pose (carla issue #8076).
         zero = carla.Vector3D(x=0.0, y=0.0, z=0.0)

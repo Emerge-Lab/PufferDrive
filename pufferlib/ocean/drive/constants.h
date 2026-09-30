@@ -106,9 +106,9 @@
 #define GOAL_REGEN_ROLLING 1 // slide window: drop reached goal, append one at the frontier
 
 // Where goals are sampled from
-#define GOAL_SOURCE_ROUTE 0 // seed from the agent's own forward route
-#define GOAL_SOURCE_MAP 1   // seed from a uniformly sampled map lane
-#define GOAL_SOURCE_GT 2    // seed directly from the logged ground-truth trajectory
+#define GOAL_SOURCE_ROUTE 0    // seed from the agent's own forward route
+#define GOAL_SOURCE_MAP 1      // seed from a uniformly sampled map lane
+#define GOAL_SOURCE_GT 2       // seed directly from the logged ground-truth trajectory
 #define GOAL_SOURCE_EXTERNAL 3 // co-sim: goal windows pushed by the external sim (c_set_agent_goals)
 #define GOAL_SOURCE_GT_MAP 4   // logged-trajectory goals projected onto the nearest co-directional lane center
 
@@ -215,7 +215,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 64
 #define ROAD_QUERY_ENTITY_COUNT (MAX_ENTITIES_PER_CELL * 25) // 5x5 cell neighborhood
-#define OBS_ENTITY_NONE 0 // grid entity not sampled for road observations
+#define OBS_ENTITY_NONE 0                                    // grid entity not sampled for road observations
 #define OBS_ENTITY_LANE 1
 #define OBS_ENTITY_EDGE 2
 

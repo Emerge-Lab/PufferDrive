@@ -152,7 +152,10 @@ class PufferDrivePlanner(AbstractPlanner):
         self._startup_jerk_cap_seconds = float(startup_jerk_cap_seconds)
         self._startup_accel_jerk_cap_mps3 = float(startup_accel_jerk_cap_mps3)
         self._startup_brake_jerk_cap_mps3 = float(startup_brake_jerk_cap_mps3)
-        if min(self._startup_jerk_cap_seconds, self._startup_accel_jerk_cap_mps3, self._startup_brake_jerk_cap_mps3) < 0:
+        if (
+            min(self._startup_jerk_cap_seconds, self._startup_accel_jerk_cap_mps3, self._startup_brake_jerk_cap_mps3)
+            < 0
+        ):
             raise ValueError("startup_jerk_cap_seconds and the startup jerk caps must be >= 0")
         self._pedestrian_min_size_m = float(pedestrian_min_size_m)
         if self._pedestrian_min_size_m < 0:
@@ -310,7 +313,9 @@ class PufferDrivePlanner(AbstractPlanner):
                 # Training semantics: a window's final goal clears only below goal_speed (3 m/s)
                 "goal_reach_requires_speed": True,
                 # C_acc conditioning: cap the jerk model's positive accel at nuPlan's comfort bound instead of 2.5
-                "conditioning_accel_scale": COMFORT_ACCEL_MARGIN * NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2 / binding.ACCEL_LONG_MAX,
+                "conditioning_accel_scale": COMFORT_ACCEL_MARGIN
+                * NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2
+                / binding.ACCEL_LONG_MAX,
                 # lockstep with nuPlan's planning iterations, not the training dt (mimolette: 0.3)
                 "dt": float(self._scenario.database_interval),
                 "scenario_length": int(self._scenario.get_number_of_iterations()) + SCENARIO_LENGTH_MARGIN_STEPS,
@@ -344,11 +349,7 @@ class PufferDrivePlanner(AbstractPlanner):
         init = self._initialization
         ex, ey = float(ego_state.center.x), float(ego_state.center.y)
 
-        cfg = (
-            {}
-            if self._dummy
-            else yaml.safe_load(open(checkpoint_config_path(self._checkpoint_path)))
-        )
+        cfg = {} if self._dummy else yaml.safe_load(open(checkpoint_config_path(self._checkpoint_path)))
 
         bin_path, self._transform, geo = self._resolve_map_bin()
         self._num_traffic = geo["num_traffic"]
@@ -420,7 +421,15 @@ class PufferDrivePlanner(AbstractPlanner):
         if self._goal_source in ("roadblock", "roadblock_lane"):
             min_ahead_m = float(self._env.goal_radius) + ROADBLOCK_GOAL_MARGIN_M
             goal_route_ids = nb.extend_route_past_loop_cut(route_ids, init.route_roadblock_ids)
-            goal_args = (init.map_api, goal_route_ids, ex, ey, float(ego_state.center.heading), self._goal_spacing, min_ahead_m)
+            goal_args = (
+                init.map_api,
+                goal_route_ids,
+                ex,
+                ey,
+                float(ego_state.center.heading),
+                self._goal_spacing,
+                min_ahead_m,
+            )
             if self._goal_source == "roadblock_lane":
                 goals = nb.roadblock_lane_goals(*goal_args)
             else:
@@ -489,7 +498,9 @@ class PufferDrivePlanner(AbstractPlanner):
         # background (slots 1..): streamed from nuPlan, never simulated here. nuPlan's TrackedObject
         # carries no acceleration/angular-velocity (perception detections, not ego telemetry), but
         # write_partner_obs never reads those fields for non-ego agents, so zero is exact, not a stopgap.
-        objs = nb.partner_tracked_objects(detections.tracked_objects, self._initialization.map_api, self._static_on_lane)
+        objs = nb.partner_tracked_objects(
+            detections.tracked_objects, self._initialization.map_api, self._static_on_lane
+        )
         if len(objs) > self._num_agents - 1:
             # keep the nearest: devkit ordering is by type/token, so blind
             # truncation could drop a close vehicle while keeping far ones
@@ -587,7 +598,10 @@ class PufferDrivePlanner(AbstractPlanner):
 
         self._env.step(act)  # integrates the ego one dt; background is re-synced next call
 
-        if self._obs_replay is not None and current_input.iteration.index >= self._scenario.get_number_of_iterations() - 2:
+        if (
+            self._obs_replay is not None
+            and current_input.iteration.index >= self._scenario.get_number_of_iterations() - 2
+        ):
             out = self._obs_replay.write(render_html=self._obs_html_render)
             print(f"[pufferdrive_planner] wrote obs replay ({len(self._obs_replay)} steps) -> {out}")
             self._obs_replay = None

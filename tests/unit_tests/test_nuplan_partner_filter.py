@@ -21,7 +21,9 @@ class FakeType(Enum):
 
 
 def _obj(type_name, token, x=0.0):
-    return SimpleNamespace(tracked_object_type=FakeType[type_name], track_token=token, center=SimpleNamespace(x=x, y=0.0))
+    return SimpleNamespace(
+        tracked_object_type=FakeType[type_name], track_token=token, center=SimpleNamespace(x=x, y=0.0)
+    )
 
 
 class FakeMap:

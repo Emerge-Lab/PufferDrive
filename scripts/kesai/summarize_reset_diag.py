@@ -2,6 +2,7 @@
 
 Usage: python scripts/kesai/summarize_reset_diag.py LOG.err [LOG2.err ...]
 """
+
 import re
 import sys
 from collections import defaultdict
@@ -40,14 +41,20 @@ def main(paths):
     if not per_map:
         print("no [DRIVE DIAG] lines found")
         return
-    print(f"{'map':40s} {'lines':>5s} {'active':>7s} {'removed':>8s} {'stopped':>8s} {'spawnfail':>9s} "
-          f"{'stop@rst':>8s} {'coll':>6s} {'offrd':>6s} {'stopl':>6s} {'empty':>6s} {'goal':>5s}")
+    print(
+        f"{'map':40s} {'lines':>5s} {'active':>7s} {'removed':>8s} {'stopped':>8s} {'spawnfail':>9s} "
+        f"{'stop@rst':>8s} {'coll':>6s} {'offrd':>6s} {'stopl':>6s} {'empty':>6s} {'goal':>5s}"
+    )
     for map_name, entry in sorted(per_map.items(), key=lambda kv: -kv[1]["lines"]):
         n = entry["lines"]
-        print(f"{map_name:40s} {n:5d} " + " ".join(
-            f"{entry[k] / n:{w}.1f}" for k, w in zip(SUM_FIELDS, (7, 8, 8, 9, 8, 6, 6, 6, 6, 5))))
-    print("\nper-line means are per sub-env at the moment of the short reset; rejects are summed over all agents "
-          "of that reset (max 30 per agent).")
+        print(
+            f"{map_name:40s} {n:5d} "
+            + " ".join(f"{entry[k] / n:{w}.1f}" for k, w in zip(SUM_FIELDS, (7, 8, 8, 9, 8, 6, 6, 6, 6, 5)))
+        )
+    print(
+        "\nper-line means are per sub-env at the moment of the short reset; rejects are summed over all agents "
+        "of that reset (max 30 per agent)."
+    )
     print("example episode seeds per map (rerun locally with use_exact_episode_seed):")
     for map_name, values in sorted(seeds.items()):
         print(f"  {map_name}: {values[:3]}")

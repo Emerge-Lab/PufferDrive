@@ -46,7 +46,14 @@ SCORE_COLS = [
     "ego_is_comfortable",
     "speed_limit_compliance",
 ]
-COMFORT_METRICS = ["ego_lon_acceleration", "ego_lon_jerk", "ego_jerk", "ego_lat_acceleration", "ego_yaw_acceleration", "ego_yaw_rate"]
+COMFORT_METRICS = [
+    "ego_lon_acceleration",
+    "ego_lon_jerk",
+    "ego_jerk",
+    "ego_lat_acceleration",
+    "ego_yaw_acceleration",
+    "ego_yaw_rate",
+]
 LIGHT_COLOR = {"RED": "red", "YELLOW": "orange", "GREEN": "limegreen", "UNKNOWN": "0.6"}
 STOPPED_SPEED_MPS = 0.3
 CLOSE_AGENT_M = 8.0
@@ -110,7 +117,9 @@ def trajectory_stats(hist, scenario):
             for s in hist.data
         ]
     )
-    expert = np.array([[s.center.x, s.center.y, s.dynamic_car_state.speed] for s in scenario.get_expert_ego_trajectory()])
+    expert = np.array(
+        [[s.center.x, s.center.y, s.dynamic_car_state.speed] for s in scenario.get_expert_ego_trajectory()]
+    )
     min_dist, min_dist_iter, min_dist_speed = np.inf, 0, 0.0
     for i, s in enumerate(hist.data):
         e = s.ego_state.center
@@ -156,7 +165,9 @@ def comfort_failures(sim_dir, token):
         r = rows.iloc[0]
         flag = [c for c in df.columns if c.endswith("within_bounds_stat_value")]
         if flag and not bool(r[flag[0]]):
-            out.append(f"{name} range {float(r[f'min_{name}_stat_value']):.2f}..{float(r[f'max_{name}_stat_value']):.2f}")
+            out.append(
+                f"{name} range {float(r[f'min_{name}_stat_value']):.2f}..{float(r[f'max_{name}_stat_value']):.2f}"
+            )
     return out
 
 
@@ -166,13 +177,19 @@ def diagnose(row, stats, comfort):
     if row["ego_progress_along_expert_route"] < 0.5 and stats["expert_dist_m"] > 5:
         if stats["stopped_frac"] > 0.6:
             categories.append("stalled")
-            reasons.append(f"stalled: stopped {stats['stopped_frac']:.0%} of the time (expert {stats['expert_stopped_frac']:.0%})")
+            reasons.append(
+                f"stalled: stopped {stats['stopped_frac']:.0%} of the time (expert {stats['expert_stopped_frac']:.0%})"
+            )
         else:
             categories.append("slow progress")
-            reasons.append(f"slow/short progress: drove {stats['ego_dist_m']:.0f} m vs expert {stats['expert_dist_m']:.0f} m")
+            reasons.append(
+                f"slow/short progress: drove {stats['ego_dist_m']:.0f} m vs expert {stats['expert_dist_m']:.0f} m"
+            )
     if row["no_ego_at_fault_collisions"] < 1:
         categories.append("collision")
-        reasons.append(f"at-fault collision (closest agent {stats['min_agent_dist_m']:.1f} m at iter {stats['min_agent_dist_iter']})")
+        reasons.append(
+            f"at-fault collision (closest agent {stats['min_agent_dist_m']:.1f} m at iter {stats['min_agent_dist_iter']})"
+        )
     if row["drivable_area_compliance"] < 1:
         categories.append("offroad")
         reasons.append(f"left drivable area (max {stats['max_lateral_from_expert_m']:.1f} m from expert path)")
@@ -192,7 +209,9 @@ def diagnose(row, stats, comfort):
         categories.append("speeding")
         reasons.append(f"speeding: max {stats['ego_max_speed']:.1f} m/s (expert {stats['expert_max_speed']:.1f})")
     if stats["max_lateral_from_expert_m"] > LANE_CHOICE_OFFSET_M and row["drivable_area_compliance"] >= 1:
-        reasons.append(f"lane choice differs from expert (up to {stats['max_lateral_from_expert_m']:.1f} m off the expert path)")
+        reasons.append(
+            f"lane choice differs from expert (up to {stats['max_lateral_from_expert_m']:.1f} m off the expert path)"
+        )
     if stats["ego_dist_m"] > stats["expert_dist_m"] + 5:
         reasons.append(f"drove further than the expert ({stats['ego_dist_m']:.0f} m vs {stats['expert_dist_m']:.0f} m)")
     return categories or ["none"], reasons or ["no metric failed"]
@@ -233,7 +252,13 @@ def process_scenario(job):
         frames = []
         for it in range(0, n, VIDEO_FRAME_STRIDE):
             fig, ax = plt.subplots(figsize=(7, 7), dpi=90)
-            draw_scene(ax, hist.data[it], scenario, expert[:, :2], title=f"{row['scenario_type']} it {it} v={ego[it, 3]:.1f} m/s")
+            draw_scene(
+                ax,
+                hist.data[it],
+                scenario,
+                expert[:, :2],
+                title=f"{row['scenario_type']} it {it} v={ego[it, 3]:.1f} m/s",
+            )
             frames.append(fig_to_rgb(fig))
             plt.close(fig)
         write_mp4(report_dir / "videos" / f"{token}.mp4", frames, fps=VIDEO_FPS)
@@ -277,10 +302,18 @@ def scenario_section(r, report_dir, inline):
     )
     media = (
         f'<img src="strips/{r["token"]}.png" style="max-width:100%"><br><img src="speed/{r["token"]}.png"><br>'
-        + (f'<video src="videos/{r["token"]}.mp4" controls width="420"></video>' if (report_dir / "videos" / f"{r['token']}.mp4").exists() else "")
+        + (
+            f'<video src="videos/{r["token"]}.mp4" controls width="420"></video>'
+            if (report_dir / "videos" / f"{r['token']}.mp4").exists()
+            else ""
+        )
         if inline
         else f'<a href="strips/{r["token"]}.png">frames</a> &middot; <a href="speed/{r["token"]}.png">speed</a>'
-        + (f' &middot; <a href="videos/{r["token"]}.mp4">video</a>' if (report_dir / "videos" / f"{r['token']}.mp4").exists() else "")
+        + (
+            f' &middot; <a href="videos/{r["token"]}.mp4">video</a>'
+            if (report_dir / "videos" / f"{r['token']}.mp4").exists()
+            else ""
+        )
     )
     return f"{header}<p><b>Diagnosis:</b> {r['diagnosis']}</p><p>{scores}</p><p>{facts}</p>{media}"
 
@@ -306,8 +339,33 @@ def main():
     df.to_csv(report_dir / "scenarios.csv", index=False)
 
     category_counts = pd.Series([c for cats in df["categories"] for c in cats.split("|")]).value_counts()
-    by_type = df.groupby("type")[["score", "ego_progress_along_expert_route", "no_ego_at_fault_collisions", "drivable_area_compliance", "ego_is_comfortable", "speed_limit_compliance"]].mean().sort_values("score")
-    table_cols = ["token", "type", "map", "score", "ego_progress_along_expert_route", "no_ego_at_fault_collisions", "drivable_area_compliance", "time_to_collision_within_bound", "ego_is_comfortable", "speed_limit_compliance", "categories"]
+    by_type = (
+        df.groupby("type")[
+            [
+                "score",
+                "ego_progress_along_expert_route",
+                "no_ego_at_fault_collisions",
+                "drivable_area_compliance",
+                "ego_is_comfortable",
+                "speed_limit_compliance",
+            ]
+        ]
+        .mean()
+        .sort_values("score")
+    )
+    table_cols = [
+        "token",
+        "type",
+        "map",
+        "score",
+        "ego_progress_along_expert_route",
+        "no_ego_at_fault_collisions",
+        "drivable_area_compliance",
+        "time_to_collision_within_bound",
+        "ego_is_comfortable",
+        "speed_limit_compliance",
+        "categories",
+    ]
     table = df[table_cols].round(2).copy()
     table["token"] = table["token"].map(lambda t: f"<a href='#{t}'>{t}</a>")
     html = [
@@ -315,10 +373,14 @@ def main():
         "<style>body{font-family:sans-serif;max-width:1500px;margin:auto} table{border-collapse:collapse;font-size:12px} td,th{border:1px solid #ccc;padding:3px 6px}</style></head><body>",
         f"<h1>PufferDrive nuPlan closed-loop &middot; {len(df)} scenarios &middot; mean score {df['score'].mean():.3f}</h1>",
         "<p>Orange = ego, blue = other agents (red within 8 m), green dashed = expert path, lane connectors colored by reported light state.</p>",
-        "<h2>Mean metrics</h2>", df[SCORE_COLS].mean().to_frame("mean").T.round(3).to_html(index=False),
-        "<h2>Failure categories (scenario counts)</h2>", category_counts.to_frame("scenarios").to_html(),
-        "<h2>By scenario type</h2>", by_type.round(3).to_html(),
-        "<h2>All scenarios, worst first</h2>", table.to_html(index=False, escape=False),
+        "<h2>Mean metrics</h2>",
+        df[SCORE_COLS].mean().to_frame("mean").T.round(3).to_html(index=False),
+        "<h2>Failure categories (scenario counts)</h2>",
+        category_counts.to_frame("scenarios").to_html(),
+        "<h2>By scenario type</h2>",
+        by_type.round(3).to_html(),
+        "<h2>All scenarios, worst first</h2>",
+        table.to_html(index=False, escape=False),
         f"<h2>Worst {min(args.max_inline, len(df))} scenarios</h2>",
     ]
     for k, (_, r) in enumerate(df.iterrows()):

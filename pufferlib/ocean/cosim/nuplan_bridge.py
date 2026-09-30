@@ -200,7 +200,9 @@ def route_centerline(map_api, route_roadblock_ids, start_x: float, start_y: floa
     start_block_idx = block_ids.index(containing[0].get_roadblock_id()) if containing else 0
     # The ego's own lane may not connect to the next route block (wrong lane for the turn, PDM's
     # route correction keeps the block): fall back to the sibling lanes of its block, nearest first.
-    siblings = sorted((lane for lane in blocks[start_block_idx].interior_edges if lane not in containing), key=_distance)
+    siblings = sorted(
+        (lane for lane in blocks[start_block_idx].interior_edges if lane not in containing), key=_distance
+    )
     candidates = containing + siblings or sorted(route_lanes.values(), key=_distance)[:1]
     target_block = blocks[min(len(blocks) - 1, start_block_idx + ROUTE_SEARCH_DEPTH_BLOCKS - 1)]
     path = []
@@ -216,6 +218,7 @@ def route_centerline(map_api, route_roadblock_ids, start_x: float, start_y: floa
     start_idx = int(np.argmin(np.hypot(*(lane_points[0] - (start_x, start_y)).T)))
     lane_points[0] = lane_points[0][start_idx:]
     return np.concatenate(lane_points, axis=0), [str(lane.id) for lane in path]
+
 
 def indices_along(polyline: np.ndarray, spacing: float) -> np.ndarray:
     """(N, 2) polyline -> vertex indices every `spacing` meters of arc length (+ the endpoint)."""
@@ -276,12 +279,19 @@ def _continuing_lane(block, prev_lane, next_block, prev_xy):
     def key(lane):
         flows_in = lane.id in successor_ids
         flows_on = next_block is None or any(edge.get_roadblock_id() == next_block.id for edge in lane.outgoing_edges)
-        return (not (flows_in and flows_on), not flows_on, not flows_in, float(np.min(np.hypot(*(_baseline_xy(lane) - prev_xy).T))))
+        return (
+            not (flows_in and flows_on),
+            not flows_on,
+            not flows_in,
+            float(np.min(np.hypot(*(_baseline_xy(lane) - prev_xy).T))),
+        )
 
     return min(block.interior_edges, key=key)
 
 
-def roadblock_lane_goals(map_api, route_roadblock_ids, start_x, start_y, start_heading, min_spacing: float, min_ahead_m: float):
+def roadblock_lane_goals(
+    map_api, route_roadblock_ids, start_x, start_y, start_heading, min_spacing: float, min_ahead_m: float
+):
     """Route roadblock goals on lane baselines chosen for lane continuity -> (N, 2) in nuPlan map coordinates.
     Blocks, start block, min_ahead_m and min_spacing as in roadblock_centroid_goals; each block's goal is the
     point nearest its centroid on the block's continuing lane (see _continuing_lane, seeded with the ego's
@@ -314,7 +324,9 @@ def roadblock_lane_goals(map_api, route_roadblock_ids, start_x, start_y, start_h
     return np.array(goals, dtype=np.float64).reshape(-1, 2)
 
 
-def roadblock_centroid_goals(map_api, route_roadblock_ids, start_x, start_y, start_heading, min_spacing: float, min_ahead_m: float):
+def roadblock_centroid_goals(
+    map_api, route_roadblock_ids, start_x, start_y, start_heading, min_spacing: float, min_ahead_m: float
+):
     """Route roadblock centroids as goals -> (N, 2) in nuPlan map coordinates, from the ego's roadblock on
     (the block containing the ego, else the nearest one). The ego block's own centroid is dropped when it
     is behind the ego or less than min_ahead_m ahead; later centroids follow the route regardless of the
@@ -334,7 +346,9 @@ def roadblock_centroid_goals(map_api, route_roadblock_ids, start_x, start_y, sta
         centroid = block.polygon.centroid
         goal = np.array([centroid.x, centroid.y], dtype=np.float64)
         if not block.polygon.contains(centroid):
-            lane_pts = np.concatenate([[[p.x, p.y] for p in lane.baseline_path.discrete_path] for lane in block.interior_edges])
+            lane_pts = np.concatenate(
+                [[[p.x, p.y] for p in lane.baseline_path.discrete_path] for lane in block.interior_edges]
+            )
             goal = lane_pts[int(np.argmin(np.hypot(*(lane_pts - goal).T)))].astype(np.float64)
         if block_idx == start_idx and (goal - (start_x, start_y)) @ heading_dir < min_ahead_m:
             continue
@@ -342,6 +356,7 @@ def roadblock_centroid_goals(map_api, route_roadblock_ids, start_x, start_y, sta
             continue
         goals.append(goal)
     return np.array(goals, dtype=np.float64).reshape(-1, 2)
+
 
 def extend_route_past_loop_cut(corrected_ids, raw_ids):
     """CaRL's route correction cuts the route where a later roadblock overlaps an earlier one (a loop),
@@ -509,7 +524,9 @@ def coarse_translation_vote(src: np.ndarray, ref: np.ndarray, grid: float = 5.0)
 
 
 LIGHT_MATCH_MAX_DIST_M = 15.0  # nuPlan connector entries sit up to 14 m before/after the bin stop line
-LIGHT_MATCH_MAX_HEADING_DIFF_RAD = np.radians(75.0)  # keeps skewed stop lines, rejects cross-street (90) and oncoming (180)
+LIGHT_MATCH_MAX_HEADING_DIFF_RAD = np.radians(
+    75.0
+)  # keeps skewed stop lines, rejects cross-street (90) and oncoming (180)
 
 
 def point_to_segment_distance(px: float, py: float, segments: np.ndarray) -> np.ndarray:
@@ -637,7 +654,9 @@ def tracked_objects_to_arrays(tracked_objects, transform: NuPlanTransform, first
 _LIGHT_RESTRICTIVENESS = {1: 0, 2: 1, LIGHT_STATE_GREEN: 2}  # RED < YELLOW < GREEN
 
 
-def traffic_light_states(traffic_light_data, connector_map: dict, num_traffic: int, route_connector_ids=()) -> np.ndarray:
+def traffic_light_states(
+    traffic_light_data, connector_map: dict, num_traffic: int, route_connector_ids=()
+) -> np.ndarray:
     """PlannerInput.traffic_light_data -> per-element state array for
     set_traffic_light_states. Several lane connectors (straight/left/right
     from one lane) share one stop-line element: an element on the ego's route

@@ -28,7 +28,9 @@ def select_failures(sim_dir, max_score, metrics):
     mask = per_scenario["score"] < max_score
     for metric in metrics:
         if metric not in per_scenario:
-            raise SystemExit(f"unknown metric {metric}; available: {[c for c in per_scenario.columns if c not in ('scenario', 'scenario_type', 'log_name', 'planner_name', 'aggregator_type', 'num_scenarios')]}")
+            raise SystemExit(
+                f"unknown metric {metric}; available: {[c for c in per_scenario.columns if c not in ('scenario', 'scenario_type', 'log_name', 'planner_name', 'aggregator_type', 'num_scenarios')]}"
+            )
         mask |= per_scenario[metric] < 1.0
     return per_scenario[mask].sort_values("score")
 
@@ -36,7 +38,10 @@ def select_failures(sim_dir, max_score, metrics):
 def build_mirror(sim_dir, out_dir, selected):
     from nuplan.planning.nuboard.base.data_class import NuBoardFile
 
-    sim_dir, out_dir = Path(sim_dir).resolve(), Path(out_dir).resolve()  # absolute: symlink targets must not be relative
+    sim_dir, out_dir = (
+        Path(sim_dir).resolve(),
+        Path(out_dir).resolve(),
+    )  # absolute: symlink targets must not be relative
     tokens = set(selected["scenario"].astype(str))
     if out_dir.exists():
         shutil.rmtree(out_dir)
@@ -82,14 +87,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("group_dir")
     ap.add_argument("--max-score", type=float, default=0.5)
-    ap.add_argument("--metric", action="append", default=[], help="also select scenarios where this metric is < 1 (repeatable)")
+    ap.add_argument(
+        "--metric", action="append", default=[], help="also select scenarios where this metric is < 1 (repeatable)"
+    )
     ap.add_argument("--out", default=None, help="mirror directory (default <group_dir>/nuboard_failures)")
     ap.add_argument("--launch", action="store_true")
     ap.add_argument("--port", type=int, default=5006)
     args = ap.parse_args()
     sim_dirs = sorted(glob.glob(f"{args.group_dir}/simulation/*/20*"))
     if len(sim_dirs) != 1:
-        raise SystemExit(f"expected exactly one simulation/<challenge>/<timestamp> under {args.group_dir}, found {sim_dirs}")
+        raise SystemExit(
+            f"expected exactly one simulation/<challenge>/<timestamp> under {args.group_dir}, found {sim_dirs}"
+        )
     selected = select_failures(sim_dirs[0], args.max_score, args.metric)
     out_dir = Path(args.out or f"{args.group_dir}/nuboard_failures").resolve()
     linked = build_mirror(sim_dirs[0], out_dir, selected)

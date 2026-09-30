@@ -138,7 +138,9 @@ def main():
         written += 1
     for line in skipped:
         print(f"[add_nuplan_human_ghost] skipped {line}")
-    print(f"[add_nuplan_human_ghost] {written}/{len(replays)} replays updated -> now run scripts/eval/render_obs_html.py {args.group_dir}")
+    print(
+        f"[add_nuplan_human_ghost] {written}/{len(replays)} replays updated -> now run scripts/eval/render_obs_html.py {args.group_dir}"
+    )
 
 
 if __name__ == "__main__":

@@ -45,7 +45,8 @@ static int test_metric_overspeed_flag_respects_tolerance(void) {
     int agent_idx = env.active_agent_indices[0];
     Agent *agent = &env.agents[agent_idx];
     compute_metrics(&env, agent_idx, 0);
-    float limit = agent->current_lane_idx != -1 ? env.lane_speed_limit_mps[agent->current_lane_idx] : UNKNOWN_LANE_SPEED_LIMIT_MPS;
+    float limit = agent->current_lane_idx != -1 ? env.lane_speed_limit_mps[agent->current_lane_idx]
+                                                : UNKNOWN_LANE_SPEED_LIMIT_MPS;
     agent->sim_speed = limit + 1.0f;
 
     env.overspeed_tolerance_mps = 0.0f;

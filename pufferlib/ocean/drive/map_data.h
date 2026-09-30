@@ -89,7 +89,8 @@ static void cache_road_observation_geometry(Drive *env) {
             segment->half_length_m = sqrtf(half_dx_m * half_dx_m + half_dy_m * half_dy_m);
             segment->direction_x = segment->half_length_m > 0.0f ? half_dx_m / segment->half_length_m : half_dx_m;
             segment->direction_y = segment->half_length_m > 0.0f ? half_dy_m / segment->half_length_m : half_dy_m;
-            segment->width_m = has_lane_width ? 0.5f * (road->widths[segment_idx] + road->widths[segment_idx + 1]) : 0.0f;
+            segment->width_m
+                = has_lane_width ? 0.5f * (road->widths[segment_idx] + road->widths[segment_idx + 1]) : 0.0f;
         }
     }
 }
@@ -328,7 +329,9 @@ static void cache_neighbor_offsets(Drive *env) {
     int cell_count = grid->grid_cols * grid->grid_rows;
     if (grid->total_entities > UINT16_MAX) {
         raise_error_with_message(
-            ERROR_INVALID_ARGUMENT, "%d grid entities exceed the uint16 neighbor cache index", grid->total_entities);
+            ERROR_INVALID_ARGUMENT,
+            "%d grid entities exceed the uint16 neighbor cache index",
+            grid->total_entities);
     }
     grid->neighbor_cache_pool_idx = (uint16_t **) calloc(cell_count, sizeof(uint16_t *));
     grid->neighbor_cache_count = (int *) calloc(cell_count + 1, sizeof(int));

@@ -1,5 +1,4 @@
-"""Evaluator for the CARLA closed-loop co-simulation benchmark.
-"""
+"""Evaluator for the CARLA closed-loop co-simulation benchmark."""
 
 import contextlib
 import json
@@ -228,7 +227,9 @@ def _submit_carla_jobs(benchmark, checkpoint_path, output_dir, executor):
         _submit_carla_route_entry(benchmark, checkpoint_path, output_dir, executor, job_idx, route_id, attempt=1)
         for job_idx, route_id in enumerate(benchmark["route_ids"])
     ]
-    print(f"[cosim_eval] submitted {len(entries)} CARLA route jobs (run_leaderboard.sh) for benchmark {benchmark['name']}")
+    print(
+        f"[cosim_eval] submitted {len(entries)} CARLA route jobs (run_leaderboard.sh) for benchmark {benchmark['name']}"
+    )
     return entries
 
 
