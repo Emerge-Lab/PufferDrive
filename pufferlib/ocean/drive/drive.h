@@ -4077,10 +4077,6 @@ int c_set_agent_states(
         // not the true previous external state.
         agent->yaw_rate = yaw_rate[k];
         if (steering) {
-            // The external sim tracks the steering angle as state, as c_step does: take it as given and
-            // derive the lateral acceleration from it the way c_step's jerk dynamics do. A yaw rate alone
-            // cannot carry both below 1 m/s, where the derivation below floors the speed (at a standstill
-            // it would zero a steering angle the car still holds).
             agent->steering_angle = clip(steering[k], -STEERING_LIMIT, STEERING_LIMIT);
             agent->accel_lat
                 = agent->sim_speed_signed * agent->sim_speed_signed * tanf(agent->steering_angle) / agent->wheelbase;

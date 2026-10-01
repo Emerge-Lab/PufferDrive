@@ -847,12 +847,7 @@ class Drive(pufferlib.PufferEnv):
         binding.AGENT_STOPPED_SPEED_THRESHOLD) is optional: pass it when the
         external sim owns the agent's kinematics every tick, so stopped-time is
         injected as state instead of derived from the dummy in-sim rollout;
-        leave it None to keep c_step's own per-tick accumulation.
-        `steering` (front-wheel angle, rad) is optional: pass it when the
-        external sim tracks the steering angle as state, as c_step does; the
-        lateral acceleration is then derived from it. Left None, both are
-        derived from `yaw_rate`, which cannot represent a held steering angle
-        below 1 m/s."""
+        leave it None to keep c_step's own per-tick accumulation."""
         binding.vec_set_agent_states(
             self.c_envs,
             np.ascontiguousarray(idx, dtype=np.int32),
