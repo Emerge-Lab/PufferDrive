@@ -1,0 +1,71 @@
+# spline_werling trajectory ablation (branch `aditya/trajectory_ablation`)
+
+Code: commit `b39be70d` on top of `731e7117` ("Adding Werling Spline Dynamics"). W&B project
+`emerge_/pufferdrive`, group `spline_werling`, tag `s30bstraj`. Launched 2026-10-01 with
+`scripts/launch_fairshare.py` (30B steps, 40 h + `afterany` continuation, a100|h100|h200, **24 CPUs**).
+
+## 1. What was slow or not improving (measured 2026-10-01, running runs untouched)
+
+Comparisons are at equal agent steps against `spline_baseline` (jerk dynamics, same rewards).
+
+| # | Issue | Evidence |
+|---|-------|----------|
+| 1 | Goal progress stalls | v1 goals/episode 0.155 vs 0.094 at 1B, 0.183 vs 0.215 at 2.3B, 0.25 vs 0.59 at 5B; DNF 0.61 vs 0.39 |
+| 2 | Goals the lattice cannot reach | `goal_source: map` drops the first goal on a uniformly random map lane. Along lane links (no U-turns) 35/63 goals are unreachable in Town04, 29/64 in Town05, 18/64 in Town06, 14/63 in Town10HD. Reachable routes average 364-3531 m for a 129-460 m straight-line distance |
+| 3 | Route features carry no information | car->goal lane distance is capped at 500 m for 40-63 of 64 agents per town; per-exit distances are capped at the first split in 70/120 (Town01) to 71/72 (Town04); unreachable and far both read 1.0, so goal exit mode ties to slot 0 |
+| 4 | Queuing behind a stopped car | harness, 22 straight 2-lane sites (Town03/04/06), lead car stopped 12-30 m ahead, ego at 2-5 m/s, v1 checkpoint 002250: p(lane change) per decision 0.001-0.005, lower than on an empty road (0.006-0.008); p(stop cell) rises to 0.44-0.88. Masks allow a lane change at all 22 sites, so the policy, not the lattice, refuses |
+| 5 | Waiting is nearly free | velocity reward is binary above 2.5 m/s (7.5e-4 per step); waiting 10 s costs ~0.025, a 2 % crash risk costs 0.03 |
+| 6 | Slow to move | time to first motion 15-88 s, moving fraction 0.36-0.46, speed 0.7-1.05 m/s vs 1.2-1.8 for the baseline |
+| 7 | Plans re-chosen about every other decision | lat_new_rate 0.43 -> 0.50, lon_new_rate 0.44 -> 0.55 over training, all runs |
+| 8 | Red-light violations rising | v1 0.086 -> 0.134 while baseline falls 0.115 -> 0.099; the plan block had stop-line distance but no light state |
+| 9 | Velocity scaling trades off | vel5x: first motion 1.8 s, but goals 0.171 vs 0.183 at 2.3B, red light 0.18, collisions 0.156; vel50x collisions 0.28-0.31 |
+| 10 | Low SPS | 60-100 K vs 134-177 K for the baseline. Jobs keep 14.2-14.7 of 16 cores busy; 90 % of wall time is rollout, of which 62 % is waiting on CPU envs. Callgrind: lattice masks are 65 % of `c_step` (longitudinal cells 42 %) |
+| 11 | No overtaking lanes in 3 towns | same-direction neighbour lanes cover 0 % of Town01/Town02 and 0.9 % of Town07 lane length (structural, not fixed here) |
+
+## 2. Fixes (each is a separate, switchable change)
+
+| Fix | Change | Addresses | Why it should not regress |
+|-----|--------|-----------|---------------------------|
+| F2 route features | Per-exit feature = extra route over the best exit / 200 m (1 = unreachable or absent); car->goal feature log-scaled to 5 km; goal exit mode uses uncapped distances | 1, 3 | Same observation size; only replaces saturated values |
+| F3 light state | Plan block +2: red / yellow at the next stop line on the chain (58 -> 60 plan features) | 8 | Information only |
+| Preview fix | Preview advanced rail arc by d_sigma*factor/sqrt(factor^2+d'^2); now d_sigma/sqrt(factor^2+d'^2) (checks already used the exact relation) | obs accuracy on curves | Identical on straight rails or at d = 0 |
+| G route goals | `env.goal_source=route` (existing option): goals 20-200 m apart along a random lane walk; 512/512 reachable, mean route 95-126 m | 1, 2 | Task change, see caveats |
+| F6 route progress | `env.reward_route_progress` per meter of lane-route distance gained toward the current goal; potential capped at 1000 m; unmeasurable stretches keep the last baseline, so each goal's total is k x (start - end distance) | 4, 5, 6 | Potential-style shaping: telescopes, nothing to farm; pays for passing a blocker, never for detours |
+| F1 plan consistency | `env.reward_trajectory_consistency` x RMS world distance between the path observed before a decision and the newly committed one (5 preview samples, 0.6-3.0 s at dt 0.3), only when a plan changes; logged as `lattice/plan_change_rms_m` (all lattice runs) | 7 | At 2e-4/m a hard emergency brake (RMS 8-15 m) costs <= 3e-3 vs collision 1.5; random-policy RMS median 1.0 m |
+| SPS | 24 CPUs per run (`scripts/cluster_configs/ag11023_priority_anygpu_cpu24.yaml`), num_envs unchanged at 20 | 10 | No code or learning change; extra code costs <= 5 % per agent-step (bench 85.9-87.8 vs 83.6-84.9 us) |
+
+## 3. Runs (each adds one feature to the previous)
+
+All: `puffer train puffer_drive_spline_werling env.lattice_exit_mode=goal` plus the code fixes F2, F3 and the preview fix.
+
+| Run (wandb name) | Main / continuation | Adds | Overrides beyond the base |
+|------------------|---------------------|------|---------------------------|
+| `spline_werling_trajA_info` | 18935213 / 18935215 | F2, F3, preview fix, 24 CPUs | none |
+| `spline_werling_trajB_routegoals` | 18935221 / 18935224 | + reachable route goals | `env.goal_source=route` |
+| `spline_werling_trajC_progress` | 18935229 / 18935231 | + route-progress reward | `+ env.reward_route_progress=1e-3` |
+| `spline_werling_trajD_consistency` | 18935235 / 18935236 | + plan-consistency penalty | `+ env.reward_trajectory_consistency=2e-4` |
+
+Compare A with `spline_werling_goal` (same exit mode, old code). B-D change the goal task, so compare them with each other
+and with A, not on raw goal counts against map-goal runs.
+
+What to watch:
+- A: `exit_nonstraight_rate`, goals and DNF vs `spline_werling_goal`; red-light rate vs v1; SPS.
+- B: goals per episode, DNF, collisions.
+- C: `reward_components/route_progress`, moving fraction, time to first motion, `chosen_change_rate`, avg speed; collisions must not climb like vel5x.
+- D: `lattice/plan_change_rms_m` and lat/lon new rates should fall, with goals and collisions flat vs C.
+
+## 4. Caveats
+
+- Observation size grows from 1072 to 1074, so checkpoints from earlier runs do not load into these runs.
+- Route goals change what "goal reached" means. Evaluation (WOSAC, human replay) still uses logged goals.
+- `goal_source: route` follows the agent's random route, so the first goal can sit on a lane the policy has not chosen yet; goal exit mode steers to it by lane-graph distance.
+
+## 5. Not done (candidates for the next batch)
+
+- Partner-conflict feature along the committed preview (collisions are flat at 0.13-0.15).
+- Exact mask speedups (longitudinal cells are 42 % of `c_step`); a 0.6 s decision period would halve mask cost but adds reaction latency.
+- EMERGENCY use stays at 0.10-0.15 of steps.
+- Town01/02/07 cannot be overtaken in (no same-direction neighbour lanes).
+
+Harnesses behind the numbers: `/scratch/ag11023/tmp/claude/ablation/harness/` (`queue.c` + `queue_policy.py`, `lanestats.c`,
+`routecheck.c`, `bench.c`, `newfeat.c`); W&B pulls in `/scratch/ag11023/tmp/claude/ablation/`.
