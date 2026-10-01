@@ -18,6 +18,7 @@
 //  9. Rewards               conditioning coefficient indices
 // 10. Metrics & scoring     metrics_array indices and scoring windows
 // 11. Telemetry             html frame field counts, episode queue
+// 12. Lattice               spline_werling action factors, rail, tracking and mask tuning
 
 // =====================================================================================
 // 1. ENTITY TYPES
@@ -113,11 +114,13 @@
 #define DYNAMICS_MODEL_CLASSIC 0
 #define DYNAMICS_MODEL_JERK 1
 #define DYNAMICS_MODEL_SPLINE 2 // car follows the spline decoded from jerk-channel actions exactly
+#define DYNAMICS_MODEL_SPLINE_WERLING 3 // committed Werling Frenet plans tracked through the jerk integrator
 
 // Action representation
 #define ACTION_TYPE_DISCRETE 0
 #define ACTION_TYPE_CONTINUOUS 1
 #define ACTION_TYPE_SPLINE 2
+#define ACTION_TYPE_LATTICE 3
 
 // Widest per-agent float action layout across all action_type modes (spline: p1/v1/a1 per
 // axis). Used only by the C test fixture's allocate()-equivalent, which must size env->actions
@@ -334,10 +337,9 @@ static const int ROAD_OFFSETS[25][2]
 
 // obs_html_frame array field counts
 #define AGENT_F32_GOAL_RADIUS_IDX 12
-// Ego-only predicted-path samples (spline action_type), world-frame (x,y) pairs; zero for
-// every other agent row and for non-spline replays.
+// Predicted-path samples, world-frame (x,y) pairs: ego-only for spline/baseline, every policy agent for lattice.
 #define AGENT_F32_PATH_BASE_IDX 13
-#define AGENT_F32_PATH_SAMPLES 8
+#define AGENT_F32_PATH_SAMPLES 16
 #define AGENT_F32_FIELDS                                                                                               \
     (13 + 2 * AGENT_F32_PATH_SAMPLES) // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat,
                                        // jerk_long, jerk_lat, goal_radius, then AGENT_F32_PATH_SAMPLES (x,y) pairs
@@ -362,5 +364,184 @@ static const int ROAD_OFFSETS[25][2]
 #define REWARD_F32_OVERSPEED_IDX 12
 #define REWARD_F32_ADE_IDX 13
 #define REWARD_F32_FIELDS 14
+
+// =====================================================================================
+// 12. LATTICE (DYNAMICS_MODEL_SPLINE_WERLING + ACTION_TYPE_LATTICE)
+// =====================================================================================
+
+// -- Action factors: [lat gate, lat cell, lon gate, lon cell, exit slot]; index 0 of every factor is neutral
+#define LATTICE_ACTION_FACTORS 5
+#define LATTICE_FACTOR_LAT_GATE 0
+#define LATTICE_FACTOR_LAT_CELL 1
+#define LATTICE_FACTOR_LON_GATE 2
+#define LATTICE_FACTOR_LON_CELL 3
+#define LATTICE_FACTOR_EXIT 4
+#define LATTICE_GATE_KEEP 0
+#define LATTICE_GATE_NEW 1
+#define LATTICE_GATE_COUNT 2
+#define LATTICE_EXIT_SLOTS 5
+
+// -- Lateral plan modes and kinds
+#define LATTICE_LAT_MODE_TIME 0
+#define LATTICE_LAT_MODE_DIST 1
+#define LATTICE_LAT_KIND_OFFSET 0
+#define LATTICE_LAT_KIND_LANE_CHANGE 1
+#define LATTICE_LAT_KIND_HOLD 2
+
+// -- Longitudinal plan kinds
+#define LATTICE_LON_KIND_SPEED 0
+#define LATTICE_LON_KIND_STOP 1
+#define LATTICE_LON_KIND_STOP_LINE 2
+#define LATTICE_LON_KIND_BACKUP 3
+#define LATTICE_LON_KIND_EMERGENCY 4
+
+// -- Exit mode
+#define LATTICE_EXIT_MODE_POLICY 0
+#define LATTICE_EXIT_MODE_GOAL 1
+
+// -- Rail change kinds
+#define LATTICE_RAIL_CHANGE_NONE 0
+#define LATTICE_RAIL_CHANGE_CHOSEN 1
+#define LATTICE_RAIL_CHANGE_DRIFT 2
+#define LATTICE_RAIL_CHANGE_LOST 3
+#define LATTICE_RAIL_CHANGE_REBUILD 4
+
+// -- Menu capacities (config lists are validated against these)
+#define LATTICE_MAX_LAT_OFFSETS 5
+#define LATTICE_MAX_LAT_DURATIONS 6
+#define LATTICE_MAX_LON_SPEEDS 12
+#define LATTICE_MAX_LON_DURATIONS 6
+#define LATTICE_MAX_STOP_DISTANCES 6
+#define LATTICE_MAX_BACKUP_DISTANCES 6
+#define LATTICE_MAX_LAT_CELLS ((LATTICE_MAX_LAT_OFFSETS + 2) * LATTICE_MAX_LAT_DURATIONS)
+#define LATTICE_MAX_LON_CELLS                                                                                          \
+    (LATTICE_MAX_LON_SPEEDS * LATTICE_MAX_LON_DURATIONS + LATTICE_MAX_STOP_DISTANCES + 2 + LATTICE_MAX_BACKUP_DISTANCES)
+#define LATTICE_MAX_MASK_FEATURES                                                                                      \
+    (2 * LATTICE_GATE_COUNT + LATTICE_MAX_LAT_CELLS + LATTICE_MAX_LON_CELLS + LATTICE_EXIT_SLOTS)
+#define LATTICE_DURATION_TOLERANCE 1e-4f // |T/dt - lround(T/dt)| allowed for every menu duration
+#define LATTICE_MAX_PLAN_STEPS 400
+
+// -- Observation layout
+#define LATTICE_PLAN_FEATURES 58
+#define LATTICE_PREVIEW_POINTS 6
+#define LATTICE_PREVIEW_SUBSTEP_S 0.2f
+#define LATTICE_PREVIEW_SUBSTEPS 30
+#define LATTICE_PREVIEW_OBS_STRIDE 5    // substeps per observed preview point (1 s)
+#define LATTICE_PREVIEW_RENDER_STRIDE 2 // substeps per rendered path sample (0.4 s)
+#define LATTICE_OBS_DIST_NORM_M 50.0f
+#define LATTICE_OBS_TIME_NORM_S 6.0f
+#define LATTICE_OBS_SPEED_NORM_MPS 20.0f
+#define LATTICE_OBS_CURVATURE_SCALE_M 10.0f
+#define LATTICE_OBS_PREVIEW_NORM_M 100.0f
+#define LATTICE_OBS_ROAD_AHEAD_NEAR_M 10.0f
+#define LATTICE_OBS_ROAD_AHEAD_MID_M 25.0f
+#define LATTICE_OBS_ROAD_AHEAD_FAR_M 50.0f
+#define LATTICE_OBS_MARGIN_WINDOW_M 20.0f
+#define LATTICE_OBS_ENVELOPE_WINDOW_M 50.0f
+#define LATTICE_OBS_STOP_LINE_NORM_M 100.0f
+
+// -- Rail (per agent): samples at LATTICE_RAIL_SPACING_M, heading box filter over +-half window
+#define LATTICE_RAIL_SAMPLES 512
+#define LATTICE_RAIL_SPACING_M 0.5f
+#define LATTICE_SMOOTH_HALF_WINDOW 4
+#define LATTICE_CHAIN_MAX_LANES 24
+#define LATTICE_TRAIL_BEHIND_M 20.0f
+#define LATTICE_TRAIL_KEEP_M 30.0f
+#define LATTICE_EXIT_FREEZE_M 160.0f
+#define LATTICE_LOOKAHEAD_FREEZE_PAD_M 40.0f
+#define LATTICE_LOOKAHEAD_MIN_M 60.0f
+#define LATTICE_LOOKAHEAD_HORIZON_S 6.0f
+#define LATTICE_LOOKAHEAD_SPEED_PAD_M 20.0f
+#define LATTICE_LOOKAHEAD_HYSTERESIS_M 20.0f
+#define LATTICE_JOIN_GAP_MAX_M 0.5f
+#define LATTICE_MIN_SEGMENT_M 1e-3f
+#define LATTICE_MAX_PREDECESSORS 8
+#define LATTICE_BASE_LANE_COS 0.5f
+#define LATTICE_BASE_LANE_RANGE_M (2.0f * LANE_WIDTH)
+#define LATTICE_PROJECTION_WINDOW_SAMPLES 24
+#define LATTICE_MAX_RAIL_VERTICES 4096
+#define LATTICE_MAX_RAW_SAMPLES 1024
+#define LATTICE_BUILD_PAD_M 10.0f
+#define LATTICE_CHECK_RAIL_BEHIND_M 10.0f
+#define LATTICE_CHECK_RAIL_PAD_M 65.0f // speed gain within the 6 s keep horizon at 2.5 m/s^2, plus margin
+#define LATTICE_CHECK_RAIL_REUSE_SLACK_M 20.0f
+#define LATTICE_STOP_PROFILE_SAMPLES 20
+#define LATTICE_STOP_FALLBACK_CANDIDATES 2
+
+// -- Map profiles (per lane, every LATTICE_PROFILE_SPACING_M)
+#define LATTICE_PROFILE_SPACING_M 2.0f
+#define LATTICE_EDGE_SEARCH_M 12.0f
+#define LATTICE_NEIGHBOUR_MIN_M 2.5f
+#define LATTICE_NEIGHBOUR_MAX_M 4.5f
+#define LATTICE_NEIGHBOUR_COS 0.9f
+#define LATTICE_NEIGHBOUR_TIEBREAK_M 15.0f
+#define LATTICE_MAX_PROFILE_SAMPLES_PER_LANE 4096
+
+// -- Rail changes
+#define LATTICE_DRIFT_MARGIN_M 0.3f
+#define LATTICE_LOST_OFFSET_M (2.0f * LANE_WIDTH)
+#define LATTICE_LOST_COS 0.5f
+
+// -- Tracking (feedforward + clamped PD, then implied jerk into the jerk integrator)
+#define LATTICE_KP_LAT 2.25f
+#define LATTICE_KD_LAT 3.0f
+#define LATTICE_E_D_MAX_M 0.5f
+#define LATTICE_E_DD_MAX_MPS 1.0f
+#define LATTICE_K_SPEED 1.0f
+#define LATTICE_K_SIGMA 0.25f
+#define LATTICE_E_SIGMA_MAX_M 2.0f
+#define LATTICE_LOW_SPEED_MPS 3.0f
+#define LATTICE_FEEDBACK_FULL_SPEED_MPS 1.0f
+#define LATTICE_K_D_SPATIAL 0.3f
+#define LATTICE_K_HEADING_SPATIAL 1.0f
+#define LATTICE_WERLING_TOL_D_M 0.3f
+#define LATTICE_WERLING_TOL_DD_MPS 0.5f
+#define LATTICE_WERLING_TOL_V_MPS 0.5f
+#define LATTICE_WERLING_TOL_SIGMA_M 0.3f
+#define LATTICE_REPLAN_D_M 0.5f
+#define LATTICE_REPLAN_DD_MPS 1.0f
+#define LATTICE_REPLAN_ACCEL_MARGIN 0.85f
+#define LATTICE_REPLAN_T_STEP_S 0.3f
+#define LATTICE_REPLAN_T_MAX_S 12.0f
+#define LATTICE_RELEASE_SPEED_MPS 0.2f
+#define LATTICE_EMERGENCY_JERK_STEP 0.25f
+#define LATTICE_EMERGENCY_MAX_RELEASE_STEPS 200
+#define LATTICE_EMERGENCY_MIN_DIST_M 5.0f
+#define LATTICE_STOPPED_SPEED_MPS 1e-4f
+#define LATTICE_STOPPED_ACCEL_MPS2 1e-4f
+
+// -- Plan menus: durations searched for stop / back-up / automatic plans
+#define LATTICE_STOP_T_GRID_S 1.2f
+#define LATTICE_STOP_T_MAX_S 12.0f
+#define LATTICE_BACKUP_T_GRID_S 0.3f
+#define LATTICE_BACKUP_T_MAX_S 12.0f
+#define LATTICE_COMFORT_ACCEL_MPS2 3.0f
+#define LATTICE_COMFORT_BRAKE_JERK -5.0f
+#define LATTICE_LOW_SPEED_CURVATURE_PEAK 5.77f // max |d''| * S^2 / D of the rest-to-rest quintic
+
+// -- Masks
+#define LATTICE_ENVELOPE_MARGIN 0.85f
+#define LATTICE_ENVELOPE_BRAKE_MPS2 2.5f
+#define LATTICE_ENVELOPE_CURVATURE_HALF_WINDOW 8
+#define LATTICE_ENVELOPE_TOLERANCE_MPS 0.05f
+#define LATTICE_MASK_SAMPLES 10
+#define LATTICE_KEEP_CHECK_S 6.0f
+#define LATTICE_UNFOLLOWABLE_TOLERANCE 0.02f
+#define LATTICE_MIN_FRENET_FACTOR 0.2f
+#define LATTICE_NOMINAL_LAUNCH_SPEED_MPS 5.0f
+#define LATTICE_NOMINAL_LAUNCH_T_S 3.6f
+#define LATTICE_STEER_RATE_RPS 0.6f
+#define LATTICE_STOP_LINE_MARGIN_M 1.0f
+#define LATTICE_BACKUP_LANDING_M 0.2f
+#define LATTICE_REVERSE_EMERGENCY_MAX_M 2.93f // from -2 m/s at a = -1.5 m/s^2, weakest c
+#define LATTICE_SPAWN_MAX_LENGTH_M 7.0f       // gigaflow spawn length maximum (drive.h spawn sampling)
+#define LATTICE_CHECK_EPS 1e-6f
+#define LATTICE_GEOMETRY_EPS 1e-6f
+#define LATTICE_MIN_RATE_MPS 1e-3f
+#define LATTICE_REVERSAL_TOLERANCE_MPS 1e-6f
+#define LATTICE_TWO_STEP_EPS 1e-9f
+#define LATTICE_FILLET_MIN_TURN_RAD 1e-4f
+#define LATTICE_FILLET_MAX_TURN_RAD 3.1f
+#define LATTICE_MIN_BACKUP_DISTANCE_M 0.1f
 
 #endif

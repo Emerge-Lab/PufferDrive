@@ -63,6 +63,23 @@ env:
   spline_consistency_lag_count: 1
   # View-only quintic fitted to every jerk step (jerk + continuous only), drawn from dt to spline_horizon_seconds
   trajectory_baseline: false
+  # --- Werling lattice (dynamics_model spline_werling + action_type lattice; see puffer_drive_spline_werling.yaml) ---
+  # In-lane lateral end offsets (must contain 0); the +-lane cells use the measured neighbour lane
+  lattice_lat_offsets_m: [-0.9, 0.0, 0.9]
+  # Lateral durations; below lattice_low_speed_mps, while stopping and in reverse cell j is a d(s) plan over distance j
+  lattice_lat_durations_s: [2.4, 3.6, 4.8, 6.0]
+  lattice_low_speed_distances_m: [5.0, 10.0, 15.0, 20.0]
+  # Longitudinal speed cells (real signed speed) x durations
+  lattice_lon_speeds_mps: [0.0, 1.0, 2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0]
+  lattice_lon_durations_s: [1.2, 2.4, 3.6, 4.8, 6.0]
+  # Stop-at-distance cells and "back up B m and stop" cells (B <= 13.37 m, the trail bound)
+  lattice_stop_distances_m: [5.0, 10.0, 20.0, 40.0]
+  lattice_backup_distances_m: [1.0, 2.0, 5.0, 10.0]
+  lattice_low_speed_mps: 3.0
+  # Actions apply every decision period (whole number of dt); other steps keep
+  lattice_decision_period_s: 0.3
+  # Options: "policy" (exit slot chosen by the policy), "goal" (env picks the exit nearest the goal; ablation)
+  lattice_exit_mode: policy
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap
@@ -151,6 +168,9 @@ env:
   reward_lane_center: 0.001
   reward_center_bias: 0.0
   reward_velocity: 0.0025
+  # Multiplies the velocity coefficient (the pinned 2.5e-3 under reward_randomization, else reward_velocity) and its
+  # conditioning bounds, so the conditioning observation stays at its midpoint
+  reward_velocity_scale: 1.0
   reward_reverse: 0.005
   reward_timestep: 2.5e-05
   reward_overspeed: 0.05

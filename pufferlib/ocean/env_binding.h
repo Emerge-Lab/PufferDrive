@@ -786,6 +786,18 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
                     agent_f32[path_base + 1] = evaluate_quintic_derivative(a->spline_coefs_y, sample_t, 0);
                 }
             }
+            // lattice: every policy agent's committed plans (6 s preview), world frame
+            for (int active_idx = 0; drive->lattice_agents != NULL && active_idx < drive->active_agent_count; active_idx++) {
+                const struct LatticeAgent *lattice_agent = &drive->lattice_agents[active_idx];
+                if (drive->active_agent_indices[active_idx] != i || lattice_agent->rail.sample_count < 2 || a->removed) {
+                    continue;
+                }
+                for (int sample_idx = 0; sample_idx < AGENT_F32_PATH_SAMPLES; sample_idx++) {
+                    int path_base = f32_base + AGENT_F32_PATH_BASE_IDX + 2 * sample_idx;
+                    agent_f32[path_base] = lattice_agent->preview_world_xy[sample_idx][0];
+                    agent_f32[path_base + 1] = lattice_agent->preview_world_xy[sample_idx][1];
+                }
+            }
 
             agent_i32[i32_base + 0] = i;
             agent_i32[i32_base + 1] = a->type;
@@ -1203,6 +1215,30 @@ static double unpack(PyObject *kwargs, char *key) {
     return 1;
 }
 
+// finite float list of 1..max_count entries; returns the count, or -1 with a Python error set
+static int unpack_float_list(PyObject *kwargs, char *key, float *out, int max_count) {
+    PyObject *val = PyDict_GetItemString(kwargs, key);
+    if (val == NULL || !PyList_Check(val)) {
+        PyErr_Format(PyExc_TypeError, "Missing or non-list keyword argument '%s'", key);
+        return -1;
+    }
+    Py_ssize_t count = PyList_Size(val);
+    if (count < 1 || count > max_count) {
+        PyErr_Format(PyExc_ValueError, "'%s' must have between 1 and %d entries, got %zd", key, max_count, count);
+        return -1;
+    }
+    for (Py_ssize_t item_idx = 0; item_idx < count; item_idx++) {
+        double item = PyFloat_AsDouble(PyList_GetItem(val, item_idx));
+        if (PyErr_Occurred() || !isfinite(item)) {
+            PyErr_Clear();
+            PyErr_Format(PyExc_ValueError, "'%s'[%zd] must be a finite number", key, item_idx);
+            return -1;
+        }
+        out[item_idx] = (float) item;
+    }
+    return (int) count;
+}
+
 static char *unpack_str(PyObject *kwargs, char *key) {
     PyObject *val = PyDict_GetItemString(kwargs, key);
     if (val == NULL) {
@@ -1327,6 +1363,20 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_STATE_OFF", TRAFFIC_CONTROL_STATE_OFF);
     PyModule_AddIntConstant(m, "EGO_FEATURES", EGO_FEATURES);
     PyModule_AddIntConstant(m, "SPLINE_INTENT_FEATURES", SPLINE_INTENT_FEATURES);
+    PyModule_AddIntConstant(m, "DYNAMICS_MODEL_SPLINE_WERLING", DYNAMICS_MODEL_SPLINE_WERLING);
+    PyModule_AddIntConstant(m, "ACTION_TYPE_LATTICE", ACTION_TYPE_LATTICE);
+    PyModule_AddIntConstant(m, "LATTICE_PLAN_FEATURES", LATTICE_PLAN_FEATURES);
+    PyModule_AddIntConstant(m, "LATTICE_ACTION_FACTORS", LATTICE_ACTION_FACTORS);
+    PyModule_AddIntConstant(m, "LATTICE_GATE_COUNT", LATTICE_GATE_COUNT);
+    PyModule_AddIntConstant(m, "LATTICE_EXIT_SLOTS", LATTICE_EXIT_SLOTS);
+    PyModule_AddIntConstant(m, "LATTICE_MAX_LAT_OFFSETS", LATTICE_MAX_LAT_OFFSETS);
+    PyModule_AddIntConstant(m, "LATTICE_MAX_LAT_DURATIONS", LATTICE_MAX_LAT_DURATIONS);
+    PyModule_AddIntConstant(m, "LATTICE_MAX_LON_SPEEDS", LATTICE_MAX_LON_SPEEDS);
+    PyModule_AddIntConstant(m, "LATTICE_MAX_LON_DURATIONS", LATTICE_MAX_LON_DURATIONS);
+    PyModule_AddIntConstant(m, "LATTICE_MAX_STOP_DISTANCES", LATTICE_MAX_STOP_DISTANCES);
+    PyModule_AddIntConstant(m, "LATTICE_MAX_BACKUP_DISTANCES", LATTICE_MAX_BACKUP_DISTANCES);
+    PyModule_AddIntConstant(m, "LATTICE_EXIT_MODE_POLICY", LATTICE_EXIT_MODE_POLICY);
+    PyModule_AddIntConstant(m, "LATTICE_EXIT_MODE_GOAL", LATTICE_EXIT_MODE_GOAL);
     PyModule_AddIntConstant(m, "SPLINE_CONSISTENCY_MAX_LAG", SPLINE_CONSISTENCY_MAX_LAG);
     PyModule_AddIntConstant(m, "GOAL_FEATURES", GOAL_FEATURES);
     PyModule_AddIntConstant(m, "MAX_GOALS", MAX_GOALS);

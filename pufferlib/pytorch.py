@@ -1,5 +1,5 @@
 import sys
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, NamedTuple, Tuple, Union
 
 import numpy as np
 import torch
@@ -142,9 +142,56 @@ def entropy(logits):
     return -p_log_p.sum(-1)
 
 
+class LatticeLogits(NamedTuple):
+    """Masked logits of the five lattice factors; a cell only acts when its gate (index 1 = new) is chosen."""
+
+    lat_gate: torch.Tensor
+    lat_cell: torch.Tensor
+    lon_gate: torch.Tensor
+    lon_cell: torch.Tensor
+    exit_slot: torch.Tensor
+
+
+LATTICE_GATE_NEW = 1
+
+
+def sample_lattice_logits(logits, action=None, action_selection=ACTION_SELECT_SAMPLE):
+    """Conditional log-prob and entropy: cells count only when their gate says new, so keep rows give cell logits no gradient."""
+    if action_selection == ACTION_SELECT_MEAN:
+        raise ValueError("action_selection='mean' is undefined for the lattice action type")
+    min_real = torch.finfo(logits.lat_gate.dtype).min
+    log_probs = [torch.clamp(factor - factor.logsumexp(dim=-1, keepdim=True), min=min_real) for factor in logits]
+    batch = logits.lat_gate.shape[0]
+    if action is None:
+        if action_selection == ACTION_SELECT_SAMPLE:
+            picks = [torch.multinomial(lp.exp().nan_to_num(1e-8, 1e-8, 1e-8), 1, replacement=True).squeeze(-1) for lp in log_probs]
+        else:
+            picks = [torch.argmax(lp, dim=-1) for lp in log_probs]
+        action = torch.stack(picks, dim=-1)
+    else:
+        action = action.view(batch, len(log_probs)).long()
+    factor_log_probs = [lp.gather(-1, action[:, factor_idx : factor_idx + 1]).squeeze(-1) for factor_idx, lp in enumerate(log_probs)]
+    factor_entropies = [-(lp.exp() * lp).sum(-1) for lp in log_probs]
+    lat_new = (action[:, 0] == LATTICE_GATE_NEW).to(factor_log_probs[0].dtype)
+    lon_new = (action[:, 2] == LATTICE_GATE_NEW).to(factor_log_probs[0].dtype)
+    logprob = factor_log_probs[0] + lat_new * factor_log_probs[1] + factor_log_probs[2] + lon_new * factor_log_probs[3] + factor_log_probs[4]
+    p_lat_new = log_probs[0][:, LATTICE_GATE_NEW].exp().detach()
+    p_lon_new = log_probs[2][:, LATTICE_GATE_NEW].exp().detach()
+    entropy_sum = (
+        factor_entropies[0]
+        + p_lat_new * factor_entropies[1]
+        + factor_entropies[2]
+        + p_lon_new * factor_entropies[3]
+        + factor_entropies[4]
+    )
+    return action, logprob, entropy_sum, None
+
+
 def sample_logits(
     logits, action=None, action_selection=ACTION_SELECT_SAMPLE, env_continuous=None, policy=None
 ):  # TODO discrete continuous
+    if isinstance(logits, LatticeLogits):
+        return sample_lattice_logits(logits, action, action_selection)
     is_discrete = isinstance(logits, torch.Tensor)
     if action_selection == ACTION_SELECT_MEAN and not (env_continuous and not policy.is_continuous):
         raise ValueError("action_selection='mean' requires a discrete policy on a continuous env")

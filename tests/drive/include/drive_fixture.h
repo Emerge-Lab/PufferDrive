@@ -61,6 +61,7 @@ static inline Drive drive_test_env_config(
     env.reward_lane_center = 0.0038f;
     env.reward_center_bias = 0.0f;
     env.reward_velocity = 0.0025f;
+    env.reward_velocity_scale = 1.0f;
     env.reward_reverse = 0.005f;
     env.reward_stop_line = 1.0f;
     env.reward_timestep = 0.000025f;

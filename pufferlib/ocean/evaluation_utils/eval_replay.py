@@ -10,6 +10,7 @@ import torch
 from tqdm import tqdm
 
 import pufferlib
+import pufferlib.pytorch
 import pufferlib.viz
 
 
@@ -90,6 +91,14 @@ class EvalReplayCapture:
             replay_frame["policy_std"] = logits.scale[: self.agents_per_batch].detach().float().cpu().numpy()
             replay_frame["policy_log_prob"] = (
                 logprob[: self.agents_per_batch].detach().reshape(-1).float().cpu().numpy()
+            )
+        elif isinstance(logits, pufferlib.pytorch.LatticeLogits):
+            # per-factor probabilities, concatenated in factor order (nvec = env.lattice_nvec)
+            replay_frame["policy_probs"] = (
+                torch.cat([torch.softmax(factor[: self.agents_per_batch].float(), dim=-1) for factor in logits], dim=-1)
+                .detach()
+                .cpu()
+                .numpy()
             )
         else:
             discrete_logits = logits if isinstance(logits, torch.Tensor) else logits[0]

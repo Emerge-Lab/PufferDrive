@@ -18,6 +18,7 @@ UNIT_SRCS := \
 	test_drive_spline_dynamics.c \
 	test_drive_spline_dynamics_model.c \
 	test_drive_trajectory_baseline.c \
+	test_drive_spline_werling.c \
 	test_drive_map_cache.c \
 	test_drive_idm.c
 SMOKE_SRCS := test_drive_env_smoke.c
@@ -31,7 +32,7 @@ PERF_BINS := $(PERF_SRCS:%.c=$(BUILD_DIR)/%)
 # prerequisites, editing drive.h leaves stale test binaries behind.
 DRIVE_HEADERS := $(wildcard $(ROOT)/pufferlib/ocean/drive/*.h)
 
-$(BUILD_DIR)/%: %.c include/test.h include/drive_fixture.h $(DRIVE_HEADERS)
+$(BUILD_DIR)/%: %.c include/test.h include/drive_fixture.h include/lattice_test_fixture.h $(DRIVE_HEADERS)
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< $(LDLIBS_DRIVE) -o $@
 

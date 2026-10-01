@@ -144,7 +144,10 @@ class LSTMWrapper(nn.Module):
         state["hidden"] = hidden
         state["lstm_h"] = hidden
         state["lstm_c"] = c
-        logits, values = self.policy.decode_actions(hidden)
+        if getattr(self.policy, "decode_uses_state", False):
+            logits, values = self.policy.decode_actions(hidden, state)
+        else:
+            logits, values = self.policy.decode_actions(hidden)
         return logits, values
 
     def forward(self, observations, state):
@@ -186,7 +189,10 @@ class LSTMWrapper(nn.Module):
         hidden = hidden.transpose(0, 1)
 
         flat_hidden = hidden.reshape(B * TT, self.hidden_size)
-        logits, values = self.policy.decode_actions(flat_hidden)
+        if getattr(self.policy, "decode_uses_state", False):
+            logits, values = self.policy.decode_actions(flat_hidden, state)
+        else:
+            logits, values = self.policy.decode_actions(flat_hidden)
         values = values.reshape(B, TT)
         # state.batch_logits = logits.reshape(B, TT, -1)
         state["hidden"] = hidden

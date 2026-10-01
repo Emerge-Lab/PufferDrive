@@ -43,6 +43,13 @@ FINITE_NUMBER_CONSTRAINT = 7
 
 # Must match pufferlib/ocean/drive/constants.h's SPLINE_CONSISTENCY_MAX_SAMPLES.
 SPLINE_CONSISTENCY_MAX_SAMPLES = 64
+# Must match constants.h: LANE_WIDTH, LATTICE_DURATION_TOLERANCE, LATTICE_MAX_PLAN_STEPS and the back-up bound
+# LATTICE_TRAIL_BEHIND_M - LATTICE_BACKUP_LANDING_M - LATTICE_REVERSE_EMERGENCY_MAX_M - LATTICE_SPAWN_MAX_LENGTH_M / 2.
+LATTICE_LANE_WIDTH_M = 3.7
+LATTICE_DURATION_TOLERANCE = 1e-4
+LATTICE_MAX_PLAN_STEPS = 400
+LATTICE_BACKUP_MAX_M = 20.0 - 0.2 - 2.93 - 3.5
+LATTICE_STOP_T_MAX_S = 12.0
 
 
 def _raise_config_error(context, path, message):
@@ -113,12 +120,19 @@ class ActionType(Enum):
     discrete = 0
     continuous = 1
     spline = 2
+    lattice = 3
 
 
 class DynamicsModel(Enum):
     classic = 0
     jerk = 1
     spline = 2
+    spline_werling = 3
+
+
+class LatticeExitMode(Enum):
+    policy = 0
+    goal = 1
 
 
 class InfractionBehavior(Enum):
@@ -304,11 +318,22 @@ class DriveEnvConfig:
     reward_lane_center: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_center_bias: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_velocity: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    reward_velocity_scale: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     reward_reverse: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_timestep: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_overspeed: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_ade: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_trajectory_consistency: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    lattice_lat_offsets_m: list[float] = MISSING
+    lattice_lat_durations_s: list[float] = MISSING
+    lattice_low_speed_distances_m: list[float] = MISSING
+    lattice_lon_speeds_mps: list[float] = MISSING
+    lattice_lon_durations_s: list[float] = MISSING
+    lattice_stop_distances_m: list[float] = MISSING
+    lattice_backup_distances_m: list[float] = MISSING
+    lattice_low_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    lattice_decision_period_s: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    lattice_exit_mode: LatticeExitMode = MISSING
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
@@ -509,6 +534,8 @@ def normalize_puffer_drive_config(config, context="load"):
         error_path = getattr(exc, "full_key", None) or "root"
         error_message = str(exc).splitlines()[0]
         _raise_config_error(context, error_path, error_message)
+    if container["trajectory_training"] and "lattice" in (container["env"]["action_type"], container["policy"]["action_type"]):
+        _raise_config_error(context, "trajectory_training", "cannot be combined with the lattice action type")
     if container["trajectory_training"]:
         # trajectory_training is the single user-facing switch for the spline action mode;
         # env.action_type/policy.action_type are internal implementation details forced here
@@ -556,6 +583,107 @@ def _validate_string_selection(value, context, path, *, allow_none=True):
     valid_list = isinstance(value, list) and value and all(isinstance(item, str) and item.strip() for item in value)
     if not valid_list:
         _raise_config_error(context, path, "must be a non-empty string or list of non-empty strings")
+
+
+def _lattice_steps(duration_s, dt):
+    ratio = duration_s / dt
+    steps = round(ratio)
+    if steps < 1 or steps > LATTICE_MAX_PLAN_STEPS or abs(ratio - steps) > LATTICE_DURATION_TOLERANCE * max(1.0, ratio):
+        return None
+    return steps
+
+
+def _validate_lattice_list(values, path, context, max_count, low, high, *, ascending=False):
+    if not isinstance(values, list) or not 1 <= len(values) <= max_count:
+        _raise_config_error(context, path, f"must be a list of 1 to {max_count} numbers")
+    for value in values:
+        if not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:
+            _raise_config_error(context, path, f"entries must be finite and within [{low}, {high}]")
+    if ascending and any(later <= earlier for earlier, later in zip(values, values[1:])):
+        _raise_config_error(context, path, "must be strictly ascending")
+
+
+def _validate_lattice_config(config, context):
+    """spline_werling / lattice: pairing rules, menu ranges and whole-step durations (mirrors lattice.h)."""
+    env = config["env"]
+    policy = config["policy"]
+    uses_lattice = env["dynamics_model"] == "spline_werling"
+    if uses_lattice != (env["action_type"] == "lattice") or uses_lattice != (policy["action_type"] == "lattice"):
+        _raise_config_error(
+            context,
+            "env.dynamics_model",
+            "'spline_werling' requires env.action_type and policy.action_type 'lattice', and vice versa",
+        )
+    if not uses_lattice:
+        return
+    from pufferlib.ocean.drive import binding
+
+    dt = env["dt"]
+    if env["reset_accel_on_stop"]:
+        _raise_config_error(context, "env.reset_accel_on_stop", "must be false for spline_werling")
+    if env["trajectory_baseline"]:
+        _raise_config_error(context, "env.trajectory_baseline", "cannot be combined with spline_werling")
+    if config["eval"] is not None and config["eval"]["action_selection"] == "mean":
+        _raise_config_error(context, "eval.action_selection", "'mean' is undefined for the lattice action type")
+    if env["lattice_exit_mode"] == "goal" and env["goal_source"] == "gt":
+        _raise_config_error(context, "env.lattice_exit_mode", "'goal' needs goal lanes, which goal_source 'gt' lacks")
+    offsets = env["lattice_lat_offsets_m"]
+    _validate_lattice_list(
+        offsets,
+        "env.lattice_lat_offsets_m",
+        context,
+        binding.LATTICE_MAX_LAT_OFFSETS,
+        -LATTICE_LANE_WIDTH_M,
+        LATTICE_LANE_WIDTH_M,
+        ascending=True,
+    )
+    if 0 not in offsets:
+        _raise_config_error(context, "env.lattice_lat_offsets_m", "must contain 0 (the lane centre)")
+    duration_lists = (
+        ("lattice_lat_durations_s", binding.LATTICE_MAX_LAT_DURATIONS),
+        ("lattice_lon_durations_s", binding.LATTICE_MAX_LON_DURATIONS),
+    )
+    for key, max_count in duration_lists:
+        _validate_lattice_list(env[key], f"env.{key}", context, max_count, dt, LATTICE_STOP_T_MAX_S)
+        for duration_s in env[key]:
+            if _lattice_steps(duration_s, dt) is None:
+                _raise_config_error(context, f"env.{key}", f"{duration_s} s is not a whole number of dt={dt} steps")
+    _validate_lattice_list(
+        env["lattice_low_speed_distances_m"],
+        "env.lattice_low_speed_distances_m",
+        context,
+        binding.LATTICE_MAX_LAT_DURATIONS,
+        1.0,
+        100.0,
+    )
+    if len(env["lattice_low_speed_distances_m"]) != len(env["lattice_lat_durations_s"]):
+        _raise_config_error(
+            context, "env.lattice_low_speed_distances_m", "must have one entry per env.lattice_lat_durations_s entry"
+        )
+    _validate_lattice_list(
+        env["lattice_lon_speeds_mps"],
+        "env.lattice_lon_speeds_mps",
+        context,
+        binding.LATTICE_MAX_LON_SPEEDS,
+        0.0,
+        env["base_max_speed_mps"],
+    )
+    _validate_lattice_list(
+        env["lattice_stop_distances_m"], "env.lattice_stop_distances_m", context, binding.LATTICE_MAX_STOP_DISTANCES, 0.5, 500.0
+    )
+    _validate_lattice_list(
+        env["lattice_backup_distances_m"],
+        "env.lattice_backup_distances_m",
+        context,
+        binding.LATTICE_MAX_BACKUP_DISTANCES,
+        0.1,
+        LATTICE_BACKUP_MAX_M,
+    )
+    if not env["lattice_low_speed_mps"] < env["base_max_speed_mps"]:
+        _raise_config_error(context, "env.lattice_low_speed_mps", "must be below env.base_max_speed_mps")
+    for grid_s in (env["lattice_decision_period_s"], 1.2, 0.3):
+        if _lattice_steps(grid_s, dt) is None:
+            _raise_config_error(context, "env.dt", f"must divide {grid_s} s (decision period and plan grids)")
 
 
 def _validate_cross_field_constraints(config, context):
@@ -683,6 +811,7 @@ def _validate_cross_field_constraints(config, context):
                 f"must not exceed {implied_max_lag - 1} at this spline_horizon_seconds/dt; "
                 "deeper lags share no scored slot with the current curve",
             )
+    _validate_lattice_config(config, context)
     if config["rnn_name"] is not None:
         if policy["backbone_num_layers"] == 0:
             _raise_config_error(

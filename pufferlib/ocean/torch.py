@@ -12,6 +12,9 @@ from pufferlib.models import Convolutional as Conv  # noqa: F401
 Recurrent = pufferlib.models.LSTMWrapper
 
 ACTIVATIONS = {"relu": nn.ReLU, "tanh": nn.Tanh, "gelu": nn.GELU}
+LATTICE_MASK_ENCODER_SIZE = 64
+LATTICE_MASKED_LOGIT = -1e9
+LATTICE_SPECIAL_CELL_LOGIT_BIAS = -2.0
 
 
 class DriveBackbone(nn.Module):
@@ -114,6 +117,11 @@ class DriveBackbone(nn.Module):
         if self.context_dim > 0:
             self.context_encoder = self._create_encoder(self.context_dim, context_input_size)
             encoders_out += context_input_size
+        # Lattice action masks are appended after every other feature and also feed the encoder
+        self.lattice_mask_features = getattr(env, "lattice_mask_features", 0)
+        if self.lattice_mask_features > 0:
+            self.lattice_mask_encoder = self._create_encoder(self.lattice_mask_features, LATTICE_MASK_ENCODER_SIZE)
+            encoders_out += LATTICE_MASK_ENCODER_SIZE
 
         # 2. Main Backbone MLP
         backbone_act_cls = ACTIVATIONS[backbone_activation]
@@ -233,6 +241,8 @@ class DriveBackbone(nn.Module):
         if self.context_dim > 0:
             context_features = self.context_encoder(context_observations)
             feature_list.append(context_features)
+        if self.lattice_mask_features > 0:
+            feature_list.append(self.lattice_mask_encoder(observations[:, -self.lattice_mask_features :]))
 
         # Concatenate all features and pass through main backbone
         concat_features = torch.cat(feature_list, dim=1)
@@ -337,7 +347,11 @@ class Drive(nn.Module):
         super().__init__()
 
         # spline dynamics is continuous-only; the jerk table is never indexed there, it only fills the unused buffers
-        if env.dynamics_model_flag in (binding.DYNAMICS_MODEL_JERK, binding.DYNAMICS_MODEL_SPLINE):
+        if env.dynamics_model_flag in (
+            binding.DYNAMICS_MODEL_JERK,
+            binding.DYNAMICS_MODEL_SPLINE,
+            binding.DYNAMICS_MODEL_SPLINE_WERLING,
+        ):
             action_long_values, action_lat_values = binding.JERK_LONG, binding.JERK_LAT
         elif env.dynamics_model_flag == binding.DYNAMICS_MODEL_CLASSIC:
             action_long_values, action_lat_values = binding.ACCELERATION_VALUES, binding.STEERING_VALUES
@@ -374,7 +388,13 @@ class Drive(nn.Module):
         self.shared_network = shared_network
         # The spline intent block sits directly after the ego block in the C layout, so it must be
         # counted here or every downstream slice (context/partner/road/traffic) shifts by its width.
-        self.ego_dim = env.ego_features + env.spline_intent_features
+        self.ego_dim = env.ego_features + env.spline_intent_features + getattr(env, "lattice_plan_features", 0)
+        self.is_lattice = action_type == "lattice"
+        # LSTMWrapper hands its state to decode_actions so the masks never live on self
+        self.decode_uses_state = self.is_lattice
+        if self.is_lattice:
+            self.lattice_nvec = [int(n) for n in env.lattice_nvec]
+            self.lattice_mask_features = sum(self.lattice_nvec)
 
         # Prepare arguments for the Backbone
         backbone_args = {
@@ -416,6 +436,8 @@ class Drive(nn.Module):
         self.is_continuous = action_type in ("continuous", "spline")
         if self.is_continuous:
             self.action_dim = env.single_action_space.shape[0]
+        elif self.is_lattice:
+            self.action_dim = self.lattice_mask_features
         else:
             self.action_dim = self.action_long_norm.numel() * self.action_lat_norm.numel()
 
@@ -432,6 +454,14 @@ class Drive(nn.Module):
         actor_output_dim = self.action_dim * 2 if self.is_continuous else self.action_dim
         actor_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(actor_in, actor_output_dim), std=0.01))
         self.actor_head = nn.Sequential(*actor_head_layers)
+        if self.is_lattice:
+            # gates start unbiased; stop, stop-line, EMERGENCY and back-up cells start unlikely
+            lon_cell_offset = sum(self.lattice_nvec[:3])
+            first_special_cell = len(env.lattice_lon_speeds_mps) * len(env.lattice_lon_durations_s)
+            with torch.no_grad():
+                self.actor_head[-1].bias[lon_cell_offset + first_special_cell : lon_cell_offset + self.lattice_nvec[3]] = (
+                    LATTICE_SPECIAL_CELL_LOGIT_BIAS
+                )
 
         # n-layer MLP for critic head (num_layers = number of hidden layers)
         critic_head_layers = []
@@ -445,10 +475,13 @@ class Drive(nn.Module):
         critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, 1), std=1))
         self.critic_head = nn.Sequential(*critic_head_layers)
 
-    def _decode_actions(self, hidden):
+    def _decode_actions(self, hidden, lattice_masks=None):
         """Shared by forward() and decode_actions(): Normal(loc, scale) for a Gaussian action
-        type (continuous or spline), raw logits otherwise. Kept as one method so a third
-        Gaussian-like mode never has to be pasted into both call sites again."""
+        type (continuous or spline), masked per-factor logits for lattice, raw logits otherwise."""
+        if self.is_lattice:
+            logits = self.actor_head(hidden)
+            masked = logits.masked_fill(lattice_masks.to(logits.device) < 0.5, LATTICE_MASKED_LOGIT)
+            return pufferlib.pytorch.LatticeLogits(*torch.split(masked, self.lattice_nvec, dim=1))
         if self.is_continuous:
             params = self.actor_head(hidden)
             loc, scale = torch.split(params, self.action_dim, dim=1)
@@ -474,7 +507,8 @@ class Drive(nn.Module):
             critic_hidden = self.critic_backbone(observations, self.ego_dim)
 
         # Compute actions
-        actions = self._decode_actions(actor_hidden)
+        lattice_masks = observations[:, -self.lattice_mask_features :] if self.is_lattice else None
+        actions = self._decode_actions(actor_hidden, lattice_masks)
 
         # Compute value
         value = self.critic_head(critic_hidden)
@@ -493,16 +527,19 @@ class Drive(nn.Module):
     # Required for PufferLib recurrent wrappers
     def encode_observations(self, observations, state=None):
         assert self.shared_network, "LSTM wrapper requires shared_network=True"
+        if self.is_lattice:
+            state["lattice_mask"] = observations[:, -self.lattice_mask_features :]
         return self.actor_backbone(observations, self.ego_dim)
 
-    def decode_actions(self, hidden):
+    def decode_actions(self, hidden, state=None):
         """
         USE ONLY FOR LSTM WRAPPER.
         Decodes actions and value from the hidden state.
         Args:
             hidden: The hidden state for the actor (policy).
+            state: the wrapper state; carries the lattice masks stored by encode_observations.
         """
-        action = self._decode_actions(hidden)
+        action = self._decode_actions(hidden, state["lattice_mask"] if self.is_lattice else None)
         value = self.critic_head(hidden)
 
         return action, value

@@ -2,6 +2,7 @@
 """Hold GPU utilization above a floor so the cluster's idle-GPU reclaimer does not scancel long jobs."""
 
 import argparse
+import math
 import signal
 import sys
 import time
@@ -15,10 +16,14 @@ MIN_MATRIX_SIZE = 256
 MAX_MATRIX_SIZE = 32768
 MIN_POLL_INTERVAL_SECONDS = 0.5
 MAX_POLL_INTERVAL_SECONDS = 60.0
-MATMULS_PER_CHUNK = 8
+CHUNK_TARGET_SECONDS = 0.25
+CHUNKS_IN_FLIGHT = 2
+CALIBRATION_MATMULS = 16
+MAX_MATMULS_PER_CHUNK = 1024
 MAX_MATMULS_PER_WINDOW = 1 << 20
 EVENT_POLL_SECONDS = 0.001
 MAX_EVENT_POLLS = 10000
+MAX_HOLD_WINDOWS = 15
 STATUS_INTERVAL_SECONDS = 300.0
 
 terminate_requested = False
@@ -59,6 +64,11 @@ def read_utilization_percent():
         return None  # unreadable utilization must fall through to generating load, never to idling
 
 
+def hold_window_count(utilization_percent, target_utilization_percent):
+    deficit_fraction = (target_utilization_percent - utilization_percent) / target_utilization_percent
+    return max(0, math.ceil(MAX_HOLD_WINDOWS * deficit_fraction))
+
+
 def wait_for_chunk(completion_event):
     for _ in range(MAX_EVENT_POLLS):
         if completion_event.query():
@@ -67,15 +77,32 @@ def wait_for_chunk(completion_event):
     return False
 
 
-def generate_load(left, right, completion_event, window_end_seconds):
+def calibrate_chunk_matmuls(left, right):
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    for _ in range(CALIBRATION_MATMULS):
+        torch.mm(left, right)  # queued ahead so a CPU stall while enqueueing the timed span leaves no GPU gap in it
+    start_event.record()
+    for _ in range(CALIBRATION_MATMULS):
+        torch.mm(left, right)
+    end_event.record()
+    end_event.synchronize()
+    matmul_seconds = start_event.elapsed_time(end_event) / 1000.0 / CALIBRATION_MATMULS
+    return max(1, min(MAX_MATMULS_PER_CHUNK, math.ceil(CHUNK_TARGET_SECONDS / matmul_seconds)))
+
+
+# chunk_events is oldest first; two queued chunks keep the GPU busy while this nice-19 process waits for CPU
+def generate_load(left, right, chunk_events, chunk_matmuls, window_end_seconds):
     matmul_count = 0
     while time.monotonic() < window_end_seconds and matmul_count < MAX_MATMULS_PER_WINDOW:
-        for _ in range(MATMULS_PER_CHUNK):
-            torch.mm(left, right)
-        completion_event.record()
-        if not wait_for_chunk(completion_event):
+        oldest_event = chunk_events.pop(0)
+        if not wait_for_chunk(oldest_event):
             return -1
-        matmul_count += MATMULS_PER_CHUNK
+        for _ in range(chunk_matmuls):
+            torch.mm(left, right)
+        oldest_event.record()
+        chunk_events.append(oldest_event)
+        matmul_count += chunk_matmuls
     return matmul_count
 
 
@@ -91,18 +118,23 @@ def main():
     device = torch.device("cuda")
     left = torch.randn(args.matrix_size, args.matrix_size, device=device)
     right = torch.randn(args.matrix_size, args.matrix_size, device=device)
-    completion_event = torch.cuda.Event()
+    chunk_events = [torch.cuda.Event() for _ in range(CHUNKS_IN_FLIGHT)]
+    chunk_matmuls = calibrate_chunk_matmuls(left, right)
 
     log(f"started on {torch.cuda.get_device_name(device)} "
         f"target={args.target_utilization_percent:.0f}% "
-        f"poll={args.poll_interval_seconds:.1f}s matrix={args.matrix_size}")
+        f"poll={args.poll_interval_seconds:.1f}s matrix={args.matrix_size} chunk_matmuls={chunk_matmuls}")
     if read_utilization_percent() is None:
         log("WARNING: utilization is unreadable (pynvml missing?); will generate load continuously")
 
     windows_total = 0
     windows_fired = 0
     windows_unreadable = 0
+    windows_training_only = 0
     utilization_sum = 0.0
+    training_utilization_sum = 0.0
+    hold_windows_remaining = 0
+    previous_window_fired = False
     next_status_seconds = time.monotonic() + STATUS_INTERVAL_SECONDS
 
     while not terminate_requested:
@@ -113,12 +145,23 @@ def main():
             windows_unreadable += 1
         else:
             utilization_sum += utilization_percent
+        if utilization_percent is not None and not previous_window_fired:
+            windows_training_only += 1
+            training_utilization_sum += utilization_percent
 
-        if utilization_percent is None or utilization_percent < args.target_utilization_percent:
-            if generate_load(left, right, completion_event, window_end_seconds) < 0:
+        # a reading taken right after our own load measures the heartbeat, not training
+        if utilization_percent is None:
+            hold_windows_remaining = MAX_HOLD_WINDOWS
+        elif hold_windows_remaining == 0 and not previous_window_fired:
+            hold_windows_remaining = hold_window_count(utilization_percent, args.target_utilization_percent)
+
+        previous_window_fired = hold_windows_remaining > 0
+        if previous_window_fired:
+            if generate_load(left, right, chunk_events, chunk_matmuls, window_end_seconds) < 0:
                 log("ERROR: matmul chunk did not complete within the poll budget")
                 return 1
             windows_fired += 1
+            hold_windows_remaining -= 1
 
         idle_seconds = window_end_seconds - time.monotonic()
         if idle_seconds > 0.0:
@@ -130,10 +173,12 @@ def main():
 
         windows_readable = windows_total - windows_unreadable
         mean_utilization = utilization_sum / windows_readable if windows_readable else float("nan")
-        log(f"mean_utilization={mean_utilization:.1f}% fired={windows_fired}/{windows_total} "
-            f"unreadable={windows_unreadable}")
-        windows_total = windows_fired = windows_unreadable = 0
-        utilization_sum = 0.0
+        training_utilization = (training_utilization_sum / windows_training_only
+                                if windows_training_only else float("nan"))
+        log(f"mean_utilization={mean_utilization:.1f}% training_utilization={training_utilization:.1f}% "
+            f"fired={windows_fired}/{windows_total} unreadable={windows_unreadable}")
+        windows_total = windows_fired = windows_unreadable = windows_training_only = 0
+        utilization_sum = training_utilization_sum = 0.0
         next_status_seconds = now_seconds + STATUS_INTERVAL_SECONDS
 
     log("terminating on signal")

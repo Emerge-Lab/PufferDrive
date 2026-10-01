@@ -181,6 +181,195 @@ struct LaneGraph {
     int *lane_to_graph_idx; // road-element idx -> graph idx (-1 if lane absent from graph), sized num_road_elements
 };
 
+// Lattice menus and derived action layout; units in field names, cells enumerate duration-major.
+struct LatticeConfig {
+    int lat_offset_count;
+    float lat_offsets_m[LATTICE_MAX_LAT_OFFSETS];
+    int lat_duration_count;
+    float lat_durations_s[LATTICE_MAX_LAT_DURATIONS];
+    float low_speed_distances_m[LATTICE_MAX_LAT_DURATIONS];
+    int lon_speed_count;
+    float lon_speeds_mps[LATTICE_MAX_LON_SPEEDS];
+    int lon_duration_count;
+    float lon_durations_s[LATTICE_MAX_LON_DURATIONS];
+    int stop_distance_count;
+    float stop_distances_m[LATTICE_MAX_STOP_DISTANCES];
+    int backup_distance_count;
+    float backup_distances_m[LATTICE_MAX_BACKUP_DISTANCES];
+    float low_speed_mps;
+    float decision_period_s;
+    int exit_mode;
+    int decision_period_steps;
+    int lat_duration_steps[LATTICE_MAX_LAT_DURATIONS];
+    int lon_duration_steps[LATTICE_MAX_LON_DURATIONS];
+    int lat_cell_count;
+    int lon_speed_cell_count;
+    int lon_stop_cell_base;
+    int lon_stop_line_cell;
+    int lon_emergency_cell;
+    int lon_backup_cell_base;
+    int lon_cell_count;
+    int mask_feature_count;
+    int nvec[LATTICE_ACTION_FACTORS];
+};
+
+// Per road element, built once per env; exits are the pruned drivable successors in slot order.
+struct LatticeLaneInfo {
+    int exit_count;
+    int exit_slots[LATTICE_EXIT_SLOTS];
+    float exit_turn_rad[LATTICE_EXIT_SLOTS];
+    int predecessor_count;
+    int predecessors[LATTICE_MAX_PREDECESSORS];
+    int is_connector;
+    int traffic_light_idx;
+    float length_m;
+    float max_curvature;
+    int profile_offset;
+    int profile_count;
+    int cum_offset;
+    int point_count;
+};
+
+// Lane cross-section every LATTICE_PROFILE_SPACING_M; offsets signed, left positive.
+struct LatticeProfileSample {
+    float edge_left_m;
+    float edge_right_m;
+    int neighbour_lane[2];
+    float neighbour_offset_m[2];
+    float neighbour_arc_m[2];
+};
+
+struct LatticeVertex {
+    float x;
+    float y;
+    float lane_arc_m;
+    int chain_slot;
+};
+
+// Per-env buffers for building one rail; never shared between agents mid-build.
+struct LatticeBuildScratch {
+    struct LatticeVertex vertices[LATTICE_MAX_RAIL_VERTICES];
+    float raw_x[LATTICE_MAX_RAW_SAMPLES];
+    float raw_y[LATTICE_MAX_RAW_SAMPLES];
+    float raw_lane_arc_m[LATTICE_MAX_RAW_SAMPLES];
+    unsigned char raw_slot[LATTICE_MAX_RAW_SAMPLES];
+    float filtered_x[LATTICE_MAX_RAW_SAMPLES];
+    float filtered_y[LATTICE_MAX_RAW_SAMPLES];
+};
+
+// Reference rail: smoothed chain samples; s of sample j is s_start_m + j * LATTICE_RAIL_SPACING_M.
+struct LatticeRail {
+    int sample_count;
+    float s_start_m;
+    float x[LATTICE_RAIL_SAMPLES];
+    float y[LATTICE_RAIL_SAMPLES];
+    float heading[LATTICE_RAIL_SAMPLES];
+    float curvature[LATTICE_RAIL_SAMPLES];
+    float v_env[LATTICE_RAIL_SAMPLES];
+    float edge_left_m[LATTICE_RAIL_SAMPLES];
+    float edge_right_m[LATTICE_RAIL_SAMPLES];
+    float lane_arc_m[LATTICE_RAIL_SAMPLES];
+    unsigned char chain_slot[LATTICE_RAIL_SAMPLES];
+    int lane_count;
+    int lanes[LATTICE_CHAIN_MAX_LANES];
+    float lane_start_s_m[LATTICE_CHAIN_MAX_LANES];
+    float lane_end_s_m[LATTICE_CHAIN_MAX_LANES];
+    int exit_decided[LATTICE_CHAIN_MAX_LANES];
+    float chain_start_arc_m;
+    int chain_is_dead_end;
+    int chain_is_complete;
+    int is_straight_fallback;
+};
+
+// Lateral plan: quintic in time (u = t - t0) or in signed rail distance (u = dir * (s - s0)); holds beyond its end.
+struct LatticeLatPlan {
+    int mode;
+    int kind;
+    double coefs[6];
+    float horizon;
+    int start_step;
+    int end_step;
+    float start_s_m;
+    int dir;
+    float target_d_m;
+    int reindexed_low_speed;
+    int reindexed_stop;
+};
+
+// Longitudinal plan in distance driven sigma and real signed speed; speed plans hold their end speed.
+struct LatticeLonPlan {
+    int kind;
+    double coefs[6];
+    float horizon_s;
+    int start_step;
+    int end_step;
+    int cell;
+    float target_speed_mps;
+    double target_sigma_m;
+    int gear;
+    int release_latched;
+    int two_step_stage;
+};
+
+struct LatticeCounters {
+    float steps;
+    float decisions;
+    float lat_new;
+    float lon_new;
+    float invalid_actions;
+    float decode_rejects;
+    float auto_replans;
+    float no_reference_steps;
+    float lost;
+    float chosen_changes;
+    float drift_changes;
+    float tracking_error_m;
+    float speed_error_mps;
+    float jerk_clip_long;
+    float jerk_clip_lat;
+    float steer_rate_saturated;
+    float dist_mode_steps;
+    float emergency_steps;
+    float unfollowable_steps;
+    float exit_decisions;
+    float exit_nonstraight;
+    float late_exit_decisions;
+    float backups;
+    float backup_m;
+    float moving_steps;
+    float first_motion_step;
+    float rail_regens;
+};
+
+struct LatticeAgent {
+    struct LatticeRail rail;
+    struct LatticeLatPlan lat;
+    struct LatticeLonPlan lon;
+    int gear;
+    double sigma_m;
+    int lane_change_active;
+    int rail_changed_flag;
+    int has_reference;
+    int projection_hint;
+    int context_step;
+    int live_split_slot;
+    int late_exit_pending;
+    int phantom_was_active;
+    int neighbour_lane[2];
+    float neighbour_offset_m[2];
+    float neighbour_arc_m[2];
+    struct LatticeRail neighbour_check_rail[2];
+    int neighbour_check_lane[2];
+    int neighbour_check_hint[2];
+    float backup_duration_s[LATTICE_MAX_BACKUP_DISTANCES];
+    float reverse_emergency_stop_m;
+    short lon_cell_steps[LATTICE_MAX_LON_CELLS];
+    float stop_line_distance_m;
+    float preview_world_xy[AGENT_F32_PATH_SAMPLES][2];
+    unsigned char mask[LATTICE_MAX_MASK_FEATURES];
+    struct LatticeCounters counters;
+};
+
 void free_agent(struct Agent *agent) {
     free(agent->log_trajectory_x);
     free(agent->log_trajectory_y);

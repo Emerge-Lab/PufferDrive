@@ -1,0 +1,24 @@
+# Werling Frenet lattice: dynamics_model spline_werling. Usage: puffer train puffer_drive_spline_werling [overrides...]
+#
+# The policy picks MultiDiscrete([2, lat cells, 2, lon cells, 5]) = [lateral keep/new, lateral cell, longitudinal
+# keep/new, longitudinal cell, exit slot] every lattice_decision_period_s. C commits to Werling polynomials on a
+# smoothed lane rail (lateral quintic in time or distance, longitudinal quartic/quintic in real speed and distance
+# driven) and tracks them through the unchanged jerk integrator. Per-factor masks are appended to the observation
+# and applied to the logits; PPO scores a cell only when its gate says new. Menus live under env.lattice_*.
+defaults:
+  - puffer_drive
+  - _self_
+
+env:
+  action_type: lattice
+  dynamics_model: spline_werling
+  reset_accel_on_stop: false
+  trajectory_baseline: false
+  reward_trajectory_consistency: 0.0
+
+policy:
+  action_type: lattice
+
+eval:
+  # "mean" is undefined for a factored discrete action
+  action_selection: sample

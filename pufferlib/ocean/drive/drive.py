@@ -27,6 +27,7 @@ class Drive(pufferlib.PufferEnv):
         reward_lane_center=0.0038,
         reward_center_bias=0.0,
         reward_velocity=0.0025,
+        reward_velocity_scale=1.0,
         reward_reverse=0.005,
         reward_stop_line=1.0,
         reward_timestep=0.000025,
@@ -124,6 +125,16 @@ class Drive(pufferlib.PufferEnv):
         phantom_braking_prob=0.0,
         phantom_braking_trigger_prob=0.0,
         phantom_braking_duration_seconds=1.0,
+        lattice_lat_offsets_m=(-0.9, 0.0, 0.9),
+        lattice_lat_durations_s=(2.4, 3.6, 4.8, 6.0),
+        lattice_low_speed_distances_m=(5.0, 10.0, 15.0, 20.0),
+        lattice_lon_speeds_mps=(0.0, 1.0, 2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0),
+        lattice_lon_durations_s=(1.2, 2.4, 3.6, 4.8, 6.0),
+        lattice_stop_distances_m=(5.0, 10.0, 20.0, 40.0),
+        lattice_backup_distances_m=(1.0, 2.0, 5.0, 10.0),
+        lattice_low_speed_mps=3.0,
+        lattice_decision_period_s=0.3,
+        lattice_exit_mode="policy",
     ):
         self.dt = dt
         self.base_max_speed_mps = float(base_max_speed_mps)
@@ -145,6 +156,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_lane_center = reward_lane_center
         self.reward_center_bias = reward_center_bias
         self.reward_velocity = reward_velocity
+        self.reward_velocity_scale = float(reward_velocity_scale)
         self.reward_reverse = reward_reverse
         self.reward_stop_line = reward_stop_line
         self.reward_timestep = reward_timestep
@@ -191,9 +203,39 @@ class Drive(pufferlib.PufferEnv):
             "classic": binding.DYNAMICS_MODEL_CLASSIC,
             "jerk": binding.DYNAMICS_MODEL_JERK,
             "spline": binding.DYNAMICS_MODEL_SPLINE,
+            "spline_werling": binding.DYNAMICS_MODEL_SPLINE_WERLING,
         }[dynamics_model]
         if dynamics_model == "spline" and action_type != "spline":
             raise ValueError(f"dynamics_model 'spline' requires action_type 'spline', got {action_type!r}")
+        if (dynamics_model == "spline_werling") != (action_type == "lattice"):
+            raise ValueError(
+                f"dynamics_model 'spline_werling' and action_type 'lattice' require each other, got {dynamics_model!r} "
+                f"and {action_type!r}"
+            )
+        self.lattice_lat_offsets_m = [float(value) for value in lattice_lat_offsets_m]
+        self.lattice_lat_durations_s = [float(value) for value in lattice_lat_durations_s]
+        self.lattice_low_speed_distances_m = [float(value) for value in lattice_low_speed_distances_m]
+        self.lattice_lon_speeds_mps = [float(value) for value in lattice_lon_speeds_mps]
+        self.lattice_lon_durations_s = [float(value) for value in lattice_lon_durations_s]
+        self.lattice_stop_distances_m = [float(value) for value in lattice_stop_distances_m]
+        self.lattice_backup_distances_m = [float(value) for value in lattice_backup_distances_m]
+        self.lattice_low_speed_mps = float(lattice_low_speed_mps)
+        self.lattice_decision_period_s = float(lattice_decision_period_s)
+        self.lattice_exit_mode = {
+            "policy": binding.LATTICE_EXIT_MODE_POLICY,
+            "goal": binding.LATTICE_EXIT_MODE_GOAL,
+        }[lattice_exit_mode]
+        # [lat gate, lat cell, lon gate, lon cell, exit slot]; must match init_lattice_config in lattice.h
+        self.lattice_nvec = [
+            binding.LATTICE_GATE_COUNT,
+            (len(self.lattice_lat_offsets_m) + 2) * len(self.lattice_lat_durations_s),
+            binding.LATTICE_GATE_COUNT,
+            len(self.lattice_lon_speeds_mps) * len(self.lattice_lon_durations_s)
+            + len(self.lattice_stop_distances_m)
+            + 2
+            + len(self.lattice_backup_distances_m),
+            binding.LATTICE_EXIT_SLOTS,
+        ]
         if trajectory_baseline and (dynamics_model != "jerk" or action_type != "continuous"):
             raise ValueError(
                 "trajectory_baseline requires dynamics_model 'jerk' and action_type 'continuous', "
@@ -273,6 +315,8 @@ class Drive(pufferlib.PufferEnv):
         self.obs_valid_count_features = binding.OBS_VALID_COUNT_FEATURES
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
         self.spline_intent_features = binding.SPLINE_INTENT_FEATURES if action_type == "spline" else 0
+        self.lattice_plan_features = binding.LATTICE_PLAN_FEATURES if action_type == "lattice" else 0
+        self.lattice_mask_features = sum(self.lattice_nvec) if action_type == "lattice" else 0
 
         # One uniform target representation (ego-frame x, y, z) regardless of goal_regen_mode.
         self.goal_features = binding.GOAL_FEATURES
@@ -289,6 +333,8 @@ class Drive(pufferlib.PufferEnv):
             + self.obs_slots_boundary_kept * self.boundary_features
             + self.obs_slots_traffic_controls_n * self.traffic_control_features
             + self.obs_valid_count_features
+            + self.lattice_plan_features
+            + self.lattice_mask_features
         )
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
@@ -358,8 +404,13 @@ class Drive(pufferlib.PufferEnv):
         elif action_type == "spline":
             self._action_type_flag = binding.ACTION_TYPE_SPLINE
             self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(6,), dtype=np.float32)
+        elif action_type == "lattice":
+            self._action_type_flag = binding.ACTION_TYPE_LATTICE
+            self.single_action_space = gymnasium.spaces.MultiDiscrete(self.lattice_nvec)
         else:
-            raise ValueError(f"Unknown action_type: {action_type!r} (expected 'discrete', 'continuous', or 'spline')")
+            raise ValueError(
+                f"Unknown action_type: {action_type!r} (expected 'discrete', 'continuous', 'spline', or 'lattice')"
+            )
         self.starting_map_counter = starting_map
         self.starting_map_counter_init = starting_map
 
@@ -455,6 +506,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_lane_center": self.reward_lane_center,
             "reward_center_bias": self.reward_center_bias,
             "reward_velocity": self.reward_velocity,
+            "reward_velocity_scale": self.reward_velocity_scale,
             "reward_reverse": self.reward_reverse,
             "reward_stop_line": self.reward_stop_line,
             "reward_timestep": self.reward_timestep,
@@ -530,6 +582,16 @@ class Drive(pufferlib.PufferEnv):
             "phantom_braking_prob": self.phantom_braking_prob,
             "phantom_braking_trigger_prob": self.phantom_braking_trigger_prob,
             "phantom_braking_duration_seconds": self.phantom_braking_duration_seconds,
+            "lattice_lat_offsets_m": self.lattice_lat_offsets_m,
+            "lattice_lat_durations_s": self.lattice_lat_durations_s,
+            "lattice_low_speed_distances_m": self.lattice_low_speed_distances_m,
+            "lattice_lon_speeds_mps": self.lattice_lon_speeds_mps,
+            "lattice_lon_durations_s": self.lattice_lon_durations_s,
+            "lattice_stop_distances_m": self.lattice_stop_distances_m,
+            "lattice_backup_distances_m": self.lattice_backup_distances_m,
+            "lattice_low_speed_mps": self.lattice_low_speed_mps,
+            "lattice_decision_period_s": self.lattice_decision_period_s,
+            "lattice_exit_mode": self.lattice_exit_mode,
         }
 
     def _sample_init_step(self):

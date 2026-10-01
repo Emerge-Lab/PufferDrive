@@ -131,6 +131,10 @@ def clean_policy_state_dict(state_dict):
 def logits_to_float(logits):
     if isinstance(logits, torch.distributions.Normal):
         return torch.distributions.Normal(logits.loc.float(), logits.scale.float())
+    if isinstance(logits, pufferlib.pytorch.LatticeLogits):
+        return pufferlib.pytorch.LatticeLogits(*(factor.float() for factor in logits))
+    if isinstance(logits, tuple):
+        return tuple(factor.float() for factor in logits)
     return logits.float()
 
 
@@ -153,6 +157,9 @@ class PuffeRL:
 
         self.env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
         obs_space = vecenv.single_observation_space
+        # lattice masks (0/1, appended last) are not features: keep them out of the obs statistics
+        driver_env = getattr(vecenv, "driver_env", None)
+        self.obs_stats_width = obs_space.shape[0] - getattr(driver_env, "lattice_mask_features", 0)
         # Custom policy attributes live on the base module, not the DDP/compile wrapper.
         unwrapped_policy = base_policy(policy)
         if self.env_continuous and not unwrapped_policy.is_continuous:
@@ -393,9 +400,10 @@ class PuffeRL:
             # Obs distribution stats (max/min/mean across the batch and obs
             # dims, appended per env step). Surfaces clipping / unbounded
             # features / normalization regressions in wandb.
-            self.stats["obs/max"].append(o_device.max().item())
-            self.stats["obs/min"].append(o_device.min().item())
-            self.stats["obs/mean"].append(o_device.mean().item())
+            stats_obs = o_device[..., : self.obs_stats_width]
+            self.stats["obs/max"].append(stats_obs.max().item())
+            self.stats["obs/min"].append(stats_obs.min().item())
+            self.stats["obs/mean"].append(stats_obs.mean().item())
 
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
@@ -1430,6 +1438,16 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "traffic_lights_enabled",
             "stop_signs_enabled",
             "yield_signs_enabled",
+            "lattice_lat_offsets_m",
+            "lattice_lat_durations_s",
+            "lattice_low_speed_distances_m",
+            "lattice_lon_speeds_mps",
+            "lattice_lon_durations_s",
+            "lattice_stop_distances_m",
+            "lattice_backup_distances_m",
+            "lattice_low_speed_mps",
+            "lattice_decision_period_s",
+            "lattice_exit_mode",
         }
         if os.path.exists(config_yaml_path):
             print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")
@@ -2273,6 +2291,10 @@ def _run_eval_rollout(
                     raw_action = action[:agents_per_batch].cpu().numpy()
                     continuous_actions = cont_action.reshape(-1, *vecenv.single_action_space.shape)
                     action = continuous_actions[:agents_per_batch].float().cpu().numpy()
+                elif isinstance(vecenv.single_action_space, pufferlib.spaces.MultiDiscrete):
+                    # Box.contains-style float casts would reject integer factors; keep them integral
+                    raw_action = action[:agents_per_batch].cpu().numpy().astype(np.int32).reshape(vecenv.action_space.shape)
+                    action = raw_action
                 else:
                     raw_action = action[:agents_per_batch].float().cpu().numpy().reshape(vecenv.action_space.shape)
                     action = raw_action

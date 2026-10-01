@@ -1,0 +1,6 @@
+# dynamics_model spline_werling (puffer_drive_spline_werling.yaml): Werling Frenet lattice. Factored masked action
+# MultiDiscrete([2, 20, 2, 60, 5]) chooses committed lateral/longitudinal polynomials on a smoothed lane rail, tracked
+# through the jerk integrator. Renders draw every agent's 6 s committed plan (predicted path).
+wandb: True
+wandb_project: pufferdrive
+wandb_group: spline_werling

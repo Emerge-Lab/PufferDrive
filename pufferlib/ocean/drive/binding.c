@@ -1959,9 +1959,17 @@ static PyObject *map_cache_release_py(
 static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->action_type = (int) unpack(kwargs, "action_type");
     env->dynamics_model = (int) unpack(kwargs, "dynamics_model");
-    if (env->dynamics_model < DYNAMICS_MODEL_CLASSIC || env->dynamics_model > DYNAMICS_MODEL_SPLINE) {
+    if (env->dynamics_model < DYNAMICS_MODEL_CLASSIC || env->dynamics_model > DYNAMICS_MODEL_SPLINE_WERLING) {
         PyErr_Format(PyExc_ValueError, "dynamics_model must be in [%d, %d]. Got: %d", DYNAMICS_MODEL_CLASSIC,
-                     DYNAMICS_MODEL_SPLINE, env->dynamics_model);
+                     DYNAMICS_MODEL_SPLINE_WERLING, env->dynamics_model);
+        return -1;
+    }
+    // lattice plans read five int32 factors per agent; any other buffer layout would be misread
+    if ((env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING) != (env->action_type == ACTION_TYPE_LATTICE)) {
+        PyErr_Format(PyExc_ValueError,
+                     "dynamics_model spline_werling and action_type lattice require each other. Got dynamics_model: %d, "
+                     "action_type: %d",
+                     env->dynamics_model, env->action_type);
         return -1;
     }
     // spline dynamics reads six action floats per agent; any narrower action buffer would be read out of bounds
@@ -1971,6 +1979,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         return -1;
     }
     env->reset_accel_on_stop = (bool) unpack(kwargs, "reset_accel_on_stop");
+    if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING && env->reset_accel_on_stop) {
+        PyErr_SetString(PyExc_ValueError, "dynamics_model spline_werling requires reset_accel_on_stop false");
+        return -1;
+    }
     env->spline_horizon_seconds = (float) unpack(kwargs, "spline_horizon_seconds");
     env->spline_consistency_lag_count = (int) unpack(kwargs, "spline_consistency_lag_count");
     if (env->spline_consistency_lag_count < 1 || env->spline_consistency_lag_count > SPLINE_CONSISTENCY_MAX_LAG) {
@@ -1990,6 +2002,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_lane_center = (float) unpack(kwargs, "reward_lane_center");
     env->reward_center_bias = (float) unpack(kwargs, "reward_center_bias");
     env->reward_velocity = (float) unpack(kwargs, "reward_velocity");
+    env->reward_velocity_scale = (float) unpack(kwargs, "reward_velocity_scale");
+    if (!(env->reward_velocity_scale > 0.0f) || !isfinite(env->reward_velocity_scale)) {
+        PyErr_Format(PyExc_ValueError, "reward_velocity_scale must be a positive finite number. Got: %g", env->reward_velocity_scale);
+        return -1;
+    }
     env->reward_reverse = (float) unpack(kwargs, "reward_reverse");
     env->reward_stop_line = (float) unpack(kwargs, "reward_stop_line");
     env->reward_timestep = (float) unpack(kwargs, "reward_timestep");
@@ -2111,8 +2128,40 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->phantom_braking_prob = (float) unpack(kwargs, "phantom_braking_prob");
     env->phantom_braking_trigger_prob = (float) unpack(kwargs, "phantom_braking_trigger_prob");
     env->phantom_braking_duration = (int) unpack(kwargs, "phantom_braking_duration_seconds");
+    if (PyErr_Occurred()) {
+        return -1;
+    }
+    if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING) {
+        struct LatticeConfig *lattice = &env->lattice;
+        lattice->lat_offset_count = unpack_float_list(kwargs, "lattice_lat_offsets_m", lattice->lat_offsets_m, LATTICE_MAX_LAT_OFFSETS);
+        lattice->lat_duration_count = unpack_float_list(kwargs, "lattice_lat_durations_s", lattice->lat_durations_s, LATTICE_MAX_LAT_DURATIONS);
+        int low_speed_distance_count = unpack_float_list(kwargs, "lattice_low_speed_distances_m", lattice->low_speed_distances_m, LATTICE_MAX_LAT_DURATIONS);
+        lattice->lon_speed_count = unpack_float_list(kwargs, "lattice_lon_speeds_mps", lattice->lon_speeds_mps, LATTICE_MAX_LON_SPEEDS);
+        lattice->lon_duration_count = unpack_float_list(kwargs, "lattice_lon_durations_s", lattice->lon_durations_s, LATTICE_MAX_LON_DURATIONS);
+        lattice->stop_distance_count = unpack_float_list(kwargs, "lattice_stop_distances_m", lattice->stop_distances_m, LATTICE_MAX_STOP_DISTANCES);
+        lattice->backup_distance_count = unpack_float_list(kwargs, "lattice_backup_distances_m", lattice->backup_distances_m, LATTICE_MAX_BACKUP_DISTANCES);
+        if (PyErr_Occurred()) {
+            return -1;
+        }
+        if (low_speed_distance_count != lattice->lat_duration_count) {
+            PyErr_SetString(PyExc_ValueError, "lattice_low_speed_distances_m must have one entry per lattice_lat_durations_s entry");
+            return -1;
+        }
+        lattice->low_speed_mps = (float) unpack(kwargs, "lattice_low_speed_mps");
+        lattice->decision_period_s = (float) unpack(kwargs, "lattice_decision_period_s");
+        lattice->exit_mode = (int) unpack(kwargs, "lattice_exit_mode");
+        if (PyErr_Occurred()) {
+            return -1;
+        }
+    }
 
-    init(env);
+    if (init(env) != 0) {
+        PyErr_Format(PyExc_RuntimeError, "Drive env init failed for map %s (see stderr for the reason)", map_file != NULL ? map_file : "?");
+        if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING && env->grid_map != NULL) {
+            c_close(env);
+        }
+        return -1;
+    }
     // Episodes must always be generated by c_reset's full path so a logged
     // episode_seed replays identically regardless of which reset created it.
     env->timestep = -1;
@@ -2210,6 +2259,33 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "spline/consistency_msd_m2", log->spline_consistency_msd_m2);
     assign_to_dict(dict, "spline/consistency_lag1_msd_m2", log->spline_consistency_lag1_msd_m2);
     assign_to_dict(dict, "spline/slip_angle_rad", log->spline_slip_angle_rad);
+    if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING) {
+        assign_to_dict(dict, "lattice/lat_new_rate", log->lattice_lat_new_rate);
+        assign_to_dict(dict, "lattice/lon_new_rate", log->lattice_lon_new_rate);
+        assign_to_dict(dict, "lattice/invalid_action_rate", log->lattice_invalid_action_rate);
+        assign_to_dict(dict, "lattice/decode_reject_rate", log->lattice_decode_reject_rate);
+        assign_to_dict(dict, "lattice/auto_replan_rate", log->lattice_auto_replan_rate);
+        assign_to_dict(dict, "lattice/no_reference_rate", log->lattice_no_reference_rate);
+        assign_to_dict(dict, "lattice/lost_rate", log->lattice_lost_rate);
+        assign_to_dict(dict, "lattice/chosen_change_rate", log->lattice_chosen_change_rate);
+        assign_to_dict(dict, "lattice/drift_change_rate", log->lattice_drift_change_rate);
+        assign_to_dict(dict, "lattice/tracking_error_m", log->lattice_tracking_error_m);
+        assign_to_dict(dict, "lattice/speed_error_mps", log->lattice_speed_error_mps);
+        assign_to_dict(dict, "lattice/jerk_clip_long_rate", log->lattice_jerk_clip_long_rate);
+        assign_to_dict(dict, "lattice/jerk_clip_lat_rate", log->lattice_jerk_clip_lat_rate);
+        assign_to_dict(dict, "lattice/steer_rate_saturation_rate", log->lattice_steer_rate_saturation_rate);
+        assign_to_dict(dict, "lattice/dist_mode_rate", log->lattice_dist_mode_rate);
+        assign_to_dict(dict, "lattice/emergency_rate", log->lattice_emergency_rate);
+        assign_to_dict(dict, "lattice/unfollowable_ref_rate", log->lattice_unfollowable_rate);
+        assign_to_dict(dict, "lattice/exit_decisions", log->lattice_exit_decisions);
+        assign_to_dict(dict, "lattice/exit_nonstraight_rate", log->lattice_exit_nonstraight_rate);
+        assign_to_dict(dict, "lattice/late_exit_decisions", log->lattice_late_exit_decisions);
+        assign_to_dict(dict, "lattice/backup_rate", log->lattice_backup_rate);
+        assign_to_dict(dict, "lattice/backup_m", log->lattice_backup_m);
+        assign_to_dict(dict, "lattice/moving_fraction", log->lattice_moving_fraction);
+        assign_to_dict(dict, "lattice/time_to_first_motion_s", log->lattice_time_to_first_motion_s);
+        assign_to_dict(dict, "lattice/rail_regen_rate", log->lattice_rail_regen_rate);
+    }
 
     if (env->compute_eval_metrics) {
         // Puffer score components

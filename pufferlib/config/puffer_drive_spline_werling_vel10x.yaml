@@ -1,0 +1,8 @@
+# spline_werling with the velocity reward coefficient scaled 10x: pinned 2.5e-3 -> 0.025 (bounds scaled too,
+# so the reward-conditioning observation stays at its midpoint). Usage: puffer train puffer_drive_spline_werling_vel10x
+defaults:
+  - puffer_drive_spline_werling
+  - _self_
+
+env:
+  reward_velocity_scale: 10.0

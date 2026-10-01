@@ -91,6 +91,31 @@ struct Log {
     float spline_consistency_msd_m2;
     float spline_consistency_lag1_msd_m2;
     float spline_slip_angle_rad;
+    float lattice_lat_new_rate;
+    float lattice_lon_new_rate;
+    float lattice_invalid_action_rate;
+    float lattice_decode_reject_rate;
+    float lattice_auto_replan_rate;
+    float lattice_no_reference_rate;
+    float lattice_lost_rate;
+    float lattice_chosen_change_rate;
+    float lattice_drift_change_rate;
+    float lattice_tracking_error_m;
+    float lattice_speed_error_mps;
+    float lattice_jerk_clip_long_rate;
+    float lattice_jerk_clip_lat_rate;
+    float lattice_steer_rate_saturation_rate;
+    float lattice_dist_mode_rate;
+    float lattice_emergency_rate;
+    float lattice_unfollowable_rate;
+    float lattice_exit_decisions;
+    float lattice_exit_nonstraight_rate;
+    float lattice_late_exit_decisions;
+    float lattice_backup_rate;
+    float lattice_backup_m;
+    float lattice_moving_fraction;
+    float lattice_time_to_first_motion_s;
+    float lattice_rail_regen_rate;
 };
 
 struct GridMapEntity {
@@ -234,6 +259,7 @@ struct Drive {
     float reward_lane_center;
     float reward_center_bias;
     float reward_velocity;
+    float reward_velocity_scale; // multiplies the velocity coefficient (pinned or configured) and its conditioning bounds
     float reward_reverse;
     float reward_stop_line;
     float reward_timestep;
@@ -286,6 +312,16 @@ struct Drive {
     float phantom_braking_prob;
     float phantom_braking_trigger_prob;
     int phantom_braking_duration;
+    // Lattice (DYNAMICS_MODEL_SPLINE_WERLING only; NULL arrays otherwise)
+    struct LatticeConfig lattice;
+    struct LatticeLaneInfo *lattice_lanes;
+    struct LatticeProfileSample *lattice_profiles;
+    int lattice_profile_count;
+    struct LatticeAgent *lattice_agents;
+    struct LatticeRail *lattice_scratch_rail;
+    struct LatticeBuildScratch *lattice_build_scratch;
+    float *lattice_lane_cum_m;
+    int episode_start_step;
     // Logging
     Log log;
     Log *logs;
@@ -627,6 +663,7 @@ static inline void project_point_from_ego_frame(
 }
 
 #include "map_data.h"
+#include "lattice.h"
 
 // ========================================
 // Road Utility Functions
@@ -2262,6 +2299,9 @@ static void add_log(Drive *env) {
         // Lane metrics (normalized per timestep for average per episode)
         episode_log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
         episode_log.lane_heading_aligned_rate += env->logs[i].lane_heading_aligned_rate / safe_timestep;
+        if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING) {
+            add_lattice_log(env, i, &episode_log);
+        }
         if (env->compute_eval_metrics) {
             env->logs[i].progress_ratio = agent->distance_since_spawn / reference_progress_distance;
             env->logs[i].comfort_score = calculate_duration_scaled_violation_score(
@@ -2347,7 +2387,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
                 ? sample_log_uniform(&env->rng_state, bounds[c].min_val, bounds[c].max_val)
                 : sample_uniform(&env->rng_state, bounds[c].min_val, bounds[c].max_val);
         }
-        agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
+        agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f * env->reward_velocity_scale;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = 2.5e-5f;
         agent->reward_coefs[REWARD_COEF_THROTTLE] = sample_mixed_uniform(&env->rng_state, 1.25f);
         agent->reward_coefs[REWARD_COEF_STEER] = sample_mixed_uniform(&env->rng_state, 1.25f);
@@ -2361,7 +2401,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_COMFORT] = env->reward_comfort;
         agent->reward_coefs[REWARD_COEF_LANE_ALIGN] = env->reward_lane_align;
         agent->reward_coefs[REWARD_COEF_LANE_CENTER] = env->reward_lane_center;
-        agent->reward_coefs[REWARD_COEF_VELOCITY] = env->reward_velocity;
+        agent->reward_coefs[REWARD_COEF_VELOCITY] = env->reward_velocity * env->reward_velocity_scale;
         agent->reward_coefs[REWARD_COEF_STOP_LINE] = env->reward_stop_line;
         agent->reward_coefs[REWARD_COEF_CENTER_BIAS] = env->reward_center_bias;
         agent->reward_coefs[REWARD_COEF_VEL_ALIGN] = env->reward_vel_align;
@@ -3055,7 +3095,7 @@ void remove_bad_trajectories(Drive *env) {
     env->timestep = 0;
 }
 
-void init(Drive *env) {
+int init(Drive *env) {
     env->timestep = 0;
     struct SharedMapData *shared = env->use_map_cache ? map_cache_lookup(env) : NULL;
     if (shared != NULL) {
@@ -3063,7 +3103,7 @@ void init(Drive *env) {
         // then discard the freshly-loaded geometry and borrow the shared copy.
         if (load_map_binary(env->map_name, env) != 0) {
             fprintf(stderr, "[ERROR] -> Failed to load map binary: %s\n", env->map_name);
-            return;
+            return -1;
         }
         for (int i = 0; i < env->num_road_elements; i++) {
             free_road_element(&env->road_elements[i]);
@@ -3081,11 +3121,11 @@ void init(Drive *env) {
         // Cache miss (or caching off): load and build the geometry as usual.
         if (load_map_binary(env->map_name, env) != 0) {
             fprintf(stderr, "[ERROR] -> Failed to load map binary: %s\n", env->map_name);
-            return;
+            return -1;
         }
         if (init_grid_map(env) != 0) {
             fprintf(stderr, "[ERROR] -> Failed to build grid map for map: %s\n", env->map_name);
-            return;
+            return -1;
         }
         env->grid_map->vision_range = compute_vision_range(env);
         init_neighbor_offsets(env);
@@ -3100,6 +3140,9 @@ void init(Drive *env) {
     }
     if (!env->use_neighbor_cache) {
         env->obs_neighbor_scratch = (GridMapEntity *) malloc(env->grid_map->total_entities * sizeof(GridMapEntity));
+    }
+    if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING && init_lattice_map(env) != 0) {
+        return -1;
     }
     env->road_dropout_enabled = (env->obs_slots_lane_kept < env->obs_slots_lane_n)
         || (env->obs_slots_boundary_kept < env->obs_slots_boundary_n);
@@ -3131,6 +3174,9 @@ void init(Drive *env) {
     }
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
+    if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING && init_lattice_agents(env) != 0) {
+        return -1;
+    }
     if (env->simulation_mode == SIMULATION_MODE_REPLAY) {
         remove_bad_trajectories(env);
     }
@@ -3179,9 +3225,11 @@ void init(Drive *env) {
             generate_new_goals_from_route(env, agent);
         }
     }
+    return 0;
 }
 
 void c_close(Drive *env) {
+    free_lattice(env);
     free(env->active_agent_indices);
     free(env->logs);
     free(env->obs_neighbor_scratch);
@@ -3195,11 +3243,14 @@ static int compute_observation_size(Drive *env) {
         + BOUNDARY_FEATURES * env->obs_slots_boundary_kept
         + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
         + env->reward_conditioning * NUM_REWARD_COEFS + env->num_goals * GOAL_FEATURES
-        + (env->action_type == ACTION_TYPE_SPLINE) * SPLINE_INTENT_FEATURES;
+        + (env->action_type == ACTION_TYPE_SPLINE) * SPLINE_INTENT_FEATURES
+        + (env->action_type == ACTION_TYPE_LATTICE) * (LATTICE_PLAN_FEATURES + env->lattice.mask_feature_count);
 }
 
 void allocate(Drive *env) {
-    init(env);
+    int init_status = init(env);
+    assert(init_status == 0);
+    (void) init_status;
     // Slack for the spline intent block: tests set action_type only after allocate() runs.
     int max_obs = compute_observation_size(env) + SPLINE_INTENT_FEATURES;
     env->observations = (float *) calloc(env->active_agent_count * max_obs, sizeof(float));
@@ -4025,8 +4076,9 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
     if (env->reward_conditioning) {
         const RewardBound *reward_bounds = env->reward_log_sampling ? REWARD_BOUNDS_LOG : REWARD_BOUNDS;
         for (int coef_idx = 0; coef_idx < NUM_REWARD_COEFS; coef_idx++) {
-            float lo = reward_bounds[coef_idx].min_val;
-            float hi = reward_bounds[coef_idx].max_val;
+            float bound_scale = coef_idx == REWARD_COEF_VELOCITY ? env->reward_velocity_scale : 1.0f;
+            float lo = bound_scale * reward_bounds[coef_idx].min_val;
+            float hi = bound_scale * reward_bounds[coef_idx].max_val;
             float coef = ego->reward_coefs[coef_idx];
             float normalized_coef;
             if (reward_bounds[coef_idx].log_scale) {
@@ -4424,6 +4476,9 @@ static void compute_observations(Drive *env) {
 
         obs_idx = write_ego_obs(env, ego, obs, obs_idx);
         obs_idx = write_spline_intent_obs(env, ego, obs, obs_idx);
+        if (env->action_type == ACTION_TYPE_LATTICE) {
+            obs_idx = write_lattice_plan_obs(env, i, obs, obs_idx);
+        }
         obs_idx = write_reward_target_obs(env, ego, obs, obs_idx);
         obs_idx = write_partner_obs(env, ego, i, obs, obs_idx, &partner_count);
         obs_idx = write_road_obs(env, ego, obs, obs_idx, &lane_count, &boundary_count);
@@ -4432,6 +4487,9 @@ static void compute_observations(Drive *env) {
         obs[obs_idx++] = (float) boundary_count;
         obs[obs_idx++] = (float) partner_count;
         obs[obs_idx++] = (float) traffic_control_count;
+        if (env->action_type == ACTION_TYPE_LATTICE) {
+            obs_idx = write_lattice_mask_obs(env, i, obs, obs_idx);
+        }
         assert(obs_idx == obs_per_agent);
     }
 }
@@ -4633,10 +4691,14 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->jerk_lat = (new_a_lat - agent->accel_lat) / env->dt;
         agent->accel_long = new_a_long;
         agent->accel_lat = new_a_lat;
-    } else if (env->dynamics_model == DYNAMICS_MODEL_JERK) {
+    } else if (env->dynamics_model == DYNAMICS_MODEL_JERK || env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING) {
         // Extract jerk action components
         float j_long, j_lat;
-        if (env->action_type == ACTION_TYPE_DISCRETE) {
+        if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING) {
+            LatticeCommand lattice_command = move_lattice_agent(env, action_idx, agent);
+            j_long = clip(lattice_command.jerk_long, JERK_LONG[0], JERK_LONG[3]);
+            j_lat = clip(lattice_command.jerk_lat, JERK_LAT[0], JERK_LAT[2]);
+        } else if (env->action_type == ACTION_TYPE_DISCRETE) {
             // Interpret action as a single integer: a = long_idx * num_lat + lat_idx
             int *action_array = (int *) env->actions;
             int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
@@ -4841,6 +4903,10 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->accel_long = a_long_new;
         agent->accel_lat = a_lat_new;
         agent->steering_angle = new_steering_angle;
+        if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING) {
+            int steer_rate_saturated = fabsf(steering_angle - (new_steering_angle - delta_steer)) > 0.6f * env->dt;
+            update_lattice_odometer(env, action_idx, signed_v, v_new, steer_rate_saturated);
+        }
     } else if (env->dynamics_model == DYNAMICS_MODEL_SPLINE) {
         move_spline_dynamics(env, agent, action_idx);
     }
@@ -4979,6 +5045,9 @@ void c_reset(Drive *env) {
             sample_erratic_flags(env, &env->agents[agent_idx]);
             compute_metrics(env, agent_idx, x);
         }
+        if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING) {
+            reset_lattice_state(env);
+        }
         reset_baseline_trajectories(env);
         compute_observations(env);
         return;
@@ -5025,6 +5094,9 @@ void c_reset(Drive *env) {
             generate_reward_coefs(env, agent);
             compute_metrics(env, agent_idx, x);
         }
+        if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING) {
+            reset_lattice_state(env);
+        }
         reset_baseline_trajectories(env);
         compute_observations(env);
         return;
@@ -5068,6 +5140,9 @@ void c_reset(Drive *env) {
             generate_new_goals_from_route(env, agent);
         }
         compute_metrics(env, agent_idx, x);
+    }
+    if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING) {
+        reset_lattice_state(env);
     }
     reset_baseline_trajectories(env);
     compute_observations(env);
@@ -5199,6 +5274,9 @@ void c_step(Drive *env) {
     }
 
     // -> 4. Compute observations
+    if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING) {
+        update_lattice_before_observations(env);
+    }
     compute_observations(env);
 
     // -> 5. Update goals for agents that reached their goal

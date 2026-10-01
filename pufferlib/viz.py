@@ -953,7 +953,8 @@ def encode_interactive_replay(scenario, replay):
         "num_goals": int(env_cfg["num_goals"]),
         "reward_conditioning": bool(env_cfg["reward_conditioning"]),
         "obs_slots_partners_n": int(env_cfg["obs_slots_partners_n"]),
-        "ego_dim": int(binding.EGO_FEATURES),
+        "ego_dim": int(binding.EGO_FEATURES)
+        + (int(binding.LATTICE_PLAN_FEATURES) if env_cfg.get("action_type") == "lattice" else 0),
         "reward_coef_count": int(binding.NUM_REWARD_COEFS),
         "partner_features": int(binding.PARTNER_FEATURES),
         "lane_features": int(binding.LANE_FEATURES),
@@ -1365,18 +1366,28 @@ self.onmessage = async event => {
             for (let j=0;j<N;j++) { const b=(f*N+j)*5, w=C.ghost_f32[b+4]; if (w <= 0) continue; ctx.save(); ctx.translate(C.ghost_f32[b], C.ghost_f32[b+1]); ctx.rotate(C.ghost_f32[b+2]); ctx.beginPath(); ctx.rect(-C.ghost_f32[b+3]/2, -w/2, C.ghost_f32[b+3], w); ctx.fill(); ctx.stroke(); ctx.restore(); }
             ctx.setLineDash([]);
         }
-        function drawPredictedPath(f) {
-            if (!showPredictedPath || !(H.action_type === "spline" || H.trajectory_baseline)) return;
-            const ego = agentAt(f, 0); // EGO_IDX = 0, matches constants.h
-            if (!ego) return;
-            const base = (f * H.agent_cap) * F.af + H.agent_path_field, n = H.agent_path_sample_count;
+        function strokeAgentPath(f, slot, width) {
+            const base = (f * H.agent_cap + slot) * F.af + H.agent_path_field, n = H.agent_path_sample_count;
+            if (C.agent_f32[base] === 0 && C.agent_f32[base+1] === 0) return;
             const path = new Path2D();
             path.moveTo(C.agent_f32[base], C.agent_f32[base+1]);
             for (let k=1;k<n;k++) path.lineTo(C.agent_f32[base+2*k], C.agent_f32[base+2*k+1]);
             ctx.save();
-            ctx.strokeStyle = PREDICTED_PATH_COLOR; ctx.globalAlpha = .5; ctx.lineWidth = Math.max(ego.w, .1); ctx.lineCap = 'butt';
+            ctx.strokeStyle = PREDICTED_PATH_COLOR; ctx.globalAlpha = .5; ctx.lineWidth = Math.max(width, .1); ctx.lineCap = 'butt';
             ctx.stroke(path);
             ctx.restore();
+        }
+        function drawPredictedPath(f) {
+            // lattice runs show every policy agent's committed plan by default (P toggles it off)
+            const lattice = H.action_type === "lattice";
+            if (!(lattice ? !showPredictedPath : showPredictedPath) || !(lattice || H.action_type === "spline" || H.trajectory_baseline)) return;
+            if (lattice) {
+                for (let i=0;i<H.agent_cap;i++) { const a = agentAt(f, i); if (a) strokeAgentPath(f, i, a.w); }
+                return;
+            }
+            const ego = agentAt(f, 0); // EGO_IDX = 0, matches constants.h
+            if (!ego) return;
+            strokeAgentPath(f, 0, ego.w);
         }
         function findAgent(frame, id) { for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a && a.id === id) return a; } return null; }
         function trafficAt(frame, idx) {
@@ -1402,7 +1413,7 @@ self.onmessage = async event => {
         function toggleObsMode(e){ if(e) e.stopPropagation(); obsMode=(obsMode+1)%OBS_MODES.length; document.getElementById('obsModeBtn').textContent=OBS_MODES[obsMode]; draw(true); }
         function toggleObsSize(e){ if(e) e.stopPropagation(); const p=document.getElementById('obs-container'), b=e ? e.currentTarget : null; obsExpanded=!obsExpanded; p.style.width=obsExpanded?'680px':'390px'; p.style.height=obsExpanded?'680px':'390px'; if(b) b.textContent=obsExpanded?'Collapse':'Expand'; resizeObsCanvas(); draw(true); }
         function searchAgent(){ const id=parseInt(document.getElementById('agentSearch').value); if(!isNaN(id)){ followedId=id; play=false; updateBtn(); draw(true); } }
-        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } if(e.code === 'KeyP' && (H.action_type === 'spline' || H.trajectory_baseline)){ showPredictedPath=!showPredictedPath; draw(true); } });
+        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } if(e.code === 'KeyP' && (H.action_type === 'spline' || H.action_type === 'lattice' || H.trajectory_baseline)){ showPredictedPath=!showPredictedPath; draw(true); } });
         c.onwheel = e => { e.preventDefault(); cam.z *= Math.exp(-e.deltaY * .001); draw(true); };
         c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), wx=(e.clientX-r.left-c.width/2)/cam.z+cam.x, wy=(e.clientY-r.top-c.height/2)/-cam.z+cam.y; let hit=null, agents=getFrameAgents(Math.floor(step)); if(!isEgoCam) for(const a of agents) if(Math.hypot(wx-a.x, wy-a.y) < Math.max(a.l,3)){ hit=a.id; break; } if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; } draw(true); };
         window.onmouseup = () => cam.drag = false;
@@ -1502,7 +1513,7 @@ self.onmessage = async event => {
         function ensurePanels() {
             // Panel structure is identical across agents/frames — build the DOM once, update textContent per frame.
             // keyed on captured probs: a discrete policy on the continuous env still records them
-            const discrete = !!C.policy_probs;
+            const discrete = !!C.policy_probs && H.action_type !== "lattice";
             const actionDims = H.chunks.raw_action.shape.length > 2 ? H.chunks.raw_action.shape[2] : 1;
             const key = (discrete ? 'd' : 'c') + actionDims;
             if (refs && panelKey === key) return;
@@ -1530,7 +1541,7 @@ self.onmessage = async event => {
                 for (let r=0;r<rows.length;r++) { html += `<div class="heat-lab">${rows[r].toFixed(1)}</div>`; for (let cI=0;cI<cols.length;cI++) html += '<div class="heat-cell"></div>'; }
                 html += `</div><div class="heat-cap">${jerk ? 'jerk_long &#8595; / jerk_lat &#8594;' : 'accel &#8595; / steer &#8594;'}</div>`;
             } else {
-                labels = H.action_type === "continuous" ? (H.dynamics_model === "jerk" ? ["jerk_long","jerk_lat"] : ["accel","steer"]) : Array.from({length:actionDims}, (_,i)=>`p${i}`);
+                labels = H.action_type === "continuous" ? (H.dynamics_model === "jerk" ? ["jerk_long","jerk_lat"] : ["accel","steer"]) : H.action_type === "lattice" ? ["lat gate","lat cell","lon gate","lon cell","exit slot"] : Array.from({length:actionDims}, (_,i)=>`p${i}`);
                 labels.forEach(l => html += `<div class="item"><span class="name">${l}</span><span class="num pol-act">-</span></div>`);
                 if (C.policy_mean) { labels.forEach(l => html += `<div class="item"><span class="name">mean ${l}</span><span class="num pol-mean">-</span></div><div class="item"><span class="name">std ${l}</span><span class="num pol-std">-</span></div>`); html += '<div class="item"><span class="name">log prob</span><span class="num" data-pol="lp">-</span></div>'; }
             }
