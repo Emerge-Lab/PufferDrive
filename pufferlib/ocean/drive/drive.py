@@ -36,6 +36,7 @@ class Drive(pufferlib.PufferEnv):
         reward_trajectory_consistency=0.0,
         reward_route_progress=0.0,
         reward_wait_penalty_frac=0.0,
+        reward_oncoming_penalty_frac=0.0,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
         num_goals=3,
@@ -138,6 +139,7 @@ class Drive(pufferlib.PufferEnv):
         lattice_decision_period_s=0.3,
         lattice_exit_mode="policy",
         lattice_light_in_view=True,
+        lattice_oncoming_overtake=False,
     ):
         self.dt = dt
         self.base_max_speed_mps = float(base_max_speed_mps)
@@ -168,6 +170,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_trajectory_consistency = reward_trajectory_consistency
         self.reward_route_progress = reward_route_progress
         self.reward_wait_penalty_frac = reward_wait_penalty_frac
+        self.reward_oncoming_penalty_frac = reward_oncoming_penalty_frac
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
@@ -231,10 +234,12 @@ class Drive(pufferlib.PufferEnv):
             "goal": binding.LATTICE_EXIT_MODE_GOAL,
         }[lattice_exit_mode]
         self.lattice_light_in_view = bool(lattice_light_in_view)
+        self.lattice_oncoming_overtake = bool(lattice_oncoming_overtake)
         # [lat gate, lat cell, lon gate, lon cell, exit slot]; must match init_lattice_config in lattice.h
         self.lattice_nvec = [
             binding.LATTICE_GATE_COUNT,
-            (len(self.lattice_lat_offsets_m) + 2) * len(self.lattice_lat_durations_s),
+            (len(self.lattice_lat_offsets_m) + 2 + int(self.lattice_oncoming_overtake))
+            * len(self.lattice_lat_durations_s),
             binding.LATTICE_GATE_COUNT,
             len(self.lattice_lon_speeds_mps) * len(self.lattice_lon_durations_s)
             + len(self.lattice_stop_distances_m)
@@ -321,7 +326,9 @@ class Drive(pufferlib.PufferEnv):
         self.obs_valid_count_features = binding.OBS_VALID_COUNT_FEATURES
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
         self.spline_intent_features = binding.SPLINE_INTENT_FEATURES if action_type == "spline" else 0
-        self.lattice_plan_features = binding.LATTICE_PLAN_FEATURES if action_type == "lattice" else 0
+        self.lattice_plan_features = (
+            binding.LATTICE_PLAN_FEATURES + int(self.lattice_oncoming_overtake) if action_type == "lattice" else 0
+        )
         self.lattice_mask_features = sum(self.lattice_nvec) if action_type == "lattice" else 0
 
         # One uniform target representation (ego-frame x, y, z) regardless of goal_regen_mode.
@@ -521,6 +528,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_trajectory_consistency": self.reward_trajectory_consistency,
             "reward_route_progress": self.reward_route_progress,
             "reward_wait_penalty_frac": self.reward_wait_penalty_frac,
+            "reward_oncoming_penalty_frac": self.reward_oncoming_penalty_frac,
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
@@ -601,6 +609,7 @@ class Drive(pufferlib.PufferEnv):
             "lattice_decision_period_s": self.lattice_decision_period_s,
             "lattice_exit_mode": self.lattice_exit_mode,
             "lattice_light_in_view": self.lattice_light_in_view,
+            "lattice_oncoming_overtake": self.lattice_oncoming_overtake,
         }
 
     def _sample_init_step(self):

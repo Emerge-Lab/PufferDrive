@@ -834,6 +834,277 @@ static int test_wait_penalty(void) {
     return 0;
 }
 
+// oncoming-lane overtaking: profiles, one-lane scene on Town01, menu layout with the sixth lateral choice
+#define TOWN01 DRIVE_TEST_REPO_ROOT "/pufferlib/resources/drive/binaries/carla/opendrive__Town01.bin"
+#define ONCOMING_CHOICE 5
+#define CENTRE_CHOICE 2
+
+static Drive make_overtake_env(const char *map_file, int num_agents) {
+    Drive env = drive_test_env_config(map_file, SIMULATION_MODE_GIGAFLOW, num_agents, 0);
+    env.dynamics_model = DYNAMICS_MODEL_SPLINE_WERLING;
+    env.action_type = ACTION_TYPE_LATTICE;
+    env.dt = 0.3f;
+    env.scenario_length = 5000;
+    lattice_test_default_menu(&env.lattice, 0.3f);
+    env.lattice.oncoming_overtake = 1;
+    allocate(&env);
+    c_reset(&env);
+    return env;
+}
+
+// a long straight non-connector lane ending at a split, with an oncoming lane beside it over its first 100 m
+static int find_overtake_lane(const Drive *env) {
+    for (int lane_idx = 0; lane_idx < env->num_road_elements; lane_idx++) {
+        const struct LatticeLaneInfo *info = &env->lattice_lanes[lane_idx];
+        if (!is_drivable_road_lane(env->road_elements[lane_idx].type) || info->is_connector || info->length_m < 120.0f
+            || info->max_curvature > 0.002f || info->exit_count < 2) {
+            continue;
+        }
+        int beside = 1;
+        for (float arc_m = 0.0f; arc_m <= 100.0f && beside; arc_m += LATTICE_PROFILE_SPACING_M) {
+            beside = lattice_profile_at(env, lane_idx, arc_m)->oncoming_lane >= 0;
+        }
+        if (beside) {
+            return lane_idx;
+        }
+    }
+    return -1;
+}
+
+static void set_overtake_reward_coefs(Agent *agent) {
+    agent->reward_coefs[REWARD_COEF_LANE_ALIGN] = 0.025f;
+    agent->reward_coefs[REWARD_COEF_VEL_ALIGN] = 1.0f;
+    agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
+    agent->reward_coefs[REWARD_COEF_LANE_CENTER] = 0.001f;
+    agent->reward_coefs[REWARD_COEF_CENTER_BIAS] = 0.0f;
+    agent->reward_coefs[REWARD_COEF_COLLISION] = 1.5f;
+    agent->reward_coefs[REWARD_COEF_OFFROAD] = 1.5f;
+    agent->reward_coefs[REWARD_COEF_STOP_LINE] = 1.0f;
+}
+
+static int test_oncoming_menu_layout(void) {
+    Drive env = make_overtake_env(TOWN06, 1);
+    const struct LatticeConfig *cfg = &env.lattice;
+    EXPECT_EQ_INT(cfg->nvec[1], 24);
+    EXPECT_EQ_INT(cfg->mask_feature_count, 93);
+    EXPECT_EQ_INT(lattice_lat_choice_count(cfg), 6);
+    EXPECT_TRUE(lattice_lat_is_oncoming(cfg, 1 * 6 + ONCOMING_CHOICE));
+    EXPECT_TRUE(!lattice_lat_is_oncoming(cfg, 1 * 6 + 4));
+    EXPECT_EQ_INT(lattice_lat_lane_side(cfg, 1 * 6 + 4), 1);
+    EXPECT_EQ_INT(lattice_lat_lane_side(cfg, 1 * 6 + ONCOMING_CHOICE), 0);
+    EXPECT_EQ_INT(lattice_lat_cell_duration_idx(cfg, 3 * 6 + ONCOMING_CHOICE), 3);
+    EXPECT_NEAR(lattice_lat_cell_offset(cfg, 1 * 6 + CENTRE_CHOICE), 0.0f, 0.0f);
+    EXPECT_EQ_INT(lattice_plan_feature_count(cfg), LATTICE_PLAN_FEATURES + 1);
+    EXPECT_EQ_INT(compute_observation_size(&env) - (EGO_FEATURES + PARTNER_FEATURES * env.obs_slots_partners_n + LANE_FEATURES * env.obs_slots_lane_kept
+        + BOUNDARY_FEATURES * env.obs_slots_boundary_kept + TRAFFIC_CONTROL_FEATURES * env.obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
+        + env.num_goals * GOAL_FEATURES), LATTICE_PLAN_FEATURES + 1 + 93);
+    free_allocated(&env);
+    return 0;
+}
+
+// oncoming lanes exist only where one lane runs each way: everywhere on Town01, never on the Town06 highway
+static int test_oncoming_profiles(void) {
+    for (size_t town_idx = 0; town_idx < sizeof(CARLA_TOWNS) / sizeof(CARLA_TOWNS[0]); town_idx++) {
+        char path[512];
+        carla_town_path(path, sizeof path, CARLA_TOWNS[town_idx]);
+        Drive env = make_overtake_env(path, 1);
+        int with_oncoming = 0;
+        for (int sample_idx = 0; sample_idx < env.lattice_profile_count; sample_idx++) {
+            const struct LatticeProfileSample *sample = &env.lattice_profiles[sample_idx];
+            if (sample->oncoming_lane < 0) {
+                EXPECT_NEAR(sample->oncoming_offset_m, 0.0f, 0.0f);
+                continue;
+            }
+            with_oncoming++;
+            EXPECT_TRUE(sample->neighbour_lane[0] < 0 && sample->neighbour_lane[1] < 0);
+            EXPECT_TRUE(sample->oncoming_offset_m >= LATTICE_NEIGHBOUR_MIN_M && sample->oncoming_offset_m <= LATTICE_NEIGHBOUR_MAX_M);
+            EXPECT_TRUE(sample->edge_left_m >= sample->oncoming_offset_m);
+        }
+        float share = (float) with_oncoming / (float) (env.lattice_profile_count > 0 ? env.lattice_profile_count : 1);
+        printf("  %s: oncoming lane beside %.1f%% of profile samples\n", CARLA_TOWNS[town_idx], 100.0f * share);
+        if (strcmp(CARLA_TOWNS[town_idx], "Town01") == 0) {
+            EXPECT_TRUE(share > 0.8f);
+        }
+        if (strcmp(CARLA_TOWNS[town_idx], "Town06") == 0) {
+            EXPECT_EQ_INT(with_oncoming, 0);
+        }
+        free_allocated(&env);
+    }
+    return 0;
+}
+
+// Town01, stopped car 35 m ahead at 6 m/s: borrow, pass, return; the reward always sees the car's own lane
+static int test_oncoming_overtake_stopped_car(void) {
+    Drive env = make_overtake_env(TOWN01, 2);
+    env.reward_oncoming_penalty_frac = 5e-4f;
+    int lane = find_overtake_lane(&env);
+    EXPECT_TRUE(lane >= 0);
+    float offset_m = lattice_profile_at(&env, lane, 30.0f)->oncoming_offset_m;
+    place_lattice_agent(&env, 1, lane, 45.0f, 0.0f);
+    place_lattice_agent(&env, 0, lane, 10.0f, 6.0f);
+    Agent *ego = slot0_agent(&env);
+    Agent *blocker = &env.agents[env.active_agent_indices[1]];
+    set_overtake_reward_coefs(ego);
+    struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+    const struct LatticeConfig *cfg = &env.lattice;
+    int lat_cells = lattice_mask_offset(cfg, LATTICE_FACTOR_LAT_CELL);
+    int choice_count = lattice_lat_choice_count(cfg);
+    printf("  lane %d, oncoming offset %.2f m, oncoming cells by duration %d %d %d %d\n", lane, offset_m,
+           lattice_agent->mask[lat_cells + ONCOMING_CHOICE], lattice_agent->mask[lat_cells + choice_count + ONCOMING_CHOICE],
+           lattice_agent->mask[lat_cells + 2 * choice_count + ONCOMING_CHOICE], lattice_agent->mask[lat_cells + 3 * choice_count + ONCOMING_CHOICE]);
+    EXPECT_TRUE(lattice_agent->mask[lat_cells + choice_count + ONCOMING_CHOICE]);
+    step_with_action(&env, 1, choice_count + ONCOMING_CHOICE, 0, 0, 0);
+    EXPECT_NEAR(lattice_agent->lat.target_d_m, offset_m, 0.05f);
+    EXPECT_NEAR(lattice_agent->counters.oncoming_starts, 1.0f, 0.0f);
+    int plan_flag_idx = EGO_FEATURES + LATTICE_PLAN_FEATURES;
+    int returned = 0, borrow_steps = 0, collided = 0, wrong_lane_steps = 0;
+    float max_d = 0.0f, min_borrow_align = 1e9f, min_borrow_velocity = 1e9f, borrow_cost = 0.0f;
+    for (int step = 0; step < 80; step++) {
+        Log before = env.logs[0];
+        LatticeFrenet ego_frenet = lattice_frenet_state(&lattice_agent->rail, ego, lattice_agent->projection_hint);
+        LatticeFrenet blocker_frenet = lattice_frenet_state(&lattice_agent->rail, blocker, -1);
+        if (!returned && ego_frenet.s > blocker_frenet.s + blocker->sim_length + 6.0f) {
+            EXPECT_TRUE(lattice_agent->mask[lat_cells + choice_count + CENTRE_CHOICE]);
+            step_with_action(&env, 1, choice_count + CENTRE_CHOICE, 0, 0, 0);
+            returned = 1;
+        } else {
+            step_keep(&env, 1);
+        }
+        LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, ego, lattice_agent->projection_hint);
+        int borrowing = lattice_is_borrowing(&env, lattice_agent, &frenet);
+        max_d = fmaxf(max_d, frenet.d);
+        collided |= ego->metrics_array[COLLISION_IDX] > 0.0f || ego->stopped;
+        wrong_lane_steps += ego->current_lane_idx != lattice_agent->rail.lanes[lattice_agent->rail.chain_slot[frenet.sample_idx]];
+        EXPECT_NEAR(env.observations[plan_flag_idx], (float) borrowing, 0.0f);
+        if (!borrowing) {
+            continue;
+        }
+        borrow_steps++;
+        EXPECT_NEAR(ego->metrics_array[LANE_ANGLE_IDX], cosf(frenet.heading_error), 1e-4f);
+        EXPECT_TRUE(ego->metrics_array[LANE_ANGLE_IDX] > 0.9f);
+        min_borrow_align = fminf(min_borrow_align, env.logs[0].reward_lane_align - before.reward_lane_align);
+        min_borrow_velocity = fminf(min_borrow_velocity, env.logs[0].reward_velocity - before.reward_velocity);
+        borrow_cost += env.logs[0].reward_oncoming - before.reward_oncoming;
+        EXPECT_NEAR(env.logs[0].reward_oncoming - before.reward_oncoming, -5e-4f, 1e-7f);
+    }
+    LatticeFrenet end = lattice_frenet_state(&lattice_agent->rail, ego, lattice_agent->projection_hint);
+    printf("  overtake: max d %.2f m, %d borrowing steps (cost %.4f), min align %.6f, min velocity %.6f, end d %.3f, s past blocker %.1f m\n",
+           max_d, borrow_steps, borrow_cost, min_borrow_align, min_borrow_velocity, end.d,
+           end.s - lattice_frenet_state(&lattice_agent->rail, blocker, -1).s);
+    EXPECT_TRUE(returned);
+    EXPECT_TRUE(!collided);
+    EXPECT_EQ_INT(wrong_lane_steps, 0);
+    EXPECT_TRUE(max_d > offset_m - 0.2f);
+    EXPECT_TRUE(borrow_steps > 10);
+    EXPECT_TRUE(min_borrow_align >= 0.0f);
+    EXPECT_TRUE(min_borrow_velocity > 0.0f);
+    EXPECT_TRUE(fabsf(end.d) < 0.1f);
+    EXPECT_NEAR(lattice_agent->counters.oncoming_steps, (float) borrow_steps, 2.0f);
+    free_allocated(&env);
+    return 0;
+}
+
+// borrowing toward the split at the lane's end: keep is masked once the 4 s window reaches the junction, return lands first
+static int test_oncoming_forced_return_before_junction(void) {
+    Drive env = make_overtake_env(TOWN01, 1);
+    int lane = find_overtake_lane(&env);
+    EXPECT_TRUE(lane >= 0);
+    place_lattice_agent(&env, 0, lane, 10.0f, 6.0f);
+    Agent *ego = slot0_agent(&env);
+    struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+    const struct LatticeConfig *cfg = &env.lattice;
+    int lat_gate = lattice_mask_offset(cfg, LATTICE_FACTOR_LAT_GATE);
+    int lat_cells = lattice_mask_offset(cfg, LATTICE_FACTOR_LAT_CELL);
+    int choice_count = lattice_lat_choice_count(cfg);
+    step_with_action(&env, 1, choice_count + ONCOMING_CHOICE, 0, 0, 0);
+    int forced_step = -1;
+    float forced_gap_m = 0.0f;
+    for (int step = 0; step < 120 && forced_step < 0; step++) {
+        if (!lattice_agent->mask[lat_gate + LATTICE_GATE_KEEP]) {
+            forced_step = step;
+            LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, ego, lattice_agent->projection_hint);
+            const struct LatticeRail *rail = &lattice_agent->rail;
+            forced_gap_m = 1e9f;
+            for (int lane_slot = rail->chain_slot[frenet.sample_idx]; lane_slot < rail->lane_count; lane_slot++) {
+                if (env.lattice_lanes[rail->lanes[lane_slot]].is_connector) {
+                    forced_gap_m = rail->lane_start_s_m[lane_slot] - frenet.s;
+                    break;
+                }
+            }
+            for (int duration_idx = 0; duration_idx < cfg->lat_duration_count; duration_idx++) {
+                EXPECT_TRUE(!lattice_agent->mask[lat_cells + duration_idx * choice_count + ONCOMING_CHOICE]);
+            }
+            EXPECT_TRUE(lattice_agent->mask[lat_gate + LATTICE_GATE_NEW]);
+            break;
+        }
+        step_keep(&env, 1);
+    }
+    printf("  forced return after %d steps, %.1f m before the junction (window %.1f m)\n", forced_step, forced_gap_m,
+           fmaxf(LATTICE_ONCOMING_KEEP_MIN_M, LATTICE_ONCOMING_KEEP_S * ego->sim_speed));
+    EXPECT_TRUE(forced_step > 0);
+    EXPECT_TRUE(forced_gap_m <= fmaxf(LATTICE_ONCOMING_KEEP_MIN_M, LATTICE_ONCOMING_KEEP_S * ego->sim_speed) + LATTICE_PROFILE_SPACING_M);
+    int return_cell = -1;
+    for (int duration_idx = 0; duration_idx < cfg->lat_duration_count && return_cell < 0; duration_idx++) {
+        int cell = duration_idx * choice_count + CENTRE_CHOICE;
+        return_cell = lattice_agent->mask[lat_cells + cell] ? cell : -1;
+    }
+    EXPECT_TRUE(return_cell >= 0);
+    step_with_action(&env, 1, return_cell, 0, 0, 0);
+    EXPECT_TRUE(lattice_agent->mask[lat_gate + LATTICE_GATE_KEEP]);
+    float d_at_junction = 1e9f;
+    for (int step = 0; step < 60; step++) {
+        step_keep(&env, 1);
+        LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, ego, lattice_agent->projection_hint);
+        if (env.lattice_lanes[lattice_agent->rail.lanes[lattice_agent->rail.chain_slot[frenet.sample_idx]]].is_connector) {
+            d_at_junction = frenet.d;
+            break;
+        }
+    }
+    printf("  offset entering the junction %.3f m\n", d_at_junction);
+    EXPECT_TRUE(fabsf(d_at_junction) < LATTICE_BORROW_MIN_D_M);
+    free_allocated(&env);
+    return 0;
+}
+
+// random valid actions with the sixth choice in every town: finite observations, no invalid actions, deterministic
+static int test_oncoming_random_rollouts(void) {
+    float starts = 0.0f, borrow_steps = 0.0f, steps = 0.0f, invalid = 0.0f;
+    for (size_t town_idx = 0; town_idx < sizeof(CARLA_TOWNS) / sizeof(CARLA_TOWNS[0]); town_idx++) {
+        char path[512];
+        carla_town_path(path, sizeof path, CARLA_TOWNS[town_idx]);
+        Drive env = make_overtake_env(path, 16);
+        Drive twin = make_overtake_env(path, 16);
+        env.reward_oncoming_penalty_frac = 5e-4f;
+        twin.reward_oncoming_penalty_frac = 5e-4f;
+        unsigned long long rng_state = 21 + town_idx, twin_rng = 21 + town_idx;
+        int obs_size = compute_observation_size(&env);
+        for (int step = 0; step < 300; step++) {
+            random_valid_actions(&env, &rng_state);
+            random_valid_actions(&twin, &twin_rng);
+            c_step(&env);
+            c_step(&twin);
+            for (int value = 0; value < env.active_agent_count * obs_size; value++) {
+                EXPECT_FINITE(env.observations[value]);
+            }
+            EXPECT_TRUE(memcmp(env.observations, twin.observations, env.active_agent_count * obs_size * sizeof(float)) == 0);
+        }
+        for (int active_idx = 0; active_idx < env.active_agent_count; active_idx++) {
+            const struct LatticeCounters *counters = &env.lattice_agents[active_idx].counters;
+            starts += counters->oncoming_starts;
+            borrow_steps += counters->oncoming_steps;
+            steps += counters->steps;
+            invalid += counters->invalid_actions;
+        }
+        free_allocated(&env);
+        free_allocated(&twin);
+    }
+    printf("  random rollouts with overtaking: %.0f borrow starts, borrowing %.2f%% of steps, invalid %.0f\n", starts, 100.0f * borrow_steps / fmaxf(steps, 1.0f), invalid);
+    EXPECT_TRUE(starts > 0.0f);
+    EXPECT_TRUE(borrow_steps > 0.0f);
+    EXPECT_NEAR(invalid, 0.0f, 0.0f);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_polynomials_and_bellman);
@@ -859,5 +1130,10 @@ int main(void) {
     RUN_TEST(test_stop_line_light_features);
     RUN_TEST(test_wait_penalty);
     RUN_TEST(test_random_rollouts_all_towns);
+    RUN_TEST(test_oncoming_menu_layout);
+    RUN_TEST(test_oncoming_profiles);
+    RUN_TEST(test_oncoming_overtake_stopped_car);
+    RUN_TEST(test_oncoming_forced_return_before_junction);
+    RUN_TEST(test_oncoming_random_rollouts);
     return test_summary(failures);
 }

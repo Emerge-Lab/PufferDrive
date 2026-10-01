@@ -954,7 +954,11 @@ def encode_interactive_replay(scenario, replay):
         "reward_conditioning": bool(env_cfg["reward_conditioning"]),
         "obs_slots_partners_n": int(env_cfg["obs_slots_partners_n"]),
         "ego_dim": int(binding.EGO_FEATURES)
-        + (int(binding.LATTICE_PLAN_FEATURES) if env_cfg.get("action_type") == "lattice" else 0),
+        + (
+            int(binding.LATTICE_PLAN_FEATURES) + int(bool(env_cfg.get("lattice_oncoming_overtake", False)))
+            if env_cfg.get("action_type") == "lattice"
+            else 0
+        ),
         "reward_coef_count": int(binding.NUM_REWARD_COEFS),
         "partner_features": int(binding.PARTNER_FEATURES),
         "lane_features": int(binding.LANE_FEATURES),

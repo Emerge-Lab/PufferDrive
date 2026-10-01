@@ -82,6 +82,8 @@ env:
   lattice_exit_mode: policy
   # Stop-line distance and red/yellow features only for a stop line the traffic-control observation lists (else rail-based)
   lattice_light_in_view: true
+  # Extra lateral choice: borrow the oncoming lane to overtake on roads with one lane per direction (off = old menu)
+  lattice_oncoming_overtake: false
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap
@@ -185,6 +187,9 @@ env:
   # Lattice only: per-step share of the car's cheapest infraction penalty charged at standstill, fading to 0 at 1 m/s
   # (not while a red/yellow light is reported ahead); must keep a whole episode of it below one infraction
   reward_wait_penalty_frac: 0.0
+  # Lattice only: per-step share of the cheapest infraction penalty charged while in a borrowed oncoming lane; the car
+  # is scored against its own lane's direction there; wait + oncoming fractions must keep a whole episode below one
+  reward_oncoming_penalty_frac: 0.0
   # --- Map ---
   # Path to map used for training
   map_dir: pufferlib/resources/drive/binaries/carla

@@ -200,6 +200,7 @@ struct LatticeConfig {
     float decision_period_s;
     int exit_mode;
     int light_in_view; // stop-line features only for a stop line the traffic-control observation lists
+    int oncoming_overtake; // extra lateral choice: borrow the oncoming lane on one-lane-per-direction roads
     int decision_period_steps;
     int lat_duration_steps[LATTICE_MAX_LAT_DURATIONS];
     int lon_duration_steps[LATTICE_MAX_LON_DURATIONS];
@@ -238,6 +239,8 @@ struct LatticeProfileSample {
     int neighbour_lane[2];
     float neighbour_offset_m[2];
     float neighbour_arc_m[2];
+    int oncoming_lane; // -1 unless the only lane of this direction has an opposite lane on its left, no edge between
+    float oncoming_offset_m;
 };
 
 struct LatticeVertex {
@@ -341,6 +344,8 @@ struct LatticeCounters {
     float first_motion_step;
     float rail_regens;
     float plan_change_rms_m;
+    float oncoming_steps;
+    float oncoming_starts;
 };
 
 // route-progress reward memory: the current goal it was measured against and last step's route distance

@@ -50,6 +50,8 @@ LATTICE_DURATION_TOLERANCE = 1e-4
 LATTICE_MAX_PLAN_STEPS = 400
 LATTICE_BACKUP_MAX_M = 20.0 - 0.2 - 2.93 - 3.5
 LATTICE_STOP_T_MAX_S = 12.0
+# Must match constants.h LATTICE_BORROW_MIN_D_M = LATTICE_BORROW_FRACTION * LATTICE_NEIGHBOUR_MIN_M.
+LATTICE_BORROW_MIN_D_M = 0.5 * 2.5
 
 
 def _raise_config_error(context, path, message):
@@ -326,6 +328,7 @@ class DriveEnvConfig:
     reward_trajectory_consistency: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_route_progress: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     reward_wait_penalty_frac: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    reward_oncoming_penalty_frac: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     lattice_lat_offsets_m: list[float] = MISSING
     lattice_lat_durations_s: list[float] = MISSING
     lattice_low_speed_distances_m: list[float] = MISSING
@@ -337,6 +340,7 @@ class DriveEnvConfig:
     lattice_decision_period_s: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     lattice_exit_mode: LatticeExitMode = MISSING
     lattice_light_in_view: bool = MISSING
+    lattice_oncoming_overtake: bool = MISSING
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
@@ -639,6 +643,18 @@ def _validate_lattice_config(config, context):
             f"a whole episode at standstill would cost {env['reward_wait_penalty_frac'] * wait_horizon_steps:.2f} "
             "of the cheapest infraction penalty; it must stay below 1 so crashing never pays",
         )
+    if env["reward_oncoming_penalty_frac"] > 0.0 and not env["lattice_oncoming_overtake"]:
+        _raise_config_error(context, "env.reward_oncoming_penalty_frac", "needs env.lattice_oncoming_overtake")
+    standstill_borrowing_cost = (
+        env["reward_wait_penalty_frac"] + env["reward_oncoming_penalty_frac"]
+    ) * wait_horizon_steps
+    if standstill_borrowing_cost >= 1.0:
+        _raise_config_error(
+            context,
+            "env.reward_oncoming_penalty_frac",
+            f"a whole episode standing in a borrowed oncoming lane would cost {standstill_borrowing_cost:.2f} "
+            "of the cheapest infraction penalty; wait + oncoming fractions must stay below 1 so crashing never pays",
+        )
     offsets = env["lattice_lat_offsets_m"]
     _validate_lattice_list(
         offsets,
@@ -651,6 +667,12 @@ def _validate_lattice_config(config, context):
     )
     if 0 not in offsets:
         _raise_config_error(context, "env.lattice_lat_offsets_m", "must contain 0 (the lane centre)")
+    if env["lattice_oncoming_overtake"] and not max(offsets) < LATTICE_BORROW_MIN_D_M:
+        _raise_config_error(
+            context,
+            "env.lattice_lat_offsets_m",
+            f"must stay below {LATTICE_BORROW_MIN_D_M} m with env.lattice_oncoming_overtake (larger reads as borrowing)",
+        )
     duration_lists = (
         ("lattice_lat_durations_s", binding.LATTICE_MAX_LAT_DURATIONS),
         ("lattice_lon_durations_s", binding.LATTICE_MAX_LON_DURATIONS),

@@ -413,7 +413,7 @@ static const int ROAD_OFFSETS[25][2]
 #define LATTICE_MAX_LON_DURATIONS 6
 #define LATTICE_MAX_STOP_DISTANCES 6
 #define LATTICE_MAX_BACKUP_DISTANCES 6
-#define LATTICE_MAX_LAT_CELLS ((LATTICE_MAX_LAT_OFFSETS + 2) * LATTICE_MAX_LAT_DURATIONS)
+#define LATTICE_MAX_LAT_CELLS ((LATTICE_MAX_LAT_OFFSETS + 3) * LATTICE_MAX_LAT_DURATIONS)
 #define LATTICE_MAX_LON_CELLS                                                                                          \
     (LATTICE_MAX_LON_SPEEDS * LATTICE_MAX_LON_DURATIONS + LATTICE_MAX_STOP_DISTANCES + 2 + LATTICE_MAX_BACKUP_DISTANCES)
 #define LATTICE_MAX_MASK_FEATURES                                                                                      \
@@ -482,6 +482,14 @@ static const int ROAD_OFFSETS[25][2]
 #define LATTICE_NEIGHBOUR_COS 0.9f
 #define LATTICE_NEIGHBOUR_TIEBREAK_M 15.0f
 #define LATTICE_MAX_PROFILE_SAMPLES_PER_LANE 4096
+
+// -- Borrowing the oncoming lane (one lane per direction): offered, kept and forced back by the lane ahead
+#define LATTICE_BORROW_FRACTION 0.5f // past this share of the oncoming lane's offset the car is in that lane
+#define LATTICE_BORROW_MIN_D_M (LATTICE_BORROW_FRACTION * LATTICE_NEIGHBOUR_MIN_M)
+#define LATTICE_ONCOMING_START_MIN_M 40.0f
+#define LATTICE_ONCOMING_START_S 6.0f
+#define LATTICE_ONCOMING_KEEP_MIN_M 20.0f
+#define LATTICE_ONCOMING_KEEP_S 4.0f
 
 // -- Rail changes
 #define LATTICE_DRIFT_MARGIN_M 0.3f

@@ -119,6 +119,9 @@ struct Log {
     float lattice_plan_change_rms_m;
     float reward_route_progress;
     float reward_wait;
+    float lattice_oncoming_rate;
+    float lattice_oncoming_starts;
+    float reward_oncoming;
 };
 
 struct GridMapEntity {
@@ -272,6 +275,7 @@ struct Drive {
     float reward_route_progress; // per meter of lane-route distance gained toward the current goal (lattice only)
     float reward_wait_penalty_frac; // per-step share of the cheapest infraction penalty charged at standstill (lattice
                                     // only)
+    float reward_oncoming_penalty_frac; // per-step share of the cheapest infraction charged in a borrowed oncoming lane
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
@@ -2334,6 +2338,7 @@ static void add_log(Drive *env) {
         episode_log.reward_trajectory_consistency += env->logs[i].reward_trajectory_consistency;
         episode_log.reward_route_progress += env->logs[i].reward_route_progress;
         episode_log.reward_wait += env->logs[i].reward_wait;
+        episode_log.reward_oncoming += env->logs[i].reward_oncoming;
         episode_log.spline_consistency_msd_m2 += env->logs[i].spline_consistency_msd_m2 / safe_timestep;
         episode_log.spline_consistency_lag1_msd_m2 += env->logs[i].spline_consistency_lag1_msd_m2 / safe_timestep;
         episode_log.spline_slip_angle_rad += env->logs[i].spline_slip_angle_rad / safe_timestep;
@@ -3288,7 +3293,8 @@ static int compute_observation_size(Drive *env) {
         + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
         + env->reward_conditioning * NUM_REWARD_COEFS + env->num_goals * GOAL_FEATURES
         + (env->action_type == ACTION_TYPE_SPLINE) * SPLINE_INTENT_FEATURES
-        + (env->action_type == ACTION_TYPE_LATTICE) * (LATTICE_PLAN_FEATURES + env->lattice.mask_feature_count);
+        + (env->action_type == ACTION_TYPE_LATTICE)
+        * (lattice_plan_feature_count(&env->lattice) + env->lattice.mask_feature_count);
 }
 
 void allocate(Drive *env) {
@@ -3631,6 +3637,9 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
             lane_heading = avg_lane_heading;
         }
     }
+    if (env->lattice.oncoming_overtake) {
+        lattice_borrowed_lane(env, log_idx, agent, &lane_idx, &signed_lane_distance, &lane_heading);
+    }
 
     // Update lane alignment metric (running average)
     if (lane_idx != -1) {
@@ -3913,7 +3922,7 @@ static void compute_spline_rewards(Drive *env, int i) {
     }
 }
 
-// lattice-only terms: plan-change consistency, waiting at low speed, and route progress toward the current goal
+// lattice-only terms: plan-change consistency, waiting at low speed, borrowing the oncoming lane, and route progress
 static void compute_lattice_rewards(Drive *env, int i) {
     Agent *agent = &env->agents[env->active_agent_indices[i]];
     Log *agent_log = &env->logs[i];
@@ -3938,6 +3947,17 @@ static void compute_lattice_rewards(Drive *env, int i) {
             float wait_penalty = -env->reward_wait_penalty_frac * cheapest_infraction * slowness;
             env->rewards[i] += wait_penalty;
             agent_log->reward_wait += wait_penalty;
+        }
+    }
+    if (env->reward_oncoming_penalty_frac > 0.0f && !agent->stopped && lattice_agent->rail.sample_count >= 2) {
+        LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, agent, lattice_agent->projection_hint);
+        if (lattice_is_borrowing(env, lattice_agent, &frenet)) {
+            float cheapest_infraction = fminf(
+                fminf(agent->reward_coefs[REWARD_COEF_COLLISION], agent->reward_coefs[REWARD_COEF_OFFROAD]),
+                agent->reward_coefs[REWARD_COEF_STOP_LINE]);
+            float oncoming_penalty = -env->reward_oncoming_penalty_frac * cheapest_infraction;
+            env->rewards[i] += oncoming_penalty;
+            agent_log->reward_oncoming += oncoming_penalty;
         }
     }
     if (env->reward_route_progress <= 0.0f) {
@@ -5140,6 +5160,12 @@ static void reset_baseline_trajectories(Drive *env) {
 #include "idm.h"
 
 void c_reset(Drive *env) {
+    // the reset metrics below run before reset_lattice_state rebuilds the rails
+    if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING) {
+        for (int active_idx = 0; active_idx < env->active_agent_count; active_idx++) {
+            env->lattice_agents[active_idx].rail.sample_count = 0;
+        }
+    }
     if (env->timestep == 0) {
         for (int i = 0; i < env->num_total_agents; i++) {
             copy_pose_to_prev(&env->agents[i]);

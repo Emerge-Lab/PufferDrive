@@ -75,3 +75,27 @@ def test_dt_01_menus_are_whole_steps():
     args["env"]["dt"] = 0.1
     normalized = _validate(args)
     assert normalized["env"]["dt"] == 0.1
+
+
+def test_oncoming_overtake_config():
+    args = _lattice_args()
+    args["env"]["lattice_oncoming_overtake"] = True
+    args["env"]["reward_oncoming_penalty_frac"] = 5e-4
+    args["env"]["reward_wait_penalty_frac"] = 5e-4
+    normalized = _validate(args)
+    assert normalized["env"]["lattice_oncoming_overtake"] is True
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"reward_oncoming_penalty_frac": 5e-4},
+        {"lattice_oncoming_overtake": True, "lattice_lat_offsets_m": [-1.5, 0.0, 1.5]},
+        {"lattice_oncoming_overtake": True, "reward_oncoming_penalty_frac": 7e-4, "reward_wait_penalty_frac": 7e-4},
+    ],
+)
+def test_invalid_oncoming_overtake_settings_are_rejected(overrides):
+    args = _lattice_args()
+    args["env"].update(overrides)
+    with pytest.raises(pufferlib.APIUsageError):
+        _validate(args)

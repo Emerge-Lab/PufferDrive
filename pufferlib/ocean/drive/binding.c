@@ -2043,6 +2043,21 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
             env->reward_route_progress);
         return -1;
     }
+    env->reward_oncoming_penalty_frac = (float) unpack(kwargs, "reward_oncoming_penalty_frac");
+    if (!(env->reward_oncoming_penalty_frac >= 0.0f) || !isfinite(env->reward_oncoming_penalty_frac)) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "reward_oncoming_penalty_frac must be a non-negative finite number. Got: %g",
+            env->reward_oncoming_penalty_frac);
+        return -1;
+    }
+    if (env->reward_oncoming_penalty_frac > 0.0f && env->dynamics_model != DYNAMICS_MODEL_SPLINE_WERLING) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "reward_oncoming_penalty_frac needs dynamics_model spline_werling. Got: %g",
+            env->reward_oncoming_penalty_frac);
+        return -1;
+    }
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
@@ -2181,7 +2196,15 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         lattice->decision_period_s = (float) unpack(kwargs, "lattice_decision_period_s");
         lattice->exit_mode = (int) unpack(kwargs, "lattice_exit_mode");
         lattice->light_in_view = (int) unpack(kwargs, "lattice_light_in_view");
+        lattice->oncoming_overtake = (int) unpack(kwargs, "lattice_oncoming_overtake");
         if (PyErr_Occurred()) {
+            return -1;
+        }
+        if (env->reward_oncoming_penalty_frac > 0.0f && !lattice->oncoming_overtake) {
+            PyErr_Format(
+                PyExc_ValueError,
+                "reward_oncoming_penalty_frac needs lattice_oncoming_overtake. Got: %g",
+                env->reward_oncoming_penalty_frac);
             return -1;
         }
     }
@@ -2289,6 +2312,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/trajectory_consistency", log->reward_trajectory_consistency);
     assign_to_dict(dict, "reward_components/route_progress", log->reward_route_progress);
     assign_to_dict(dict, "reward_components/wait", log->reward_wait);
+    assign_to_dict(dict, "reward_components/oncoming", log->reward_oncoming);
     assign_to_dict(dict, "spline/consistency_msd_m2", log->spline_consistency_msd_m2);
     assign_to_dict(dict, "spline/consistency_lag1_msd_m2", log->spline_consistency_lag1_msd_m2);
     assign_to_dict(dict, "spline/slip_angle_rad", log->spline_slip_angle_rad);
@@ -2319,6 +2343,8 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         assign_to_dict(dict, "lattice/time_to_first_motion_s", log->lattice_time_to_first_motion_s);
         assign_to_dict(dict, "lattice/rail_regen_rate", log->lattice_rail_regen_rate);
         assign_to_dict(dict, "lattice/plan_change_rms_m", log->lattice_plan_change_rms_m);
+        assign_to_dict(dict, "lattice/oncoming_rate", log->lattice_oncoming_rate);
+        assign_to_dict(dict, "lattice/oncoming_starts", log->lattice_oncoming_starts);
     }
 
     if (env->compute_eval_metrics) {

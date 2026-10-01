@@ -149,6 +149,12 @@ static int init_lattice_config(Drive *env) {
     if (cfg->exit_mode != LATTICE_EXIT_MODE_POLICY && cfg->exit_mode != LATTICE_EXIT_MODE_GOAL) {
         return lattice_config_error("lattice_exit_mode", (float) cfg->exit_mode);
     }
+    if (cfg->oncoming_overtake != 0 && cfg->oncoming_overtake != 1) {
+        return lattice_config_error("lattice_oncoming_overtake", (float) cfg->oncoming_overtake);
+    }
+    if (cfg->oncoming_overtake && !(cfg->lat_offsets_m[cfg->lat_offset_count - 1] < LATTICE_BORROW_MIN_D_M)) {
+        return lattice_config_error("lattice_oncoming_overtake needs every lattice_lat_offsets_m below 1.25 m", cfg->lat_offsets_m[cfg->lat_offset_count - 1]);
+    }
     if (lattice_duration_steps(cfg->decision_period_s, env->dt, &cfg->decision_period_steps) != 0) {
         return lattice_config_error("lattice_decision_period_s must be a whole number of dt", cfg->decision_period_s);
     }
@@ -168,7 +174,7 @@ static int init_lattice_config(Drive *env) {
         || lattice_duration_steps(LATTICE_BACKUP_T_GRID_S, env->dt, &backup_grid_steps) != 0) {
         return lattice_config_error("dt must divide the 1.2 s stop grid and the 0.3 s back-up grid", env->dt);
     }
-    cfg->lat_cell_count = (cfg->lat_offset_count + 2) * cfg->lat_duration_count;
+    cfg->lat_cell_count = (cfg->lat_offset_count + 2 + cfg->oncoming_overtake) * cfg->lat_duration_count;
     cfg->lon_speed_cell_count = cfg->lon_speed_count * cfg->lon_duration_count;
     cfg->lon_stop_cell_base = cfg->lon_speed_cell_count;
     cfg->lon_stop_line_cell = cfg->lon_stop_cell_base + cfg->stop_distance_count;
@@ -195,9 +201,13 @@ static int lattice_mask_offset(const struct LatticeConfig *cfg, int factor_idx) 
     return offset;
 }
 
-// lateral cell = (offset_count + 2) * duration_idx + choice; choice 0 = right lane, last = left lane
+// lateral cell = choice_count * duration_idx + choice; choice 0 = right lane, offsets, left lane, then oncoming lane
 static int lattice_lat_choice_count(const struct LatticeConfig *cfg) {
-    return cfg->lat_offset_count + 2;
+    return cfg->lat_offset_count + 2 + cfg->oncoming_overtake;
+}
+
+static int lattice_lat_is_oncoming(const struct LatticeConfig *cfg, int cell) {
+    return cell % lattice_lat_choice_count(cfg) == cfg->lat_offset_count + 2;
 }
 
 static int lattice_lat_lane_side(const struct LatticeConfig *cfg, int cell) {
@@ -215,6 +225,10 @@ static float lattice_lat_cell_offset(const struct LatticeConfig *cfg, int cell) 
 
 static int lattice_lat_cell_duration_idx(const struct LatticeConfig *cfg, int cell) {
     return cell / lattice_lat_choice_count(cfg);
+}
+
+static int lattice_plan_feature_count(const struct LatticeConfig *cfg) {
+    return LATTICE_PLAN_FEATURES + cfg->oncoming_overtake;
 }
 
 // ========================================
@@ -559,6 +573,8 @@ static void compute_lattice_profile_sample(
         sample->neighbour_offset_m[side] = 0.0f;
         sample->neighbour_arc_m[side] = 0.0f;
     }
+    sample->oncoming_lane = -1;
+    sample->oncoming_offset_m = 0.0f;
     int list_size = get_neighbors_entities(env, px, py, entity_list, ROAD_QUERY_ENTITY_COUNT, ROAD_OFFSETS, (int) (sizeof(ROAD_OFFSETS) / sizeof(ROAD_OFFSETS[0])));
     for (int entity_idx = 0; entity_idx < list_size; entity_idx++) {
         int element_idx = entity_list[entity_idx].entity_idx;
@@ -589,8 +605,12 @@ static void compute_lattice_profile_sample(
         if (distance_m < LATTICE_NEIGHBOUR_MIN_M || distance_m > LATTICE_NEIGHBOUR_MAX_M) {
             continue;
         }
-        float segment_heading = lattice_segment_heading(element, geometry_idx);
-        if (cosf(segment_heading - heading) <= LATTICE_NEIGHBOUR_COS) {
+        float heading_cos = cosf(lattice_segment_heading(element, geometry_idx) - heading);
+        if (side == 1 && heading_cos < -LATTICE_NEIGHBOUR_COS && (sample->oncoming_lane < 0 || distance_m < sample->oncoming_offset_m)) {
+            sample->oncoming_lane = element_idx;
+            sample->oncoming_offset_m = distance_m;
+        }
+        if (heading_cos <= LATTICE_NEIGHBOUR_COS) {
             continue;
         }
         const float *cum = &env->lattice_lane_cum_m[env->lattice_lanes[element_idx].cum_offset];
@@ -603,6 +623,10 @@ static void compute_lattice_profile_sample(
             sample->neighbour_offset_m[side] = lambda;
             sample->neighbour_arc_m[side] = neighbour_arc_m;
         }
+    }
+    if (sample->neighbour_lane[0] >= 0 || sample->neighbour_lane[1] >= 0 || sample->edge_left_m < sample->oncoming_offset_m) {
+        sample->oncoming_lane = -1;
+        sample->oncoming_offset_m = 0.0f;
     }
 }
 
@@ -1421,6 +1445,48 @@ static int lattice_car_on_connector(const Drive *env, const struct LatticeAgent 
         return 1;
     }
     return env->lattice_lanes[rail->lanes[rail->chain_slot[lattice_agent->projection_hint]]].is_connector;
+}
+
+// offset (left, > 0) of the oncoming lane beside rail sample sample_idx; 0 when there is none or the feature is off
+static float lattice_oncoming_offset_at(const Drive *env, const struct LatticeAgent *lattice_agent, int sample_idx) {
+    const struct LatticeRail *rail = &lattice_agent->rail;
+    if (!env->lattice.oncoming_overtake || !lattice_agent->has_reference || rail->is_straight_fallback) {
+        return 0.0f;
+    }
+    const struct LatticeProfileSample *profile = lattice_profile_at(env, rail->lanes[rail->chain_slot[sample_idx]], rail->lane_arc_m[sample_idx]);
+    return profile->oncoming_lane >= 0 ? profile->oncoming_offset_m : 0.0f;
+}
+
+// the car is in the oncoming lane: past LATTICE_BORROW_FRACTION of its offset, still facing along the rail
+static int lattice_is_borrowing(const Drive *env, const struct LatticeAgent *lattice_agent, const LatticeFrenet *frenet) {
+    float offset_m = lattice_oncoming_offset_at(env, lattice_agent, frenet->sample_idx);
+    return offset_m > 0.0f && frenet->d > LATTICE_BORROW_FRACTION * offset_m && cosf(frenet->heading_error) > LATTICE_LOST_COS;
+}
+
+// the committed lateral plan ends in the oncoming lane beside the car
+static int lattice_plan_in_oncoming(const Drive *env, const struct LatticeAgent *lattice_agent, const LatticeFrenet *frenet) {
+    float offset_m = lattice_oncoming_offset_at(env, lattice_agent, frenet->sample_idx);
+    return offset_m > 0.0f && lattice_agent->lat.target_d_m > LATTICE_BORROW_FRACTION * offset_m;
+}
+
+// from the car to window_m ahead the rail stays off connectors and keeps an oncoming lane beside it
+static int lattice_oncoming_clear(const Drive *env, const struct LatticeAgent *lattice_agent, const LatticeFrenet *frenet, float window_m) {
+    const struct LatticeRail *rail = &lattice_agent->rail;
+    float end_s_m = frenet->s + window_m;
+    if (end_s_m > lattice_rail_end_s(rail)) {
+        return 0;
+    }
+    for (int lane_slot = rail->chain_slot[frenet->sample_idx]; lane_slot < rail->lane_count && rail->lane_start_s_m[lane_slot] <= end_s_m; lane_slot++) {
+        if (env->lattice_lanes[rail->lanes[lane_slot]].is_connector) {
+            return 0;
+        }
+    }
+    for (float ahead_m = 0.0f; ahead_m <= window_m; ahead_m += LATTICE_PROFILE_SPACING_M) {
+        if (!(lattice_oncoming_offset_at(env, lattice_agent, lattice_rail_at(rail, frenet->s + ahead_m).sample_idx) > 0.0f)) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 // lane-graph distance from the start of lane_idx to the start of goal_lane_idx; INFINITY when unreachable or unknown
@@ -2548,7 +2614,16 @@ static int lattice_build_lat_cell(Drive *env, const struct LatticeAgent *lattice
     int duration_idx = lattice_lat_cell_duration_idx(cfg, cell);
     int lane_side = lattice_lat_lane_side(cfg, cell);
     int kind = lane_side != 0 ? LATTICE_LAT_KIND_LANE_CHANGE : LATTICE_LAT_KIND_OFFSET;
-    float target_d_m = lane_side != 0 ? 0.0f : lattice_lat_cell_offset(cfg, cell);
+    float target_d_m = 0.0f;
+    if (lattice_lat_is_oncoming(cfg, cell)) {
+        assert(d_shift == 0.0f);
+        target_d_m = lattice_oncoming_offset_at(env, lattice_agent, ctx->frenet.sample_idx);
+        if (!(target_d_m > 0.0f) || reverse_distance_m > 0.0f) {
+            return 0;
+        }
+    } else if (lane_side == 0) {
+        target_d_m = lattice_lat_cell_offset(cfg, cell);
+    }
     float d0 = (float) ctx->lat_start.value - d_shift;
     if (reverse_distance_m > 0.0f) {
         if (duration_idx != cfg->lat_duration_count - 1 || lane_side != 0 || reverse_distance_m < 2.0f * LATTICE_RAIL_SPACING_M) {
@@ -2851,9 +2926,17 @@ static void compute_lattice_masks(Drive *env, int active_idx, int now_step) {
                                                                                   : ctx.backup_remaining_m;
         reverse_distance_m = fmaxf(reverse_distance_m, LATTICE_CHECK_EPS);
     }
+    int must_return = 0;
     if (lattice_agent->has_reference) {
+        int forward = !ctx.reversing && lattice_agent->gear > 0;
+        int plan_in_oncoming = lattice_plan_in_oncoming(env, lattice_agent, &ctx.frenet);
+        float speed_mps = fabsf(agent->sim_speed);
+        float window_m = plan_in_oncoming ? fmaxf(LATTICE_ONCOMING_KEEP_MIN_M, LATTICE_ONCOMING_KEEP_S * speed_mps)
+                                          : fmaxf(LATTICE_ONCOMING_START_MIN_M, LATTICE_ONCOMING_START_S * speed_mps);
+        int oncoming_allowed = cfg->oncoming_overtake && forward && lattice_oncoming_clear(env, lattice_agent, &ctx.frenet, window_m);
+        must_return = plan_in_oncoming && forward && !oncoming_allowed;
         for (int cell = 0; cell < cfg->lat_cell_count; cell++) {
-            if (lattice_lat_lane_side(cfg, cell) != 0) {
+            if (lattice_lat_lane_side(cfg, cell) != 0 || (lattice_lat_is_oncoming(cfg, cell) && !oncoming_allowed)) {
                 continue;
             }
             struct LatticeLatPlan candidate;
@@ -2864,7 +2947,8 @@ static void compute_lattice_masks(Drive *env, int active_idx, int now_step) {
             mask[lat_cells + cell] = (unsigned char) ok;
             any_lat |= ok;
         }
-        int lane_change_allowed = !exit_live && !ctx.reversing && lattice_agent->gear > 0 && !lattice_car_on_connector(env, lattice_agent);
+        int lane_change_allowed = !exit_live && forward && !lattice_car_on_connector(env, lattice_agent) && !plan_in_oncoming
+            && !lattice_is_borrowing(env, lattice_agent, &ctx.frenet);
         for (int side_idx = 0; side_idx < 2 && lane_change_allowed; side_idx++) {
             int neighbour_lane = lattice_agent->neighbour_lane[side_idx];
             if (neighbour_lane < 0) {
@@ -2905,7 +2989,7 @@ static void compute_lattice_masks(Drive *env, int active_idx, int now_step) {
             }
         }
     }
-    mask[lat_gate + LATTICE_GATE_KEEP] = 1;
+    mask[lat_gate + LATTICE_GATE_KEEP] = (unsigned char) !(must_return && any_lat);
     mask[lat_gate + LATTICE_GATE_NEW] = (unsigned char) any_lat;
     if (!any_lat) {
         mask[lat_cells] = 1;
@@ -3152,6 +3236,7 @@ static void apply_lattice_action(Drive *env, int active_idx, Agent *agent, int n
     int same_plan = candidate.mode == LATTICE_LAT_MODE_TIME && committed->mode == LATTICE_LAT_MODE_TIME && candidate.target_d_m == committed->target_d_m
         && candidate.end_step == committed->end_step;
     if (!same_plan) {
+        lattice_agent->counters.oncoming_starts += lattice_lat_is_oncoming(cfg, lat_cell) && !lattice_plan_in_oncoming(env, lattice_agent, &ctx.frenet);
         *committed = candidate;
         lattice_agent->counters.lat_new += 1.0f;
     }
@@ -3205,6 +3290,7 @@ static LatticeCommand move_lattice_agent(Drive *env, int active_idx, Agent *agen
     counters->speed_error_mps += fabsf(command.speed_error_mps);
     counters->no_reference_steps += !lattice_agent->has_reference;
     counters->dist_mode_steps += lattice_agent->lat.mode == LATTICE_LAT_MODE_DIST;
+    counters->oncoming_steps += lattice_is_borrowing(env, lattice_agent, &frenet);
     counters->emergency_steps += lattice_agent->lon.kind == LATTICE_LON_KIND_EMERGENCY;
     counters->unfollowable_steps += fabsf(frenet.curvature) > lattice_curvature_limit(agent);
     counters->jerk_clip_long += command.jerk_long < JERK_LONG[0] || command.jerk_long > JERK_LONG[3];
@@ -3314,13 +3400,14 @@ static float lattice_plan_curvature_ahead(const struct LatticeRail *rail, float 
     return point.curvature / fmaxf(1.0f - point.curvature * d_m, LATTICE_MIN_FRENET_FACTOR);
 }
 
-// plan block (LATTICE_PLAN_FEATURES floats) written right after the ego block
+// plan block (lattice_plan_feature_count floats) written right after the ego block
 static int write_lattice_plan_obs(Drive *env, int active_idx, float *obs, int obs_idx) {
     int start_idx = obs_idx;
+    int feature_count = lattice_plan_feature_count(&env->lattice);
     struct LatticeAgent *lattice_agent = &env->lattice_agents[active_idx];
     Agent *agent = &env->agents[env->active_agent_indices[active_idx]];
     if (!lattice_is_policy_agent(agent) || lattice_agent->rail.sample_count < 2) {
-        return start_idx + LATTICE_PLAN_FEATURES;
+        return start_idx + feature_count;
     }
     const struct LatticeRail *rail = &lattice_agent->rail;
     const struct LatticeLatPlan *lat = &lattice_agent->lat;
@@ -3423,7 +3510,10 @@ static int write_lattice_plan_obs(Drive *env, int active_idx, float *obs, int ob
         obs[obs_idx++] = local_y / LATTICE_OBS_PREVIEW_NORM_M;
         obs[obs_idx++] = preview.speed[substep_idx] / LATTICE_OBS_SPEED_NORM_MPS;
     }
-    assert(obs_idx == start_idx + LATTICE_PLAN_FEATURES);
+    if (env->lattice.oncoming_overtake) {
+        obs[obs_idx++] = (float) lattice_is_borrowing(env, lattice_agent, &frenet);
+    }
+    assert(obs_idx == start_idx + feature_count);
     return obs_idx;
 }
 
@@ -3440,6 +3530,22 @@ static int write_lattice_mask_obs(Drive *env, int active_idx, float *obs, int ob
         }
     }
     return obs_idx + cfg->mask_feature_count;
+}
+
+// a policy car borrowing the oncoming lane is scored in its own lane's direction, centred on the borrowed lane
+static void lattice_borrowed_lane(const Drive *env, int active_idx, const Agent *agent, int *lane_idx, float *signed_lane_distance_m, float *lane_heading) {
+    const struct LatticeAgent *lattice_agent = &env->lattice_agents[active_idx];
+    const struct LatticeRail *rail = &lattice_agent->rail;
+    if (!lattice_is_policy_agent(agent) || rail->sample_count < 2) {
+        return;
+    }
+    LatticeFrenet frenet = lattice_frenet_state(rail, agent, lattice_agent->projection_hint);
+    if (!lattice_is_borrowing(env, lattice_agent, &frenet)) {
+        return;
+    }
+    *lane_idx = rail->lanes[rail->chain_slot[frenet.sample_idx]];
+    *signed_lane_distance_m = lattice_oncoming_offset_at(env, lattice_agent, frenet.sample_idx) - frenet.d; // left negative
+    *lane_heading = lattice_wrap_angle(agent->sim_heading - frenet.heading_error);
 }
 
 static void add_lattice_log(Drive *env, int active_idx, Log *episode_log) {
@@ -3473,6 +3579,8 @@ static void add_lattice_log(Drive *env, int active_idx, Log *episode_log) {
     episode_log->lattice_time_to_first_motion_s += first_motion_steps * env->dt;
     episode_log->lattice_rail_regen_rate += counters->rail_regens / steps;
     episode_log->lattice_plan_change_rms_m += counters->plan_change_rms_m / decisions;
+    episode_log->lattice_oncoming_rate += counters->oncoming_steps / steps;
+    episode_log->lattice_oncoming_starts += counters->oncoming_starts;
 }
 
 // all active slots: follow the rails every step, recompute context and masks on context steps
