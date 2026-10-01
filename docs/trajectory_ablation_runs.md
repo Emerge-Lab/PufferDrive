@@ -48,6 +48,7 @@ All: `puffer train puffer_drive_spline_werling env.lattice_exit_mode=goal` plus 
 | `spline_werling_trajA_info_wait_pen` | 18956052 / 18956053 | A + waiting penalty | `env.reward_wait_penalty_frac=5e-4 env.lattice_light_in_view=false` |
 | `spline_werling_trajC2_routegoals_wait_pen` | 18956054 / 18956055 | B + waiting penalty | `env.goal_source=route env.reward_wait_penalty_frac=5e-4 env.lattice_light_in_view=false` |
 | `spline_werling_trajD2_mapgoals_wait_pen` | 18956057 / 18956058 | A + waiting penalty + consistency | `env.reward_wait_penalty_frac=5e-4 env.reward_trajectory_consistency=2e-4 env.lattice_light_in_view=false` |
+| `spline_werling_trajE_overtake_wait_pen` | 18976365 / 18976366 | A + waiting penalty + borrowing the oncoming lane (section 7) | `env.reward_wait_penalty_frac=5e-4 env.lattice_light_in_view=false env.lattice_oncoming_overtake=true env.reward_oncoming_penalty_frac=5e-4` |
 
 The three `*_wait_pen` runs use commit `d9f1e2ee` (waiting penalty) on top of `37157e4c` (view-gated light features,
 switched off for them so they differ from A only as listed). Waiting penalty: each step a car pays
@@ -69,7 +70,8 @@ What to watch:
 
 ## 4. Caveats
 
-- Observation size grows from 1072 to 1074, so checkpoints from earlier runs do not load into these runs.
+- Observation size grows from 1072 to 1074, so checkpoints from earlier runs do not load into these runs. With
+  `lattice_oncoming_overtake` it grows by 5 more (plan flag + 4 lateral cells) and the lateral head has 24 cells.
 - Route goals change what "goal reached" means. Evaluation (WOSAC, human replay) still uses logged goals.
 - `goal_source: route` follows the agent's random route, so the first goal can sit on a lane the policy has not chosen yet; goal exit mode steers to it by lane-graph distance.
 
@@ -96,7 +98,41 @@ What to watch:
 - Partner-conflict feature along the committed preview (collisions are flat at 0.13-0.15).
 - Exact mask speedups (longitudinal cells are 42 % of `c_step`); a 0.6 s decision period would halve mask cost but adds reaction latency.
 - EMERGENCY use stays at 0.10-0.15 of steps.
-- Town01/02/07 cannot be overtaken in (no same-direction neighbour lanes).
+- Town01/02/07 cannot be overtaken in (no same-direction neighbour lanes): addressed by section 7 behind a flag, one run so far.
+
+## 7. Borrowing the oncoming lane (commit `03889a6a`, `env.lattice_oncoming_overtake`)
+
+Addresses issue 11: on roads with one lane each way (most of Town01/02/07) a lattice car could only queue behind a
+stopped car, because its widest lateral move is +0.9 m.
+
+| Part | Rule |
+|------|------|
+| Menu | A sixth lateral choice per duration, "oncoming lane": 20 -> 24 lateral cells, 89 -> 93 mask features. Off by default (old menu, old checkpoints load) |
+| Where | Lane profiles record an opposite-heading lane 2.5-4.5 m to the left only when no same-direction lane runs on either side and no road edge lies between. Target = that lane's offset at the car (4.0 m on Town01) |
+| Offered | Forward gear, not reversing, and the next max(40 m, 6 s x speed) of rail keeps the oncoming lane beside it with no connector (junction, light, merge) |
+| Kept | Once the plan ends in the oncoming lane, keep needs max(20 m, 4 s x speed); otherwise keep is masked and the car must pick a return. Lane changes are masked while borrowing |
+| Observation | Plan block +1: borrowing flag (60 -> 61) |
+| Reward | While borrowing (past half the oncoming offset, facing along the rail) the lane metrics use the car's own lane: its direction, its lane index (lights, speed limit, route distance) and the distance to the borrowed lane's centre. So the wrong-way alignment penalty and the zero velocity reward of the old scoring no longer apply. `env.reward_oncoming_penalty_frac` charges frac x min(collision, offroad, stop-line coefficient) per borrowing step instead; the schema keeps (wait + oncoming) x discounted episode below one infraction (0.92 at 5e-4 + 5e-4) |
+| Logs | `lattice/oncoming_rate` (share of steps borrowing), `lattice/oncoming_starts` (per agent-episode), `reward_components/oncoming` |
+
+Measured (C tests and `harness/overtake_share.c`, default menu, dt 0.3):
+- Share of lane length where the move is offered at <= 6.7 m/s (40 m window): Town01 55.9 %, Town02 42.9 %, Town07
+  22.6 %, Town03 5.1 %, Town04 3.1 %, Town05 3.0 %, Town10HD 0.5 %, Town06 0 %. At 10 m/s (60 m): 49.0 / 35.3 / 13.1 / 3.8 / 1.9 / 2.6 / 0.0 / 0 %.
+- Town01, stopped car 35 m ahead at 6 m/s: the 3.6/4.8/6.0 s cells are feasible (2.4 s is not); the car reaches
+  d = 4.07 m, passes with no collision and returns to d = 0.000. The reward's lane stays the car's own lane on every step.
+  27 borrowing steps cost 0.0135 in total. The old scoring charged about 0.0525 per borrowing step and paid no velocity
+  reward (1.27 over the prototype's 7.2 s borrow); a crash at that speed costs 2.1.
+- Borrowing toward a split: keep is masked 22.4 m before the junction (window 24 m at 6 m/s); the car enters the
+  junction at d = -0.06 m.
+- Random valid actions, 16 agents x 300 steps x 8 towns: 410 borrow starts, 2.4 % of steps borrowing, 0 invalid
+  actions, bit-identical twin runs.
+
+Run: `spline_werling_trajE_overtake_wait_pen` (18976365 / continuation 18976366, queued behind the 16-GPU cap on
+2026-10-01) = `trajA_info_wait_pen` + `env.lattice_oncoming_overtake=true env.reward_oncoming_penalty_frac=5e-4`.
+Compare with `trajA_info_wait_pen`.
+
+What to watch: `lattice/oncoming_rate` and `oncoming_starts` should rise above the random-policy level without collisions
+climbing; goals, DNF, moving fraction and time to first motion vs `trajA_info_wait_pen`; `reward_components/oncoming`.
 
 Harnesses behind the numbers: `/scratch/ag11023/tmp/claude/ablation/harness/` (`queue.c` + `queue_policy.py`, `lanestats.c`,
-`routecheck.c`, `bench.c`, `newfeat.c`); W&B pulls in `/scratch/ag11023/tmp/claude/ablation/`.
+`routecheck.c`, `bench.c`, `newfeat.c`, `overtake.c`, `overtake_share.c`); W&B pulls in `/scratch/ag11023/tmp/claude/ablation/`.
