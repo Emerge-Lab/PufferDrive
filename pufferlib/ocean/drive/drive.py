@@ -832,7 +832,9 @@ class Drive(pufferlib.PufferEnv):
 
         return states
 
-    def set_agent_states(self, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long, seconds_stopped=None):
+    def set_agent_states(
+        self, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long, seconds_stopped=None, steering=None
+    ):
         """Co-sim: overwrite the sim state of agents at global indices `idx`
         (e.g. CARLA background) with world-frame pose/velocity. The C side
         subtracts world_mean, recaches heading trig and recomputes speed.
@@ -845,7 +847,12 @@ class Drive(pufferlib.PufferEnv):
         binding.AGENT_STOPPED_SPEED_THRESHOLD) is optional: pass it when the
         external sim owns the agent's kinematics every tick, so stopped-time is
         injected as state instead of derived from the dummy in-sim rollout;
-        leave it None to keep c_step's own per-tick accumulation."""
+        leave it None to keep c_step's own per-tick accumulation.
+        `steering` (front-wheel angle, rad) is optional: pass it when the
+        external sim tracks the steering angle as state, as c_step does; the
+        lateral acceleration is then derived from it. Left None, both are
+        derived from `yaw_rate`, which cannot represent a held steering angle
+        below 1 m/s."""
         binding.vec_set_agent_states(
             self.c_envs,
             np.ascontiguousarray(idx, dtype=np.int32),
@@ -858,6 +865,7 @@ class Drive(pufferlib.PufferEnv):
             np.ascontiguousarray(yaw_rate, dtype=np.float32),
             np.ascontiguousarray(accel_long, dtype=np.float32),
             None if seconds_stopped is None else np.ascontiguousarray(seconds_stopped, dtype=np.float32),
+            None if steering is None else np.ascontiguousarray(steering, dtype=np.float32),
         )
 
     # ── Co-simulation external-state setters ─────────────────────────────────────

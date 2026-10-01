@@ -4034,7 +4034,8 @@ int c_set_agent_states(
     const float *vy,
     const float *yaw_rate,
     const float *accel_long,
-    const float *seconds_stopped) {
+    const float *seconds_stopped,
+    const float *steering) {
     for (int k = 0; k < count; k++) {
         int agent_idx = idx[k];
         if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
@@ -4044,6 +4045,9 @@ int c_set_agent_states(
             return -1;
         }
         if (seconds_stopped && !(seconds_stopped[k] >= 0.0f)) {
+            return -1;
+        }
+        if (steering && !isfinite(steering[k])) {
             return -1;
         }
         Agent *agent = &env->agents[agent_idx];
@@ -4072,11 +4076,21 @@ int c_set_agent_states(
         // called, so "the agent's previous state" at this point is a throwaway dummy-action rollout,
         // not the true previous external state.
         agent->yaw_rate = yaw_rate[k];
-        float speed_for_steering = fmaxf(fabsf(agent->sim_speed_signed), 1.0f);
-        float steering = atanf(agent->yaw_rate * agent->wheelbase / speed_for_steering);
-        agent->steering_angle = clip(steering, -STEERING_LIMIT, STEERING_LIMIT);
+        if (steering) {
+            // The external sim tracks the steering angle as state, as c_step does: take it as given and
+            // derive the lateral acceleration from it the way c_step's jerk dynamics do. A yaw rate alone
+            // cannot carry both below 1 m/s, where the derivation below floors the speed (at a standstill
+            // it would zero a steering angle the car still holds).
+            agent->steering_angle = clip(steering[k], -STEERING_LIMIT, STEERING_LIMIT);
+            agent->accel_lat
+                = agent->sim_speed_signed * agent->sim_speed_signed * tanf(agent->steering_angle) / agent->wheelbase;
+        } else {
+            float speed_for_steering = fmaxf(fabsf(agent->sim_speed_signed), 1.0f);
+            float derived_steering = atanf(agent->yaw_rate * agent->wheelbase / speed_for_steering);
+            agent->steering_angle = clip(derived_steering, -STEERING_LIMIT, STEERING_LIMIT);
+            agent->accel_lat = agent->sim_speed_signed * agent->yaw_rate;
+        }
         agent->accel_long = accel_long[k];
-        agent->accel_lat = agent->sim_speed_signed * agent->yaw_rate;
         refresh_lane_association(env, agent); // current_lane_idx / lane-dist / lane-angle for the new pose
 
         // NULL keeps c_step's own accumulation (co-sim default); an array injects stopped-time as state.
