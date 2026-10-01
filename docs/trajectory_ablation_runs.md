@@ -45,7 +45,13 @@ All: `puffer train puffer_drive_spline_werling env.lattice_exit_mode=goal` plus 
 | `spline_werling_trajC_progress` | 18935229 / 18935231 | + route-progress reward | `+ env.reward_route_progress=1e-3` |
 | `spline_werling_trajD_consistency` | 18935235 / 18935236 | + plan-consistency penalty | `+ env.reward_trajectory_consistency=2e-4` |
 
-Compare A with `spline_werling_goal` (same exit mode, old code). B-D change the goal task, so compare them with each other
+| `spline_werling_trajC_progress_mapgoals` | 18953137 / 18953138 | C without route goals (map goals), nice 500 | `env.reward_route_progress=1e-3` |
+| `spline_werling_trajD_consistency_mapgoals` | 18953142 / 18953143 | D without route goals (map goals), nice 500 | `+ env.reward_trajectory_consistency=2e-4` |
+
+`spline_werling_vel50x` was cancelled on 2026-10-01 (main 18867873 after 24 h, continuation 18867876 before it started).
+
+Compare A with `spline_werling_goal` (same exit mode, old code). With map goals the progress potential is flat beyond
+1000 m of route and pays nothing toward an unreachable goal, so in C_map / D_map it acts on 60 % of first goals. B-D change the goal task, so compare them with each other
 and with A, not on raw goal counts against map-goal runs.
 
 What to watch:
@@ -60,7 +66,19 @@ What to watch:
 - Route goals change what "goal reached" means. Evaluation (WOSAC, human replay) still uses logged goals.
 - `goal_source: route` follows the agent's random route, so the first goal can sit on a lane the policy has not chosen yet; goal exit mode steers to it by lane-graph distance.
 
-## 5. Not done (candidates for the next batch)
+## 5. Later measurements (2026-10-01)
+
+- Unreachable map goals mostly come from sealed lane sets (lanes from which less than half the town is reachable):
+  Town04 174 lanes (57 % of lane length), Town05 32 (25 %), Town06 129 (26 %), Town10HD 19 (15 %, incl. a closed
+  16-lane ring of 782.6 m). Cars that start in one: Town04 28/35 unreachable, Town05 13/29, Town06 17/18, Town10HD 14/14.
+- Across 8 towns, of 510 first map goals: 96 unreachable, 149 longer than 768 m, 265 within 768 m. Route goals: 0
+  unreachable, 1 of 512 longer than 768 m.
+- Old goal exit mode (500 m cap, tie -> slot 0) picked a different exit from the true shortest at 82 of 351 first
+  junctions (23 %).
+- Light flags fire for a stop line up to ~222 m ahead (rail end ~225 m); the distance feature saturates at 100 m.
+- Explainer: https://claude.ai/artifact/UmKvFJcedLxoYEB35dchb2 ("Where the Goals Go").
+
+## 6. Not done (candidates for the next batch)
 
 - Partner-conflict feature along the committed preview (collisions are flat at 0.13-0.15).
 - Exact mask speedups (longitudinal cells are 42 % of `c_step`); a 0.6 s decision period would halve mask cost but adds reaction latency.
