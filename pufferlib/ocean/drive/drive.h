@@ -4064,7 +4064,7 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
 }
 
 static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
-    // Partner blindness: zero partner obs for the configured duration once triggered
+    // Partner blindness restricts visibility to the forward centerline while triggered.
     if (ego->partner_blindness_counter > 0) {
         ego->partner_blindness_counter--;
     }
@@ -4072,13 +4072,6 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
         ego->partner_blindness_counter = env->partner_blindness_duration;
     }
-    if (ego->partner_blindness_counter > 0) {
-        int partner_obs_stride = env->obs_slots_partners_n * partner_feature_count(env);
-        memset(&obs[obs_idx], 0, partner_obs_stride * sizeof(float));
-        *partner_count = 0;
-        return obs_idx + partner_obs_stride;
-    }
-
     typedef struct {
         int index;
         float dist_sq;
@@ -4102,6 +4095,18 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         float dz = other->sim_z - ego->sim_z;
         float dist_sq = dx * dx + dy * dy + dz * dz;
         if (dist_sq > env->obs_range_partner_m * env->obs_range_partner_m) {
+            continue;
+        }
+        bool partner_visible = true;
+        if (ego->partner_blindness_counter > 0) {
+            float rel_x, rel_y, rel_heading_x, rel_heading_y;
+            project_point_to_ego_frame(ego, other->sim_x, other->sim_y, &rel_x, &rel_y);
+            project_vector_to_ego_frame(ego, other->cos_heading, other->sin_heading, &rel_heading_x, &rel_heading_y);
+            float lateral_half_extent_m
+                = 0.5f * (fabsf(rel_heading_y) * other->sim_length + fabsf(rel_heading_x) * other->sim_width);
+            partner_visible = rel_x > 0.0f && fabsf(rel_y) <= lateral_half_extent_m;
+        }
+        if (!partner_visible) {
             continue;
         }
         nearby_agents[nearby_count].index = index;
