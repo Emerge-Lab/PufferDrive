@@ -80,6 +80,8 @@ env:
   lattice_decision_period_s: 0.3
   # Options: "policy" (exit slot chosen by the policy), "goal" (env picks the exit nearest the goal; ablation)
   lattice_exit_mode: policy
+  # Stop-line distance and red/yellow features only for a stop line the traffic-control observation lists (else rail-based)
+  lattice_light_in_view: true
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap

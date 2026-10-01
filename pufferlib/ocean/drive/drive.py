@@ -136,6 +136,7 @@ class Drive(pufferlib.PufferEnv):
         lattice_low_speed_mps=3.0,
         lattice_decision_period_s=0.3,
         lattice_exit_mode="policy",
+        lattice_light_in_view=True,
     ):
         self.dt = dt
         self.base_max_speed_mps = float(base_max_speed_mps)
@@ -227,6 +228,7 @@ class Drive(pufferlib.PufferEnv):
             "policy": binding.LATTICE_EXIT_MODE_POLICY,
             "goal": binding.LATTICE_EXIT_MODE_GOAL,
         }[lattice_exit_mode]
+        self.lattice_light_in_view = bool(lattice_light_in_view)
         # [lat gate, lat cell, lon gate, lon cell, exit slot]; must match init_lattice_config in lattice.h
         self.lattice_nvec = [
             binding.LATTICE_GATE_COUNT,
@@ -595,6 +597,7 @@ class Drive(pufferlib.PufferEnv):
             "lattice_low_speed_mps": self.lattice_low_speed_mps,
             "lattice_decision_period_s": self.lattice_decision_period_s,
             "lattice_exit_mode": self.lattice_exit_mode,
+            "lattice_light_in_view": self.lattice_light_in_view,
         }
 
     def _sample_init_step(self):

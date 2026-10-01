@@ -2785,6 +2785,26 @@ static LatticeStopLine lattice_next_stop_line(const Drive *env, const struct Lat
     return none;
 }
 
+typedef struct {
+    float distance_m; // -1 when no stop line is reported
+    int light_state;
+} LatticeReportedLight;
+
+// the car's own next stop line and light state as its observation reports them
+static LatticeReportedLight lattice_reported_light(const Drive *env, const struct LatticeAgent *lattice_agent, const Agent *agent, float car_s_m) {
+    LatticeStopLine stop_line = lattice_next_stop_line(env, lattice_agent, agent, car_s_m);
+    LatticeReportedLight reported = {-1.0f, TRAFFIC_CONTROL_STATE_UNKNOWN};
+    if (stop_line.traffic_idx < 0 || (env->lattice.light_in_view && !traffic_control_in_view(env, agent, stop_line.traffic_idx))) {
+        return reported;
+    }
+    reported.distance_m = stop_line.distance_m;
+    const TrafficControlElement *light = &env->traffic_elements[stop_line.traffic_idx];
+    if (env->timestep < light->state_size) {
+        reported.light_state = light->states[env->timestep];
+    }
+    return reported;
+}
+
 static void lattice_mask_index0_only(struct LatticeAgent *lattice_agent, const struct LatticeConfig *cfg) {
     memset(lattice_agent->mask, 0, sizeof(lattice_agent->mask));
     for (int factor_idx = 0; factor_idx < LATTICE_ACTION_FACTORS; factor_idx++) {
@@ -3388,14 +3408,10 @@ static int write_lattice_plan_obs(Drive *env, int active_idx, float *obs, int ob
     obs[obs_idx++] = isfinite(car_goal_distance_m)
         ? fminf(log1pf(car_goal_distance_m / LATTICE_OBS_ROUTE_LOG_SCALE_M) / log1pf(LATTICE_OBS_ROUTE_LOG_MAX_M / LATTICE_OBS_ROUTE_LOG_SCALE_M), 1.0f)
         : 1.0f;
-    LatticeStopLine stop_line = lattice_next_stop_line(env, lattice_agent, agent, frenet.s);
-    obs[obs_idx++] = stop_line.distance_m >= 0.0f ? fminf(stop_line.distance_m, LATTICE_OBS_STOP_LINE_NORM_M) / LATTICE_OBS_STOP_LINE_NORM_M : 1.0f;
-    int light_state = TRAFFIC_CONTROL_STATE_UNKNOWN;
-    if (stop_line.traffic_idx >= 0 && env->timestep < env->traffic_elements[stop_line.traffic_idx].state_size) {
-        light_state = env->traffic_elements[stop_line.traffic_idx].states[env->timestep];
-    }
-    obs[obs_idx++] = (float) (light_state == TRAFFIC_CONTROL_STATE_RED);
-    obs[obs_idx++] = (float) (light_state == TRAFFIC_CONTROL_STATE_YELLOW);
+    LatticeReportedLight light = lattice_reported_light(env, lattice_agent, agent, frenet.s);
+    obs[obs_idx++] = light.distance_m >= 0.0f ? fminf(light.distance_m, LATTICE_OBS_STOP_LINE_NORM_M) / LATTICE_OBS_STOP_LINE_NORM_M : 1.0f;
+    obs[obs_idx++] = (float) (light.light_state == TRAFFIC_CONTROL_STATE_RED);
+    obs[obs_idx++] = (float) (light.light_state == TRAFFIC_CONTROL_STATE_YELLOW);
     obs[obs_idx++] = (float) lattice_agent->rail_changed_flag;
     LatticePreview preview = compute_lattice_preview(env, lattice_agent, agent, now_step);
     lattice_store_render_path(lattice_agent, &preview);

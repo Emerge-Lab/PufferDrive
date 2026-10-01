@@ -764,6 +764,18 @@ static int test_stop_line_light_features(void) {
         EXPECT_NEAR(env.observations[plan_idx + 39], state_idx == 0 ? 1.0f : 0.0f, 0.0f);
         EXPECT_NEAR(env.observations[plan_idx + 40], state_idx == 1 ? 1.0f : 0.0f, 0.0f);
     }
+    // out of the traffic-control view: with light_in_view the features report none, without it the rail still does
+    light->states[env.timestep] = TRAFFIC_CONTROL_STATE_RED;
+    env.obs_range_traffic_control_m = 5.0f;
+    env.lattice.light_in_view = 1;
+    compute_observations(&env);
+    EXPECT_NEAR(env.observations[plan_idx + 38], 1.0f, 0.0f);
+    EXPECT_NEAR(env.observations[plan_idx + 39], 0.0f, 0.0f);
+    EXPECT_NEAR(env.observations[plan_idx + 40], 0.0f, 0.0f);
+    env.lattice.light_in_view = 0;
+    compute_observations(&env);
+    EXPECT_TRUE(env.observations[plan_idx + 38] < 1.0f);
+    EXPECT_NEAR(env.observations[plan_idx + 39], 1.0f, 0.0f);
     free_allocated(&env);
     return 0;
 }

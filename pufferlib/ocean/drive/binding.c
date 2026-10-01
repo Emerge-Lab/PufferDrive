@@ -2165,6 +2165,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         lattice->low_speed_mps = (float) unpack(kwargs, "lattice_low_speed_mps");
         lattice->decision_period_s = (float) unpack(kwargs, "lattice_decision_period_s");
         lattice->exit_mode = (int) unpack(kwargs, "lattice_exit_mode");
+        lattice->light_in_view = (int) unpack(kwargs, "lattice_light_in_view");
         if (PyErr_Occurred()) {
             return -1;
         }

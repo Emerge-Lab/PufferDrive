@@ -666,6 +666,42 @@ static inline void project_point_from_ego_frame(
 }
 
 #include "map_data.h"
+// a traffic control the observation may list: its type is enabled in this env
+static int traffic_control_observable(const Drive *env, const TrafficControlElement *tc) {
+    return !(
+        tc->type == TRAFFIC_CONTROL_TYPE_NONE
+        || (tc->type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT && !env->traffic_lights_enabled)
+        || (tc->type == TRAFFIC_CONTROL_TYPE_STOP_SIGN && !env->stop_signs_enabled)
+        || (tc->type == TRAFFIC_CONTROL_TYPE_YIELD_SIGN && !env->yield_signs_enabled));
+}
+
+static float traffic_control_dist_sq(const TrafficControlElement *tc, const Agent *agent) {
+    float dx = (tc->stop_line[0] + tc->stop_line[3]) * 0.5f - agent->sim_x;
+    float dy = (tc->stop_line[1] + tc->stop_line[4]) * 0.5f - agent->sim_y;
+    float dz = (tc->stop_line[2] + tc->stop_line[5]) * 0.5f - agent->sim_z;
+    return dx * dx + dy * dy + dz * dz;
+}
+
+// same selection as the traffic-control observation: observable, in range, among the nearest obs slots
+static int traffic_control_in_view(const Drive *env, const Agent *agent, int traffic_idx) {
+    const TrafficControlElement *target = &env->traffic_elements[traffic_idx];
+    float target_dist_sq = traffic_control_dist_sq(target, agent);
+    if (!traffic_control_observable(env, target)
+        || target_dist_sq > env->obs_range_traffic_control_m * env->obs_range_traffic_control_m) {
+        return 0;
+    }
+    int nearer_count = 0;
+    for (int j = 0; j < env->num_traffic_elements && nearer_count < env->obs_slots_traffic_controls_n; j++) {
+        const TrafficControlElement *other = &env->traffic_elements[j];
+        if (j == traffic_idx || !traffic_control_observable(env, other)) {
+            continue;
+        }
+        float other_dist_sq = traffic_control_dist_sq(other, agent);
+        nearer_count += other_dist_sq < target_dist_sq || (other_dist_sq == target_dist_sq && j < traffic_idx);
+    }
+    return nearer_count < env->obs_slots_traffic_controls_n;
+}
+
 #include "lattice.h"
 
 // ========================================
@@ -4452,19 +4488,10 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
 
     for (int j = 0; j < env->num_traffic_elements; j++) {
         TrafficControlElement *tc = &env->traffic_elements[j];
-        if (tc->type == TRAFFIC_CONTROL_TYPE_NONE
-            || (tc->type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT && !env->traffic_lights_enabled)
-            || (tc->type == TRAFFIC_CONTROL_TYPE_STOP_SIGN && !env->stop_signs_enabled)
-            || (tc->type == TRAFFIC_CONTROL_TYPE_YIELD_SIGN && !env->yield_signs_enabled)) {
+        if (!traffic_control_observable(env, tc)) {
             continue;
         }
-        float mid_x = (tc->stop_line[0] + tc->stop_line[3]) * 0.5f;
-        float mid_y = (tc->stop_line[1] + tc->stop_line[4]) * 0.5f;
-        float mid_z = (tc->stop_line[2] + tc->stop_line[5]) * 0.5f;
-        float dx = mid_x - ego->sim_x;
-        float dy = mid_y - ego->sim_y;
-        float dz = mid_z - ego->sim_z;
-        float dist_sq = dx * dx + dy * dy + dz * dz;
+        float dist_sq = traffic_control_dist_sq(tc, ego);
         if (dist_sq > env->obs_range_traffic_control_m * env->obs_range_traffic_control_m) {
             continue;
         }

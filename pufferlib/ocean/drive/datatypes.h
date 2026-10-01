@@ -199,6 +199,7 @@ struct LatticeConfig {
     float low_speed_mps;
     float decision_period_s;
     int exit_mode;
+    int light_in_view; // stop-line features only for a stop line the traffic-control observation lists
     int decision_period_steps;
     int lat_duration_steps[LATTICE_MAX_LAT_DURATIONS];
     int lon_duration_steps[LATTICE_MAX_LON_DURATIONS];
