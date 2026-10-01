@@ -45,10 +45,17 @@ All: `puffer train puffer_drive_spline_werling env.lattice_exit_mode=goal` plus 
 | `spline_werling_trajC_progress` | 18935229 / 18935231 | + route-progress reward | `+ env.reward_route_progress=1e-3` |
 | `spline_werling_trajD_consistency` | 18935235 / 18935236 | + plan-consistency penalty | `+ env.reward_trajectory_consistency=2e-4` |
 
-| `spline_werling_trajC_progress_mapgoals` | 18953137 / 18953138 | C without route goals (map goals), nice 500 | `env.reward_route_progress=1e-3` |
-| `spline_werling_trajD_consistency_mapgoals` | 18953142 / 18953143 | D without route goals (map goals), nice 500 | `+ env.reward_trajectory_consistency=2e-4` |
+| `spline_werling_trajA_info_wait_pen` | 18956052 / 18956053 | A + waiting penalty | `env.reward_wait_penalty_frac=5e-4 env.lattice_light_in_view=false` |
+| `spline_werling_trajC2_routegoals_wait_pen` | 18956054 / 18956055 | B + waiting penalty | `env.goal_source=route env.reward_wait_penalty_frac=5e-4 env.lattice_light_in_view=false` |
+| `spline_werling_trajD2_mapgoals_wait_pen` | 18956057 / 18956058 | A + waiting penalty + consistency | `env.reward_wait_penalty_frac=5e-4 env.reward_trajectory_consistency=2e-4 env.lattice_light_in_view=false` |
 
-`spline_werling_vel50x` was cancelled on 2026-10-01 (main 18867873 after 24 h, continuation 18867876 before it started).
+The three `*_wait_pen` runs use commit `d9f1e2ee` (waiting penalty) on top of `37157e4c` (view-gated light features,
+switched off for them so they differ from A only as listed). Waiting penalty: each step a car pays
+0.0005 x min(its collision, offroad, stop-line coefficient) x max(0, 1 - speed / 1 m/s), except while its reported next
+light is red or yellow; a whole standstill episode costs at most 0.46 of that cheapest infraction (gamma 0.999, 2560 steps).
+
+Cancelled 2026-10-01: `spline_werling_vel50x` (18867873 after 24 h, continuation 18867876), and before they started
+`trajC_progress_mapgoals` (18953137 / 138) and `trajD_consistency_mapgoals` (18953142 / 143).
 
 Compare A with `spline_werling_goal` (same exit mode, old code). With map goals the progress potential is flat beyond
 1000 m of route and pays nothing toward an unreachable goal, so in C_map / D_map it acts on 60 % of first goals. B-D change the goal task, so compare them with each other
@@ -66,16 +73,22 @@ What to watch:
 - Route goals change what "goal reached" means. Evaluation (WOSAC, human replay) still uses logged goals.
 - `goal_source: route` follows the agent's random route, so the first goal can sit on a lane the policy has not chosen yet; goal exit mode steers to it by lane-graph distance.
 
-## 5. Later measurements (2026-10-01)
+## 5. Later measurements (2026-10-01, corrected)
 
-- Unreachable map goals mostly come from sealed lane sets (lanes from which less than half the town is reachable):
-  Town04 174 lanes (57 % of lane length), Town05 32 (25 %), Town06 129 (26 %), Town10HD 19 (15 %, incl. a closed
-  16-lane ring of 782.6 m). Cars that start in one: Town04 28/35 unreachable, Town05 13/29, Town06 17/18, Town10HD 14/14.
-- Across 8 towns, of 510 first map goals: 96 unreachable, 149 longer than 768 m, 265 within 768 m. Route goals: 0
-  unreachable, 1 of 512 longer than 768 m.
-- Old goal exit mode (500 m cap, tie -> slot 0) picked a different exit from the true shortest at 82 of 351 first
-  junctions (23 %).
-- Light flags fire for a stop line up to ~222 m ahead (rail end ~225 m); the distance feature saturates at 100 m.
+- No map goal is unreachable once lane changes count (0 of 510 first goals). An earlier version of this section followed
+  lane links only and reported "sealed lane sets"; those are links-only artefacts (e.g. Town10HD's 16-lane ring, where 13
+  lanes have a same-direction neighbour outside it).
+- The map file's lane-graph distance follows links only. It feeds `g`, `c`, goal-mode exit choice and the progress
+  reward, and it scores 167 of 234 (map goals) and 240 of 242 (route goals) lane changes on offer at reset as a >=100 m
+  detour or a dead end while the true route changes by <30 m. Goal-mode exit picks differ from the lane-change-aware
+  shortest at 58 of 351 (map) and 11 of 354 (route) first junctions. This is why the progress reward (C, D) can penalise
+  a harmless lane change; the waiting penalty does not use route distance.
+- Lane-change-aware first-goal routes (map goals): 368-1743 m mean per town, median 2.1-3.7x the straight line; 354 of
+  510 within 768 m. Route goals: 104-124 m.
+- Old goal exit mode (500 m cap, tie -> slot 0) picked a different exit from the uncapped lane-graph rule at 82 of 351
+  first junctions (23 %).
+- Light features: the rail finds a stop line up to ~222 m ahead; with `lattice_light_in_view` they appear only once it is
+  among the 4 nearest observed stop lines within 200 m (162 m on the measured Town10HD approach).
 - Explainer: https://claude.ai/artifact/UmKvFJcedLxoYEB35dchb2 ("Where the Goals Go").
 
 ## 6. Not done (candidates for the next batch)
