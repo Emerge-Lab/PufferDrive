@@ -324,6 +324,7 @@ class DriveEnvConfig:
     reward_overspeed: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_ade: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_trajectory_consistency: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    reward_route_progress: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     lattice_lat_offsets_m: list[float] = MISSING
     lattice_lat_durations_s: list[float] = MISSING
     lattice_low_speed_distances_m: list[float] = MISSING

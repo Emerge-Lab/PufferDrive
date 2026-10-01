@@ -422,7 +422,7 @@ static const int ROAD_OFFSETS[25][2]
 #define LATTICE_MAX_PLAN_STEPS 400
 
 // -- Observation layout
-#define LATTICE_PLAN_FEATURES 58
+#define LATTICE_PLAN_FEATURES 60
 #define LATTICE_PREVIEW_POINTS 6
 #define LATTICE_PREVIEW_SUBSTEP_S 0.2f
 #define LATTICE_PREVIEW_SUBSTEPS 30
@@ -439,6 +439,11 @@ static const int ROAD_OFFSETS[25][2]
 #define LATTICE_OBS_MARGIN_WINDOW_M 20.0f
 #define LATTICE_OBS_ENVELOPE_WINDOW_M 50.0f
 #define LATTICE_OBS_STOP_LINE_NORM_M 100.0f
+#define LATTICE_OBS_ROUTE_GAP_NORM_M 200.0f // extra route over the best exit that saturates the feature
+#define LATTICE_OBS_ROUTE_LOG_SCALE_M 50.0f
+#define LATTICE_OBS_ROUTE_LOG_MAX_M 5000.0f
+#define LATTICE_CONSISTENCY_SAMPLES 5 // first render-path samples compared after a plan change (0.6 s apart at dt 0.3)
+#define LATTICE_ROUTE_PROGRESS_CAP_M 1000.0f // route distance beyond this is flat in the progress potential
 
 // -- Rail (per agent): samples at LATTICE_RAIL_SPACING_M, heading box filter over +-half window
 #define LATTICE_RAIL_SAMPLES 512

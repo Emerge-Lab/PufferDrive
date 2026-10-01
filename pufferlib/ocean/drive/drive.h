@@ -116,6 +116,8 @@ struct Log {
     float lattice_moving_fraction;
     float lattice_time_to_first_motion_s;
     float lattice_rail_regen_rate;
+    float lattice_plan_change_rms_m;
+    float reward_route_progress;
 };
 
 struct GridMapEntity {
@@ -266,6 +268,7 @@ struct Drive {
     float reward_overspeed;
     float reward_ade;
     float reward_trajectory_consistency;
+    float reward_route_progress; // per meter of lane-route distance gained toward the current goal (lattice only)
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
@@ -2290,6 +2293,7 @@ static void add_log(Drive *env) {
         episode_log.reward_overspeed += env->logs[i].reward_overspeed;
         episode_log.reward_ade += env->logs[i].reward_ade;
         episode_log.reward_trajectory_consistency += env->logs[i].reward_trajectory_consistency;
+        episode_log.reward_route_progress += env->logs[i].reward_route_progress;
         episode_log.spline_consistency_msd_m2 += env->logs[i].spline_consistency_msd_m2 / safe_timestep;
         episode_log.spline_consistency_lag1_msd_m2 += env->logs[i].spline_consistency_lag1_msd_m2 / safe_timestep;
         episode_log.spline_slip_angle_rad += env->logs[i].spline_slip_angle_rad / safe_timestep;
@@ -3869,6 +3873,56 @@ static void compute_spline_rewards(Drive *env, int i) {
     }
 }
 
+// lattice-only terms: plan-change consistency, and route progress toward the current goal (meters gained)
+static void compute_lattice_rewards(Drive *env, int i) {
+    Agent *agent = &env->agents[env->active_agent_indices[i]];
+    Log *agent_log = &env->logs[i];
+    struct LatticeAgent *lattice_agent = &env->lattice_agents[i];
+    float consistency_penalty
+        = -agent->reward_coefs[REWARD_COEF_TRAJECTORY_CONSISTENCY] * lattice_agent->plan_change_rms_m;
+    lattice_agent->plan_change_rms_m = 0.0f; // consumed once: stopped agents skip the move stage
+    env->rewards[i] += consistency_penalty;
+    agent_log->reward_trajectory_consistency += consistency_penalty;
+    if (env->reward_route_progress <= 0.0f) {
+        return;
+    }
+    struct LatticeRouteProgress *progress = &lattice_agent->route_progress;
+    int goal_lane = lattice_agent_goal_lane(agent);
+    if (goal_lane < 0 || lattice_agent->rail.sample_count < 2) {
+        return;
+    }
+    if (progress->goal_idx != agent->current_goal_idx || progress->goal_x != agent->current_goal_x
+        || progress->goal_y != agent->current_goal_y) {
+        progress->goal_idx = agent->current_goal_idx;
+        progress->goal_x = agent->current_goal_x;
+        progress->goal_y = agent->current_goal_y;
+        progress->goal_arc_m = compute_lane_progress(
+            &env->road_elements[goal_lane],
+            agent->current_goal_x,
+            agent->current_goal_y,
+            1.0f,
+            0.0f,
+            false,
+            NULL);
+        progress->previous_distance_m = INFINITY;
+    }
+    LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, agent, lattice_agent->projection_hint);
+    float route_m = lattice_route_distance_m(env, lattice_agent, frenet, goal_lane, progress->goal_arc_m);
+    // an unmeasurable stretch keeps the last finite baseline, so per-goal shaping still telescopes
+    if (!isfinite(route_m)) {
+        return;
+    }
+    float distance_m = fminf(route_m, LATTICE_ROUTE_PROGRESS_CAP_M);
+    float previous_m = progress->previous_distance_m;
+    progress->previous_distance_m = distance_m;
+    if (!isfinite(previous_m)) {
+        return;
+    }
+    float progress_reward = env->reward_route_progress * (previous_m - distance_m);
+    env->rewards[i] += progress_reward;
+    agent_log->reward_route_progress += progress_reward;
+}
+
 static void compute_rewards(Drive *env, int i) {
     int agent_idx = env->active_agent_indices[i];
     Agent *agent = &env->agents[agent_idx];
@@ -3992,6 +4046,9 @@ static void compute_rewards(Drive *env, int i) {
     // Only CONTROLLER_POLICY agents reach move_dynamics, so only they hold a fresh curve.
     if (env->action_type == ACTION_TYPE_SPLINE && agent->controller == CONTROLLER_POLICY) {
         compute_spline_rewards(env, i);
+    }
+    if (env->action_type == ACTION_TYPE_LATTICE && agent->controller == CONTROLLER_POLICY) {
+        compute_lattice_rewards(env, i);
     }
 
     // Update episode return

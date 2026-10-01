@@ -178,6 +178,8 @@ env:
   # Penalizes disagreement between consecutive predicted spline curves over their
   # overlap; only used when trajectory_training: true. Placeholder, tune empirically.
   reward_trajectory_consistency: 0.0
+  # Lattice only: reward per meter of lane-route distance gained toward the current goal (0 = off)
+  reward_route_progress: 0.0
   # --- Map ---
   # Path to map used for training
   map_dir: pufferlib/resources/drive/binaries/carla

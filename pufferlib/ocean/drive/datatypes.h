@@ -339,6 +339,16 @@ struct LatticeCounters {
     float moving_steps;
     float first_motion_step;
     float rail_regens;
+    float plan_change_rms_m;
+};
+
+// route-progress reward memory: the current goal it was measured against and last step's route distance
+struct LatticeRouteProgress {
+    int goal_idx;
+    float goal_x;
+    float goal_y;
+    float goal_arc_m;
+    float previous_distance_m; // last finite route distance; INFINITY until the first one for this goal
 };
 
 struct LatticeAgent {
@@ -366,6 +376,8 @@ struct LatticeAgent {
     short lon_cell_steps[LATTICE_MAX_LON_CELLS];
     float stop_line_distance_m;
     float preview_world_xy[AGENT_F32_PATH_SAMPLES][2];
+    float plan_change_rms_m;
+    struct LatticeRouteProgress route_progress;
     unsigned char mask[LATTICE_MAX_MASK_FEATURES];
     struct LatticeCounters counters;
 };

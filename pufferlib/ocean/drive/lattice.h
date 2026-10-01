@@ -1423,17 +1423,38 @@ static int lattice_car_on_connector(const Drive *env, const struct LatticeAgent 
     return env->lattice_lanes[rail->lanes[rail->chain_slot[lattice_agent->projection_hint]]].is_connector;
 }
 
+// lane-graph distance from the start of lane_idx to the start of goal_lane_idx; INFINITY when unreachable or unknown
 static float lattice_goal_distance_m(const Drive *env, int lane_idx, int goal_lane_idx) {
     if (lane_idx < 0 || goal_lane_idx < 0 || goal_lane_idx >= env->num_road_elements || lane_idx >= env->num_road_elements) {
-        return LANE_GRAPH_DISTANCE_NORM_M;
+        return INFINITY;
     }
     int from_idx = env->lane_graph.lane_to_graph_idx[lane_idx];
     int to_idx = env->lane_graph.lane_to_graph_idx[goal_lane_idx];
     if (from_idx < 0 || to_idx < 0) {
-        return LANE_GRAPH_DISTANCE_NORM_M;
+        return INFINITY;
     }
     float distance_m = env->lane_graph.distances[from_idx * env->lane_graph.n_lanes + to_idx];
-    return (!isfinite(distance_m) || distance_m < 0.0f) ? LANE_GRAPH_DISTANCE_NORM_M : fminf(distance_m, LANE_GRAPH_DISTANCE_NORM_M);
+    return (!isfinite(distance_m) || distance_m < 0.0f) ? INFINITY : distance_m;
+}
+
+// driving distance along lanes from the car (projected at frenet) to goal_arc_m on goal_lane; INFINITY if unreachable
+static float lattice_route_distance_m(const Drive *env, const struct LatticeAgent *lattice_agent, LatticeFrenet frenet, int goal_lane, float goal_arc_m) {
+    const struct LatticeRail *rail = &lattice_agent->rail;
+    if (!lattice_agent->has_reference || rail->is_straight_fallback) {
+        return INFINITY;
+    }
+    int car_slot = rail->chain_slot[frenet.sample_idx];
+    int car_lane = rail->lanes[car_slot];
+    float car_arc_m = frenet.s - rail->lane_start_s_m[car_slot];
+    if (car_lane == goal_lane && goal_arc_m >= car_arc_m) {
+        return goal_arc_m - car_arc_m;
+    }
+    const struct LatticeLaneInfo *info = &env->lattice_lanes[car_lane];
+    float best_exit_m = INFINITY;
+    for (int slot_idx = 0; slot_idx < info->exit_count; slot_idx++) {
+        best_exit_m = fminf(best_exit_m, lattice_goal_distance_m(env, info->exit_slots[slot_idx], goal_lane));
+    }
+    return rail->lane_end_s_m[car_slot] - frenet.s + best_exit_m + goal_arc_m;
 }
 
 static int lattice_agent_goal_lane(const Agent *agent) {
@@ -2180,6 +2201,9 @@ static void reset_lattice_slot(Drive *env, int active_idx) {
     memset(&lattice_agent->counters, 0, sizeof(lattice_agent->counters));
     memset(lattice_agent->mask, 0, sizeof(lattice_agent->mask));
     memset(lattice_agent->preview_world_xy, 0, sizeof(lattice_agent->preview_world_xy));
+    lattice_agent->plan_change_rms_m = 0.0f;
+    lattice_agent->route_progress.goal_idx = -1;
+    lattice_agent->route_progress.previous_distance_m = INFINITY;
     lattice_agent->counters.first_motion_step = -1.0f;
     lattice_agent->sigma_m = 0.0;
     lattice_agent->lane_change_active = 0;
@@ -2730,10 +2754,16 @@ static int lattice_backup_allowed(Drive *env, const struct LatticeAgent *lattice
 }
 
 // distance from the car to the next light-controlled stop line on the chain, minus half length and margin
-static float lattice_stop_line_distance(const Drive *env, const struct LatticeAgent *lattice_agent, const Agent *agent, float car_s_m) {
+typedef struct {
+    float distance_m; // -1 when no stop line lies ahead on the chain
+    int traffic_idx;
+} LatticeStopLine;
+
+static LatticeStopLine lattice_next_stop_line(const Drive *env, const struct LatticeAgent *lattice_agent, const Agent *agent, float car_s_m) {
     const struct LatticeRail *rail = &lattice_agent->rail;
+    LatticeStopLine none = {-1.0f, -1};
     if (!lattice_agent->has_reference) {
-        return -1.0f;
+        return none;
     }
     for (int lane_slot = rail->chain_slot[lattice_agent->projection_hint]; lane_slot < rail->lane_count; lane_slot++) {
         int traffic_idx = env->lattice_lanes[rail->lanes[lane_slot]].traffic_light_idx;
@@ -2748,10 +2778,11 @@ static float lattice_stop_line_distance(const Drive *env, const struct LatticeAg
         LatticeFrenet line = lattice_project(rail, mid_x, mid_y, hint);
         float distance_m = line.s - car_s_m - 0.5f * agent->sim_length - LATTICE_STOP_LINE_MARGIN_M;
         if (line.s > car_s_m) {
-            return distance_m;
+            LatticeStopLine stop_line = {distance_m, traffic_idx};
+            return stop_line;
         }
     }
-    return -1.0f;
+    return none;
 }
 
 static void lattice_mask_index0_only(struct LatticeAgent *lattice_agent, const struct LatticeConfig *cfg) {
@@ -2860,7 +2891,7 @@ static void compute_lattice_masks(Drive *env, int active_idx, int now_step) {
         mask[lat_cells] = 1;
     }
     int any_lon = 0;
-    lattice_agent->stop_line_distance_m = lattice_stop_line_distance(env, lattice_agent, agent, ctx.frenet.s);
+    lattice_agent->stop_line_distance_m = lattice_next_stop_line(env, lattice_agent, agent, ctx.frenet.s).distance_m;
     int forward_allowed = !ctx.reversing && (lattice_agent->gear > 0 || ctx.stopped_exactly);
     for (int cell = 0; cell < cfg->lon_cell_count; cell++) {
         int is_backup = cell >= cfg->lon_backup_cell_base;
@@ -3106,6 +3137,27 @@ static void apply_lattice_action(Drive *env, int active_idx, Agent *agent, int n
     }
 }
 
+typedef struct {
+    float x[LATTICE_PREVIEW_SUBSTEPS + 1];
+    float y[LATTICE_PREVIEW_SUBSTEPS + 1];
+    float speed[LATTICE_PREVIEW_SUBSTEPS + 1];
+} LatticePreview;
+
+static LatticePreview compute_lattice_preview(Drive *env, const struct LatticeAgent *lattice_agent, const Agent *agent, int now_step);
+
+// RMS world distance between the path observed before this decision and the newly committed one
+static float lattice_plan_change_rms_m(Drive *env, const struct LatticeAgent *lattice_agent, const Agent *agent, int now_step) {
+    LatticePreview preview = compute_lattice_preview(env, lattice_agent, agent, now_step);
+    float sum_m2 = 0.0f;
+    for (int sample_idx = 1; sample_idx <= LATTICE_CONSISTENCY_SAMPLES; sample_idx++) {
+        int substep_idx = sample_idx * LATTICE_PREVIEW_RENDER_STRIDE;
+        float dx = preview.x[substep_idx] - lattice_agent->preview_world_xy[sample_idx][0];
+        float dy = preview.y[substep_idx] - lattice_agent->preview_world_xy[sample_idx][1];
+        sum_m2 += dx * dx + dy * dy;
+    }
+    return sqrtf(sum_m2 / LATTICE_CONSISTENCY_SAMPLES);
+}
+
 // move stage: decode on decision steps, automatic plan updates, then the tracking command
 static LatticeCommand move_lattice_agent(Drive *env, int active_idx, Agent *agent) {
     struct LatticeAgent *lattice_agent = &env->lattice_agents[active_idx];
@@ -3116,7 +3168,12 @@ static LatticeCommand move_lattice_agent(Drive *env, int active_idx, Agent *agen
     }
     if (lattice_is_decision_step(env)) {
         lattice_agent->rail_changed_flag = 0;
+        float plans_committed = lattice_agent->counters.lat_new + lattice_agent->counters.lon_new;
         apply_lattice_action(env, active_idx, agent, now_step);
+        if (lattice_agent->counters.lat_new + lattice_agent->counters.lon_new > plans_committed) {
+            lattice_agent->plan_change_rms_m = lattice_plan_change_rms_m(env, lattice_agent, agent, now_step);
+            lattice_agent->counters.plan_change_rms_m += lattice_agent->plan_change_rms_m;
+        }
     }
     LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, agent, lattice_agent->projection_hint);
     lattice_agent->projection_hint = frenet.sample_idx;
@@ -3157,16 +3214,9 @@ static void update_lattice_odometer(Drive *env, int active_idx, float speed_befo
 // Preview of the committed plans (observation + rendered predicted path) and observations
 // ========================================
 
-typedef struct {
-    float x[LATTICE_PREVIEW_SUBSTEPS + 1];
-    float y[LATTICE_PREVIEW_SUBSTEPS + 1];
-    float speed[LATTICE_PREVIEW_SUBSTEPS + 1];
-} LatticePreview;
-
-static LatticePreview compute_lattice_preview(Drive *env, const struct LatticeAgent *lattice_agent, const Agent *agent) {
+static LatticePreview compute_lattice_preview(Drive *env, const struct LatticeAgent *lattice_agent, const Agent *agent, int now_step) {
     LatticePreview preview;
     const struct LatticeRail *rail = &lattice_agent->rail;
-    int now_step = env->timestep + 1;
     LatticeFrenet frenet = lattice_frenet_state(rail, agent, lattice_agent->projection_hint);
     int emergency = lattice_agent->lon.kind == LATTICE_LON_KIND_EMERGENCY;
     int steps_per_substep = (int) lroundf(LATTICE_PREVIEW_SUBSTEP_S / env->dt);
@@ -3178,7 +3228,8 @@ static LatticePreview compute_lattice_preview(Drive *env, const struct LatticeAg
     double sigma_prev = sigma_now;
     float s_m = frenet.s;
     float speed_prev = agent->sim_speed_signed;
-    float d_dot_prime_prev = 0.0f;
+    float factor_prev = 1.0f;
+    float d_prime_prev = 0.0f;
     for (int substep_idx = 0; substep_idx <= LATTICE_PREVIEW_SUBSTEPS; substep_idx++) {
         double sigma_m;
         float speed;
@@ -3200,7 +3251,7 @@ static LatticePreview compute_lattice_preview(Drive *env, const struct LatticeAg
             speed = (float) lon.first;
         }
         if (substep_idx > 0) {
-            float rail_ratio = 1.0f / sqrtf(1.0f + d_dot_prime_prev * d_dot_prime_prev);
+            float rail_ratio = 1.0f / sqrtf(factor_prev * factor_prev + d_prime_prev * d_prime_prev);
             s_m += (float) (sigma_m - sigma_prev) * rail_ratio;
         }
         LatticeRailPoint point = lattice_rail_at(rail, s_m);
@@ -3217,7 +3268,8 @@ static LatticePreview compute_lattice_preview(Drive *env, const struct LatticeAg
             d_prime = (float) lat.first;
         }
         float factor = fmaxf(1.0f - point.curvature * d_m, LATTICE_MIN_FRENET_FACTOR);
-        d_dot_prime_prev = d_prime / factor;
+        factor_prev = factor;
+        d_prime_prev = d_prime;
         preview.x[substep_idx] = point.x - d_m * sinf(point.heading);
         preview.y[substep_idx] = point.y + d_m * cosf(point.heading);
         preview.speed[substep_idx] = speed;
@@ -3312,26 +3364,40 @@ static int write_lattice_plan_obs(Drive *env, int active_idx, float *obs, int ob
     }
     obs[obs_idx++] = committed_turn / (float) M_PI;
     obs[obs_idx++] = (float) (lattice_agent->live_split_slot >= 0);
+    const struct LatticeLaneInfo *split_info = split_slot >= 0 ? &env->lattice_lanes[rail->lanes[split_slot]] : NULL;
+    int exit_count = split_info != NULL ? split_info->exit_count : 0;
+    float exit_goal_distance_m[LATTICE_EXIT_SLOTS];
+    float best_exit_goal_distance_m = INFINITY;
+    for (int slot_idx = 0; slot_idx < exit_count; slot_idx++) {
+        exit_goal_distance_m[slot_idx] = lattice_goal_distance_m(env, split_info->exit_slots[slot_idx], goal_lane);
+        best_exit_goal_distance_m = fminf(best_exit_goal_distance_m, exit_goal_distance_m[slot_idx]);
+    }
+    // per exit: extra route length over the best exit, 1 when unreachable or absent
     for (int slot_idx = 0; slot_idx < LATTICE_EXIT_SLOTS; slot_idx++) {
-        int exists = 0;
-        float turn = 0.0f;
-        float goal_distance_m = LANE_GRAPH_DISTANCE_NORM_M;
-        if (split_slot >= 0) {
-            const struct LatticeLaneInfo *info = &env->lattice_lanes[rail->lanes[split_slot]];
-            exists = slot_idx < info->exit_count;
-            turn = exists ? info->exit_turn_rad[slot_idx] : 0.0f;
-            goal_distance_m = exists ? lattice_goal_distance_m(env, info->exit_slots[slot_idx], goal_lane) : LANE_GRAPH_DISTANCE_NORM_M;
+        int exists = slot_idx < exit_count;
+        float route_gap = 1.0f;
+        if (exists && isfinite(exit_goal_distance_m[slot_idx])) {
+            route_gap = fminf((exit_goal_distance_m[slot_idx] - best_exit_goal_distance_m) / LATTICE_OBS_ROUTE_GAP_NORM_M, 1.0f);
         }
         obs[obs_idx++] = (float) exists;
-        obs[obs_idx++] = turn / (float) M_PI;
-        obs[obs_idx++] = goal_distance_m / LANE_GRAPH_DISTANCE_NORM_M;
+        obs[obs_idx++] = exists ? split_info->exit_turn_rad[slot_idx] / (float) M_PI : 0.0f;
+        obs[obs_idx++] = route_gap;
     }
     int car_lane = lattice_agent->has_reference ? rail->lanes[car_slot] : -1;
-    obs[obs_idx++] = lattice_goal_distance_m(env, car_lane, goal_lane) / LANE_GRAPH_DISTANCE_NORM_M;
-    float stop_line_m = lattice_stop_line_distance(env, lattice_agent, agent, frenet.s);
-    obs[obs_idx++] = stop_line_m >= 0.0f ? fminf(stop_line_m, LATTICE_OBS_STOP_LINE_NORM_M) / LATTICE_OBS_STOP_LINE_NORM_M : 1.0f;
+    float car_goal_distance_m = lattice_goal_distance_m(env, car_lane, goal_lane);
+    obs[obs_idx++] = isfinite(car_goal_distance_m)
+        ? fminf(log1pf(car_goal_distance_m / LATTICE_OBS_ROUTE_LOG_SCALE_M) / log1pf(LATTICE_OBS_ROUTE_LOG_MAX_M / LATTICE_OBS_ROUTE_LOG_SCALE_M), 1.0f)
+        : 1.0f;
+    LatticeStopLine stop_line = lattice_next_stop_line(env, lattice_agent, agent, frenet.s);
+    obs[obs_idx++] = stop_line.distance_m >= 0.0f ? fminf(stop_line.distance_m, LATTICE_OBS_STOP_LINE_NORM_M) / LATTICE_OBS_STOP_LINE_NORM_M : 1.0f;
+    int light_state = TRAFFIC_CONTROL_STATE_UNKNOWN;
+    if (stop_line.traffic_idx >= 0 && env->timestep < env->traffic_elements[stop_line.traffic_idx].state_size) {
+        light_state = env->traffic_elements[stop_line.traffic_idx].states[env->timestep];
+    }
+    obs[obs_idx++] = (float) (light_state == TRAFFIC_CONTROL_STATE_RED);
+    obs[obs_idx++] = (float) (light_state == TRAFFIC_CONTROL_STATE_YELLOW);
     obs[obs_idx++] = (float) lattice_agent->rail_changed_flag;
-    LatticePreview preview = compute_lattice_preview(env, lattice_agent, agent);
+    LatticePreview preview = compute_lattice_preview(env, lattice_agent, agent, now_step);
     lattice_store_render_path(lattice_agent, &preview);
     for (int point_idx = 1; point_idx <= LATTICE_PREVIEW_POINTS; point_idx++) {
         int substep_idx = point_idx * LATTICE_PREVIEW_OBS_STRIDE;
@@ -3390,6 +3456,7 @@ static void add_lattice_log(Drive *env, int active_idx, Log *episode_log) {
     float first_motion_steps = counters->first_motion_step >= 0.0f ? counters->first_motion_step : counters->steps;
     episode_log->lattice_time_to_first_motion_s += first_motion_steps * env->dt;
     episode_log->lattice_rail_regen_rate += counters->rail_regens / steps;
+    episode_log->lattice_plan_change_rms_m += counters->plan_change_rms_m / decisions;
 }
 
 // all active slots: follow the rails every step, recompute context and masks on context steps

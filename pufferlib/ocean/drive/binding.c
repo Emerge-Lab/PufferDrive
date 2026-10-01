@@ -2013,6 +2013,21 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_overspeed = (float) unpack(kwargs, "reward_overspeed");
     env->reward_ade = (float) unpack(kwargs, "reward_ade");
     env->reward_trajectory_consistency = (float) unpack(kwargs, "reward_trajectory_consistency");
+    env->reward_route_progress = (float) unpack(kwargs, "reward_route_progress");
+    if (!(env->reward_route_progress >= 0.0f) || !isfinite(env->reward_route_progress)) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "reward_route_progress must be a non-negative finite number. Got: %g",
+            env->reward_route_progress);
+        return -1;
+    }
+    if (env->reward_route_progress > 0.0f && env->dynamics_model != DYNAMICS_MODEL_SPLINE_WERLING) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "reward_route_progress measures lattice rails and needs dynamics_model spline_werling. Got: %g",
+            env->reward_route_progress);
+        return -1;
+    }
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
@@ -2256,6 +2271,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
     assign_to_dict(dict, "reward_components/ade", log->reward_ade);
     assign_to_dict(dict, "reward_components/trajectory_consistency", log->reward_trajectory_consistency);
+    assign_to_dict(dict, "reward_components/route_progress", log->reward_route_progress);
     assign_to_dict(dict, "spline/consistency_msd_m2", log->spline_consistency_msd_m2);
     assign_to_dict(dict, "spline/consistency_lag1_msd_m2", log->spline_consistency_lag1_msd_m2);
     assign_to_dict(dict, "spline/slip_angle_rad", log->spline_slip_angle_rad);
@@ -2285,6 +2301,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         assign_to_dict(dict, "lattice/moving_fraction", log->lattice_moving_fraction);
         assign_to_dict(dict, "lattice/time_to_first_motion_s", log->lattice_time_to_first_motion_s);
         assign_to_dict(dict, "lattice/rail_regen_rate", log->lattice_rail_regen_rate);
+        assign_to_dict(dict, "lattice/plan_change_rms_m", log->lattice_plan_change_rms_m);
     }
 
     if (env->compute_eval_metrics) {

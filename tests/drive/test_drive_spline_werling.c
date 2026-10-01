@@ -659,7 +659,7 @@ static int test_rail_changed_flag_timing_dt_01(void) {
     struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
     step_keep(&env, 1);
     int obs_size = compute_observation_size(&env);
-    int flag_idx = EGO_FEATURES + 39;
+    int flag_idx = EGO_FEATURES + 41;
     int flag_steps = 0;
     for (int step = 0; step < 6; step++) {
         int next_is_decision = ((env.timestep + 1 - env.episode_start_step) % 3) == 1;
@@ -678,6 +678,92 @@ static int test_rail_changed_flag_timing_dt_01(void) {
     printf("  rail-changed flag seen on %d consecutive steps at dt 0.1\n", flag_steps);
     EXPECT_EQ_INT(flag_steps, 3);
     (void) obs_size;
+    free_allocated(&env);
+    return 0;
+}
+
+// plan-change RMS is zero while keeping, positive on a lane change, charged once at the consistency coefficient
+static int test_plan_change_rms_consistency(void) {
+    Drive env = make_lattice_env(TOWN06, 1, 0.3f);
+    place_lattice_agent(&env, 0, CURVED_LANE_TOWN06, 20.0f, 4.5f);
+    Agent *agent = slot0_agent(&env);
+    struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+    agent->reward_coefs[REWARD_COEF_TRAJECTORY_CONSISTENCY] = 1.0f;
+    step_keep(&env, 1);
+    EXPECT_NEAR(lattice_agent->counters.plan_change_rms_m, 0.0f, 0.0f);
+    EXPECT_TRUE(lattice_agent->mask[lattice_mask_offset(&env.lattice, LATTICE_FACTOR_LAT_CELL) + 14]);
+    step_with_action(&env, 1, 14, 0, 0, 0);
+    float change_rms_m = lattice_agent->counters.plan_change_rms_m;
+    printf("  lane change plan-change RMS %.3f m, consistency reward %.3f\n", change_rms_m, env.logs[0].reward_trajectory_consistency);
+    EXPECT_TRUE(change_rms_m > 0.3f && change_rms_m < LANE_WIDTH);
+    EXPECT_NEAR(env.logs[0].reward_trajectory_consistency, -change_rms_m, 1e-6f);
+    EXPECT_NEAR(lattice_agent->plan_change_rms_m, 0.0f, 0.0f);
+    step_keep(&env, 3);
+    EXPECT_NEAR(lattice_agent->counters.plan_change_rms_m, change_rms_m, 0.0f);
+    EXPECT_NEAR(env.logs[0].reward_trajectory_consistency, -change_rms_m, 1e-6f);
+    free_allocated(&env);
+    return 0;
+}
+
+// route progress on a straight lane toward a goal 80 m ahead pays one unit per meter driven
+static int test_route_progress_reward(void) {
+    Drive env = make_lattice_env(TOWN06, 1, 0.3f);
+    env.reward_route_progress = 1.0f;
+    place_lattice_agent(&env, 0, STRAIGHT_LANE_TOWN06, 40.0f, 5.0f);
+    Agent *agent = slot0_agent(&env);
+    float goal_x, goal_y, goal_heading;
+    lattice_lane_point_at_arc(&env, STRAIGHT_LANE_TOWN06, 120.0f, &goal_x, &goal_y, &goal_heading);
+    agent->list_goal_x[0] = goal_x;
+    agent->list_goal_y[0] = goal_y;
+    agent->list_goal_z[0] = agent->sim_z;
+    agent->list_goal_lane[0] = STRAIGHT_LANE_TOWN06;
+    agent->goal_count = 1;
+    agent->current_goal_idx = 0;
+    agent->current_goal_x = goal_x;
+    agent->current_goal_y = goal_y;
+    agent->current_goal_z = agent->sim_z;
+    float start_x = agent->sim_x, start_y = agent->sim_y;
+    step_keep(&env, 1);
+    float first_x = agent->sim_x, first_y = agent->sim_y;
+    EXPECT_NEAR(env.logs[0].reward_route_progress, 0.0f, 0.0f);
+    step_keep(&env, 10);
+    float driven_m = sqrtf((agent->sim_x - first_x) * (agent->sim_x - first_x) + (agent->sim_y - first_y) * (agent->sim_y - first_y));
+    printf("  route progress over %.2f m driven: %.2f (start %.1f m from first step)\n", driven_m, env.logs[0].reward_route_progress,
+           sqrtf((first_x - start_x) * (first_x - start_x) + (first_y - start_y) * (first_y - start_y)));
+    EXPECT_TRUE(driven_m > 10.0f);
+    EXPECT_NEAR(env.logs[0].reward_route_progress, driven_m, 0.3f);
+    free_allocated(&env);
+    return 0;
+}
+
+// the plan block reports the red / yellow state of the light at the next stop line on the chain
+static int test_stop_line_light_features(void) {
+    Drive env = make_lattice_env(TOWN06, 1, 0.3f);
+    int light_lane = -1, approach_lane = -1;
+    for (int lane_idx = 0; lane_idx < env.num_road_elements && light_lane < 0; lane_idx++) {
+        const struct LatticeLaneInfo *info = &env.lattice_lanes[lane_idx];
+        if (!is_drivable_road_lane(env.road_elements[lane_idx].type) || info->traffic_light_idx < 0 || info->predecessor_count == 0) {
+            continue;
+        }
+        int predecessor = info->predecessors[0];
+        if (env.lattice_lanes[predecessor].exit_slots[0] == lane_idx && env.lattice_lanes[predecessor].length_m > 25.0f) {
+            light_lane = lane_idx;
+            approach_lane = predecessor;
+        }
+    }
+    EXPECT_TRUE(light_lane >= 0);
+    place_lattice_agent(&env, 0, approach_lane, env.lattice_lanes[approach_lane].length_m - 20.0f, 0.0f);
+    TrafficControlElement *light = &env.traffic_elements[env.lattice_lanes[light_lane].traffic_light_idx];
+    EXPECT_TRUE(env.timestep < light->state_size);
+    int plan_idx = EGO_FEATURES;
+    int states[3] = {TRAFFIC_CONTROL_STATE_RED, TRAFFIC_CONTROL_STATE_YELLOW, TRAFFIC_CONTROL_STATE_GREEN};
+    for (int state_idx = 0; state_idx < 3; state_idx++) {
+        light->states[env.timestep] = states[state_idx];
+        compute_observations(&env);
+        EXPECT_TRUE(env.observations[plan_idx + 38] < 1.0f);
+        EXPECT_NEAR(env.observations[plan_idx + 39], state_idx == 0 ? 1.0f : 0.0f, 0.0f);
+        EXPECT_NEAR(env.observations[plan_idx + 40], state_idx == 1 ? 1.0f : 0.0f, 0.0f);
+    }
     free_allocated(&env);
     return 0;
 }
@@ -702,6 +788,9 @@ int main(void) {
     RUN_TEST(test_drift_switch_with_hysteresis);
     RUN_TEST(test_no_lane_mode_and_removed_rows);
     RUN_TEST(test_rail_changed_flag_timing_dt_01);
+    RUN_TEST(test_plan_change_rms_consistency);
+    RUN_TEST(test_route_progress_reward);
+    RUN_TEST(test_stop_line_light_features);
     RUN_TEST(test_random_rollouts_all_towns);
     return test_summary(failures);
 }
