@@ -35,6 +35,7 @@ class Drive(pufferlib.PufferEnv):
         reward_ade=0.0,
         reward_trajectory_consistency=0.0,
         reward_route_progress=0.0,
+        reward_wait_penalty_frac=0.0,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
         num_goals=3,
@@ -166,6 +167,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_ade = reward_ade
         self.reward_trajectory_consistency = reward_trajectory_consistency
         self.reward_route_progress = reward_route_progress
+        self.reward_wait_penalty_frac = reward_wait_penalty_frac
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
@@ -518,6 +520,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_ade": self.reward_ade,
             "reward_trajectory_consistency": self.reward_trajectory_consistency,
             "reward_route_progress": self.reward_route_progress,
+            "reward_wait_penalty_frac": self.reward_wait_penalty_frac,
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,

@@ -444,6 +444,7 @@ static const int ROAD_OFFSETS[25][2]
 #define LATTICE_OBS_ROUTE_LOG_MAX_M 5000.0f
 #define LATTICE_CONSISTENCY_SAMPLES 5 // first render-path samples compared after a plan change (0.6 s apart at dt 0.3)
 #define LATTICE_ROUTE_PROGRESS_CAP_M 1000.0f // route distance beyond this is flat in the progress potential
+#define LATTICE_WAIT_FULL_SPEED_MPS 1.0f     // the waiting penalty fades out linearly up to this speed
 
 // -- Rail (per agent): samples at LATTICE_RAIL_SPACING_M, heading box filter over +-half window
 #define LATTICE_RAIL_SAMPLES 512

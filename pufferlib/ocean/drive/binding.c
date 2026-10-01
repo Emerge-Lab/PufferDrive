@@ -2021,6 +2021,21 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
             env->reward_route_progress);
         return -1;
     }
+    env->reward_wait_penalty_frac = (float) unpack(kwargs, "reward_wait_penalty_frac");
+    if (!(env->reward_wait_penalty_frac >= 0.0f) || !isfinite(env->reward_wait_penalty_frac)) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "reward_wait_penalty_frac must be a non-negative finite number. Got: %g",
+            env->reward_wait_penalty_frac);
+        return -1;
+    }
+    if (env->reward_wait_penalty_frac > 0.0f && env->dynamics_model != DYNAMICS_MODEL_SPLINE_WERLING) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "reward_wait_penalty_frac needs dynamics_model spline_werling. Got: %g",
+            env->reward_wait_penalty_frac);
+        return -1;
+    }
     if (env->reward_route_progress > 0.0f && env->dynamics_model != DYNAMICS_MODEL_SPLINE_WERLING) {
         PyErr_Format(
             PyExc_ValueError,
@@ -2273,6 +2288,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/ade", log->reward_ade);
     assign_to_dict(dict, "reward_components/trajectory_consistency", log->reward_trajectory_consistency);
     assign_to_dict(dict, "reward_components/route_progress", log->reward_route_progress);
+    assign_to_dict(dict, "reward_components/wait", log->reward_wait);
     assign_to_dict(dict, "spline/consistency_msd_m2", log->spline_consistency_msd_m2);
     assign_to_dict(dict, "spline/consistency_lag1_msd_m2", log->spline_consistency_lag1_msd_m2);
     assign_to_dict(dict, "spline/slip_angle_rad", log->spline_slip_angle_rad);

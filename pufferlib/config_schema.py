@@ -325,6 +325,7 @@ class DriveEnvConfig:
     reward_ade: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_trajectory_consistency: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_route_progress: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    reward_wait_penalty_frac: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     lattice_lat_offsets_m: list[float] = MISSING
     lattice_lat_durations_s: list[float] = MISSING
     lattice_low_speed_distances_m: list[float] = MISSING
@@ -629,6 +630,15 @@ def _validate_lattice_config(config, context):
         _raise_config_error(context, "eval.action_selection", "'mean' is undefined for the lattice action type")
     if env["lattice_exit_mode"] == "goal" and env["goal_source"] == "gt":
         _raise_config_error(context, "env.lattice_exit_mode", "'goal' needs goal lanes, which goal_source 'gt' lacks")
+    gamma = config["train"]["gamma"]
+    wait_horizon_steps = (1.0 - gamma ** env["scenario_length"]) / (1.0 - gamma) if gamma < 1.0 else env["scenario_length"]
+    if env["reward_wait_penalty_frac"] * wait_horizon_steps >= 1.0:
+        _raise_config_error(
+            context,
+            "env.reward_wait_penalty_frac",
+            f"a whole episode at standstill would cost {env['reward_wait_penalty_frac'] * wait_horizon_steps:.2f} "
+            "of the cheapest infraction penalty; it must stay below 1 so crashing never pays",
+        )
     offsets = env["lattice_lat_offsets_m"]
     _validate_lattice_list(
         offsets,

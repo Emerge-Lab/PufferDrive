@@ -780,6 +780,60 @@ static int test_stop_line_light_features(void) {
     return 0;
 }
 
+// waiting penalty: frac x cheapest infraction per step at rest, half at 0.5 m/s, none at 1 m/s or at a reported red light
+static int test_wait_penalty(void) {
+    Drive env = make_lattice_env(TOWN06, 1, 0.3f);
+    env.reward_wait_penalty_frac = 5e-4f;
+    float speeds[3] = {0.0f, 0.5f, 5.0f};
+    float expected[3] = {-5e-4f, -2.5e-4f, 0.0f};
+    for (int case_idx = 0; case_idx < 3; case_idx++) {
+        place_lattice_agent(&env, 0, STRAIGHT_LANE_TOWN06, 40.0f, speeds[case_idx]);
+        Agent *agent = slot0_agent(&env);
+        agent->reward_coefs[REWARD_COEF_COLLISION] = 1.5f;
+        agent->reward_coefs[REWARD_COEF_OFFROAD] = 1.5f;
+        agent->reward_coefs[REWARD_COEF_STOP_LINE] = 1.0f;
+        float before = env.logs[0].reward_wait;
+        step_keep(&env, 1);
+        printf("  wait penalty at %.1f m/s: %.6f\n", speeds[case_idx], env.logs[0].reward_wait - before);
+        EXPECT_NEAR(env.logs[0].reward_wait - before, expected[case_idx], 2e-5f);
+    }
+    free_allocated(&env);
+    Drive light_env = make_lattice_env(TOWN06, 1, 0.3f);
+    light_env.reward_wait_penalty_frac = 5e-4f;
+    light_env.lattice.light_in_view = 1;
+    int light_lane = -1, approach_lane = -1;
+    for (int lane_idx = 0; lane_idx < light_env.num_road_elements && light_lane < 0; lane_idx++) {
+        const struct LatticeLaneInfo *info = &light_env.lattice_lanes[lane_idx];
+        if (!is_drivable_road_lane(light_env.road_elements[lane_idx].type) || info->traffic_light_idx < 0 || info->predecessor_count == 0) {
+            continue;
+        }
+        int predecessor = info->predecessors[0];
+        if (light_env.lattice_lanes[predecessor].exit_slots[0] == lane_idx && light_env.lattice_lanes[predecessor].length_m > 25.0f) {
+            light_lane = lane_idx;
+            approach_lane = predecessor;
+        }
+    }
+    EXPECT_TRUE(light_lane >= 0);
+    TrafficControlElement *light = &light_env.traffic_elements[light_env.lattice_lanes[light_lane].traffic_light_idx];
+    int states[2] = {TRAFFIC_CONTROL_STATE_RED, TRAFFIC_CONTROL_STATE_GREEN};
+    float light_expected[2] = {0.0f, -5e-4f};
+    for (int case_idx = 0; case_idx < 2; case_idx++) {
+        place_lattice_agent(&light_env, 0, approach_lane, light_env.lattice_lanes[approach_lane].length_m - 20.0f, 0.0f);
+        Agent *agent = slot0_agent(&light_env);
+        agent->reward_coefs[REWARD_COEF_COLLISION] = 1.5f;
+        agent->reward_coefs[REWARD_COEF_OFFROAD] = 1.5f;
+        agent->reward_coefs[REWARD_COEF_STOP_LINE] = 1.0f;
+        for (int t = 0; t < light->state_size; t++) {
+            light->states[t] = states[case_idx];
+        }
+        float before = light_env.logs[0].reward_wait;
+        step_keep(&light_env, 1);
+        EXPECT_NEAR(light_env.logs[0].reward_wait - before, light_expected[case_idx], 2e-5f);
+    }
+    free_allocated(&light_env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_polynomials_and_bellman);
@@ -803,6 +857,7 @@ int main(void) {
     RUN_TEST(test_plan_change_rms_consistency);
     RUN_TEST(test_route_progress_reward);
     RUN_TEST(test_stop_line_light_features);
+    RUN_TEST(test_wait_penalty);
     RUN_TEST(test_random_rollouts_all_towns);
     return test_summary(failures);
 }

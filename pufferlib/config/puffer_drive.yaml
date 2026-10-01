@@ -182,6 +182,9 @@ env:
   reward_trajectory_consistency: 0.0
   # Lattice only: reward per meter of lane-route distance gained toward the current goal (0 = off)
   reward_route_progress: 0.0
+  # Lattice only: per-step share of the car's cheapest infraction penalty charged at standstill, fading to 0 at 1 m/s
+  # (not while a red/yellow light is reported ahead); must keep a whole episode of it below one infraction
+  reward_wait_penalty_frac: 0.0
   # --- Map ---
   # Path to map used for training
   map_dir: pufferlib/resources/drive/binaries/carla

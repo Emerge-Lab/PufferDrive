@@ -118,6 +118,7 @@ struct Log {
     float lattice_rail_regen_rate;
     float lattice_plan_change_rms_m;
     float reward_route_progress;
+    float reward_wait;
 };
 
 struct GridMapEntity {
@@ -269,6 +270,8 @@ struct Drive {
     float reward_ade;
     float reward_trajectory_consistency;
     float reward_route_progress; // per meter of lane-route distance gained toward the current goal (lattice only)
+    float reward_wait_penalty_frac; // per-step share of the cheapest infraction penalty charged at standstill (lattice
+                                    // only)
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
@@ -2330,6 +2333,7 @@ static void add_log(Drive *env) {
         episode_log.reward_ade += env->logs[i].reward_ade;
         episode_log.reward_trajectory_consistency += env->logs[i].reward_trajectory_consistency;
         episode_log.reward_route_progress += env->logs[i].reward_route_progress;
+        episode_log.reward_wait += env->logs[i].reward_wait;
         episode_log.spline_consistency_msd_m2 += env->logs[i].spline_consistency_msd_m2 / safe_timestep;
         episode_log.spline_consistency_lag1_msd_m2 += env->logs[i].spline_consistency_lag1_msd_m2 / safe_timestep;
         episode_log.spline_slip_angle_rad += env->logs[i].spline_slip_angle_rad / safe_timestep;
@@ -3909,7 +3913,7 @@ static void compute_spline_rewards(Drive *env, int i) {
     }
 }
 
-// lattice-only terms: plan-change consistency, and route progress toward the current goal (meters gained)
+// lattice-only terms: plan-change consistency, waiting at low speed, and route progress toward the current goal
 static void compute_lattice_rewards(Drive *env, int i) {
     Agent *agent = &env->agents[env->active_agent_indices[i]];
     Log *agent_log = &env->logs[i];
@@ -3919,6 +3923,23 @@ static void compute_lattice_rewards(Drive *env, int i) {
     lattice_agent->plan_change_rms_m = 0.0f; // consumed once: stopped agents skip the move stage
     env->rewards[i] += consistency_penalty;
     agent_log->reward_trajectory_consistency += consistency_penalty;
+    // sized against the cheapest infraction so sitting still for a whole episode never beats crashing out
+    float slowness = fmaxf(0.0f, 1.0f - agent->sim_speed / LATTICE_WAIT_FULL_SPEED_MPS);
+    if (env->reward_wait_penalty_frac > 0.0f && slowness > 0.0f && !agent->stopped) {
+        int light_state = TRAFFIC_CONTROL_STATE_UNKNOWN;
+        if (lattice_agent->rail.sample_count >= 2) {
+            LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, agent, lattice_agent->projection_hint);
+            light_state = lattice_reported_light(env, lattice_agent, agent, frenet.s).light_state;
+        }
+        if (light_state != TRAFFIC_CONTROL_STATE_RED && light_state != TRAFFIC_CONTROL_STATE_YELLOW) {
+            float cheapest_infraction = fminf(
+                fminf(agent->reward_coefs[REWARD_COEF_COLLISION], agent->reward_coefs[REWARD_COEF_OFFROAD]),
+                agent->reward_coefs[REWARD_COEF_STOP_LINE]);
+            float wait_penalty = -env->reward_wait_penalty_frac * cheapest_infraction * slowness;
+            env->rewards[i] += wait_penalty;
+            agent_log->reward_wait += wait_penalty;
+        }
+    }
     if (env->reward_route_progress <= 0.0f) {
         return;
     }
