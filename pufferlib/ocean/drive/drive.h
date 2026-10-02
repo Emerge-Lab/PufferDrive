@@ -4064,7 +4064,7 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
 }
 
 static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
-    // Partner blindness restricts visibility to the forward centerline while triggered.
+    // Partner blindness restricts visibility to an ego-width forward corridor while triggered.
     if (ego->partner_blindness_counter > 0) {
         ego->partner_blindness_counter--;
     }
@@ -4104,7 +4104,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
             project_vector_to_ego_frame(ego, other->cos_heading, other->sin_heading, &rel_heading_x, &rel_heading_y);
             float lateral_half_extent_m
                 = 0.5f * (fabsf(rel_heading_y) * other->sim_length + fabsf(rel_heading_x) * other->sim_width);
-            partner_visible = rel_x > 0.0f && fabsf(rel_y) <= lateral_half_extent_m;
+            partner_visible = rel_x > 0.0f && fabsf(rel_y) <= lateral_half_extent_m + 0.5f * ego->sim_width;
         }
         if (!partner_visible) {
             continue;
