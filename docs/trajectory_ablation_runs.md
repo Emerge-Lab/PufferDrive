@@ -51,6 +51,7 @@ All: `puffer train puffer_drive_spline_werling env.lattice_exit_mode=goal` plus 
 | `spline_werling_trajE_overtake_wait_pen` | 18986342 / 18986344 | A + waiting penalty + borrowing the oncoming lane (section 7) | `env.reward_wait_penalty_frac=5e-4 env.lattice_light_in_view=false env.lattice_oncoming_overtake=true env.reward_oncoming_penalty_frac=5e-4` |
 | `spline_werling_trajE_overtake_wait_pen_consist10x` | 19026614 / 19026615 | trajE + plan consistency at 10x D's coefficient | trajE's + `env.reward_trajectory_consistency=2e-3` |
 | `spline_werling_trajE_overtake_wait_pen_consist50x` | 19026638 / 19026639 | trajE + plan consistency at 50x D's coefficient | trajE's + `env.reward_trajectory_consistency=1e-2` |
+| `spline_werling_trajF_overtake_turnaround_wait_pen` | 19032829 / 19032830 | trajE + turning around (section 8) | trajE's + `env.lattice_turnaround=true` |
 
 The three `*_wait_pen` runs use commit `d9f1e2ee` (waiting penalty) on top of `37157e4c` (view-gated light features,
 switched off for them so they differ from A only as listed). Waiting penalty: each step a car pays
@@ -62,6 +63,7 @@ Cancelled 2026-10-01: `spline_werling_vel50x` (18867873 after 24 h, continuation
 first `trajE_overtake_wait_pen` submission (18976365 / 366). Also cancelled 2026-10-01 to free a GPU:
 `spline_werling_vel10x` (18867871 after 34 h 17 m, continuation 18867872). Cancelled 2026-10-02 to free GPUs:
 `spline_baseline` (18811661 after 23 h 08 m) and `spline_werling_vel5x` (continuation 18867868 after 6 h 46 m).
+Also cancelled 2026-10-02 at the user's request: `spline_werling_halfpen` (18878816); the `halfpen_goal` run (18881663) kept.
 
 Compare A with `spline_werling_goal` (same exit mode, old code). With map goals the progress potential is flat beyond
 1000 m of route and pays nothing toward an unreachable goal, so in C_map / D_map it acts on 60 % of first goals. B-D change the goal task, so compare them with each other
@@ -148,3 +150,61 @@ climbing; goals, DNF, moving fraction and time to first motion vs `trajA_info_wa
 
 Harnesses behind the numbers: `/scratch/ag11023/tmp/claude/ablation/harness/` (`queue.c` + `queue_policy.py`, `lanestats.c`,
 `routecheck.c`, `bench.c`, `newfeat.c`, `overtake.c`, `overtake_share.c`); W&B pulls in `/scratch/ag11023/tmp/claude/ablation/`.
+
+## 8. Turning around (`env.lattice_turnaround`)
+
+Lattice rails follow lane links forward, so a car that wants to go back the way it came has had to drive on to a
+junction and loop round. With lane changes every first map goal is reachable, but often only by a long loop: the
+median route to the first map goal is 2.1-3.7x the straight-line distance (`benefit2.c`, 510 goals over 8 towns).
+
+| Part | Rule |
+|------|------|
+| Menu | One more longitudinal cell after the back-ups, "turn around": 60 -> 61 longitudinal cells (+1 mask feature). Off by default (old menu, old checkpoints load) |
+| Planner | Rest-to-rest legs at constant curvature, alternating gear and all rotating one way, each stopping where the box plus 0.3 m would touch a road edge (start may sit 0.15 m close). It tries both senses x both first gears x three arc radii (1.0 / 0.7 / 0.5 x 0.9 of the tightest curvature the car can steer to), re-aiming at the landing lane's heading on curves. A plan must land on another non-connector lane, within 0.3 rad of its heading and 1.5 lane widths of its centre, with no road edge between the car and that lane and a car-width corridor clear 10 m ahead. Ranking: legs, with a landing beyond half a lane counting 2 extra legs; ties go to fewer legs, then centred, then shorter |
+| Offered | Stopped exactly, on a lane rail, not on a connector, not borrowing, not a phantom braker; no stop line, light or yield line within the plan's reach (2 x radius + box corner) in any direction; no vehicle within the reach or closing in on it before the turn ends; a plan exists. Cached while the car does not move |
+| Execution | Each leg runs on a lane-less arc rail with d held at 0: the wheel swings at rest, then a rest-to-rest STOP/BACKUP plan at half the accel and jerk limits, at most 2 m/s. At every cusp the rest is re-planned from the actual pose (sweeps 0.3 / 0.15 / 0.08 m, either sense, no landing limits); a car the sim stops mid-turn aborts it. While turning, every factor is masked to index 0 |
+| Landing | Back on the lane rail of the base-lane search with gear 1. A last leg can end up to 1.5 lanes off the landing lane's centre: the lateral plan then merges onto the centre over max(curvature-safe distance, the longest low-speed distance). Until the car is within half a lane of that centre, its lane metrics (lane index, direction, centre distance) use the landing lane, not the nearest lane, which can be the old one faced against |
+| Observation | Plan block +3 after the borrowing flag: turning flag, rotation still to go / pi (clipped to [0, 1]), and the route gap (route after turning minus route ahead, / 200 m, in [-1, 1]; 1 = no gain). The gap is shown only where the turn is feasible: at rest from the offer, while moving from a probe every 10 decisions, and only when it is negative |
+| Reward | While turning, the lane-align, lane-centre and reverse terms are 0; all others (collision, offroad, goal, waiting, comfort) are unchanged |
+| Logs | `lattice/turn_rate` (share of steps turning), `lattice/turn_starts`, `turn_completions`, `turn_aborts` (per agent-episode) |
+
+Measured (C tests, harnesses in `/scratch/ag11023/tmp/claude/uturn2/`, default menu, dt 0.3, training sizes and
+coefficients):
+- Offered share of non-connector lane length (every 4 m, `landing.c`, empty road):
+
+  | Car | Town01 | Town02 | Town03 | Town04 | Town05 | Town06 | Town07 | Town10HD |
+  |-----|--------|--------|--------|--------|--------|--------|--------|----------|
+  | 2.0 x 1.5 m | 100 % | 100 % | 78 % | 9 % | 51 % | 0 % | 88 % | 84 % |
+  | 3.5 x 1.6 m | 100 % | 100 % | 78 % | 10 % | 51 % | 0 % | 89 % | 85 % |
+  | 4.5 x 1.8 m | 100 % | 100 % | 77 % | 9 % | 52 % | 0 % | 40 % | 85 % |
+  | 5.5 x 2.5 m | 0 % | 0 % | 28 % | 0.1 % | 24 % | 0.2 % | 0 % | 41 % |
+
+  Landings within half a lane of the landing lane's centre: 73-100 % of plans, except the 4.5 m car on Town01/02/04/07
+  (4-7 %; it lands 1.85-3.7 m off with 4 legs on Town01/02, 6 on Town04/07) and the 3.5 m car on Town07 (46 %). Mean
+  legs 1.0-6.0 per town and size. Wider arcs are used in up to 90 % of plans (the 3.5 m car on Town01/02).
+- Route benefit (`benefit2.c`, every first map goal, turn-arounds as extra graph edges at +30 m): a turn-around is on the
+  best route for 171 of 510 goals (median saving 132-274 m per town; none in Town06); goals within an episode's driving
+  range rise from 354 to 390 of 510.
+- Randomised execution (`sweep12.c`, 300 random placements per town, sizes L U(0.8, 7) x W U(0.8, 2.7), randomised
+  c_steer / c_throttle / c_acc): 715 turns offered, 715 completed, 0 aborted, 0 offroad steps while turning, min box
+  clearance to an edge 0.108 m (p1 0.135-0.270 m per town), median turn 11.4-15.9 s (p90 20.1-37.8 s), 1.4-2.6 legs on
+  average. Landing |d| median 0.92-1.36 m, beyond half a lane in 143 of 715. In the 40 steps after landing (greedy
+  speed, lateral plan kept) 3 of 715 cars clipped an edge (one from a centred landing) and the lane-align term went
+  negative for 2, both next to near-perpendicular lanes (cos -0.16 and -0.04).
+- Town01 sedan K-turn (C test): 4 legs, 27.3 s, every step clear of edges, lands 2.36 m off the landing lane, uses the
+  landing override for 11 steps and is at d = 0.00 after pulling away 81 m.
+- Random valid actions (C test, 16 agents x 300 steps x 8 towns): 0 invalid actions, bit-identical twin runs.
+- Cost: 0.2-1.0 ms per plan (mean over every 4 m of lane); 2-7 % more time per agent-step on 64-agent random-action
+  benchmarks (Town01/03/05/10HD, noise about 3 %), nearly all from offers at rest, not from the moving-car probes.
+- Independent black-box suite (written by an agent that had not seen the implementation, 34 groups; kept outside the
+  repo in `/scratch/ag11023/tmp/claude/uturn2/blackbox/`): 32 pass. It found two real defects that are fixed here (the
+  remaining-rotation feature read 0 for turns of more than 180 degrees; landings up to 7.1 m off, now capped and
+  merged). The two groups that still fail are by design: landings up to 3.9 m off the landing lane (its spec said within
+  half a lane) and a 157 degree rotation onto an angled landing lane (its spec said 180 degrees). Its random rollouts:
+  113 turns started, 96 completed, 0 aborted, 17 still turning when the rollout ended, 0 invalid actions.
+
+Run: `spline_werling_trajF_overtake_turnaround_wait_pen` = `trajE_overtake_wait_pen` + `env.lattice_turnaround=true`,
+same budget and settings (30B steps, 24 CPUs, 40 h + continuation). Code commit `d6119098`; submitted 2026-10-02 as
+19032829 / continuation 19032830 (torch_pr_355_tandon_priority). Compare with trajE: goals per episode
+and DNF first, then `lattice/turn_starts` (should rise above the random-policy level), `turn_aborts` (should stay near
+0), collisions and offroad (should not climb), time to first motion and moving fraction.
