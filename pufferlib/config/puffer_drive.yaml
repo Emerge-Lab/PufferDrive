@@ -84,6 +84,8 @@ env:
   lattice_light_in_view: true
   # Extra lateral choice: borrow the oncoming lane to overtake on roads with one lane per direction (off = old menu)
   lattice_oncoming_overtake: false
+  # Extra longitudinal cell: turn around from rest (one-shot or multi-point, inside the road edges, away from stop lines and traffic)
+  lattice_turnaround: false
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap

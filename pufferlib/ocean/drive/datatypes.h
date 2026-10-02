@@ -201,6 +201,7 @@ struct LatticeConfig {
     int exit_mode;
     int light_in_view; // stop-line features only for a stop line the traffic-control observation lists
     int oncoming_overtake; // extra lateral choice: borrow the oncoming lane on one-lane-per-direction roads
+    int turnaround;        // extra longitudinal cell: turn around (one-shot or multi-point) from rest
     int decision_period_steps;
     int lat_duration_steps[LATTICE_MAX_LAT_DURATIONS];
     int lon_duration_steps[LATTICE_MAX_LON_DURATIONS];
@@ -210,6 +211,7 @@ struct LatticeConfig {
     int lon_stop_line_cell;
     int lon_emergency_cell;
     int lon_backup_cell_base;
+    int lon_turn_cell; // -1 without turnaround
     int lon_cell_count;
     int mask_feature_count;
     int nvec[LATTICE_ACTION_FACTORS];
@@ -241,6 +243,8 @@ struct LatticeProfileSample {
     float neighbour_arc_m[2];
     int oncoming_lane; // -1 unless the only lane of this direction has an opposite lane on its left, no edge between
     float oncoming_offset_m;
+    int turn_lane; // nearest opposite lane on the left within LATTICE_EDGE_SEARCH_M, no edge between; -1 if none
+    float turn_arc_m;
 };
 
 struct LatticeVertex {
@@ -248,6 +252,45 @@ struct LatticeVertex {
     float y;
     float lane_arc_m;
     int chain_slot;
+};
+
+struct LatticeTurnLeg {
+    int gear;
+    float curvature; // signed, heading change per metre driven forward
+    float length_m;
+};
+
+// legs from the car's pose to the reversed heading; landing_lane is the opposite lane the car ends on
+struct LatticeTurnPlan {
+    int leg_count;
+    int sense; // +1 counter-clockwise, -1 clockwise
+    float target_heading;
+    struct LatticeTurnLeg legs[LATTICE_TURN_MAX_LEGS];
+    float driven_m;
+    float end_x;
+    float end_y;
+    float end_heading;
+    int landing_lane;
+    float landing_arc_m;
+    float landing_offset_m; // end pose to the landing lane's centre
+    int radius_idx;         // into LATTICE_TURN_CURVATURE_SCALES
+};
+
+// one planner query: rotation sense (0 = both), arc radii tried, box margins, and whether the car is mid-turn
+struct LatticeTurnSearch {
+    int sense_only;
+    int radius_count;
+    float sweep_margin_m;
+    float start_margin_m;
+    int committed; // mid-turn any landing beats an abort: no landing offset or heading limits
+};
+
+struct LatticeTurnEdges {
+    int count;
+    float ax[LATTICE_TURN_MAX_EDGES];
+    float ay[LATTICE_TURN_MAX_EDGES];
+    float bx[LATTICE_TURN_MAX_EDGES];
+    float by[LATTICE_TURN_MAX_EDGES];
 };
 
 // Per-env buffers for building one rail; never shared between agents mid-build.
@@ -259,6 +302,7 @@ struct LatticeBuildScratch {
     unsigned char raw_slot[LATTICE_MAX_RAW_SAMPLES];
     float filtered_x[LATTICE_MAX_RAW_SAMPLES];
     float filtered_y[LATTICE_MAX_RAW_SAMPLES];
+    struct LatticeTurnEdges turn_edges;
 };
 
 // Reference rail: smoothed chain samples; s of sample j is s_start_m + j * LATTICE_RAIL_SPACING_M.
@@ -346,6 +390,10 @@ struct LatticeCounters {
     float plan_change_rms_m;
     float oncoming_steps;
     float oncoming_starts;
+    float turn_starts;
+    float turn_completions;
+    float turn_aborts;
+    float turn_steps;
 };
 
 // route-progress reward memory: the current goal it was measured against and last step's route distance
@@ -355,6 +403,28 @@ struct LatticeRouteProgress {
     float goal_y;
     float goal_arc_m;
     float previous_distance_m; // last finite route distance; INFINITY until the first one for this goal
+};
+
+// a turn-around in progress (legs executed one at a time, re-planned at every cusp) and the planner cache at rest
+struct LatticeTurnState {
+    int active;
+    int start_lane;
+    float target_heading;
+    struct LatticeTurnPlan plan;
+    int radius_count; // arc radii re-plans may use: up to the started plan's, whose reach the offer checked
+    int cache_valid;
+    int cache_ok;
+    float cache_x;
+    float cache_y;
+    float cache_heading;
+    struct LatticeTurnPlan cache_plan;
+    int feasible; // latest feasibility at the car's pose: the offer at rest, else the periodic probe
+    int landing;  // completed, still beyond LATTICE_TURN_LANDED_D_M of the landing lane's centre
+    int probe_step;
+    int goal_idx;
+    float goal_x;
+    float goal_y;
+    float goal_arc_m;
 };
 
 struct LatticeAgent {
@@ -384,6 +454,7 @@ struct LatticeAgent {
     float preview_world_xy[AGENT_F32_PATH_SAMPLES][2];
     float plan_change_rms_m;
     struct LatticeRouteProgress route_progress;
+    struct LatticeTurnState turn;
     unsigned char mask[LATTICE_MAX_MASK_FEATURES];
     struct LatticeCounters counters;
 };

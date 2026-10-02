@@ -1105,6 +1105,337 @@ static int test_oncoming_random_rollouts(void) {
     return 0;
 }
 
+// turning around (env.lattice.turnaround): menu, planner, execution on Town01, offer rules, random rollouts
+static Drive make_turn_env(const char *map_file, int num_agents, int overtake) {
+    Drive env = drive_test_env_config(map_file, SIMULATION_MODE_GIGAFLOW, num_agents, 0);
+    env.dynamics_model = DYNAMICS_MODEL_SPLINE_WERLING;
+    env.action_type = ACTION_TYPE_LATTICE;
+    env.dt = 0.3f;
+    env.scenario_length = 100000;
+    lattice_test_default_menu(&env.lattice, 0.3f);
+    env.lattice.turnaround = 1;
+    env.lattice.oncoming_overtake = overtake;
+    allocate(&env);
+    c_reset(&env);
+    return env;
+}
+
+// at rest on lane at arc with the given size; returns the turn cell's mask bit
+static int place_turn_car(Drive *env, int active_idx, int lane, float arc_m, float length_m, float width_m) {
+    place_lattice_agent(env, active_idx, lane, arc_m, 0.0f);
+    Agent *agent = &env->agents[env->active_agent_indices[active_idx]];
+    agent->sim_length = length_m;
+    agent->sim_width = width_m;
+    agent->wheelbase = 0.6f * length_m;
+    update_agent_z(env, agent);
+    copy_pose_to_prev(agent);
+    reset_lattice_state(env);
+    compute_observations(env);
+    const struct LatticeConfig *cfg = &env->lattice;
+    return env->lattice_agents[active_idx].mask[lattice_mask_offset(cfg, LATTICE_FACTOR_LON_CELL) + cfg->lon_turn_cell];
+}
+
+static int test_turn_menu_layout(void) {
+    Drive env = make_turn_env(TOWN06, 1, 0);
+    const struct LatticeConfig *cfg = &env.lattice;
+    EXPECT_EQ_INT(cfg->nvec[1], 20);
+    EXPECT_EQ_INT(cfg->nvec[3], 61);
+    EXPECT_EQ_INT(cfg->lon_turn_cell, 60);
+    EXPECT_EQ_INT(cfg->mask_feature_count, 90);
+    EXPECT_EQ_INT(lattice_plan_feature_count(cfg), LATTICE_PLAN_FEATURES + LATTICE_TURN_PLAN_FEATURES);
+    free_allocated(&env);
+    Drive both = make_turn_env(TOWN06, 1, 1);
+    EXPECT_EQ_INT(both.lattice.nvec[1], 24);
+    EXPECT_EQ_INT(both.lattice.nvec[3], 61);
+    EXPECT_EQ_INT(both.lattice.mask_feature_count, 94);
+    EXPECT_EQ_INT(lattice_plan_feature_count(&both.lattice), LATTICE_PLAN_FEATURES + 1 + LATTICE_TURN_PLAN_FEATURES);
+    EXPECT_EQ_INT(
+        compute_observation_size(&both)
+            - (EGO_FEATURES + PARTNER_FEATURES * both.obs_slots_partners_n + LANE_FEATURES * both.obs_slots_lane_kept
+               + BOUNDARY_FEATURES * both.obs_slots_boundary_kept
+               + TRAFFIC_CONTROL_FEATURES * both.obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
+               + both.num_goals * GOAL_FEATURES),
+        LATTICE_PLAN_FEATURES + 1 + LATTICE_TURN_PLAN_FEATURES + 94);
+    free_allocated(&both);
+    Drive off = make_lattice_env(TOWN06, 1, 0.3f);
+    EXPECT_EQ_INT(off.lattice.lon_turn_cell, -1);
+    EXPECT_EQ_INT(off.lattice.nvec[3], 60);
+    free_allocated(&off);
+    return 0;
+}
+
+// legs alternate gear, rotate one way, drive pi / k in total; one-shot for small cars, none for trucks on 8 m roads
+static int test_turn_planner_cases(void) {
+    Drive env = make_turn_env(TOWN01, 1, 0);
+    int lane = find_overtake_lane(&env);
+    EXPECT_TRUE(lane >= 0);
+    const float sizes[3][2] = {{2.0f, 1.5f}, {4.5f, 1.8f}, {5.5f, 2.5f}};
+    int legs[3];
+    for (int size_idx = 0; size_idx < 3; size_idx++) {
+        int offered = place_turn_car(&env, 0, lane, 40.0f, sizes[size_idx][0], sizes[size_idx][1]);
+        const struct LatticeTurnPlan *plan = &env.lattice_agents[0].turn.cache_plan;
+        legs[size_idx] = offered ? plan->leg_count : 0;
+        if (!offered) {
+            continue;
+        }
+        Agent *agent = slot0_agent(&env);
+        float driven_m = 0.0f;
+        for (int leg_idx = 0; leg_idx < plan->leg_count; leg_idx++) {
+            driven_m += plan->legs[leg_idx].length_m;
+            EXPECT_TRUE(plan->legs[leg_idx].curvature * plan->legs[leg_idx].gear * plan->sense > 0.0f);
+            if (leg_idx > 0) {
+                EXPECT_EQ_INT(plan->legs[leg_idx].gear, -plan->legs[leg_idx - 1].gear);
+            }
+        }
+        float target_rotation = fabsf(lattice_wrap_angle(plan->target_heading - agent->sim_heading));
+        EXPECT_NEAR(driven_m, target_rotation / fabsf(plan->legs[0].curvature), 0.15f);
+        EXPECT_TRUE(cosf(plan->end_heading - agent->sim_heading) < -0.95f);
+    }
+    printf("  Town01 lane %d: legs small %d, sedan %d, large %d\n", lane, legs[0], legs[1], legs[2]);
+    EXPECT_EQ_INT(legs[0], 1);
+    EXPECT_TRUE(legs[1] >= 2);
+    EXPECT_EQ_INT(legs[2], 0);
+    free_allocated(&env);
+    Drive highway = make_turn_env(TOWN06, 1, 0);
+    int offered = 0;
+    for (int lane_idx = 0; lane_idx < highway.num_road_elements && lane_idx < 400; lane_idx += 7) {
+        if (!is_drivable_road_lane(highway.road_elements[lane_idx].type) || highway.lattice_lanes[lane_idx].is_connector
+            || highway.lattice_lanes[lane_idx].length_m < 30.0f) {
+            continue;
+        }
+        offered += place_turn_car(&highway, 0, lane_idx, 15.0f, 2.0f, 1.5f);
+    }
+    EXPECT_EQ_INT(offered, 0);
+    free_allocated(&highway);
+    return 0;
+}
+
+// sedan K-turn on Town01: inside the edges every step, keep-only masks, neutral lane rewards, lands aligned on the
+// other lane
+static int test_turn_execution_town01(void) {
+    Drive env = make_turn_env(TOWN01, 1, 0);
+    int lane = find_overtake_lane(&env);
+    EXPECT_TRUE(place_turn_car(&env, 0, lane, 40.0f, 4.5f, 1.8f));
+    Agent *agent = slot0_agent(&env);
+    set_overtake_reward_coefs(agent);
+    struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+    const struct LatticeConfig *cfg = &env.lattice;
+    struct LatticeTurnEdges edges;
+    EXPECT_TRUE(lattice_collect_turn_edges(&env, agent, LATTICE_TURN_RADIUS_COUNT, &edges));
+    float start_heading = agent->sim_heading;
+    int turn_idx = EGO_FEATURES + LATTICE_PLAN_FEATURES;
+    step_with_action(&env, 0, 0, 1, cfg->lon_turn_cell, 0);
+    EXPECT_EQ_INT(lattice_agent->turn.active, 1);
+    int steps = 0, clear_steps = 0, mask_ok = 1, reward_ok = 1;
+    float previous_remaining = 2.0f, remaining_rise = 0.0f;
+    while (lattice_agent->turn.active && steps < 300) {
+        Log before = env.logs[0];
+        step_with_action(&env, 1, 3, 1, cfg->lon_emergency_cell, 2);
+        steps++;
+        LatticePose pose = {agent->sim_x, agent->sim_y, agent->sim_heading};
+        clear_steps += lattice_turn_pose_clear(&edges, pose, 0.5f * agent->sim_length, 0.5f * agent->sim_width);
+        if (!lattice_agent->turn.active) {
+            break;
+        }
+        for (int factor_idx = 0; factor_idx < LATTICE_ACTION_FACTORS; factor_idx++) {
+            int offset = lattice_mask_offset(cfg, factor_idx);
+            for (int value = 0; value < cfg->nvec[factor_idx]; value++) {
+                mask_ok &= lattice_agent->mask[offset + value] == (value == 0);
+            }
+        }
+        reward_ok &= env.logs[0].reward_lane_align == before.reward_lane_align
+            && env.logs[0].reward_lane_center == before.reward_lane_center
+            && env.logs[0].reward_reverse == before.reward_reverse;
+        float remaining = env.observations[turn_idx + 1];
+        EXPECT_NEAR(env.observations[turn_idx], 1.0f, 0.0f);
+        EXPECT_NEAR(env.observations[turn_idx + 2], 0.0f, 0.0f);
+        remaining_rise = fmaxf(remaining_rise, remaining - previous_remaining);
+        previous_remaining = remaining;
+    }
+    LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, agent, lattice_agent->projection_hint);
+    int landing_lane = lattice_agent->rail.lanes[lattice_agent->rail.chain_slot[lattice_agent->projection_hint]];
+    printf(
+        "  sedan K-turn: %d steps (%.1f s), %d of %d steps clear of edges, heading change %.1f deg, lands on lane %d "
+        "at d %.2f cos %.3f, starts %.0f completions %.0f invalid %.0f\n",
+        steps,
+        steps * env.dt,
+        clear_steps,
+        steps,
+        lattice_wrap_angle(agent->sim_heading - start_heading) * 57.2958f,
+        landing_lane,
+        frenet.d,
+        cosf(frenet.heading_error),
+        lattice_agent->counters.turn_starts,
+        lattice_agent->counters.turn_completions,
+        lattice_agent->counters.invalid_actions);
+    EXPECT_EQ_INT(lattice_agent->turn.active, 0);
+    EXPECT_EQ_INT(clear_steps, steps);
+    EXPECT_TRUE(mask_ok);
+    EXPECT_TRUE(reward_ok);
+    EXPECT_TRUE(remaining_rise < 0.02f);
+    EXPECT_TRUE(agent->metrics_array[OFFROAD_IDX] == 0.0f && !agent->stopped);
+    EXPECT_TRUE(cosf(agent->sim_heading - start_heading) < -0.98f);
+    EXPECT_TRUE(lattice_agent->has_reference && landing_lane != lane);
+    EXPECT_TRUE(cosf(frenet.heading_error) > 0.99f);
+    EXPECT_EQ_INT(lattice_agent->gear, 1);
+    EXPECT_NEAR(lattice_agent->counters.turn_starts, 1.0f, 0.0f);
+    EXPECT_NEAR(lattice_agent->counters.turn_completions, 1.0f, 0.0f);
+    EXPECT_NEAR(lattice_agent->counters.turn_aborts, 0.0f, 0.0f);
+    EXPECT_TRUE(lattice_agent->counters.invalid_actions >= (float) (steps - 1));
+    EXPECT_TRUE(steps * env.dt < 60.0f);
+    EXPECT_NEAR(env.observations[turn_idx], 0.0f, 0.0f);
+    EXPECT_NEAR(lattice_agent->lat.target_d_m, 0.0f, 0.0f);
+    EXPECT_EQ_INT(lattice_agent->turn.landing, fabsf(frenet.d) > LATTICE_TURN_LANDED_D_M);
+    EXPECT_EQ_INT(agent->current_lane_idx, landing_lane);
+    EXPECT_TRUE(agent->metrics_array[LANE_ANGLE_IDX] > 0.99f);
+    EXPECT_NEAR(agent->metrics_array[LANE_DIST_IDX], -frenet.d, 0.05f);
+    double landed_sigma_m = lattice_agent->sigma_m;
+    int landing_steps = 0;
+    float min_align_reward = INFINITY;
+    for (int step = 0; step < 60; step++) {
+        float align_before = env.logs[0].reward_lane_align;
+        step_greedy(&env, 5.0f);
+        min_align_reward = fminf(min_align_reward, env.logs[0].reward_lane_align - align_before);
+        landing_steps += lattice_agent->turn.landing;
+    }
+    LatticeFrenet merged = lattice_frenet_state(&lattice_agent->rail, agent, lattice_agent->projection_hint);
+    printf(
+        "  after pulling away %.1f m: d %.2f, offroad %.0f, %d steps on the landing override, min lane-align step "
+        "reward %.5f\n",
+        lattice_agent->sigma_m - landed_sigma_m,
+        merged.d,
+        agent->metrics_array[OFFROAD_IDX],
+        landing_steps,
+        min_align_reward);
+    EXPECT_TRUE(fabsf(merged.d) < 0.3f);
+    EXPECT_TRUE(agent->metrics_array[OFFROAD_IDX] == 0.0f);
+    EXPECT_EQ_INT(lattice_agent->turn.landing, 0);
+    EXPECT_TRUE(min_align_reward >= 0.0f);
+    free_allocated(&env);
+    return 0;
+}
+
+// a car the sim stops mid-turn (collision or offroad behaviour) leaves the turn as an abort
+static int test_turn_aborts_when_stopped(void) {
+    Drive env = make_turn_env(TOWN01, 1, 0);
+    int lane = find_overtake_lane(&env);
+    EXPECT_TRUE(place_turn_car(&env, 0, lane, 40.0f, 4.5f, 1.8f));
+    struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+    step_with_action(&env, 0, 0, 1, env.lattice.lon_turn_cell, 0);
+    for (int step = 0; step < 15; step++) {
+        step_with_action(&env, 0, 0, 0, 0, 0);
+    }
+    EXPECT_EQ_INT(lattice_agent->turn.active, 1);
+    slot0_agent(&env)->stopped = 1;
+    step_with_action(&env, 0, 0, 0, 0, 0);
+    EXPECT_EQ_INT(lattice_agent->turn.active, 0);
+    EXPECT_NEAR(lattice_agent->counters.turn_aborts, 1.0f, 0.0f);
+    EXPECT_NEAR(lattice_agent->counters.turn_completions, 0.0f, 0.0f);
+    free_allocated(&env);
+    return 0;
+}
+
+// not offered while moving, with a car parked inside the reach, for a phantom braker, or next to a stop line
+static int test_turn_offer_rules(void) {
+    Drive env = make_turn_env(TOWN01, 2, 0);
+    int lane = find_overtake_lane(&env);
+    const struct LatticeConfig *cfg = &env.lattice;
+    int turn_bit = lattice_mask_offset(cfg, LATTICE_FACTOR_LON_CELL) + cfg->lon_turn_cell;
+    place_lattice_agent(&env, 1, lane, 150.0f, 0.0f);
+    EXPECT_TRUE(place_turn_car(&env, 0, lane, 40.0f, 2.0f, 1.5f));
+    place_lattice_agent(&env, 0, lane, 40.0f, 3.0f);
+    EXPECT_EQ_INT(env.lattice_agents[0].mask[turn_bit], 0);
+    place_lattice_agent(&env, 1, lane, 46.0f, 0.0f);
+    EXPECT_EQ_INT(place_turn_car(&env, 0, lane, 40.0f, 2.0f, 1.5f), 0);
+    place_lattice_agent(&env, 1, lane, 150.0f, 0.0f);
+    EXPECT_TRUE(place_turn_car(&env, 0, lane, 40.0f, 2.0f, 1.5f));
+    slot0_agent(&env)->is_phantom_braker = 1;
+    reset_lattice_state(&env);
+    compute_observations(&env);
+    EXPECT_EQ_INT(env.lattice_agents[0].mask[turn_bit], 0);
+    free_allocated(&env);
+    Drive lights = make_turn_env(TOWN06, 1, 0);
+    int near = 0;
+    for (int traffic_idx = 0; traffic_idx < lights.num_traffic_elements && !near; traffic_idx++) {
+        const TrafficControlElement *traffic = &lights.traffic_elements[traffic_idx];
+        if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
+            continue;
+        }
+        float mid_x = 0.5f * (traffic->stop_line[0] + traffic->stop_line[3]);
+        float mid_y = 0.5f * (traffic->stop_line[1] + traffic->stop_line[4]);
+        for (int lane_idx = 0; lane_idx < lights.num_road_elements && !near; lane_idx++) {
+            if (!is_drivable_road_lane(lights.road_elements[lane_idx].type)
+                || lights.lattice_lanes[lane_idx].is_connector) {
+                continue;
+            }
+            float x, y, h;
+            float end_arc_m = lights.lattice_lanes[lane_idx].length_m - 6.0f;
+            lattice_lane_point_at_arc(&lights, lane_idx, end_arc_m, &x, &y, &h);
+            if (hypotf(x - mid_x, y - mid_y) < 8.0f) {
+                near = 1;
+                EXPECT_EQ_INT(place_turn_car(&lights, 0, lane_idx, end_arc_m, 2.0f, 1.5f), 0);
+                EXPECT_TRUE(lattice_stop_line_within(
+                    &lights,
+                    slot0_agent(&lights),
+                    lattice_turn_reach_m(slot0_agent(&lights), lattice_turn_curvature(&lights, slot0_agent(&lights)))));
+            }
+        }
+    }
+    EXPECT_TRUE(near);
+    free_allocated(&lights);
+    return 0;
+}
+
+// random valid actions with the turn cell (and overtaking) in every town: finite, deterministic, no invalid actions,
+// turns finish
+static int test_turn_random_rollouts(void) {
+    float starts = 0.0f, completions = 0.0f, aborts = 0.0f, invalid = 0.0f, turn_steps = 0.0f, steps = 0.0f;
+    for (size_t town_idx = 0; town_idx < sizeof(CARLA_TOWNS) / sizeof(CARLA_TOWNS[0]); town_idx++) {
+        char path[512];
+        carla_town_path(path, sizeof path, CARLA_TOWNS[town_idx]);
+        Drive env = make_turn_env(path, 16, 1);
+        Drive twin = make_turn_env(path, 16, 1);
+        env.reward_wait_penalty_frac = 5e-4f;
+        twin.reward_wait_penalty_frac = 5e-4f;
+        unsigned long long rng_state = 41 + town_idx, twin_rng = 41 + town_idx;
+        int obs_size = compute_observation_size(&env);
+        for (int step = 0; step < 300; step++) {
+            random_valid_actions(&env, &rng_state);
+            random_valid_actions(&twin, &twin_rng);
+            c_step(&env);
+            c_step(&twin);
+            for (int value = 0; value < env.active_agent_count * obs_size; value++) {
+                EXPECT_FINITE(env.observations[value]);
+            }
+            EXPECT_TRUE(
+                memcmp(env.observations, twin.observations, env.active_agent_count * obs_size * sizeof(float)) == 0);
+        }
+        for (int active_idx = 0; active_idx < env.active_agent_count; active_idx++) {
+            const struct LatticeCounters *counters = &env.lattice_agents[active_idx].counters;
+            starts += counters->turn_starts;
+            completions += counters->turn_completions;
+            aborts += counters->turn_aborts;
+            invalid += counters->invalid_actions;
+            turn_steps += counters->turn_steps;
+            steps += counters->steps;
+        }
+        free_allocated(&env);
+        free_allocated(&twin);
+    }
+    printf(
+        "  random rollouts with turning: %.0f turn starts, %.0f completed, %.0f aborted, %.2f%% of steps turning, "
+        "invalid %.0f\n",
+        starts,
+        completions,
+        aborts,
+        100.0f * turn_steps / fmaxf(steps, 1.0f),
+        invalid);
+    EXPECT_TRUE(starts > 0.0f);
+    EXPECT_TRUE(completions > 0.0f);
+    EXPECT_NEAR(invalid, 0.0f, 0.0f);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_polynomials_and_bellman);
@@ -1135,5 +1466,11 @@ int main(void) {
     RUN_TEST(test_oncoming_overtake_stopped_car);
     RUN_TEST(test_oncoming_forced_return_before_junction);
     RUN_TEST(test_oncoming_random_rollouts);
+    RUN_TEST(test_turn_menu_layout);
+    RUN_TEST(test_turn_planner_cases);
+    RUN_TEST(test_turn_execution_town01);
+    RUN_TEST(test_turn_aborts_when_stopped);
+    RUN_TEST(test_turn_offer_rules);
+    RUN_TEST(test_turn_random_rollouts);
     return test_summary(failures);
 }

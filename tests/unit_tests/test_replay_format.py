@@ -68,6 +68,13 @@ DRIVE_VARIANTS = {
     "lattice_overtake": dict(
         SLOT_COUNTS, action_type="lattice", dynamics_model="spline_werling", lattice_oncoming_overtake=True
     ),
+    "lattice_turnaround": dict(
+        SLOT_COUNTS,
+        action_type="lattice",
+        dynamics_model="spline_werling",
+        lattice_oncoming_overtake=True,
+        lattice_turnaround=True,
+    ),
     "reward_conditioning": dict(SLOT_COUNTS, action_type="continuous", dynamics_model="jerk", reward_conditioning=True),
 }
 
@@ -152,6 +159,7 @@ def _expected_counts(variant_kwargs):
         ego_features += binding.SPLINE_INTENT_FEATURES
     if action_type == "lattice":
         ego_features += binding.LATTICE_PLAN_FEATURES + int(variant_kwargs.get("lattice_oncoming_overtake", False))
+        ego_features += binding.LATTICE_TURN_PLAN_FEATURES * int(variant_kwargs.get("lattice_turnaround", False))
         lattice_mask_features = sum(drive.lattice_nvec)
     return {
         "ego_features": ego_features,
@@ -812,6 +820,16 @@ def test_encode_rejects_non_finite_observations(captured_replay, bad_value):
             "lattice",
             {"action_type": "lattice", "dynamics_model": "spline_werling", "lattice_oncoming_overtake": True},
             binding.LATTICE_PLAN_FEATURES + 1,
+        ),
+        (
+            "lattice",
+            {
+                "action_type": "lattice",
+                "dynamics_model": "spline_werling",
+                "lattice_oncoming_overtake": True,
+                "lattice_turnaround": True,
+            },
+            binding.LATTICE_PLAN_FEATURES + 1 + binding.LATTICE_TURN_PLAN_FEATURES,
         ),
     ],
 )

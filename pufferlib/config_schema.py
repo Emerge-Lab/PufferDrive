@@ -347,6 +347,7 @@ class DriveEnvConfig:
     lattice_exit_mode: LatticeExitMode = MISSING
     lattice_light_in_view: bool = MISSING
     lattice_oncoming_overtake: bool = MISSING
+    lattice_turnaround: bool = MISSING
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)

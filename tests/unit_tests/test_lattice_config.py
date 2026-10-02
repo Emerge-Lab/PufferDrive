@@ -86,6 +86,14 @@ def test_oncoming_overtake_config():
     assert normalized["env"]["lattice_oncoming_overtake"] is True
 
 
+def test_turnaround_config():
+    args = _lattice_args()
+    assert args["env"]["lattice_turnaround"] is False
+    args["env"]["lattice_turnaround"] = True
+    normalized = _validate(args)
+    assert normalized["env"]["lattice_turnaround"] is True
+
+
 @pytest.mark.parametrize(
     "overrides",
     [

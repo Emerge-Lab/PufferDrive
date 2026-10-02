@@ -140,6 +140,7 @@ class Drive(pufferlib.PufferEnv):
         lattice_exit_mode="policy",
         lattice_light_in_view=True,
         lattice_oncoming_overtake=False,
+        lattice_turnaround=False,
     ):
         self.dt = dt
         self.base_max_speed_mps = float(base_max_speed_mps)
@@ -235,6 +236,7 @@ class Drive(pufferlib.PufferEnv):
         }[lattice_exit_mode]
         self.lattice_light_in_view = bool(lattice_light_in_view)
         self.lattice_oncoming_overtake = bool(lattice_oncoming_overtake)
+        self.lattice_turnaround = bool(lattice_turnaround)
         # [lat gate, lat cell, lon gate, lon cell, exit slot]; must match init_lattice_config in lattice.h
         self.lattice_nvec = [
             binding.LATTICE_GATE_COUNT,
@@ -244,7 +246,8 @@ class Drive(pufferlib.PufferEnv):
             len(self.lattice_lon_speeds_mps) * len(self.lattice_lon_durations_s)
             + len(self.lattice_stop_distances_m)
             + 2
-            + len(self.lattice_backup_distances_m),
+            + len(self.lattice_backup_distances_m)
+            + int(self.lattice_turnaround),
             binding.LATTICE_EXIT_SLOTS,
         ]
         if trajectory_baseline and (dynamics_model != "jerk" or action_type != "continuous"):
@@ -327,7 +330,11 @@ class Drive(pufferlib.PufferEnv):
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
         self.spline_intent_features = binding.SPLINE_INTENT_FEATURES if action_type == "spline" else 0
         self.lattice_plan_features = (
-            binding.LATTICE_PLAN_FEATURES + int(self.lattice_oncoming_overtake) if action_type == "lattice" else 0
+            binding.LATTICE_PLAN_FEATURES
+            + int(self.lattice_oncoming_overtake)
+            + binding.LATTICE_TURN_PLAN_FEATURES * int(self.lattice_turnaround)
+            if action_type == "lattice"
+            else 0
         )
         self.lattice_mask_features = sum(self.lattice_nvec) if action_type == "lattice" else 0
 
@@ -610,6 +617,7 @@ class Drive(pufferlib.PufferEnv):
             "lattice_exit_mode": self.lattice_exit_mode,
             "lattice_light_in_view": self.lattice_light_in_view,
             "lattice_oncoming_overtake": self.lattice_oncoming_overtake,
+            "lattice_turnaround": self.lattice_turnaround,
         }
 
     def _sample_init_step(self):

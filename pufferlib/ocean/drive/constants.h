@@ -415,7 +415,8 @@ static const int ROAD_OFFSETS[25][2]
 #define LATTICE_MAX_BACKUP_DISTANCES 6
 #define LATTICE_MAX_LAT_CELLS ((LATTICE_MAX_LAT_OFFSETS + 3) * LATTICE_MAX_LAT_DURATIONS)
 #define LATTICE_MAX_LON_CELLS                                                                                          \
-    (LATTICE_MAX_LON_SPEEDS * LATTICE_MAX_LON_DURATIONS + LATTICE_MAX_STOP_DISTANCES + 2 + LATTICE_MAX_BACKUP_DISTANCES)
+    (LATTICE_MAX_LON_SPEEDS * LATTICE_MAX_LON_DURATIONS + LATTICE_MAX_STOP_DISTANCES + 2                               \
+     + LATTICE_MAX_BACKUP_DISTANCES + 1)
 #define LATTICE_MAX_MASK_FEATURES                                                                                      \
     (2 * LATTICE_GATE_COUNT + LATTICE_MAX_LAT_CELLS + LATTICE_MAX_LON_CELLS + LATTICE_EXIT_SLOTS)
 #define LATTICE_DURATION_TOLERANCE 1e-4f // |T/dt - lround(T/dt)| allowed for every menu duration
@@ -490,6 +491,44 @@ static const int ROAD_OFFSETS[25][2]
 #define LATTICE_ONCOMING_START_S 6.0f
 #define LATTICE_ONCOMING_KEEP_MIN_M 20.0f
 #define LATTICE_ONCOMING_KEEP_S 4.0f
+
+// -- Turning around: rest-to-rest constant-curvature legs, forward and reverse, with the box kept inside the road edges
+#define LATTICE_TURN_MAX_LEGS 7
+#define LATTICE_TURN_CURVATURE_FRACTION 0.9f     // of full lock, so the tracker keeps steering authority on the legs
+#define LATTICE_TURN_MARGIN_M 0.3f               // box inflation against road edges wherever a leg moves
+#define LATTICE_TURN_START_MARGIN_M 0.15f        // a leg may start this close: executed legs end up to ~0.11 m nearer
+#define LATTICE_TURN_REPLAN_START_MARGIN_M 0.03f // mid-turn re-plans: committed, so any clear start pose will do
+#define LATTICE_TURN_LAST_MARGIN_M 0.08f         // last re-plan sweep margin before a mid-turn abort
+#define LATTICE_TURN_STEP_M 0.2f                 // path length between clearance samples, below the margin
+#define LATTICE_TURN_MIN_LEG_M 0.5f
+#define LATTICE_TURN_HEADING_TOL_RAD 0.05f
+#define LATTICE_TURN_OVERSHOOT_RAD (0.5f * (float) M_PI) // rotation past the target; a turn needs at most ~4.2 rad
+#define LATTICE_TURN_SETTLE_HEADING_RAD 0.35f // a failed late re-plan this close to the target still counts as turned
+#define LATTICE_TURN_ALIGN_TOL_RAD 0.1f       // re-aim at the landing lane's heading until the end pose is this close
+#define LATTICE_TURN_LAND_HEADING_TOL_RAD                                                                              \
+    0.3f // a plan whose end pose stays farther off the landing lane is not offered
+#define LATTICE_TURN_AIM_PASSES 3
+#define LATTICE_TURN_Z_SLACK_M 1.0f // edges kept beyond the sim's Z_BUFFER band: the car's z drifts on slopes
+#define LATTICE_TURN_MAX_EDGES 4096
+#define LATTICE_TURN_RADIUS_COUNT 3
+// plan ranking: a landing beyond LATTICE_TURN_LANDED_D_M weighs as this many extra legs
+#define LATTICE_TURN_OFF_CENTRE_LEGS 2
+#define LATTICE_TURN_RAIL_PAD_M 5.0f        // leg rail beyond both ends of the leg, less on small circles
+#define LATTICE_TURN_RAIL_LAP_FRACTION 0.9f // a leg rail stays below this share of its circle: no overlapping laps
+#define LATTICE_TURN_LEG_SPEED_MPS 2.0f     // equals |MAX_BACKWARD_SPEED|, inside the low-speed tracker
+#define LATTICE_TURN_T_MAX_S 30.0f
+#define LATTICE_TURN_LIMIT_FRACTION 0.5f // of the accel and jerk limits on legs: reverse braking is only 2.5 c_acc
+#define LATTICE_TURN_SETTLE_STEPS 10     // a leg that is not at rest this long after its plan ends aborts the turn
+#define LATTICE_TURN_PLAN_FEATURES 3
+#define LATTICE_TURN_PROBE_STEPS 10 // decisions between feasibility probes of a moving car the turn would help
+#define LATTICE_TURN_PARTNER_HORIZON_M 150.0f
+// lane metrics follow the landing lane until the car is this close to its centre
+#define LATTICE_TURN_LANDED_D_M (0.5f * LANE_WIDTH)
+// farther off the landing lane the car would still be in the old direction's lanes
+#define LATTICE_TURN_MAX_LANDING_M (1.5f * LANE_WIDTH)
+#define LATTICE_TURN_CORRIDOR_HALF_M 0.05f // end pose to landing lane centre: checked for a road edge between
+#define LATTICE_TURN_EXIT_CHECK_M 10.0f    // the car's width clear from the end pose to the landing lane this far on
+static const float LATTICE_TURN_CURVATURE_SCALES[LATTICE_TURN_RADIUS_COUNT] = {1.0f, 0.7f, 0.5f}; // wider arcs
 
 // -- Rail changes
 #define LATTICE_DRIFT_MARGIN_M 0.3f

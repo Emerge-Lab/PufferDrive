@@ -1457,6 +1457,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "lattice_decision_period_s",
             "lattice_exit_mode",
             "lattice_oncoming_overtake",
+            "lattice_turnaround",
         }
         if os.path.exists(config_yaml_path):
             print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")

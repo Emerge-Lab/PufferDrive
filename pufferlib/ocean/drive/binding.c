@@ -2197,6 +2197,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         lattice->exit_mode = (int) unpack(kwargs, "lattice_exit_mode");
         lattice->light_in_view = (int) unpack(kwargs, "lattice_light_in_view");
         lattice->oncoming_overtake = (int) unpack(kwargs, "lattice_oncoming_overtake");
+        lattice->turnaround = (int) unpack(kwargs, "lattice_turnaround");
         if (PyErr_Occurred()) {
             return -1;
         }
@@ -2345,6 +2346,10 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         assign_to_dict(dict, "lattice/plan_change_rms_m", log->lattice_plan_change_rms_m);
         assign_to_dict(dict, "lattice/oncoming_rate", log->lattice_oncoming_rate);
         assign_to_dict(dict, "lattice/oncoming_starts", log->lattice_oncoming_starts);
+        assign_to_dict(dict, "lattice/turn_rate", log->lattice_turn_rate);
+        assign_to_dict(dict, "lattice/turn_starts", log->lattice_turn_starts);
+        assign_to_dict(dict, "lattice/turn_completions", log->lattice_turn_completions);
+        assign_to_dict(dict, "lattice/turn_aborts", log->lattice_turn_aborts);
     }
 
     if (env->compute_eval_metrics) {

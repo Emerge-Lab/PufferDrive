@@ -32,7 +32,7 @@ SEED = 5
 STEPS = 150
 
 
-def _build_config(rnn=False, oncoming_overtake=False):
+def _build_config(rnn=False, oncoming_overtake=False, turnaround=False):
     saved_argv = sys.argv
     sys.argv = [saved_argv[0]]
     try:
@@ -50,6 +50,7 @@ def _build_config(rnn=False, oncoming_overtake=False):
             "map_dir": "pufferlib/resources/drive/binaries/carla",
             "lattice_oncoming_overtake": oncoming_overtake,
             "reward_oncoming_penalty_frac": 5e-4 if oncoming_overtake else 0.0,
+            "lattice_turnaround": turnaround,
         }
     )
     args["wandb"] = False
@@ -114,6 +115,28 @@ def test_spline_werling_oncoming_overtake_rollout():
         policy = load_policy(args, vecenv, "puffer_drive")
         logits, _ = policy(torch.as_tensor(obs))
         assert logits[1].shape[1] == 24
+    finally:
+        vecenv.close()
+
+
+def test_spline_werling_turnaround_rollout():
+    args = _build_config(oncoming_overtake=True, turnaround=True)
+    rng = np.random.default_rng(SEED)
+    vecenv = load_env("puffer_drive", args)
+    try:
+        driver = vecenv.driver_env
+        nvec = driver.lattice_nvec
+        assert list(vecenv.single_action_space.nvec) == nvec == [2, 24, 2, 61, 5]
+        assert driver.lattice_plan_features == binding.LATTICE_PLAN_FEATURES + 1 + binding.LATTICE_TURN_PLAN_FEATURES
+        obs, _ = vecenv.reset(seed=SEED)
+        assert obs.shape[1] == driver.num_obs
+        for step in range(STEPS):
+            obs, rewards, _, _, _ = vecenv.step(_random_valid_actions(obs, nvec, rng))
+            assert np.isfinite(obs).all(), f"non-finite observation at step {step}"
+            assert np.isfinite(rewards).all(), f"non-finite reward at step {step}"
+        policy = load_policy(args, vecenv, "puffer_drive")
+        logits, _ = policy(torch.as_tensor(obs))
+        assert logits[3].shape[1] == 61
     finally:
         vecenv.close()
 
@@ -225,6 +248,7 @@ def test_viewer_draws_lattice_plans_for_every_agent():
 if __name__ == "__main__":
     test_spline_werling_rollout()
     test_spline_werling_oncoming_overtake_rollout()
+    test_spline_werling_turnaround_rollout()
     test_spline_werling_policy_and_ppo_loss()
     test_spline_werling_recurrent_policy()
     print("OK")

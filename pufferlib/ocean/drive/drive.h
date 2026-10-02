@@ -122,6 +122,10 @@ struct Log {
     float lattice_oncoming_rate;
     float lattice_oncoming_starts;
     float reward_oncoming;
+    float lattice_turn_rate;
+    float lattice_turn_starts;
+    float lattice_turn_completions;
+    float lattice_turn_aborts;
 };
 
 struct GridMapEntity {
@@ -3640,6 +3644,9 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     if (env->lattice.oncoming_overtake) {
         lattice_borrowed_lane(env, log_idx, agent, &lane_idx, &signed_lane_distance, &lane_heading);
     }
+    if (env->lattice.turnaround) {
+        lattice_landing_lane(env, log_idx, agent, &lane_idx, &signed_lane_distance, &lane_heading);
+    }
 
     // Update lane alignment metric (running average)
     if (lane_idx != -1) {
@@ -4048,6 +4055,9 @@ static void compute_rewards(Drive *env, int i) {
         agent_log->reward_goal += reward_goal;
     }
 
+    // a lattice turn-around crosses and reverses against lanes by design: no lane or reverse terms on its legs
+    int turning = env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING && env->lattice_agents[i].turn.active;
+
     // Get lane angle metric: cos(θ_f) where θ_f = heading diff from lane
     float cos_theta = agent->metrics_array[LANE_ANGLE_IDX];
     float theta_f = acosf(fminf(fmaxf(cos_theta, -1.0f), 1.0f)); // Get |θ_f| from cos
@@ -4058,7 +4068,7 @@ static void compute_rewards(Drive *env, int i) {
     float vel_aligned_penalty
         = agent->reward_coefs[REWARD_COEF_VEL_ALIGN] * fminf(cos_theta * agent->sim_speed_signed, 0.0f);
     float alignment_bonus = 0.0025f * (1.0f - theta_f / (M_PI / 2.0f));
-    float lane_align_reward = agent->reward_coefs[REWARD_COEF_LANE_ALIGN] * env->dt
+    float lane_align_reward = !turning * agent->reward_coefs[REWARD_COEF_LANE_ALIGN] * env->dt
         * (against_lane_penalty + vel_aligned_penalty + alignment_bonus);
     env->rewards[i] += lane_align_reward;
     agent_log->reward_lane_align += lane_align_reward;
@@ -4067,8 +4077,8 @@ static void compute_rewards(Drive *env, int i) {
     float lane_center_distance = agent->metrics_array[LANE_DIST_IDX];
     float adjusted_dist = fabsf(lane_center_distance - agent->reward_coefs[REWARD_COEF_CENTER_BIAS]);
     float exp_decay = 0.05f / expf(adjusted_dist - 0.5f);
-    float lane_center_reward
-        = -agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt * ((cos_theta > 0.5f) * adjusted_dist - exp_decay);
+    float lane_center_reward = -!turning * agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt
+        * ((cos_theta > 0.5f) * adjusted_dist - exp_decay);
     env->rewards[i] += lane_center_reward;
     agent_log->lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f;
     agent_log->reward_lane_center += lane_center_reward;
@@ -4096,7 +4106,7 @@ static void compute_rewards(Drive *env, int i) {
     }
 
     // Reverse reward
-    if (agent->sim_speed_signed < -0.01f) {
+    if (agent->sim_speed_signed < -0.01f && !turning) {
         float reverse_penalty = -agent->reward_coefs[REWARD_COEF_REVERSE] * env->dt;
         env->rewards[i] += reverse_penalty;
         agent_log->reward_reverse += reverse_penalty;

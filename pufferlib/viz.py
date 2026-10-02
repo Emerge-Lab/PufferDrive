@@ -954,7 +954,9 @@ def encode_interactive_replay(scenario, replay):
         "ego_dim": int(binding.EGO_FEATURES)
         + (int(binding.SPLINE_INTENT_FEATURES) if env_cfg.get("action_type") == "spline" else 0)
         + (
-            int(binding.LATTICE_PLAN_FEATURES) + int(bool(env_cfg.get("lattice_oncoming_overtake", False)))
+            int(binding.LATTICE_PLAN_FEATURES)
+            + int(bool(env_cfg.get("lattice_oncoming_overtake", False)))
+            + int(binding.LATTICE_TURN_PLAN_FEATURES) * int(bool(env_cfg.get("lattice_turnaround", False)))
             if env_cfg.get("action_type") == "lattice"
             else 0
         ),
