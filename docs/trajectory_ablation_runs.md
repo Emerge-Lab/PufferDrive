@@ -49,6 +49,8 @@ All: `puffer train puffer_drive_spline_werling env.lattice_exit_mode=goal` plus 
 | `spline_werling_trajC2_routegoals_wait_pen` | 18956054 / 18956055 | B + waiting penalty | `env.goal_source=route env.reward_wait_penalty_frac=5e-4 env.lattice_light_in_view=false` |
 | `spline_werling_trajD2_mapgoals_wait_pen` | 18956057 / 18956058 | A + waiting penalty + consistency | `env.reward_wait_penalty_frac=5e-4 env.reward_trajectory_consistency=2e-4 env.lattice_light_in_view=false` |
 | `spline_werling_trajE_overtake_wait_pen` | 18986342 / 18986344 | A + waiting penalty + borrowing the oncoming lane (section 7) | `env.reward_wait_penalty_frac=5e-4 env.lattice_light_in_view=false env.lattice_oncoming_overtake=true env.reward_oncoming_penalty_frac=5e-4` |
+| `spline_werling_trajE_overtake_wait_pen_consist10x` | 19026614 / 19026615 | trajE + plan consistency at 10x D's coefficient | trajE's + `env.reward_trajectory_consistency=2e-3` |
+| `spline_werling_trajE_overtake_wait_pen_consist50x` | 19026638 / 19026639 | trajE + plan consistency at 50x D's coefficient | trajE's + `env.reward_trajectory_consistency=1e-2` |
 
 The three `*_wait_pen` runs use commit `d9f1e2ee` (waiting penalty) on top of `37157e4c` (view-gated light features,
 switched off for them so they differ from A only as listed). Waiting penalty: each step a car pays
@@ -58,7 +60,8 @@ light is red or yellow; a whole standstill episode costs at most 0.46 of that ch
 Cancelled 2026-10-01: `spline_werling_vel50x` (18867873 after 24 h, continuation 18867876), and before they started
 `trajC_progress_mapgoals` (18953137 / 138), `trajD_consistency_mapgoals` (18953142 / 143) and the
 first `trajE_overtake_wait_pen` submission (18976365 / 366). Also cancelled 2026-10-01 to free a GPU:
-`spline_werling_vel10x` (18867871 after 34 h 17 m, continuation 18867872).
+`spline_werling_vel10x` (18867871 after 34 h 17 m, continuation 18867872). Cancelled 2026-10-02 to free GPUs:
+`spline_baseline` (18811661 after 23 h 08 m) and `spline_werling_vel5x` (continuation 18867868 after 6 h 46 m).
 
 Compare A with `spline_werling_goal` (same exit mode, old code). With map goals the progress potential is flat beyond
 1000 m of route and pays nothing toward an unreachable goal, so in C_map / D_map it acts on 60 % of first goals. B-D change the goal task, so compare them with each other
@@ -133,6 +136,12 @@ Run: `spline_werling_trajE_overtake_wait_pen` = `trajA_info_wait_pen` + `env.lat
 env.reward_oncoming_penalty_frac=5e-4`. First submitted as 18976365 / 18976366 and cancelled
 unstarted (a misread request); relaunched 2026-10-01 as 18986342 / 18986344 after `spline_werling_vel10x` was cancelled
 to free a GPU. Compare with `trajA_info_wait_pen`.
+
+Consistency variants (submitted 2026-10-02): trajE plus `env.reward_trajectory_consistency` at 10x (2e-3) and 50x (1e-2)
+D's 2e-4. They run trajE's exact code: the working tree then held uncommitted checkpoint-render work, so their snapshots
+were replaced with trajE's `code_v1` copy (identical to HEAD `64e271e0`) before `sbatch`. At 1e-2 per metre RMS, a hard
+emergency brake (RMS 8-15 m) costs 0.08-0.15 against a 1.5 collision; keeping the committed plans costs nothing.
+Compare both with trajE: `lattice/plan_change_rms_m`, lat/lon new rates, goals, collisions, oncoming rate.
 
 What to watch: `lattice/oncoming_rate` and `oncoming_starts` should rise above the random-policy level without collisions
 climbing; goals, DNF, moving fraction and time to first motion vs `trajA_info_wait_pen`; `reward_components/oncoming`.
