@@ -66,6 +66,10 @@ first `trajE_overtake_wait_pen` submission (18976365 / 366). Also cancelled 2026
 Also cancelled 2026-10-02 at the user's request: `spline_werling_halfpen` (18878816); the `halfpen_goal` run (18881663) kept.
 `trajE_overtake_wait_pen_consist50x` (19026638 after 3 h 28 m, continuation 19026639 unstarted) was cancelled
 2026-10-02 at 11:47 EDT from outside this session (sacct: CANCELLED, not a failure).
+Also cancelled 2026-10-02 at 16:16 EDT from outside this session, each continuation first and then its main job:
+trajA_info (18935213 / 215), trajB_routegoals (18935221 / 224), trajC_progress (18935229 / 231), trajA_info_wait_pen
+(18956052 / 053) and trajC2_routegoals_wait_pen (18956054 / 055). At 16:26 EDT the three `s30bswerlgoal` runs were also cancelled
+(18881653, 18881656 and the `halfpen_goal` run 18881663).
 
 Compare A with `spline_werling_goal` (same exit mode, old code). With map goals the progress potential is flat beyond
 1000 m of route and pays nothing toward an unreachable goal, so in C_map / D_map it acts on 60 % of first goals. B-D change the goal task, so compare them with each other
@@ -270,16 +274,19 @@ env.lattice_oncoming_overtake=true env.reward_trajectory_consistency=2e-3 env.la
 the turn-around), from scratch. The turn-around changes the observation and action spaces, and fine-tuning would also
 drop the flag (`KEYS_OF_INTEREST`). Each sweep run changes one knob of the base by x0.1 or x10.
 
-| Run | wait | oncoming | full speed (m/s) | guard x 1000 steps | nice |
-|---|---|---|---|---|---|
-| `spline_werling_tune_base` | 7e-4 | 2.5e-4 | 5 | 0.95 | 1000 |
-| `spline_werling_tune_control` | 5e-4 | 5e-4 | 1 | 1.00 | 1000 |
-| `spline_werling_tune_wait7e-5` | 7e-5 | 2.5e-4 | 5 | 0.32 | 2000 |
-| `spline_werling_tune_wait7e-3` | 7e-3 | 2.5e-4 | 5 | 7.25 (guard off) | 2000 |
-| `spline_werling_tune_onc2.5e-5` | 7e-4 | 2.5e-5 | 5 | 0.73 | 3000 |
-| `spline_werling_tune_onc2.5e-3` | 7e-4 | 2.5e-3 | 5 | 3.20 (guard off) | 3000 |
-| `spline_werling_tune_vfull0.5` | 7e-4 | 2.5e-4 | 0.5 | 0.95 | 4000 |
-| `spline_werling_tune_vfull50` | 7e-4 | 2.5e-4 | 50 | 0.95 | 4000 |
+| Run | wait | oncoming | full speed (m/s) | guard x 1000 steps | nice | main / continuation |
+|---|---|---|---|---|---|---|
+| `spline_werling_tune_base` | 7e-4 | 2.5e-4 | 5 | 0.95 | 1000 | 19064424 / 19064426 |
+| `spline_werling_tune_control` | 5e-4 | 5e-4 | 1 | 1.00 | 1000 | 19064431 / 19064432 |
+| `spline_werling_tune_wait7e-5` | 7e-5 | 2.5e-4 | 5 | 0.32 | 2000 | 19064435 / 19064436 |
+| `spline_werling_tune_wait7e-3` | 7e-3 | 2.5e-4 | 5 | 7.25 (guard off) | 2000 | 19064438 / 19064439 |
+| `spline_werling_tune_onc2.5e-5` | 7e-4 | 2.5e-5 | 5 | 0.73 | 3000 | 19064449 / 19064452 |
+| `spline_werling_tune_onc2.5e-3` | 7e-4 | 2.5e-3 | 5 | 3.20 (guard off) | 3000 | 19064460 / 19064464 |
+| `spline_werling_tune_vfull0.5` | 7e-4 | 2.5e-4 | 0.5 | 0.95 | 4000 | 19064469 / 19064472 |
+| `spline_werling_tune_vfull50` | 7e-4 | 2.5e-4 | 50 | 0.95 | 4000 | 19064735 / 19064738 |
+
+Submitted 2026-10-02 16:31 EDT from commit `2f4d4aa3` (torch_pr_355_tandon_priority); all 8 snapshots diff clean
+against it.
 
 Why the base:
 - wait 7e-4 + oncoming 2.5e-4 keeps a whole stuck episode in the oncoming lane at 0.95 of one infraction.
