@@ -141,6 +141,41 @@ def test_spline_werling_turnaround_rollout():
         vecenv.close()
 
 
+def test_spline_werling_low_speed_penalty_rollout():
+    args = _build_config(oncoming_overtake=True, turnaround=True)
+    args["env"].update(
+        {
+            "reward_wait_penalty_frac": 7e-4,
+            "reward_wait_full_speed_mps": 5.0,
+            "reward_oncoming_penalty_frac": 2.5e-4,
+            "reward_trajectory_consistency": 2e-3,
+        }
+    )
+    args = normalize_puffer_drive_config(args, "test")
+    rng = np.random.default_rng(SEED)
+    vecenv = load_env("puffer_drive", args)
+    try:
+        driver = vecenv.driver_env
+        assert driver.reward_wait_full_speed_mps == 5.0
+        obs, _ = vecenv.reset(seed=SEED)
+        total = 0.0
+        for step in range(STEPS):
+            obs, rewards, _, _, _ = vecenv.step(_random_valid_actions(obs, driver.lattice_nvec, rng))
+            assert np.isfinite(rewards).all(), f"non-finite reward at step {step}"
+            total += float(rewards.sum())
+        assert np.isfinite(total)
+    finally:
+        vecenv.close()
+    bad = _build_config()
+    bad["env"]["reward_wait_full_speed_mps"] = 0.0
+    try:
+        load_env("puffer_drive", bad).close()
+    except ValueError as error:
+        assert "reward_wait_full_speed_mps" in str(error)
+    else:
+        raise AssertionError("a zero full speed must be rejected by the binding")
+
+
 def _policy_losses(rnn):
     args = _build_config(rnn=rnn)
     vecenv = load_env("puffer_drive", args)
@@ -249,6 +284,7 @@ if __name__ == "__main__":
     test_spline_werling_rollout()
     test_spline_werling_oncoming_overtake_rollout()
     test_spline_werling_turnaround_rollout()
+    test_spline_werling_low_speed_penalty_rollout()
     test_spline_werling_policy_and_ppo_loss()
     test_spline_werling_recurrent_policy()
     print("OK")

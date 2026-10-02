@@ -126,6 +126,14 @@ struct Log {
     float lattice_turn_starts;
     float lattice_turn_completions;
     float lattice_turn_aborts;
+    float lattice_oncoming_passes;
+    float lattice_turn_legs;
+    float lattice_queued_rate;
+    float lattice_queued_frozen_rate;
+    float lattice_slow_follow_rate;
+    float lattice_wait_exempt_rate;
+    float lattice_oncoming_collisions;
+    float lattice_turn_route_gap;
 };
 
 struct GridMapEntity {
@@ -279,6 +287,7 @@ struct Drive {
     float reward_route_progress; // per meter of lane-route distance gained toward the current goal (lattice only)
     float reward_wait_penalty_frac; // per-step share of the cheapest infraction penalty charged at standstill (lattice
                                     // only)
+    float reward_wait_full_speed_mps;   // the waiting penalty fades out linearly up to this speed
     float reward_oncoming_penalty_frac; // per-step share of the cheapest infraction charged in a borrowed oncoming lane
     int reward_conditioning;
     int reward_randomization;
@@ -3940,8 +3949,8 @@ static void compute_lattice_rewards(Drive *env, int i) {
     env->rewards[i] += consistency_penalty;
     agent_log->reward_trajectory_consistency += consistency_penalty;
     // sized against the cheapest infraction so sitting still for a whole episode never beats crashing out
-    float slowness = fmaxf(0.0f, 1.0f - agent->sim_speed / LATTICE_WAIT_FULL_SPEED_MPS);
-    if (env->reward_wait_penalty_frac > 0.0f && slowness > 0.0f && !agent->stopped) {
+    float slowness = fmaxf(0.0f, 1.0f - agent->sim_speed / env->reward_wait_full_speed_mps);
+    if (env->reward_wait_penalty_frac > 0.0f && slowness > 0.0f && !agent->stopped && !lattice_agent->turn.active) {
         int light_state = TRAFFIC_CONTROL_STATE_UNKNOWN;
         if (lattice_agent->rail.sample_count >= 2) {
             LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, agent, lattice_agent->projection_hint);
@@ -5365,6 +5374,9 @@ void c_step(Drive *env) {
         }
         compute_metrics(env, agent_idx, i);
         compute_rewards(env, i);
+        if (env->dynamics_model == DYNAMICS_MODEL_SPLINE_WERLING && lattice_is_policy_agent(&env->agents[agent_idx])) {
+            update_lattice_traffic_counters(env, i);
+        }
     }
 
     // Mark terminals for stopped or removed agents

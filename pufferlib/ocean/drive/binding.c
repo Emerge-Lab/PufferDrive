@@ -2036,6 +2036,14 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
             env->reward_wait_penalty_frac);
         return -1;
     }
+    env->reward_wait_full_speed_mps = (float) unpack(kwargs, "reward_wait_full_speed_mps");
+    if (!(env->reward_wait_full_speed_mps > 0.0f) || !isfinite(env->reward_wait_full_speed_mps)) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "reward_wait_full_speed_mps must be a positive finite speed. Got: %g",
+            env->reward_wait_full_speed_mps);
+        return -1;
+    }
     if (env->reward_route_progress > 0.0f && env->dynamics_model != DYNAMICS_MODEL_SPLINE_WERLING) {
         PyErr_Format(
             PyExc_ValueError,
@@ -2350,6 +2358,14 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         assign_to_dict(dict, "lattice/turn_starts", log->lattice_turn_starts);
         assign_to_dict(dict, "lattice/turn_completions", log->lattice_turn_completions);
         assign_to_dict(dict, "lattice/turn_aborts", log->lattice_turn_aborts);
+        assign_to_dict(dict, "lattice/oncoming_passes", log->lattice_oncoming_passes);
+        assign_to_dict(dict, "lattice/turn_legs", log->lattice_turn_legs);
+        assign_to_dict(dict, "lattice/queued_rate", log->lattice_queued_rate);
+        assign_to_dict(dict, "lattice/queued_frozen_rate", log->lattice_queued_frozen_rate);
+        assign_to_dict(dict, "lattice/slow_follow_rate", log->lattice_slow_follow_rate);
+        assign_to_dict(dict, "lattice/wait_exempt_rate", log->lattice_wait_exempt_rate);
+        assign_to_dict(dict, "lattice/oncoming_collisions", log->lattice_oncoming_collisions);
+        assign_to_dict(dict, "lattice/turn_route_gap", log->lattice_turn_route_gap);
     }
 
     if (env->compute_eval_metrics) {

@@ -334,6 +334,8 @@ class DriveEnvConfig:
     reward_trajectory_consistency: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_route_progress: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     reward_wait_penalty_frac: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    reward_wait_full_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    reward_wait_guard: bool = MISSING
     reward_oncoming_penalty_frac: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     lattice_lat_offsets_m: list[float] = MISSING
     lattice_lat_durations_s: list[float] = MISSING
@@ -652,8 +654,14 @@ def _validate_lattice_config(config, context):
     if env["lattice_exit_mode"] == "goal" and env["goal_source"] == "gt":
         _raise_config_error(context, "env.lattice_exit_mode", "'goal' needs goal lanes, which goal_source 'gt' lacks")
     gamma = config["train"]["gamma"]
-    wait_horizon_steps = (1.0 - gamma ** env["scenario_length"]) / (1.0 - gamma) if gamma < 1.0 else env["scenario_length"]
-    if env["reward_wait_penalty_frac"] * wait_horizon_steps >= 1.0:
+    if gamma >= 1.0:
+        wait_horizon_steps = env["scenario_length"]
+    elif config["train"]["use_value_bootstrapping"]:
+        # truncations bootstrap from the value, so a wait the episode end cuts off still counts in full
+        wait_horizon_steps = 1.0 / (1.0 - gamma)
+    else:
+        wait_horizon_steps = (1.0 - gamma ** env["scenario_length"]) / (1.0 - gamma)
+    if env["reward_wait_guard"] and env["reward_wait_penalty_frac"] * wait_horizon_steps >= 1.0:
         _raise_config_error(
             context,
             "env.reward_wait_penalty_frac",
@@ -665,7 +673,7 @@ def _validate_lattice_config(config, context):
     standstill_borrowing_cost = (
         env["reward_wait_penalty_frac"] + env["reward_oncoming_penalty_frac"]
     ) * wait_horizon_steps
-    if standstill_borrowing_cost >= 1.0:
+    if env["reward_wait_guard"] and standstill_borrowing_cost >= 1.0:
         _raise_config_error(
             context,
             "env.reward_oncoming_penalty_frac",

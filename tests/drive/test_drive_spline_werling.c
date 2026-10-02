@@ -797,6 +797,24 @@ static int test_wait_penalty(void) {
         printf("  wait penalty at %.1f m/s: %.6f\n", speeds[case_idx], env.logs[0].reward_wait - before);
         EXPECT_NEAR(env.logs[0].reward_wait - before, expected[case_idx], 2e-5f);
     }
+    // a 5 m/s full speed also charges slow driving: half at 2.5 m/s, nothing from 5 m/s on
+    env.reward_wait_full_speed_mps = 5.0f;
+    float slow_speeds[3] = {0.0f, 2.5f, 7.5f};
+    float slow_expected[3] = {-5e-4f, -2.5e-4f, 0.0f};
+    for (int case_idx = 0; case_idx < 3; case_idx++) {
+        place_lattice_agent(&env, 0, STRAIGHT_LANE_TOWN06, 40.0f, slow_speeds[case_idx]);
+        Agent *agent = slot0_agent(&env);
+        agent->reward_coefs[REWARD_COEF_COLLISION] = 1.5f;
+        agent->reward_coefs[REWARD_COEF_OFFROAD] = 1.5f;
+        agent->reward_coefs[REWARD_COEF_STOP_LINE] = 1.0f;
+        float before = env.logs[0].reward_wait;
+        step_keep(&env, 1);
+        printf(
+            "  wait penalty at %.1f m/s with full speed 5 m/s: %.6f\n",
+            slow_speeds[case_idx],
+            env.logs[0].reward_wait - before);
+        EXPECT_NEAR(env.logs[0].reward_wait - before, slow_expected[case_idx], 2e-5f);
+    }
     free_allocated(&env);
     Drive light_env = make_lattice_env(TOWN06, 1, 0.3f);
     light_env.reward_wait_penalty_frac = 5e-4f;
@@ -1000,7 +1018,119 @@ static int test_oncoming_overtake_stopped_car(void) {
     EXPECT_TRUE(min_borrow_velocity > 0.0f);
     EXPECT_TRUE(fabsf(end.d) < 0.1f);
     EXPECT_NEAR(lattice_agent->counters.oncoming_steps, (float) borrow_steps, 2.0f);
+    EXPECT_NEAR(lattice_agent->counters.oncoming_passes, 1.0f, 0.0f);
     free_allocated(&env);
+    // the same borrow turned back to the lane centre (6.0 s) one step in never reaches the stopped car: no pass
+    Drive early = make_overtake_env(TOWN01, 2);
+    place_lattice_agent(&early, 1, lane, 75.0f, 0.0f);
+    place_lattice_agent(&early, 0, lane, 10.0f, 6.0f);
+    struct LatticeAgent *early_agent = &early.lattice_agents[0];
+    step_with_action(&early, 1, choice_count + ONCOMING_CHOICE, 0, 0, 0);
+    step_with_action(&early, 1, 3 * choice_count + CENTRE_CHOICE, 0, 0, 0);
+    for (int step = 0; step < 20; step++) {
+        step_keep(&early, 1);
+    }
+    printf(
+        "  borrow turned back after one step: oncoming starts %.0f, borrowing steps %.0f, passes %.0f\n",
+        early_agent->counters.oncoming_starts,
+        early_agent->counters.oncoming_steps,
+        early_agent->counters.oncoming_passes);
+    EXPECT_NEAR(early_agent->counters.oncoming_starts, 1.0f, 0.0f);
+    EXPECT_NEAR(early_agent->counters.oncoming_steps, 0.0f, 0.0f);
+    EXPECT_NEAR(early_agent->counters.oncoming_passes, 0.0f, 0.0f);
+    free_allocated(&early);
+    // one borrow past two stopped cars in a row counts two passes
+    Drive platoon = make_overtake_env(TOWN01, 3);
+    place_lattice_agent(&platoon, 1, lane, 45.0f, 0.0f);
+    Agent *front = &platoon.agents[platoon.active_agent_indices[1]];
+    place_lattice_agent(&platoon, 2, lane, 45.0f + front->sim_length + 3.0f, 0.0f);
+    place_lattice_agent(&platoon, 0, lane, 10.0f, 6.0f);
+    Agent *platoon_ego = slot0_agent(&platoon);
+    Agent *last = &platoon.agents[platoon.active_agent_indices[2]];
+    struct LatticeAgent *platoon_agent = &platoon.lattice_agents[0];
+    step_with_action(&platoon, 1, choice_count + ONCOMING_CHOICE, 0, 0, 0);
+    int platoon_returned = 0;
+    for (int step = 0; step < 100 && !platoon_ego->stopped; step++) {
+        LatticeFrenet ego_frenet
+            = lattice_frenet_state(&platoon_agent->rail, platoon_ego, platoon_agent->projection_hint);
+        LatticeFrenet last_frenet = lattice_frenet_state(&platoon_agent->rail, last, -1);
+        if (!platoon_returned && ego_frenet.s > last_frenet.s + last->sim_length + 6.0f) {
+            step_with_action(&platoon, 1, choice_count + CENTRE_CHOICE, 0, 0, 0);
+            platoon_returned = 1;
+        } else {
+            step_keep(&platoon, 1);
+        }
+    }
+    printf(
+        "  borrow past two stopped cars: returned %d, collision %.0f, passes %.0f\n",
+        platoon_returned,
+        platoon_ego->metrics_array[COLLISION_IDX],
+        platoon_agent->counters.oncoming_passes);
+    EXPECT_TRUE(platoon_returned);
+    EXPECT_TRUE(!platoon_ego->stopped);
+    EXPECT_NEAR(platoon_agent->counters.oncoming_passes, 2.0f, 0.0f);
+    free_allocated(&platoon);
+    return 0;
+}
+
+// stacking diagnostics: queued behind a live and a frozen car, slow-following, a crash just after a borrow
+static int test_stacking_counters(void) {
+    Drive env = make_overtake_env(TOWN01, 2);
+    int lane = find_overtake_lane(&env);
+    struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+    place_lattice_agent(&env, 1, lane, 45.0f, 0.0f);
+    Agent *blocker = &env.agents[env.active_agent_indices[1]];
+    place_lattice_agent(&env, 0, lane, 45.0f - blocker->sim_length - 3.0f, 0.0f);
+    step_keep(&env, 5);
+    float live_queued = lattice_agent->counters.queued_steps, live_frozen = lattice_agent->counters.queued_frozen_steps;
+    blocker->stopped = 1;
+    step_keep(&env, 5);
+    float frozen_queued = lattice_agent->counters.queued_frozen_steps - live_frozen;
+    printf(
+        "  queued behind a live car %.0f of 5 steps (frozen %.0f), behind a frozen car %.0f of 5\n",
+        live_queued,
+        live_frozen,
+        frozen_queued);
+    EXPECT_NEAR(live_queued, 5.0f, 0.0f);
+    EXPECT_NEAR(live_frozen, 0.0f, 0.0f);
+    EXPECT_NEAR(frozen_queued, 5.0f, 0.0f);
+    free_allocated(&env);
+    Drive slow = make_overtake_env(TOWN01, 2);
+    struct LatticeAgent *slow_agent = &slow.lattice_agents[0];
+    place_lattice_agent(&slow, 1, lane, 60.0f, 0.0f);
+    place_lattice_agent(&slow, 0, lane, 40.0f, 2.5f);
+    int cell = 2 * slow.lattice.lon_speed_count + 2;
+    step_with_action(&slow, 0, 0, 1, cell, 0);
+    step_keep(&slow, 4);
+    printf(
+        "  slow-following at 2.5 m/s, car 20 m ahead: %.0f of 5 steps, queued %.0f\n",
+        slow_agent->counters.slow_follow_steps,
+        slow_agent->counters.queued_steps);
+    EXPECT_NEAR(slow_agent->counters.slow_follow_steps, 5.0f, 0.0f);
+    EXPECT_NEAR(slow_agent->counters.queued_steps, 0.0f, 0.0f);
+    free_allocated(&slow);
+    // a borrow turned back while still behind a stopped car, at constant speed, ends in that car: a borrow collision
+    Drive crash = make_overtake_env(TOWN01, 2);
+    struct LatticeAgent *crash_agent = &crash.lattice_agents[0];
+    int choice_count = lattice_lat_choice_count(&crash.lattice);
+    place_lattice_agent(&crash, 1, lane, 45.0f, 0.0f);
+    place_lattice_agent(&crash, 0, lane, 10.0f, 6.0f);
+    step_with_action(&crash, 1, choice_count + ONCOMING_CHOICE, 0, 0, 0);
+    for (int step = 1; step < 40 && slot0_agent(&crash)->metrics_array[COLLISION_IDX] == 0.0f; step++) {
+        if (step == 10) {
+            step_with_action(&crash, 1, choice_count + CENTRE_CHOICE, 0, 0, 0);
+        } else {
+            step_keep(&crash, 1);
+        }
+    }
+    printf(
+        "  borrow turned back behind a stopped car: borrowing steps %.0f, collision %.0f, borrow collisions %.0f\n",
+        crash_agent->counters.oncoming_steps,
+        slot0_agent(&crash)->metrics_array[COLLISION_IDX],
+        crash_agent->counters.oncoming_collisions);
+    EXPECT_TRUE(crash_agent->counters.oncoming_steps > 0.0f);
+    EXPECT_NEAR(crash_agent->counters.oncoming_collisions, 1.0f, 0.0f);
+    free_allocated(&crash);
     return 0;
 }
 
@@ -1214,6 +1344,7 @@ static int test_turn_planner_cases(void) {
 // other lane
 static int test_turn_execution_town01(void) {
     Drive env = make_turn_env(TOWN01, 1, 0);
+    env.reward_wait_penalty_frac = 5e-4f;
     int lane = find_overtake_lane(&env);
     EXPECT_TRUE(place_turn_car(&env, 0, lane, 40.0f, 4.5f, 1.8f));
     Agent *agent = slot0_agent(&env);
@@ -1226,6 +1357,7 @@ static int test_turn_execution_town01(void) {
     int turn_idx = EGO_FEATURES + LATTICE_PLAN_FEATURES;
     step_with_action(&env, 0, 0, 1, cfg->lon_turn_cell, 0);
     EXPECT_EQ_INT(lattice_agent->turn.active, 1);
+    EXPECT_NEAR(lattice_agent->counters.turn_legs, (float) lattice_agent->turn.plan.leg_count, 0.0f);
     int steps = 0, clear_steps = 0, mask_ok = 1, reward_ok = 1;
     float previous_remaining = 2.0f, remaining_rise = 0.0f;
     while (lattice_agent->turn.active && steps < 300) {
@@ -1245,7 +1377,7 @@ static int test_turn_execution_town01(void) {
         }
         reward_ok &= env.logs[0].reward_lane_align == before.reward_lane_align
             && env.logs[0].reward_lane_center == before.reward_lane_center
-            && env.logs[0].reward_reverse == before.reward_reverse;
+            && env.logs[0].reward_reverse == before.reward_reverse && env.logs[0].reward_wait == before.reward_wait;
         float remaining = env.observations[turn_idx + 1];
         EXPECT_NEAR(env.observations[turn_idx], 1.0f, 0.0f);
         EXPECT_NEAR(env.observations[turn_idx + 2], 0.0f, 0.0f);
@@ -1353,6 +1485,23 @@ static int test_turn_offer_rules(void) {
     reset_lattice_state(&env);
     compute_observations(&env);
     EXPECT_EQ_INT(env.lattice_agents[0].mask[turn_bit], 0);
+    // the plan stays cached at rest but traffic is checked every decision: a car pulling up withdraws the offer
+    slot0_agent(&env)->is_phantom_braker = 0;
+    EXPECT_TRUE(place_turn_car(&env, 0, lane, 40.0f, 2.0f, 1.5f));
+    Agent *other = &env.agents[env.active_agent_indices[1]];
+    float far_x = other->sim_x, far_y = other->sim_y, near_x, near_y, near_heading;
+    lattice_lane_point_at_arc(&env, lane, 47.0f, &near_x, &near_y, &near_heading);
+    float rest_x = slot0_agent(&env)->sim_x;
+    other->sim_x = near_x;
+    other->sim_y = near_y;
+    step_keep(&env, 1);
+    EXPECT_NEAR(slot0_agent(&env)->sim_x, rest_x, 0.0f);
+    EXPECT_EQ_INT(env.lattice_agents[0].turn.cache_valid, 1);
+    EXPECT_EQ_INT(env.lattice_agents[0].mask[turn_bit], 0);
+    other->sim_x = far_x;
+    other->sim_y = far_y;
+    step_keep(&env, 1);
+    EXPECT_EQ_INT(env.lattice_agents[0].mask[turn_bit], 1);
     free_allocated(&env);
     Drive lights = make_turn_env(TOWN06, 1, 0);
     int near = 0;
@@ -1464,6 +1613,7 @@ int main(void) {
     RUN_TEST(test_oncoming_menu_layout);
     RUN_TEST(test_oncoming_profiles);
     RUN_TEST(test_oncoming_overtake_stopped_car);
+    RUN_TEST(test_stacking_counters);
     RUN_TEST(test_oncoming_forced_return_before_junction);
     RUN_TEST(test_oncoming_random_rollouts);
     RUN_TEST(test_turn_menu_layout);

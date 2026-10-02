@@ -36,6 +36,8 @@ class Drive(pufferlib.PufferEnv):
         reward_trajectory_consistency=0.0,
         reward_route_progress=0.0,
         reward_wait_penalty_frac=0.0,
+        reward_wait_full_speed_mps=1.0,
+        reward_wait_guard=True,
         reward_oncoming_penalty_frac=0.0,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
@@ -171,6 +173,9 @@ class Drive(pufferlib.PufferEnv):
         self.reward_trajectory_consistency = reward_trajectory_consistency
         self.reward_route_progress = reward_route_progress
         self.reward_wait_penalty_frac = reward_wait_penalty_frac
+        self.reward_wait_full_speed_mps = reward_wait_full_speed_mps
+        # validated by the config schema only (the whole-episode waiting budget); the sim never reads it
+        self.reward_wait_guard = bool(reward_wait_guard)
         self.reward_oncoming_penalty_frac = reward_oncoming_penalty_frac
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
@@ -535,6 +540,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_trajectory_consistency": self.reward_trajectory_consistency,
             "reward_route_progress": self.reward_route_progress,
             "reward_wait_penalty_frac": self.reward_wait_penalty_frac,
+            "reward_wait_full_speed_mps": self.reward_wait_full_speed_mps,
             "reward_oncoming_penalty_frac": self.reward_oncoming_penalty_frac,
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,

@@ -94,6 +94,38 @@ def test_turnaround_config():
     assert normalized["env"]["lattice_turnaround"] is True
 
 
+def test_wait_speed_and_guard_config():
+    args = _lattice_args()
+    assert args["env"]["reward_wait_full_speed_mps"] == 1.0
+    assert args["env"]["reward_wait_guard"] is True
+    args["env"].update({"reward_wait_full_speed_mps": 5.0, "reward_wait_penalty_frac": 9.5e-4})
+    assert _validate(args)["env"]["reward_wait_full_speed_mps"] == 5.0
+    over = _lattice_args()
+    over["env"]["reward_wait_penalty_frac"] = 1e-2
+    with pytest.raises(pufferlib.APIUsageError):
+        _validate(over)
+    over["env"]["reward_wait_guard"] = False
+    assert _validate(over)["env"]["reward_wait_penalty_frac"] == 1e-2
+
+
+def test_wait_guard_uses_bootstrapped_horizon():
+    args = _lattice_args()
+    assert args["train"]["use_value_bootstrapping"] is True
+    args["env"]["reward_wait_penalty_frac"] = 1.05e-3
+    with pytest.raises(pufferlib.APIUsageError):
+        _validate(args)
+    args["train"]["use_value_bootstrapping"] = False
+    assert _validate(args)["env"]["reward_wait_penalty_frac"] == 1.05e-3
+
+
+@pytest.mark.parametrize("speed", [0.0, -1.0])
+def test_wait_full_speed_must_be_positive(speed):
+    args = _lattice_args()
+    args["env"]["reward_wait_full_speed_mps"] = speed
+    with pytest.raises(pufferlib.APIUsageError):
+        _validate(args)
+
+
 @pytest.mark.parametrize(
     "overrides",
     [

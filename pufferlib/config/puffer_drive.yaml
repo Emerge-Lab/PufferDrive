@@ -186,9 +186,15 @@ env:
   reward_trajectory_consistency: 0.0
   # Lattice only: reward per meter of lane-route distance gained toward the current goal (0 = off)
   reward_route_progress: 0.0
-  # Lattice only: per-step share of the car's cheapest infraction penalty charged at standstill, fading to 0 at 1 m/s
-  # (not while a red/yellow light is reported ahead); must keep a whole episode of it below one infraction
+  # Lattice only: per-step share of the car's cheapest infraction penalty charged at standstill, fading to 0 at
+  # reward_wait_full_speed_mps (not while a red/yellow light is reported ahead); must keep a whole episode of it below one
+  # infraction
   reward_wait_penalty_frac: 0.0
+  # Speed at which the waiting penalty reaches 0: 1 m/s charges only (near) standstill, higher also charges slow driving
+  reward_wait_full_speed_mps: 1.0
+  # Reject wait + oncoming fractions whose discounted stuck cost (1 / (1 - gamma) steps with value bootstrapping) reaches
+  # one infraction (false only for experiments that probe that regime: a stuck car may then learn that crashing out pays)
+  reward_wait_guard: true
   # Lattice only: per-step share of the cheapest infraction penalty charged while in a borrowed oncoming lane; the car
   # is scored against its own lane's direction there; wait + oncoming fractions must keep a whole episode below one
   reward_oncoming_penalty_frac: 0.0

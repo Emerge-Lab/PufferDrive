@@ -394,6 +394,14 @@ struct LatticeCounters {
     float turn_completions;
     float turn_aborts;
     float turn_steps;
+    float oncoming_passes;
+    float turn_legs;
+    float queued_steps;
+    float queued_frozen_steps;
+    float slow_follow_steps;
+    float wait_exempt_steps;
+    float oncoming_collisions;
+    float turn_route_gap;
 };
 
 // route-progress reward memory: the current goal it was measured against and last step's route distance
@@ -455,6 +463,9 @@ struct LatticeAgent {
     float plan_change_rms_m;
     struct LatticeRouteProgress route_progress;
     struct LatticeTurnState turn;
+    int pass_target; // agent index of the car a borrow is passing, -1 when none
+    int was_borrowing;
+    int steps_since_borrow;
     unsigned char mask[LATTICE_MAX_MASK_FEATURES];
     struct LatticeCounters counters;
 };

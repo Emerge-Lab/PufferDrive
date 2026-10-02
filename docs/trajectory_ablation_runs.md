@@ -64,6 +64,8 @@ first `trajE_overtake_wait_pen` submission (18976365 / 366). Also cancelled 2026
 `spline_werling_vel10x` (18867871 after 34 h 17 m, continuation 18867872). Cancelled 2026-10-02 to free GPUs:
 `spline_baseline` (18811661 after 23 h 08 m) and `spline_werling_vel5x` (continuation 18867868 after 6 h 46 m).
 Also cancelled 2026-10-02 at the user's request: `spline_werling_halfpen` (18878816); the `halfpen_goal` run (18881663) kept.
+`trajE_overtake_wait_pen_consist50x` (19026638 after 3 h 28 m, continuation 19026639 unstarted) was cancelled
+2026-10-02 at 11:47 EDT from outside this session (sacct: CANCELLED, not a failure).
 
 Compare A with `spline_werling_goal` (same exit mode, old code). With map goals the progress potential is flat beyond
 1000 m of route and pays nothing toward an unreachable goal, so in C_map / D_map it acts on 60 % of first goals. B-D change the goal task, so compare them with each other
@@ -208,3 +210,103 @@ same budget and settings (30B steps, 24 CPUs, 40 h + continuation). Code commit 
 19032829 / continuation 19032830 (torch_pr_355_tandon_priority). Compare with trajE: goals per episode
 and DNF first, then `lattice/turn_starts` (should rise above the random-policy level), `turn_aborts` (should stay near
 0), collisions and offroad (should not climb), time to first motion and moving fraction.
+
+## 9. Tuning the waiting, borrowing and slow-driving penalties (2026-10-02)
+
+Seen in the trajE / trajF renders: cars queue behind slow or stopped cars instead of overtaking or turning around.
+
+### Measured first (consist10x settings: wait 5e-4, oncoming 5e-4, waiting penalty fades out by 1 m/s)
+
+- Masks are not the cause. Behind a stopped car the oncoming choice is offered from every gap and speed, and a borrow can
+  be turned back at any step with the 4.8 / 6.0 s lane-centre cells. A borrow turned back before the car is half way into
+  the oncoming lane never reads as borrowing, so it pays no oncoming penalty (C test: 1 start, 0 borrowing steps).
+- The policies start 8-14 borrows per agent-episode on W&B but almost never complete one.
+- Reward over a 24 s window, mean per-agent coefficients (cheapest infraction m = 0.398, `costs2.c` with Log deltas from
+  `c_step`; lane-centre bias 0, the best case):
+
+  | Choice behind the blocker | old (control) | tuned (base) |
+  |---|---|---|
+  | overtake the stopped car | +0.0316 | +0.0342 |
+  | wait behind it | -0.0075 | -0.0139 |
+  | follow at 2.5 m/s | **+0.0176** (free) | +0.0064 |
+  | overtake minus follow | 0.0140 | 0.0278 |
+  | overtake minus wait | 0.0391 | 0.0481 |
+
+  With the old settings, following at 2.5 m/s paid nothing (the velocity reward is binary above 2.5 m/s and the waiting
+  penalty ended at 1 m/s). The turn-around legs are capped at 2 m/s, so before the exemption below a U-turn paid about
+  what standing still pays.
+
+### Code changes (this commit)
+
+- `env.reward_wait_full_speed_mps` (default 1.0 = the old behaviour): the waiting penalty fades out linearly up to this
+  speed, so slow following is charged too.
+- No waiting penalty while turning around (it charged the manoeuvre that ends the wait).
+- Guard horizon: with `train.use_value_bootstrapping` truncations bootstrap from the value, so the schema now uses
+  1 / (1 - gamma) = 1000 steps instead of the 2560-step discounted sum (922.8). The old trajE values sit exactly at 1.0.
+- `env.reward_wait_guard` (default true): false skips that guard, only for the two x10 probes below. It is a `Drive`
+  kwarg so evaluation of those checkpoints passes the same check.
+- Turn-offer fix: the offer was cached by bit-exact pose, including the traffic check. A car at rest kept the offer while
+  a car closed in (43.9 m away at 8 m/s, reproduced), and never got it back after a parked car left. Now the plan is
+  cached by pose, and the rail state, stop lines and traffic are re-checked at every decision.
+- New W&B keys (per agent-episode, like the other `lattice/` keys):
+  - `lattice/oncoming_passes`: cars passed while borrowing (the car's rear ahead of the other car's front, which is still
+    in the own lane); each car of a platoon counts.
+  - `lattice/oncoming_collisions`: collisions while borrowing or within 10 steps after a borrow.
+  - `lattice/turn_legs`: planned legs of each turn-around; legs / `turn_starts` = 1 for a U-turn, 3+ for a K-turn.
+  - `lattice/turn_route_gap`: the route-gap feature at each turn start, summed; / `turn_starts` < 0 means turning
+    shortened the route to the goal, 1 means no route.
+  - `lattice/queued_rate`: share of steps below 1 m/s with a car ahead within 15 m (half a lane sideways, not facing
+    the car), not at a reported red / yellow; `queued_frozen_rate` the part where that car is frozen after an infraction.
+  - `lattice/slow_follow_rate`: share of steps at 1-5 m/s with a car ahead within 30 m.
+  - `lattice/wait_exempt_rate`: share of steps that would pay the waiting penalty but a red / yellow is reported ahead.
+  - Already there: `oncoming_starts`, `oncoming_rate`, `turn_starts`, `turn_completions`, `turn_aborts`, `turn_rate`.
+- Cost: `c_step` takes 2.6-6.6 % longer per agent-step than at `52bdd8af` (25th percentile of 10 runs, 64 agents, random
+  valid actions, Town01 / 03 / 10HD; 3.5-6.0 % with full speed 50 m/s, where every car below 50 m/s runs the counters).
+
+### Runs (prefix `s30btune`, nice 1000-4000 so they never outrank the pending trajF or any continuation)
+
+All: `puffer train puffer_drive_spline_werling env.lattice_exit_mode=goal env.lattice_light_in_view=false
+env.lattice_oncoming_overtake=true env.reward_trajectory_consistency=2e-3 env.lattice_turnaround=true` (consist10x plus
+the turn-around), from scratch. The turn-around changes the observation and action spaces, and fine-tuning would also
+drop the flag (`KEYS_OF_INTEREST`). Each sweep run changes one knob of the base by x0.1 or x10.
+
+| Run | wait | oncoming | full speed (m/s) | guard x 1000 steps | nice |
+|---|---|---|---|---|---|
+| `spline_werling_tune_base` | 7e-4 | 2.5e-4 | 5 | 0.95 | 1000 |
+| `spline_werling_tune_control` | 5e-4 | 5e-4 | 1 | 1.00 | 1000 |
+| `spline_werling_tune_wait7e-5` | 7e-5 | 2.5e-4 | 5 | 0.32 | 2000 |
+| `spline_werling_tune_wait7e-3` | 7e-3 | 2.5e-4 | 5 | 7.25 (guard off) | 2000 |
+| `spline_werling_tune_onc2.5e-5` | 7e-4 | 2.5e-5 | 5 | 0.73 | 3000 |
+| `spline_werling_tune_onc2.5e-3` | 7e-4 | 2.5e-3 | 5 | 3.20 (guard off) | 3000 |
+| `spline_werling_tune_vfull0.5` | 7e-4 | 2.5e-4 | 0.5 | 0.95 | 4000 |
+| `spline_werling_tune_vfull50` | 7e-4 | 2.5e-4 | 50 | 0.95 | 4000 |
+
+Why the base:
+- wait 7e-4 + oncoming 2.5e-4 keeps a whole stuck episode in the oncoming lane at 0.95 of one infraction.
+- Oncoming 5e-5 was rejected: that makes cruising in the oncoming lane nearly free, and no traffic mask forces a return.
+- Full speed 5 m/s charges slow following without charging free driving.
+
+Predictions, recorded before any result:
+- **base vs control**: lower `queued_rate` and `slow_follow_rate`, higher `oncoming_passes` per `oncoming_starts`,
+  earlier first motion and more goals. Risk: more `oncoming_collisions`.
+- **wait7e-5**: the most queuing of the guarded runs (waiting is almost free again).
+- **wait7e-3**: fastest to move, but for small-m agents crashing out pays after ~140 stuck steps, so collisions,
+  offroad and red-light running should rise.
+- **onc2.5e-5**: the highest `oncoming_rate`, with long stays in the oncoming lane and more `oncoming_collisions`.
+- **onc2.5e-3**: for m = 1, overtaking (-0.031 per 24 s) loses to following at 2.5 m/s (-0.010) but still beats waiting
+  (-0.048). So fewer passes, slow following kept, and turn-arounds relatively more attractive.
+- **vfull0.5**: like the control for slow following (free from 0.5 m/s), so the highest `slow_follow_rate`.
+- **vfull50**: the waiting penalty turns into a time penalty (free driving pays 0.020 per 24 s at m = 0.398). Expect
+  higher speeds, possibly more collisions and overspeed.
+
+Limits that tuning cannot change:
+- A turn-around is never offered with another car within about 19 m (a 2.7 m-wheelbase car's turn reach of 16.4 m,
+  about three turning radii, plus 2.4 m for the other car), and a back-up moves at most 13.4 m. So a car stacked right behind a stopped car can only get out by borrowing or
+  changing lanes.
+- With `light_in_view=false` a red light reported anywhere ahead on the chain exempts the wait; `wait_exempt_rate`
+  shows how often.
+- The lane-centre term is a penalty for about 85 % of agents (random centre bias). It is not scaled by m, so the guard
+  does not cover it.
+- Passes are judged in the move stage: lower-indexed cars have already moved that step (no effect for stopped cars).
+  A pass on the episode's last step is not counted. `turn_legs` counts planned legs, and re-plans at cusps can change
+  that count.

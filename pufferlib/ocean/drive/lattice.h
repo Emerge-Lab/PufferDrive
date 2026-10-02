@@ -2659,6 +2659,9 @@ static void reset_lattice_slot(Drive *env, int active_idx) {
     lattice_agent->route_progress.previous_distance_m = INFINITY;
     memset(&lattice_agent->turn, 0, sizeof(lattice_agent->turn));
     lattice_agent->turn.goal_idx = -1;
+    lattice_agent->pass_target = -1;
+    lattice_agent->was_borrowing = 0;
+    lattice_agent->steps_since_borrow = LATTICE_ONCOMING_COLLISION_STEPS + 1;
     lattice_agent->counters.first_motion_step = -1.0f;
     lattice_agent->sigma_m = 0.0;
     lattice_agent->lane_change_active = 0;
@@ -3482,6 +3485,7 @@ static void start_lattice_turn(Drive *env, struct LatticeAgent *lattice_agent, c
     turn->radius_count = turn->cache_plan.radius_idx + 1;
     turn->cache_valid = 0;
     lattice_agent->counters.turn_starts += 1.0f;
+    lattice_agent->counters.turn_legs += (float) turn->plan.leg_count;
     start_lattice_turn_leg(env, lattice_agent, agent, now_step);
 }
 
@@ -3557,21 +3561,55 @@ static int lattice_turn_partners_clear(const Drive *env, const Agent *agent, flo
     return 1;
 }
 
-// no stop line or light the turn could cross or land on, and no vehicle inside reach_m or closing in on it in time
-static int lattice_turn_clear_within(
+// no stop line or light the turn could cross or land on within reach_m
+static int lattice_turn_controls_clear(
     const Drive *env,
     const struct LatticeAgent *lattice_agent,
     const Agent *agent,
     const LatticeFrenet *frenet,
-    float reach_m,
-    float duration_s) {
+    float reach_m) {
     LatticeStopLine stop_line = lattice_next_stop_line(env, lattice_agent, agent, frenet->s);
-    if ((stop_line.traffic_idx >= 0 && stop_line.distance_m < reach_m)
-        || lattice_light_lane_behind(env, lattice_agent, frenet->s, reach_m)
-        || lattice_stop_line_within(env, agent, reach_m)) {
+    return !(stop_line.traffic_idx >= 0 && stop_line.distance_m < reach_m)
+        && !lattice_light_lane_behind(env, lattice_agent, frenet->s, reach_m)
+        && !lattice_stop_line_within(env, agent, reach_m);
+}
+
+// the car's own state that rules a turn out; it can change while the car stands still
+static int lattice_turn_state_allows(
+    const Drive *env,
+    const struct LatticeAgent *lattice_agent,
+    const Agent *agent,
+    const LatticeFrenet *frenet) {
+    return lattice_agent->has_reference && !lattice_agent->rail.is_straight_fallback && !agent->is_phantom_braker
+        && !lattice_car_on_connector(env, lattice_agent) && !lattice_plan_in_oncoming(env, lattice_agent, frenet)
+        && !lattice_is_borrowing(env, lattice_agent, frenet);
+}
+
+// the plan from the car's pose, clear of stop lines and lights within its reach; depends only on the pose and the rail
+static int plan_lattice_turn_here(
+    Drive *env,
+    struct LatticeAgent *lattice_agent,
+    const Agent *agent,
+    const LatticeFrenet *frenet) {
+    struct LatticeTurnState *turn = &lattice_agent->turn;
+    const struct LatticeRail *rail = &lattice_agent->rail;
+    turn->start_lane = rail->lanes[rail->chain_slot[lattice_agent->projection_hint]];
+    turn->target_heading = lattice_wrap_angle(lattice_rail_at(rail, frenet->s).heading + (float) M_PI);
+    float tight_reach_m = lattice_turn_reach_m(agent, lattice_turn_curvature(env, agent));
+    const struct LatticeTurnSearch search
+        = {0, LATTICE_TURN_RADIUS_COUNT, LATTICE_TURN_MARGIN_M, LATTICE_TURN_START_MARGIN_M, 0};
+    if (!lattice_turn_controls_clear(env, lattice_agent, agent, frenet, tight_reach_m)
+        || !plan_lattice_turnaround(env, agent, turn->start_lane, turn->target_heading, &search, &turn->cache_plan)) {
         return 0;
     }
-    return lattice_turn_partners_clear(env, agent, reach_m, duration_s);
+    float reach_m = lattice_turn_reach_m(agent, fabsf(turn->cache_plan.legs[0].curvature));
+    return lattice_turn_controls_clear(env, lattice_agent, agent, frenet, reach_m);
+}
+
+// no other vehicle inside the plan's reach now, nor closing in on it before the turn ends
+static int lattice_turn_traffic_clear(const Drive *env, const Agent *agent, const struct LatticeTurnPlan *plan) {
+    float reach_m = lattice_turn_reach_m(agent, fabsf(plan->legs[0].curvature));
+    return lattice_turn_partners_clear(env, agent, reach_m, lattice_turn_duration_s(env, agent, plan));
 }
 
 // all rules for turning around from the car's pose (rest not required) and the plan; 0 when not possible here now
@@ -3580,33 +3618,14 @@ static int lattice_turnaround_possible(
     struct LatticeAgent *lattice_agent,
     const Agent *agent,
     const LatticeFrenet *frenet) {
-    struct LatticeTurnState *turn = &lattice_agent->turn;
-    if (!lattice_agent->has_reference || lattice_agent->rail.is_straight_fallback || agent->is_phantom_braker
-        || lattice_car_on_connector(env, lattice_agent) || lattice_plan_in_oncoming(env, lattice_agent, frenet)
-        || lattice_is_borrowing(env, lattice_agent, frenet)) {
-        return 0;
-    }
-    const struct LatticeRail *rail = &lattice_agent->rail;
-    turn->start_lane = rail->lanes[rail->chain_slot[lattice_agent->projection_hint]];
-    turn->target_heading = lattice_wrap_angle(lattice_rail_at(rail, frenet->s).heading + (float) M_PI);
     float tight_reach_m = lattice_turn_reach_m(agent, lattice_turn_curvature(env, agent));
-    const struct LatticeTurnSearch search
-        = {0, LATTICE_TURN_RADIUS_COUNT, LATTICE_TURN_MARGIN_M, LATTICE_TURN_START_MARGIN_M, 0};
-    if (!lattice_turn_clear_within(env, lattice_agent, agent, frenet, tight_reach_m, 0.0f)
-        || !plan_lattice_turnaround(env, agent, turn->start_lane, turn->target_heading, &search, &turn->cache_plan)) {
-        return 0;
-    }
-    float reach_m = lattice_turn_reach_m(agent, fabsf(turn->cache_plan.legs[0].curvature));
-    return lattice_turn_clear_within(
-        env,
-        lattice_agent,
-        agent,
-        frenet,
-        reach_m,
-        lattice_turn_duration_s(env, agent, &turn->cache_plan));
+    return lattice_turn_state_allows(env, lattice_agent, agent, frenet)
+        && lattice_turn_partners_clear(env, agent, tight_reach_m, 0.0f)
+        && plan_lattice_turn_here(env, lattice_agent, agent, frenet)
+        && lattice_turn_traffic_clear(env, agent, &lattice_agent->turn.cache_plan);
 }
 
-// offered from rest when possible; cached while the car does not move
+// offered from rest when possible: the plan is cached while the car does not move, its state and traffic are not
 static int lattice_turnaround_offered(
     Drive *env,
     struct LatticeAgent *lattice_agent,
@@ -3617,17 +3636,23 @@ static int lattice_turnaround_offered(
         turn->cache_valid = 0;
         return 0;
     }
+    turn->probe_step = ctx->now_step;
+    if (!lattice_agent->has_reference || lattice_agent->rail.is_straight_fallback) {
+        turn->cache_valid = 0;
+        turn->feasible = 0;
+        return 0;
+    }
     if (!(turn->cache_valid && turn->cache_x == agent->sim_x && turn->cache_y == agent->sim_y
           && turn->cache_heading == agent->sim_heading)) {
         turn->cache_valid = 1;
         turn->cache_x = agent->sim_x;
         turn->cache_y = agent->sim_y;
         turn->cache_heading = agent->sim_heading;
-        turn->cache_ok = lattice_turnaround_possible(env, lattice_agent, agent, &ctx->frenet);
+        turn->cache_ok = plan_lattice_turn_here(env, lattice_agent, agent, &ctx->frenet);
     }
-    turn->feasible = turn->cache_ok;
-    turn->probe_step = ctx->now_step;
-    return turn->cache_ok;
+    turn->feasible = turn->cache_ok && lattice_turn_state_allows(env, lattice_agent, agent, &ctx->frenet)
+        && lattice_turn_traffic_clear(env, agent, &turn->cache_plan);
+    return turn->feasible;
 }
 
 // driving distance from lane_idx at arc_m to goal_arc_m on goal_lane along lane links; INFINITY if unreachable
@@ -4005,6 +4030,7 @@ static void apply_lattice_action(Drive *env, int active_idx, Agent *agent, int n
     LatticeContext ctx = lattice_make_context(env, lattice_agent, agent, now_step);
     const struct LatticeLonPlan *new_lon = NULL;
     if (lon_gate == LATTICE_GATE_NEW && lon_cell == cfg->lon_turn_cell) {
+        lattice_agent->counters.turn_route_gap += lattice_turn_route_gap(env, lattice_agent, agent, &ctx.frenet);
         start_lattice_turn(env, lattice_agent, agent, now_step);
         return;
     }
@@ -4099,6 +4125,60 @@ static float lattice_plan_change_rms_m(Drive *env, const struct LatticeAgent *la
     return sqrtf(sum_m2 / LATTICE_CONSISTENCY_SAMPLES);
 }
 
+// the nearest car ahead in the car's own lane within LATTICE_PASS_LOOKAHEAD_M, as an agent index; -1 when none
+static int lattice_car_ahead_in_lane(
+    const Drive *env,
+    const struct LatticeAgent *lattice_agent,
+    const Agent *agent,
+    const LatticeFrenet *frenet) {
+    int best_idx = -1;
+    float best_gap_m = LATTICE_PASS_LOOKAHEAD_M;
+    for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
+        const Agent *other = &env->agents[agent_idx];
+        if (other == agent || other->removed || other->sim_x == INVALID_POSITION
+            || fabsf(other->sim_z - agent->sim_z) > Z_BUFFER) {
+            continue;
+        }
+        LatticeFrenet on_rail = lattice_frenet_state(&lattice_agent->rail, other, -1);
+        float gap_m = on_rail.s - frenet->s;
+        if (gap_m > 0.0f && gap_m < best_gap_m && fabsf(on_rail.d) < 0.5f * LANE_WIDTH) {
+            best_gap_m = gap_m;
+            best_idx = agent_idx;
+        }
+    }
+    return best_idx;
+}
+
+// a borrow passes each car ahead in its own lane that falls behind it, then tracks the next car ahead
+static void update_lattice_pass(
+    Drive *env,
+    struct LatticeAgent *lattice_agent,
+    const Agent *agent,
+    const LatticeFrenet *frenet,
+    int borrowing) {
+    if (borrowing && !lattice_agent->was_borrowing) {
+        lattice_agent->pass_target = lattice_car_ahead_in_lane(env, lattice_agent, agent, frenet);
+    }
+    lattice_agent->was_borrowing = borrowing;
+    int since_borrow = lattice_agent->steps_since_borrow + 1;
+    lattice_agent->steps_since_borrow = borrowing
+        ? 0
+        : (since_borrow > LATTICE_ONCOMING_COLLISION_STEPS ? LATTICE_ONCOMING_COLLISION_STEPS + 1 : since_borrow);
+    if (lattice_agent->pass_target < 0) {
+        return;
+    }
+    const Agent *target = &env->agents[lattice_agent->pass_target];
+    LatticeFrenet on_rail = lattice_frenet_state(&lattice_agent->rail, target, -1);
+    int passed = on_rail.s + 0.5f * target->sim_length < frenet->s - 0.5f * agent->sim_length;
+    int still_there = !target->removed && fabsf(on_rail.d) < LANE_WIDTH;
+    lattice_agent->counters.oncoming_passes += (float) (passed && still_there);
+    if (!borrowing) {
+        lattice_agent->pass_target = -1;
+    } else if (passed || !still_there) {
+        lattice_agent->pass_target = lattice_car_ahead_in_lane(env, lattice_agent, agent, frenet);
+    }
+}
+
 // move stage: decode on decision steps, automatic plan updates, then the tracking command
 static LatticeCommand move_lattice_agent(Drive *env, int active_idx, Agent *agent) {
     struct LatticeAgent *lattice_agent = &env->lattice_agents[active_idx];
@@ -4131,7 +4211,9 @@ static LatticeCommand move_lattice_agent(Drive *env, int active_idx, Agent *agen
     counters->no_reference_steps += !lattice_agent->has_reference && !lattice_agent->turn.active;
     counters->turn_steps += lattice_agent->turn.active;
     counters->dist_mode_steps += lattice_agent->lat.mode == LATTICE_LAT_MODE_DIST;
-    counters->oncoming_steps += lattice_is_borrowing(env, lattice_agent, &frenet);
+    int borrowing = lattice_is_borrowing(env, lattice_agent, &frenet);
+    counters->oncoming_steps += borrowing;
+    update_lattice_pass(env, lattice_agent, agent, &frenet, borrowing);
     counters->emergency_steps += lattice_agent->lon.kind == LATTICE_LON_KIND_EMERGENCY;
     counters->unfollowable_steps += fabsf(frenet.curvature) > lattice_curvature_limit(agent);
     counters->jerk_clip_long += command.jerk_long < JERK_LONG[0] || command.jerk_long > JERK_LONG[3];
@@ -4418,6 +4500,59 @@ static void lattice_landing_lane(
     *lane_heading = lattice_wrap_angle(agent->sim_heading - frenet.heading_error);
 }
 
+// gap to the nearest car ahead in the car's own frame, within half a lane sideways and not facing it; INFINITY if none
+static float lattice_leader_gap_m(const Drive *env, const Agent *agent, int *leader_idx) {
+    float best_gap_m = INFINITY;
+    float cos_h = cosf(agent->sim_heading);
+    float sin_h = sinf(agent->sim_heading);
+    *leader_idx = -1;
+    for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
+        const Agent *other = &env->agents[agent_idx];
+        if (other == agent || other->removed || other->sim_x == INVALID_POSITION
+            || fabsf(other->sim_z - agent->sim_z) > Z_BUFFER) {
+            continue;
+        }
+        float rel_x = other->sim_x - agent->sim_x;
+        float rel_y = other->sim_y - agent->sim_y;
+        float ahead_m = rel_x * cos_h + rel_y * sin_h;
+        float side_m = -rel_x * sin_h + rel_y * cos_h;
+        float gap_m = ahead_m - 0.5f * (agent->sim_length + other->sim_length);
+        if (ahead_m <= 0.0f || fabsf(side_m) >= 0.5f * LANE_WIDTH
+            || cosf(other->sim_heading - agent->sim_heading) < LATTICE_LEADER_MIN_COS || gap_m >= best_gap_m) {
+            continue;
+        }
+        best_gap_m = gap_m;
+        *leader_idx = agent_idx;
+    }
+    return best_gap_m;
+}
+
+// log only, after the step's rewards: queued or slow behind a car ahead (no red/yellow reported), borrow collisions
+static void update_lattice_traffic_counters(Drive *env, int active_idx) {
+    struct LatticeAgent *lattice_agent = &env->lattice_agents[active_idx];
+    const Agent *agent = &env->agents[env->active_agent_indices[active_idx]];
+    struct LatticeCounters *counters = &lattice_agent->counters;
+    counters->oncoming_collisions += agent->metrics_array[COLLISION_IDX] > 0.0f
+        && lattice_agent->steps_since_borrow <= LATTICE_ONCOMING_COLLISION_STEPS;
+    if (agent->sim_speed >= fmaxf(LATTICE_SLOW_FOLLOW_SPEED_MPS, env->reward_wait_full_speed_mps)
+        || lattice_agent->rail.sample_count < 2) {
+        return;
+    }
+    LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, agent, lattice_agent->projection_hint);
+    int light_state = lattice_reported_light(env, lattice_agent, agent, frenet.s).light_state;
+    if (light_state == TRAFFIC_CONTROL_STATE_RED || light_state == TRAFFIC_CONTROL_STATE_YELLOW) {
+        counters->wait_exempt_steps += agent->sim_speed < env->reward_wait_full_speed_mps;
+        return;
+    }
+    int leader_idx;
+    float gap_m = lattice_leader_gap_m(env, agent, &leader_idx);
+    int queued = agent->sim_speed < LATTICE_QUEUE_SPEED_MPS && gap_m < LATTICE_QUEUE_GAP_M;
+    counters->queued_steps += queued;
+    counters->queued_frozen_steps += queued && env->agents[leader_idx].stopped;
+    counters->slow_follow_steps += !queued && agent->sim_speed >= LATTICE_QUEUE_SPEED_MPS
+        && agent->sim_speed < LATTICE_SLOW_FOLLOW_SPEED_MPS && gap_m < LATTICE_SLOW_FOLLOW_GAP_M;
+}
+
 static void add_lattice_log(Drive *env, int active_idx, Log *episode_log) {
     const struct LatticeCounters *counters = &env->lattice_agents[active_idx].counters;
     float decisions = fmaxf(counters->decisions, 1.0f);
@@ -4455,6 +4590,14 @@ static void add_lattice_log(Drive *env, int active_idx, Log *episode_log) {
     episode_log->lattice_turn_starts += counters->turn_starts;
     episode_log->lattice_turn_completions += counters->turn_completions;
     episode_log->lattice_turn_aborts += counters->turn_aborts;
+    episode_log->lattice_oncoming_passes += counters->oncoming_passes;
+    episode_log->lattice_turn_legs += counters->turn_legs;
+    episode_log->lattice_queued_rate += counters->queued_steps / steps;
+    episode_log->lattice_queued_frozen_rate += counters->queued_frozen_steps / steps;
+    episode_log->lattice_slow_follow_rate += counters->slow_follow_steps / steps;
+    episode_log->lattice_wait_exempt_rate += counters->wait_exempt_steps / steps;
+    episode_log->lattice_oncoming_collisions += counters->oncoming_collisions;
+    episode_log->lattice_turn_route_gap += counters->turn_route_gap;
 }
 
 // all active slots: follow the rails every step, recompute context and masks on context steps

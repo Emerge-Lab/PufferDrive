@@ -445,7 +445,7 @@ static const int ROAD_OFFSETS[25][2]
 #define LATTICE_OBS_ROUTE_LOG_MAX_M 5000.0f
 #define LATTICE_CONSISTENCY_SAMPLES 5 // first render-path samples compared after a plan change (0.6 s apart at dt 0.3)
 #define LATTICE_ROUTE_PROGRESS_CAP_M 1000.0f // route distance beyond this is flat in the progress potential
-#define LATTICE_WAIT_FULL_SPEED_MPS 1.0f     // the waiting penalty fades out linearly up to this speed
+#define LATTICE_WAIT_FULL_SPEED_MPS 1.0f     // default speed up to which the waiting penalty fades out
 
 // -- Rail (per agent): samples at LATTICE_RAIL_SPACING_M, heading box filter over +-half window
 #define LATTICE_RAIL_SAMPLES 512
@@ -491,6 +491,15 @@ static const int ROAD_OFFSETS[25][2]
 #define LATTICE_ONCOMING_START_S 6.0f
 #define LATTICE_ONCOMING_KEEP_MIN_M 20.0f
 #define LATTICE_ONCOMING_KEEP_S 4.0f
+#define LATTICE_PASS_LOOKAHEAD_M 60.0f      // a borrow passes the nearest car ahead in the own lane within this
+#define LATTICE_ONCOMING_COLLISION_STEPS 10 // a collision this soon after a borrow ends still counts as the borrow's
+
+// -- Stacking diagnostics (log only): a car ahead within half a lane sideways, not facing the car
+#define LATTICE_LEADER_MIN_COS 0.0f
+#define LATTICE_QUEUE_SPEED_MPS 1.0f // queued: slower than this with the car ahead within LATTICE_QUEUE_GAP_M
+#define LATTICE_QUEUE_GAP_M 15.0f
+#define LATTICE_SLOW_FOLLOW_SPEED_MPS 5.0f // slow-following: from the queue speed up to this, car ahead within the gap
+#define LATTICE_SLOW_FOLLOW_GAP_M 30.0f
 
 // -- Turning around: rest-to-rest constant-curvature legs, forward and reverse, with the box kept inside the road edges
 #define LATTICE_TURN_MAX_LEGS 7
