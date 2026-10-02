@@ -12,6 +12,7 @@ import zlib
 import base64
 import struct
 
+from pufferlib import replay_format
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import compute_effective_road_obs_count
 
@@ -34,26 +35,7 @@ TRAFFIC_LIGHT_COLORS = {
     binding.TRAFFIC_CONTROL_STATE_OFF: "#808080",
 }
 
-VEHICLE_COLORS = [
-    "#681D00",
-    "#1F77B4",
-    "#FF7F0E",
-    "#2CA02C",
-    "#9467BD",
-    "#8C564B",
-    "#D47CBA",
-    "#BCBD22",
-    "#17BECF",
-    "#AEC7E8",
-    "#FFBB78",
-    "#98DF8A",
-    "#FF9896",
-    "#C5B0D5",
-    "#C49C94",
-    "#F7B6D2",
-    "#DBDB8D",
-    "#9EDAE5",
-]
+VEHICLE_COLORS = replay_format.REPLAY_VIEW_STYLE["vehicle_colors"]
 
 METRIC_LABELS = [
     "collision",
@@ -785,15 +767,9 @@ def _pack_replay_binary(header, chunks):
     packed = {}
     blob_parts = []
     offset = 0
-    dtype_names = {
-        np.dtype(np.float32): "float32",
-        np.dtype(np.int32): "int32",
-        np.dtype(np.int16): "int16",
-        np.dtype(np.uint8): "uint8",
-    }
     for name, arr in chunks.items():
         arr = np.ascontiguousarray(arr)
-        dtype = dtype_names[arr.dtype]
+        dtype = replay_format.REPLAY_DTYPE_NAMES[arr.dtype]
         raw = arr.tobytes()
         packed[name] = {"dtype": dtype, "shape": list(arr.shape), "offset": offset, "nbytes": len(raw)}
         blob_parts.append(raw)
@@ -813,6 +789,7 @@ def _pack_replay_binary(header, chunks):
 
 def encode_interactive_replay(scenario, replay):
     road_points = []
+    road_points_z = []
     road_lengths = []
     road_types = []
     road_ids = []
@@ -833,11 +810,15 @@ def encode_interactive_replay(scenario, replay):
         else:
             continue
         count = min(len(xs), len(ys))
+        zs = elem.get("z") or [0.0] * count
+        if len(zs) < count:
+            raise ValueError(f"Road element {road_idx} has {len(zs)} z values for {count} points")
         road_lengths.append(count)
         road_types.append(draw_type)
         road_ids.append(int(elem.get("id", road_idx)))
         for i in range(count):
             road_points.append((float(xs[i]), float(ys[i])))
+            road_points_z.append(float(zs[i]))
 
     traffic_stop_lines = []
     traffic_types = []
@@ -855,18 +836,26 @@ def encode_interactive_replay(scenario, replay):
         env_cfg["obs_slots_boundary_n"], env_cfg.get("obs_dropout_boundary", 0.0)
     )
 
-    observation_scale = 1.0
-    quantized_observations = None
+    observations = None
+    obs_layout = None
     if replay.get("obs") is not None:
-        observations_f32 = np.asarray(replay["obs"], dtype=np.float32)
-        if observations_f32.size:
-            observation_scale = float(np.max(np.abs(observations_f32))) / 32767.0
-        if observation_scale == 0.0:
-            observation_scale = 1.0
-        quantized_observations = np.round(observations_f32 / observation_scale).astype(np.int16)
+        observations = np.asarray(replay["obs"]).astype(np.float16, copy=False)
+        non_finite_entries = np.argwhere(~np.isfinite(observations))
+        if len(non_finite_entries):
+            frame_idx, slot_idx, column_idx = non_finite_entries[0]
+            raise ValueError(
+                f"Replay observation is not finite at frame {frame_idx}, slot {slot_idx}, column {column_idx}"
+            )
+        obs_layout = replay_format.build_obs_layout(replay["obs_layout"])
+        if obs_layout["obs_dim"] != observations.shape[-1]:
+            raise ValueError(
+                f"Replay observation layout sums to {obs_layout['obs_dim']} features, "
+                f"but captured observations have {observations.shape[-1]}"
+            )
 
     chunks = {
         "road_points": np.asarray(road_points or [(0.0, 0.0)], dtype=np.float32),
+        "road_points_z": np.asarray(road_points_z or [0.0], dtype=np.float32),
         "road_lengths": np.asarray(road_lengths or [0], dtype=np.int32),
         "road_types": np.asarray(road_types or [0], dtype=np.int16),
         "road_ids": np.asarray(road_ids or [0], dtype=np.int32),
@@ -888,8 +877,8 @@ def encode_interactive_replay(scenario, replay):
         chunks["rewards_f32"] = replay["rewards_f32"].astype(np.float32, copy=False)
     if replay.get("coefs_f32") is not None:
         chunks["coefs_f32"] = replay["coefs_f32"].astype(np.float32, copy=False)
-    if quantized_observations is not None:
-        chunks["obs"] = quantized_observations
+    if observations is not None:
+        chunks["obs"] = observations
     if replay.get("policy_probs") is not None:
         chunks["policy_probs"] = replay["policy_probs"].astype(np.float32, copy=False)
     if replay.get("policy_mean") is not None:
@@ -910,6 +899,7 @@ def encode_interactive_replay(scenario, replay):
     active_count = int(replay["raw_action"].shape[1])
     init_step = int(env_cfg.get("init_step", 0))
     ghost = np.zeros((frame_count, max(1, active_count), 5), dtype=np.float32)
+    ghost_z = np.zeros((frame_count, max(1, active_count)), dtype=np.float32)
     for slot in range(min(active_count, len(active_indices))):
         agent_idx = active_indices[slot]
         if agent_idx < 0 or agent_idx >= len(agents):
@@ -919,6 +909,7 @@ def encode_interactive_replay(scenario, replay):
         ly = np.asarray(a.get("log_trajectory_y") or [], dtype=np.float32)
         lh = np.asarray(a.get("log_heading") or [], dtype=np.float32)
         lv = np.asarray(a.get("log_valid") or [], dtype=np.int32)
+        lz = np.asarray(a.get("log_trajectory_z") or [], dtype=np.float32)
         n = min(frame_count, max(0, lx.shape[0] - init_step))
         if n <= 0:
             continue
@@ -929,7 +920,10 @@ def encode_interactive_replay(scenario, replay):
         ghost[:n, slot, 3] = float(a.get("sim_length", 0.0))
         width = float(a.get("sim_width", 0.0))
         ghost[:n, slot, 4] = np.where(lv[window] == 0, 0.0, width) if lv.shape[0] >= init_step + n else width
+        if lz.shape[0] >= init_step + n:
+            ghost_z[:n, slot] = lz[window]
     chunks["ghost_f32"] = ghost
+    chunks["ghost_z_f32"] = ghost_z
 
     metadata = {
         "map_name": scenario.get("map_name", "Unknown"),
@@ -945,8 +939,12 @@ def encode_interactive_replay(scenario, replay):
         "default_goal_radius_meters": float(env_cfg["goal_radius"]),
         "traffic_cap": int(replay["traffic_i16"].shape[1]),
         "active_count": int(replay["raw_action"].shape[1]),
-        "obs_dim": int(replay["obs"].shape[2]) if replay.get("obs") is not None else 0,
-        "obs_scale": observation_scale,
+        "obs_dim": int(observations.shape[2]) if observations is not None else 0,
+        "replay_format_version": replay_format.REPLAY_FORMAT_VERSION,
+        "obs_layout": obs_layout,
+        "obs_norm_m": replay_format.obs_norm_from_env_config(env_cfg),
+        "obs_range_m": replay_format.obs_range_from_env_config(env_cfg),
+        "dt": float(env_cfg["dt"]),
         "action_type": env_cfg.get("action_type", "continuous"),
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
         "trajectory_baseline": bool(env_cfg.get("trajectory_baseline", False)),
@@ -954,6 +952,7 @@ def encode_interactive_replay(scenario, replay):
         "reward_conditioning": bool(env_cfg["reward_conditioning"]),
         "obs_slots_partners_n": int(env_cfg["obs_slots_partners_n"]),
         "ego_dim": int(binding.EGO_FEATURES)
+        + (int(binding.SPLINE_INTENT_FEATURES) if env_cfg.get("action_type") == "spline" else 0)
         + (
             int(binding.LATTICE_PLAN_FEATURES) + int(bool(env_cfg.get("lattice_oncoming_overtake", False)))
             if env_cfg.get("action_type") == "lattice"
@@ -989,7 +988,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             --bg:#e9ebee; --surface:rgba(255,255,255,.92); --surface-solid:#ffffff; --border:#dcdfe5;
             --text:#181b20; --muted:#6c7484; --field:rgba(108,116,132,.07);
             --accent:#0a66d0; --danger:#d6202c;
-            --road:#c6cad1; --line:#959ca8; --edge:#2a2e35;
+            --road:__MAP_ROAD_LIGHT__; --line:__MAP_LINE_LIGHT__; --edge:__MAP_EDGE_LIGHT__;
             --shadow:0 1px 2px rgba(22,26,34,.05),0 10px 30px rgba(22,26,34,.10);
             --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
         }
@@ -997,7 +996,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             --bg:#0d0f12; --surface:rgba(23,26,31,.92); --surface-solid:#171a1f; --border:#2a2f37;
             --text:#e9ebef; --muted:#8c94a4; --field:rgba(140,148,164,.08);
             --accent:#4d9fff; --danger:#ff5560;
-            --road:#363b43; --line:#5d6573; --edge:#06070a;
+            --road:__MAP_ROAD_DARK__; --line:__MAP_LINE_DARK__; --edge:__MAP_EDGE_DARK__;
             --shadow:0 1px 2px rgba(0,0,0,.5),0 12px 34px rgba(0,0,0,.55);
         }
         * { box-sizing:border-box; }
@@ -1067,11 +1066,19 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         .obs-tool { padding:3px 8px; border:1px solid var(--border); border-radius:5px; background:transparent; color:var(--muted); font-size:9.5px; font-weight:600; letter-spacing:.05em; cursor:pointer; }
         .obs-tool:hover { color:var(--accent); border-color:var(--accent); }
         #obs-canvas { width:100%; height:100%; background:#fff; }
+        .cam-chip + .cam-chip { margin-left:4px; }
+        .cam-chip.on { color:var(--accent); border-color:var(--accent); }
+        #hud-telemetry.expanded { width:min(680px, 45vw); }
+        #agent-view-box { display:none; position:sticky; top:0; z-index:2; margin:8px 0 4px; padding:6px; border:1px solid var(--border); border-radius:8px; background:#363e4d; }
+        #agent-view-canvas { display:block; width:100%; aspect-ratio:16 / 9; border-radius:5px; background:#cfe0f0; }
+        .av-tools { display:flex; gap:6px; justify-content:flex-end; margin-top:5px; }
+        #view-pill { position:absolute; top:14px; left:50%; transform:translateX(-50%); display:none; padding:5px 12px; border:1px solid var(--border); border-radius:14px; background:var(--surface-solid); color:var(--text); box-shadow:var(--shadow); font-size:11px; font-weight:600; letter-spacing:.04em; white-space:nowrap; }
     </style>
 </head>
 <body>
     <div id="loading-overlay"><div class="spinner"></div><div id="load-text">Decoding replay&#8230;</div></div>
     <div id="ui-layer">
+        <div id="view-pill"></div>
         <div id="hud-global" class="panel collapsed">
             <h3 onclick="toggleGlobalPanel()">Scenario <span id="globalChevron" style="float:right">&#9656;</span></h3>
             <div class="label">Map</div><div class="value" id="meta-map">-</div>
@@ -1087,7 +1094,8 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <button class="btn" onclick="toggleTheme()" style="width:100%; margin-top:12px">Toggle theme</button>
         </div>
         <div id="hud-telemetry" class="panel">
-            <h3 id="tel-drag-handle">Agent <span id="tel-id" class="highlight mono">?</span><button type="button" id="camMode" class="cam-chip" onclick="toggleCamMode()">world cam</button></h3>
+            <h3 id="tel-drag-handle">Agent <span id="tel-id" class="highlight mono">?</span><button type="button" id="camMode" class="cam-chip" onclick="toggleCamMode()">world cam</button><button type="button" id="agentViewBtn" class="cam-chip" onclick="toggleAgentView()">agent view</button></h3>
+            <div id="agent-view-box"><canvas id="agent-view-canvas"></canvas><div class="av-tools"><button type="button" id="agentViewPresetBtn" class="obs-tool" onclick="cycleAgentViewPreset()">chase</button><button type="button" id="agentViewExpandBtn" class="obs-tool" onclick="toggleAgentViewSize()">expand</button></div></div>
             <div id="warn-row"></div>
             <div class="speed-block"><span id="tel-speed" class="speed-num">0.0</span><span class="speed-unit">km/h</span></div>
             <div class="grid">
@@ -1112,7 +1120,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <button type="button" class="toggle-header" data-target="metrics-grid"><span>Metrics</span><span>&#9662;</span></button>
             <div id="metrics-grid" class="grid toggle-body"></div>
         </div>
-        <div id="obs-container" class="panel"><div id="obs-title"><span>Ego-centric observation</span><button type="button" class="obs-tool" onclick="resetObsZoom(event)">1x</button><button type="button" id="obsModeBtn" class="obs-tool" onclick="toggleObsMode(event)">BOTH</button><button type="button" class="obs-tool" onclick="toggleObsSize(event)">Expand</button></div><canvas id="obs-canvas"></canvas></div>
+        <div id="obs-container" class="panel"><div id="obs-title"><span id="obs-title-text">Ego-centric observation</span><button type="button" class="obs-tool" onclick="resetObsZoom(event)">1x</button><button type="button" id="obsModeBtn" class="obs-tool" onclick="toggleObsMode(event)">BOTH</button><button type="button" class="obs-tool" onclick="toggleObsSize(event)">Expand</button></div><canvas id="obs-canvas"></canvas></div>
         <div id="controls" class="panel">
             <button id="btnPlay" class="btn icon" onclick="toggle()"></button>
             <span class="mono step-counter"><span id="stepNow">0</span><span class="dim"> / </span><span id="stepTotal">0</span></span>
@@ -1126,6 +1134,7 @@ __PAYLOAD_CHUNKS__
     <script>
         const METRIC_LABELS = __METRIC_LABELS__;
         const VEHICLE_COLORS = __VEHICLE_COLORS__;
+        const VIEW_STYLE = __REPLAY_VIEW_STYLE__;
         // Order must match the Log fields written in env_binding.h vec_get_obs_html_frame (15 values).
         const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];
         // Order must match the REWARD_COEF_* indices in constants.h.
@@ -1133,32 +1142,40 @@ __PAYLOAD_CHUNKS__
         const REWARD_LABELS = ["collision","offroad","red light","stop sign","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed","ADE"];
         const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
         const JLONG = [-15,-4,0,4], JLAT = [-4,0,4];
-        const DYNAMIC_EXPERT_COLOR = "#c4c8cf";
-        const STATIC_AGENT_COLOR = "#4a505a";
-        const INFRACTION_AGENT_COLOR = "#d92d20";
+        const DYNAMIC_EXPERT_COLOR = VIEW_STYLE.agent_colors.dynamic_expert;
+        const STATIC_AGENT_COLOR = VIEW_STYLE.agent_colors.static;
+        const INFRACTION_AGENT_COLOR = VIEW_STYLE.agent_colors.infraction;
         const PARTNER_BLINDNESS_OUTLINE_COLOR = "#6d28d9";
         const PHANTOM_BRAKING_OUTLINE_COLOR = "#b45309";
-        const PREDICTED_PATH_COLOR = "#00e5ff";
-        const INFRACTION_METRIC_COUNT = 4;
+        const PREDICTED_PATH_COLOR = VIEW_STYLE.predicted_path_color;
+        const INFRACTION_METRIC_COUNT = VIEW_STYLE.infraction_metric_count;
+        const VIEW_PILL_FLASH_MS = 2500;
         const DEFAULT_GOAL_RADIUS_METERS = 2;
         const SVG_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>';
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
         let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, roadPathsById = new Map(), lastDrawn = -1;
         const c = document.getElementById('c'), ctx = c.getContext('2d');
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
+        const avC = document.getElementById('agent-view-canvas'), avCtx = avC.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
         let step = 0, play = false, speed = 4, lastTick = 0;
         let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0};
         let followedId = null, isEgoCam = false, darkMode = false, showGhost = false, showPredictedPath = false;
-        let obsZoom = 2.2, obsExpanded = false, obsMode = 2;
+        let obsZoom = VIEW_STYLE.obs_panel_default_zoom, obsExpanded = false, obsMode = 2;
+        let agentViewOn = false, agentViewPreset = 'chase', agentViewExpanded = false, observedOnly = false;
+        let visibleAgentIdx = null, visibleAgentSlots = null, pillFlashUntil = 0;
+        let roadSegs = new Float32Array(0), roadSegCount = 0, groundPoints = new Float64Array(0), groundGrid = new Map();
+        let obsRowCache = {key:null, row:null}, observedCache = {key:null, value:null};
+        const HALF_FLOAT_TABLE = buildHalfFloatTable();
         let expertAgentIndices = new Set();
         const OBS_MODES = ["ALL","POOL","BOTH"];
 
         function chunk(name) {
-            const m = H.chunks[name], start = H.dataStart + m.offset, n = m.nbytes / ({float32:4,int32:4,int16:2,uint8:1}[m.dtype]);
+            const m = H.chunks[name], start = H.dataStart + m.offset, n = m.nbytes / ({float32:4,int32:4,int16:2,uint8:1,float16:2}[m.dtype]);
             if (m.dtype === "float32") return new Float32Array(H.buffer, start, n);
             if (m.dtype === "int32") return new Int32Array(H.buffer, start, n);
             if (m.dtype === "int16") return new Int16Array(H.buffer, start, n);
+            if (m.dtype === "float16") return new Uint16Array(H.buffer, start, n);
             return new Uint8Array(H.buffer, start, n);
         }
         function frameMax() { return Math.max(0, (H ? H.frames : 1) - 1); }
@@ -1265,7 +1282,7 @@ self.onmessage = async event => {
             const first = getFrameAgents(0)[0]; if (first) { cam.x = first.x; cam.y = first.y; }
             document.getElementById('loading-overlay').style.display = 'none';
             window.onresize();
-            requestAnimationFrame(() => { buildMapPaths(); draw(true); });
+            requestAnimationFrame(() => { buildMapPaths(); buildGroundGrid(); buildRoadSegments(); draw(true); });
         }
         initReplay().catch(err => { console.error(err); document.getElementById('load-text').textContent = 'Replay load failed. See console.'; });
 
@@ -1360,14 +1377,14 @@ self.onmessage = async event => {
             const goalRadiusField = H.agent_goal_radius_field;
             const defaultGoalRadius = H.default_goal_radius_meters || DEFAULT_GOAL_RADIUS_METERS;
             const goalRadius = Number.isInteger(goalRadiusField) && goalRadiusField < F.af ? C.agent_f32[fb+goalRadiusField] : defaultGoalRadius;
-            return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], partnerBlindnessActive:C.agent_i32[ib+8] === 1, phantomBrakingActive:C.agent_i32[ib+9] === 1, x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], goalRadius:goalRadius, c:agentColor};
+            return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], partnerBlindnessActive:C.agent_i32[ib+8] === 1, phantomBrakingActive:C.agent_i32[ib+9] === 1, x:C.agent_f32[fb], y:C.agent_f32[fb+1], z:C.agent_f32[fb+2], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], goalRadius:goalRadius, c:agentColor};
         }
         function getFrameAgents(frame) { const out = []; for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a) out.push(a); } return out; }
         function drawGhosts(f) {
             if (!showGhost || !C.ghost_f32) return;
             const N = H.chunks.ghost_f32.shape[1];
             ctx.strokeStyle = '#ff0000'; ctx.fillStyle = 'rgba(255,0,0,.22)'; ctx.lineWidth = .28; ctx.setLineDash([.6,.4]);
-            for (let j=0;j<N;j++) { const b=(f*N+j)*5, w=C.ghost_f32[b+4]; if (w <= 0) continue; ctx.save(); ctx.translate(C.ghost_f32[b], C.ghost_f32[b+1]); ctx.rotate(C.ghost_f32[b+2]); ctx.beginPath(); ctx.rect(-C.ghost_f32[b+3]/2, -w/2, C.ghost_f32[b+3], w); ctx.fill(); ctx.stroke(); ctx.restore(); }
+            for (let j=0;j<N;j++) { const b=(f*N+j)*5, w=C.ghost_f32[b+4]; if (w <= 0 || (visibleAgentSlots && !visibleAgentSlots.has(j))) continue; ctx.save(); ctx.translate(C.ghost_f32[b], C.ghost_f32[b+1]); ctx.rotate(C.ghost_f32[b+2]); ctx.beginPath(); ctx.rect(-C.ghost_f32[b+3]/2, -w/2, C.ghost_f32[b+3], w); ctx.fill(); ctx.stroke(); ctx.restore(); }
             ctx.setLineDash([]);
         }
         function strokeAgentPath(f, slot, width) {
@@ -1377,7 +1394,7 @@ self.onmessage = async event => {
             path.moveTo(C.agent_f32[base], C.agent_f32[base+1]);
             for (let k=1;k<n;k++) path.lineTo(C.agent_f32[base+2*k], C.agent_f32[base+2*k+1]);
             ctx.save();
-            ctx.strokeStyle = PREDICTED_PATH_COLOR; ctx.globalAlpha = .5; ctx.lineWidth = Math.max(width, .1); ctx.lineCap = 'butt';
+            ctx.strokeStyle = PREDICTED_PATH_COLOR; ctx.globalAlpha = VIEW_STYLE.predicted_path_alpha; ctx.lineWidth = Math.max(width, .1); ctx.lineCap = 'butt';
             ctx.stroke(path);
             ctx.restore();
         }
@@ -1386,11 +1403,11 @@ self.onmessage = async event => {
             const lattice = H.action_type === "lattice";
             if (!(lattice ? !showPredictedPath : showPredictedPath) || !(lattice || H.action_type === "spline" || H.trajectory_baseline)) return;
             if (lattice) {
-                for (let i=0;i<H.agent_cap;i++) { const a = agentAt(f, i); if (a) strokeAgentPath(f, i, a.w); }
+                for (let i=0;i<H.agent_cap;i++) { const a = agentAt(f, i); if (a && (!visibleAgentIdx || visibleAgentIdx.has(i))) strokeAgentPath(f, i, a.w); }
                 return;
             }
             const ego = agentAt(f, 0); // EGO_IDX = 0, matches constants.h
-            if (!ego) return;
+            if (!ego || (visibleAgentIdx && !visibleAgentIdx.has(0))) return;
             strokeAgentPath(f, 0, ego.w);
         }
         function findAgent(frame, id) { for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a && a.id === id) return a; } return null; }
@@ -1400,7 +1417,7 @@ self.onmessage = async event => {
             const sb = idx * 6, type = C.traffic_types[idx] || C.traffic_i16[db+1], state = C.traffic_i16[db+2];
             return {type, state, stop_line:Array.from(C.traffic_stop_lines.subarray(sb, sb + 6))};
         }
-        function trafficColor(t) { return t.state === 1 ? "#ff0000" : t.state === 2 ? "#ffff00" : t.state === 3 ? "#00ff00" : "#888888"; }
+        function trafficColor(t) { return VIEW_STYLE.traffic_state_colors[String(t.state)] || VIEW_STYLE.traffic_default_color; }
         function getColors() { const s = getComputedStyle(document.documentElement); return {bg:s.getPropertyValue('--bg'), road:s.getPropertyValue('--road'), line:s.getPropertyValue('--line'), edge:s.getPropertyValue('--edge'), text:s.getPropertyValue('--text'), accent:s.getPropertyValue('--accent')}; }
         function resizeObsCanvas() {
             const r = obsC.getBoundingClientRect();
@@ -1413,13 +1430,13 @@ self.onmessage = async event => {
         function toggleTheme(){ darkMode=!darkMode; document.documentElement.setAttribute('data-theme', darkMode?'dark':'light'); draw(true); }
         function toggleGlobalPanel(){ const p=document.getElementById('hud-global'), collapsed=!p.classList.contains('collapsed'); p.classList.toggle('collapsed', collapsed); document.getElementById('globalChevron').innerHTML=collapsed?'&#9656;':'&#9662;'; }
         function toggleCamMode(){ if(followedId !== null){ isEgoCam=!isEgoCam; draw(true); } }
-        function resetObsZoom(e){ if(e) e.stopPropagation(); obsZoom=2.2; draw(true); }
+        function resetObsZoom(e){ if(e) e.stopPropagation(); obsZoom=VIEW_STYLE.obs_panel_default_zoom; draw(true); }
         function toggleObsMode(e){ if(e) e.stopPropagation(); obsMode=(obsMode+1)%OBS_MODES.length; document.getElementById('obsModeBtn').textContent=OBS_MODES[obsMode]; draw(true); }
         function toggleObsSize(e){ if(e) e.stopPropagation(); const p=document.getElementById('obs-container'), b=e ? e.currentTarget : null; obsExpanded=!obsExpanded; p.style.width=obsExpanded?'680px':'390px'; p.style.height=obsExpanded?'680px':'390px'; if(b) b.textContent=obsExpanded?'Collapse':'Expand'; resizeObsCanvas(); draw(true); }
         function searchAgent(){ const id=parseInt(document.getElementById('agentSearch').value); if(!isNaN(id)){ followedId=id; play=false; updateBtn(); draw(true); } }
-        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } if(e.code === 'KeyP' && (H.action_type === 'spline' || H.action_type === 'lattice' || H.trajectory_baseline)){ showPredictedPath=!showPredictedPath; draw(true); } });
+        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; observedOnly=false; updateUI(); draw(true); } if(e.code === 'KeyV'){ toggleObservedOnly(); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } if(e.code === 'KeyP' && (H.action_type === 'spline' || H.action_type === 'lattice' || H.trajectory_baseline)){ showPredictedPath=!showPredictedPath; draw(true); } });
         c.onwheel = e => { e.preventDefault(); cam.z *= Math.exp(-e.deltaY * .001); draw(true); };
-        c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), wx=(e.clientX-r.left-c.width/2)/cam.z+cam.x, wy=(e.clientY-r.top-c.height/2)/-cam.z+cam.y; let hit=null, agents=getFrameAgents(Math.floor(step)); if(!isEgoCam) for(const a of agents) if(Math.hypot(wx-a.x, wy-a.y) < Math.max(a.l,3)){ hit=a.id; break; } if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; } draw(true); };
+        c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), wx=(e.clientX-r.left-c.width/2)/cam.z+cam.x, wy=(e.clientY-r.top-c.height/2)/-cam.z+cam.y; let hit=null, agents=getFrameAgents(Math.floor(step)); if(!isEgoCam) for(const a of agents) if((!visibleAgentIdx || visibleAgentIdx.has(a.idx)) && Math.hypot(wx-a.x, wy-a.y) < Math.max(a.l,3)){ hit=a.id; break; } if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; observedOnly=false; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; } draw(true); };
         window.onmouseup = () => cam.drag = false;
         c.onmousemove = e => { if(cam.drag && !isEgoCam){ cam.x -= (e.clientX-cam.lx)/cam.z; cam.y -= (e.clientY-cam.ly)/-cam.z; cam.lx=e.clientX; cam.ly=e.clientY; draw(true); } };
         obsC.addEventListener('wheel', e => { e.preventDefault(); obsZoom = Math.max(.45, Math.min(8, obsZoom * Math.exp(-e.deltaY * .001))); draw(true); }, {passive:false});
@@ -1474,22 +1491,15 @@ self.onmessage = async event => {
             ctx.restore();
         }
         function decodeObs(frame, slot) {
-            if (!C.obs || slot < 0 || slot >= H.active_count) return null;
-            const base = (frame * H.active_count + slot) * H.obs_dim, obs = C.obs, Q = H.obs_scale === undefined ? 1 : H.obs_scale, LF = H.lane_features, BF = H.boundary_features, TF = H.traffic_features;
-            let p = base; const egoStart = p; p += H.ego_dim;
-            if (H.reward_conditioning) p += H.reward_coef_count;
-            const targetStart = p; p += H.num_goals * H.goal_features;
-            const partnersStart = p; p += H.obs_slots_partners_n * H.partner_features;
-            const lanesStart = p; p += H.lane_count * LF;
-            const boundsStart = p; p += H.boundary_count * BF;
-            const trafficStart = p;
+            if (!obsAvailable() || slot < 0 || slot >= H.active_count) return null;
+            const obs = obsRow(frame, slot), layout = H.obs_layout, LF = layout.lane_features, BF = layout.boundary_features, TF = layout.traffic_features, PF = layout.partner_features, GF = layout.goal_features;
             const rot = (x,y) => [-y,x];
             const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
-            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), cs=rot(obs[o+5]*Q,obs[o+6]*Q); out.push([xy[0],xy[1],obs[o+3]*Q*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
-            const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*Q*H.scales.veh_len_to_position,w:obs[o+4]*Q*H.scales.veh_width_to_position,h:h,pool:poolAt("pool_partner",frame,slot,i)}); }
-            const gps = []; for(let i=0;i<H.num_goals;i++){ const o=targetStart+i*H.goal_features; if(zero(o,H.goal_features)) continue; let scale=H.scales.goal_to_position*Q, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
-            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(obs[o]*Q,obs[o+1]*Q), b=rot(obs[o+2]*Q,obs[o+3]*Q); controls.push({type:Math.round(obs[o+5]*Q), state:Math.round(obs[o+6]*Q), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
-            return {ego:{w:obs[egoStart+1]*Q*H.scales.veh_width_to_position,l:obs[egoStart+2]*Q*H.scales.veh_len_to_position}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane",LF), bounds:roads(boundsStart,H.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
+            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(obs[o],obs[o+1]), cs=rot(obs[o+5],obs[o+6]); out.push([xy[0],xy[1],2*obs[o+3]*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
+            const partners = []; for(let i=0;i<layout.partner_count;i++){ const o=layout.partner_start+i*PF; if(zero(o,PF)) continue; let xy=rot(obs[o],obs[o+1]), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*H.scales.veh_len_to_position,w:obs[o+4]*H.scales.veh_width_to_position,h:h,pool:poolAt("pool_partner",frame,slot,i)}); }
+            const gps = []; for(let i=0;i<layout.goal_count;i++){ const o=layout.goal_start+i*GF; if(zero(o,GF)) continue; gps.push(rot(obs[o]*H.scales.goal_to_position, obs[o+1]*H.scales.goal_to_position)); }
+            const controls = []; for(let i=0;i<layout.traffic_count;i++){ const o=layout.traffic_start+i*TF; if(zero(o,TF)) continue; let a=rot(obs[o],obs[o+1]), b=rot(obs[o+2],obs[o+3]); controls.push({type:Math.round(obs[o+5]), state:Math.round(obs[o+6]), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
+            return {ego:{w:obs[1]*H.scales.veh_width_to_position,l:obs[2]*H.scales.veh_len_to_position}, partners, lanes:roads(layout.lane_start,layout.lane_count,"pool_lane",LF), bounds:roads(layout.boundary_start,layout.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
         }
         function drawObs(frame) {
             resizeObsCanvas();
@@ -1512,6 +1522,499 @@ self.onmessage = async event => {
             if(frame.ego){ obsCtx.save(); obsCtx.rotate(Math.PI/2); obsCtx.fillStyle="rgba(0,102,255,.8)"; obsCtx.strokeStyle="#000"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-frame.ego.l/2,-frame.ego.w/2,frame.ego.l,frame.ego.w); obsCtx.fill(); obsCtx.stroke(); obsCtx.restore(); }
             obsCtx.restore();
             if(showPool && poolMax > 1) drawPoolLegend(poolMax);
+        }
+        function buildHalfFloatTable() {
+            const table = new Float64Array(65536);
+            for (let bits=0; bits<65536; bits++) {
+                const sign = (bits & 0x8000) ? -1 : 1, exponent = (bits >> 10) & 0x1f, mantissa = bits & 0x3ff;
+                if (exponent === 0) table[bits] = sign * Math.pow(2, -14) * (mantissa / 1024);
+                else if (exponent === 31) table[bits] = mantissa ? NaN : sign * Infinity;
+                else table[bits] = sign * Math.pow(2, exponent - 15) * (1 + mantissa / 1024);
+            }
+            return table;
+        }
+        function obsAvailable() { return !!C.obs && H.replay_format_version >= 2 && !!H.obs_layout; }
+        function obsRow(frame, slot) {
+            const key = frame * H.active_count + slot;
+            if (obsRowCache.key === key) return obsRowCache.row;
+            const dim = H.obs_dim, base = key * dim, row = new Float64Array(dim);
+            for (let i=0;i<dim;i++) row[i] = HALF_FLOAT_TABLE[C.obs[base+i]];
+            obsRowCache = {key:key, row:row};
+            return row;
+        }
+        function decodeObservedWorld(frame, agent) {
+            if (!agent || agent.slot < 0 || agent.slot >= H.active_count || !obsAvailable()) return null;
+            const key = frame * H.agent_cap + agent.idx;
+            if (observedCache.key === key) return observedCache.value;
+            const row = obsRow(frame, agent.slot), layout = H.obs_layout, norm = H.obs_norm_m;
+            const cosH = Math.cos(agent.h), sinH = Math.sin(agent.h);
+            const worldX = (lx, ly) => agent.x + cosH * lx - sinH * ly, worldY = (lx, ly) => agent.y + sinH * lx + cosH * ly;
+            const occupied = (o, n) => { for (let i=0;i<n;i++) if (row[o+i] !== 0) return true; return false; };
+            const relativeZ = value => agent.z + value * (norm.z || 0);
+            const segments = (start, count, features, heights) => {
+                const out = [];
+                for (let i=0;i<count;i++) {
+                    const o = start + i * features;
+                    if (!occupied(o, features)) continue;
+                    const midX = row[o] * norm.xy_offset, midY = row[o+1] * norm.xy_offset, half = row[o+3] * norm.road_seg_length;
+                    const startX = midX - row[o+5] * half, startY = midY - row[o+6] * half, endX = midX + row[o+5] * half, endY = midY + row[o+6] * half;
+                    out.push([worldX(startX, startY), worldY(startX, startY), worldX(endX, endY), worldY(endX, endY)]);
+                    heights.push(relativeZ(row[o+2]));
+                }
+                return out;
+            };
+            const decodedPartners = [];
+            for (let i=0;i<layout.partner_count;i++) {
+                const o = layout.partner_start + i * layout.partner_features;
+                if (!occupied(o, layout.partner_features)) continue;
+                const lx = row[o] * norm.xy_offset, ly = row[o+1] * norm.xy_offset;
+                decodedPartners.push({slot:i, x:worldX(lx, ly), y:worldY(lx, ly), z:relativeZ(row[o+2]), h:agent.h + Math.atan2(row[o+6], row[o+5]), l:row[o+3] * norm.veh_length, w:row[o+4] * norm.veh_width});
+            }
+            const pairs = [];
+            for (let i=0;i<H.agent_cap;i++) {
+                const other = i === agent.idx ? null : agentAt(frame, i);
+                if (!other) continue;
+                for (const partner of decodedPartners) {
+                    const distanceM = Math.hypot(partner.x - other.x, partner.y - other.y);
+                    if (distanceM <= VIEW_STYLE.partner_match_tolerance_m) pairs.push([distanceM, partner.slot, i]);
+                }
+            }
+            pairs.sort((p, q) => p[0] - q[0] || p[1] - q[1] || p[2] - q[2]);
+            const usedSlots = new Set(), usedAgents = new Set(), partnerAgentIdx = [];
+            for (const pair of pairs) {
+                if (usedSlots.has(pair[1]) || usedAgents.has(pair[2])) continue;
+                usedSlots.add(pair[1]); usedAgents.add(pair[2]); partnerAgentIdx.push(pair[2]);
+            }
+            const stopLines = [];
+            for (let i=0;i<layout.traffic_count;i++) {
+                const o = layout.traffic_start + i * layout.traffic_features;
+                if (!occupied(o, layout.traffic_features)) continue;
+                const x0 = row[o] * norm.xy_offset, y0 = row[o+1] * norm.xy_offset, x1 = row[o+2] * norm.xy_offset, y1 = row[o+3] * norm.xy_offset;
+                stopLines.push({x0:worldX(x0, y0), y0:worldY(x0, y0), z0:relativeZ(row[o+4]), x1:worldX(x1, y1), y1:worldY(x1, y1), z1:relativeZ(row[o+4]), type:Math.round(row[o+5]), state:Math.round(row[o+6])});
+            }
+            const laneZ = [], boundZ = [];
+            const value = {
+                lanes: segments(layout.lane_start, layout.lane_count, layout.lane_features, laneZ),
+                bounds: segments(layout.boundary_start, layout.boundary_count, layout.boundary_features, boundZ),
+                laneZ: laneZ,
+                boundZ: boundZ,
+                stopLines: stopLines,
+                partnerAgentIdx: partnerAgentIdx,
+                unmatchedPartners: decodedPartners.filter(p => !usedSlots.has(p.slot)).map(p => ({x:p.x, y:p.y, z:p.z, h:p.h, l:p.l, w:p.w})),
+                partnerBlind: agent.partnerBlindnessActive,
+            };
+            observedCache = {key:key, value:value};
+            return value;
+        }
+        function setPill(text) {
+            if (!text && performance.now() < pillFlashUntil) return;
+            const pill = document.getElementById('view-pill');
+            pill.textContent = text || '';
+            pill.style.display = text ? 'block' : 'none';
+        }
+        function flashPill(text) {
+            pillFlashUntil = 0;
+            setPill(text);
+            pillFlashUntil = performance.now() + VIEW_PILL_FLASH_MS;
+            setTimeout(() => { pillFlashUntil = 0; draw(true); }, VIEW_PILL_FLASH_MS + 10);
+        }
+        function missingObservationsText() { return C.obs ? 're-render replay: old format' : 'V needs eval.capture_observations=true'; }
+        function observedSetFor(frame, target) {
+            if (!observedOnly) { setPill(null); return null; }
+            if (!obsAvailable()) { setPill(missingObservationsText()); return null; }
+            if (!target) { setPill('agent ' + followedId + ' not present'); return null; }
+            if (target.slot < 0) { setPill('agent ' + target.id + ' has no observation'); return null; }
+            const observed = decodeObservedWorld(frame, target);
+            setPill('observed by agent ' + target.id + ' (V)' + (observed.partnerBlind ? ' · partner-blind' : ''));
+            return observed;
+        }
+        function toggleObservedOnly() {
+            if (!H) return;
+            if (observedOnly) { observedOnly = false; draw(true); return; }
+            if (followedId === null) { flashPill('V: select an agent first'); return; }
+            if (!obsAvailable()) { flashPill(missingObservationsText()); return; }
+            const target = findAgent(Math.max(0, Math.min(frameMax(), Math.floor(step))), followedId);
+            if (!target) { flashPill('agent ' + followedId + ' not present'); return; }
+            if (target.slot < 0) { flashPill('agent ' + target.id + ' has no observation'); return; }
+            observedOnly = true;
+            draw(true);
+        }
+        function drawObservedMap(observed, colors) {
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = colors.road; ctx.lineWidth = .5; ctx.beginPath();
+            for (const s of observed.lanes) { ctx.moveTo(s[0], s[1]); ctx.lineTo(s[2], s[3]); }
+            ctx.stroke();
+            ctx.strokeStyle = colors.edge; ctx.lineWidth = .8; ctx.beginPath();
+            for (const s of observed.bounds) { ctx.moveTo(s[0], s[1]); ctx.lineTo(s[2], s[3]); }
+            ctx.stroke();
+        }
+        function drawObservedStopLines(observed) {
+            for (const t of observed.stopLines) {
+                ctx.lineCap = 'butt';
+                if (t.type === 1) { ctx.strokeStyle = trafficColor(t); ctx.lineWidth = Math.min(1.5, 3/cam.z); }
+                else { ctx.strokeStyle = t.type === 2 ? VIEW_STYLE.stop_sign_color : VIEW_STYLE.yield_sign_color; ctx.lineWidth = Math.min(1.2, 2.5/cam.z); ctx.setLineDash([6/cam.z, 4/cam.z]); }
+                ctx.beginPath(); ctx.moveTo(t.x0, t.y0); ctx.lineTo(t.x1, t.y1); ctx.stroke(); ctx.setLineDash([]);
+            }
+        }
+        function drawUnmatchedPartners(observed, colors) {
+            ctx.save(); ctx.strokeStyle = colors.text; ctx.lineWidth = 1.5/cam.z; ctx.setLineDash([4/cam.z, 3/cam.z]);
+            for (const p of observed.unmatchedPartners) { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.h); ctx.strokeRect(-p.l/2, -p.w/2, p.l, p.w); ctx.restore(); }
+            ctx.restore();
+        }
+        function toggleAgentView() {
+            agentViewOn = !agentViewOn;
+            document.getElementById('agent-view-box').style.display = agentViewOn ? 'block' : 'none';
+            document.getElementById('agentViewBtn').classList.toggle('on', agentViewOn);
+            draw(true);
+        }
+        function cycleAgentViewPreset() {
+            agentViewPreset = agentViewPreset === 'chase' ? 'driver' : 'chase';
+            document.getElementById('agentViewPresetBtn').textContent = agentViewPreset;
+            draw(true);
+        }
+        function toggleAgentViewSize() {
+            agentViewExpanded = !agentViewExpanded;
+            document.getElementById('hud-telemetry').classList.toggle('expanded', agentViewExpanded);
+            document.getElementById('agentViewExpandBtn').textContent = agentViewExpanded ? 'collapse' : 'expand';
+            draw(true);
+        }
+        function roadPointZ(pointIdx) { return C.road_points_z ? C.road_points_z[pointIdx] : 0; }
+        function buildRoadSegments() {
+            let total = 0;
+            for (let i=0;i<H.road_polyline_count;i++) total += Math.max(0, C.road_lengths[i] - 1);
+            roadSegs = new Float32Array(total * 8); roadSegCount = 0;
+            let p = 0;
+            for (let i=0;i<H.road_polyline_count;i++) {
+                const len = C.road_lengths[i], type = C.road_types[i];
+                if (len <= 0) continue;
+                for (let j=1;j<len;j++) {
+                    const o = roadSegCount * 8;
+                    roadSegs[o] = C.road_points[(p+j-1)*2]; roadSegs[o+1] = C.road_points[(p+j-1)*2+1]; roadSegs[o+2] = roadPointZ(p+j-1);
+                    roadSegs[o+3] = C.road_points[(p+j)*2]; roadSegs[o+4] = C.road_points[(p+j)*2+1]; roadSegs[o+5] = roadPointZ(p+j); roadSegs[o+6] = type;
+                    roadSegs[o+7] = elevationBand((roadSegs[o] + roadSegs[o+3]) / 2, (roadSegs[o+1] + roadSegs[o+4]) / 2, (roadSegs[o+2] + roadSegs[o+5]) / 2);
+                    roadSegCount++;
+                }
+                p += len;
+            }
+        }
+        function buildGroundGrid() {
+            // lane centrelines only, as the sim does for car heights; road edges and lines sit at other heights
+            const lanePoints = [];
+            let p = 0;
+            for (let i=0;i<H.road_polyline_count;i++) {
+                const len = C.road_lengths[i];
+                if (len <= 0) continue;
+                if (C.road_types[i] === 0) for (let j=0;j<len;j++) lanePoints.push(p + j);
+                p += len;
+            }
+            const cellM = VIEW_STYLE.ground_grid_cell_m;
+            groundPoints = new Float64Array(lanePoints.length * 3); groundGrid = new Map();
+            for (let i=0;i<lanePoints.length;i++) {
+                const x = C.road_points[lanePoints[i]*2], y = C.road_points[lanePoints[i]*2+1];
+                groundPoints[i*3] = x; groundPoints[i*3+1] = y; groundPoints[i*3+2] = roadPointZ(lanePoints[i]);
+                const key = Math.floor(x / cellM) + ',' + Math.floor(y / cellM);
+                if (!groundGrid.has(key)) groundGrid.set(key, []);
+                groundGrid.get(key).push(i);
+            }
+        }
+        function groundHeightM(x, y, referenceZ) {
+            // average of the nearest lane points on the level closest to referenceZ, so stacked roads never mix
+            const cellM = VIEW_STYLE.ground_grid_cell_m, radiusM = VIEW_STYLE.ground_lookup_radius_m, toleranceM = VIEW_STYLE.ground_level_tolerance_m, reach = Math.ceil(radiusM / cellM);
+            const cellX = Math.floor(x / cellM), cellY = Math.floor(y / cellM), candidates = [];
+            for (let dx=-reach; dx<=reach; dx++) for (let dy=-reach; dy<=reach; dy++) {
+                const bucket = groundGrid.get((cellX + dx) + ',' + (cellY + dy));
+                if (!bucket) continue;
+                for (const i of bucket) {
+                    const ddx = groundPoints[i*3] - x, ddy = groundPoints[i*3+1] - y, d2 = ddx * ddx + ddy * ddy;
+                    if (d2 < radiusM * radiusM) candidates.push([d2, groundPoints[i*3+2]]);
+                }
+            }
+            if (!candidates.length) return referenceZ;
+            let levelZ = referenceZ;
+            if (!candidates.some(c => Math.abs(c[1] - referenceZ) <= toleranceM)) {
+                let closest = candidates[0];
+                for (const c of candidates) if (Math.abs(c[1] - referenceZ) < Math.abs(closest[1] - referenceZ)) closest = c;
+                levelZ = closest[1];
+            }
+            const level = candidates.filter(c => Math.abs(c[1] - levelZ) <= toleranceM).sort((p, q) => p[0] - q[0]).slice(0, VIEW_STYLE.ground_average_point_count);
+            let sumZ = 0;
+            for (const c of level) sumZ += c[1];
+            return sumZ / level.length;
+        }
+        function elevationBand(x, y, z) {
+            const cellM = VIEW_STYLE.ground_grid_cell_m, radiusM = VIEW_STYLE.overpass_search_radius_m, belowZ = z - VIEW_STYLE.overpass_clearance_m, reach = Math.ceil(radiusM / cellM);
+            const cellX = Math.floor(x / cellM), cellY = Math.floor(y / cellM);
+            for (let dx=-reach; dx<=reach; dx++) for (let dy=-reach; dy<=reach; dy++) {
+                const bucket = groundGrid.get((cellX + dx) + ',' + (cellY + dy));
+                if (!bucket) continue;
+                for (const i of bucket) {
+                    const ddx = groundPoints[i*3] - x, ddy = groundPoints[i*3+1] - y;
+                    if (ddx * ddx + ddy * ddy <= radiusM * radiusM && groundPoints[i*3+2] <= belowZ) return 1;
+                }
+            }
+            return 0;
+        }
+        function agentViewCamera(agent, presetName, widthPx, heightPx) {
+            const preset = VIEW_STYLE.cameras[presetName];
+            if (preset.back_m + preset.ahead_m <= 0) throw new Error('agent view camera needs back_m + ahead_m > 0');
+            const headingX = Math.cos(agent.h), headingY = Math.sin(agent.h), baseZ = agent.z || 0;
+            const eye = [agent.x - preset.back_m * headingX, agent.y - preset.back_m * headingY, baseZ + preset.eye_z_m];
+            const lookAt = [agent.x + preset.ahead_m * headingX, agent.y + preset.ahead_m * headingY, baseZ + preset.target_z_m];
+            const delta = [lookAt[0] - eye[0], lookAt[1] - eye[1], lookAt[2] - eye[2]];
+            const deltaNorm = Math.sqrt(delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]);
+            const forward = [delta[0] / deltaNorm, delta[1] / deltaNorm, delta[2] / deltaNorm];
+            const rightNorm = Math.sqrt(forward[1] * forward[1] + forward[0] * forward[0]);
+            const right = [forward[1] / rightNorm, -forward[0] / rightNorm, 0];
+            const up = [right[1] * forward[2] - right[2] * forward[1], right[2] * forward[0] - right[0] * forward[2], right[0] * forward[1] - right[1] * forward[0]];
+            const focalLengthPx = (heightPx / 2) / Math.tan(preset.fovy_deg * Math.PI / 360);
+            const horizonYPx = heightPx / 2 - focalLengthPx * (up[0] * headingX + up[1] * headingY) / (forward[0] * headingX + forward[1] * headingY);
+            return {eye:eye, forward:forward, right:right, up:up, focalLengthPx:focalLengthPx, widthPx:widthPx, heightPx:heightPx, horizonYPx:horizonYPx};
+        }
+        function camDepth(view, x, y, z) { return (x - view.eye[0]) * view.forward[0] + (y - view.eye[1]) * view.forward[1] + (z - view.eye[2]) * view.forward[2]; }
+        function camProject(view, x, y, z) {
+            const dx = x - view.eye[0], dy = y - view.eye[1], dz = z - view.eye[2];
+            const cameraX = dx * view.right[0] + dy * view.right[1] + dz * view.right[2];
+            const cameraY = dx * view.up[0] + dy * view.up[1] + dz * view.up[2];
+            const depthM = dx * view.forward[0] + dy * view.forward[1] + dz * view.forward[2];
+            return [view.widthPx / 2 + view.focalLengthPx * cameraX / depthM, view.heightPx / 2 - view.focalLengthPx * cameraY / depthM, depthM];
+        }
+        function clipPolygonNear(view, points, nearM) {
+            const clipped = [];
+            for (let i=0;i<points.length;i++) {
+                const a = points[i], b = points[(i+1) % points.length], depthA = camDepth(view, a[0], a[1], a[2]), depthB = camDepth(view, b[0], b[1], b[2]);
+                if (depthA >= nearM) clipped.push(a);
+                if ((depthA >= nearM) === (depthB >= nearM)) continue;
+                const t = (nearM - depthA) / (depthB - depthA);
+                clipped.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
+            }
+            return clipped.length >= 3 ? clipped : [];
+        }
+        function clipSegmentNear(view, a, b, nearM) {
+            const depthA = camDepth(view, a[0], a[1], a[2]), depthB = camDepth(view, b[0], b[1], b[2]);
+            if (depthA < nearM && depthB < nearM) return null;
+            if (depthA >= nearM && depthB >= nearM) return [a, b];
+            const t = (nearM - depthA) / (depthB - depthA), crossing = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+            return depthA < nearM ? [crossing, b] : [a, crossing];
+        }
+        function appendClippedPolygon(view, points, nearM) {
+            const clipped = clipPolygonNear(view, points, nearM);
+            for (let i=0;i<clipped.length;i++) { const p = camProject(view, clipped[i][0], clipped[i][1], clipped[i][2]); if (i === 0) avCtx.moveTo(p[0], p[1]); else avCtx.lineTo(p[0], p[1]); }
+            if (clipped.length) avCtx.closePath();
+            return clipped.length > 0;
+        }
+        function appendClippedSegment(view, a, b, nearM) {
+            const segment = clipSegmentNear(view, a, b, nearM);
+            if (!segment) return false;
+            const start = camProject(view, segment[0][0], segment[0][1], segment[0][2]), end = camProject(view, segment[1][0], segment[1][1], segment[1][2]);
+            avCtx.moveTo(start[0], start[1]); avCtx.lineTo(end[0], end[1]);
+            return true;
+        }
+        function viewSegments(observed, drawType, target) {
+            const out = [], rangeM = VIEW_STYLE.cull_range_m;
+            if (observed) {
+                const source = drawType === 0 ? observed.lanes : (drawType === 2 ? observed.bounds : []), heights = drawType === 0 ? observed.laneZ : observed.boundZ;
+                for (let i=0;i<source.length;i++) { const s = source[i]; if (Math.hypot((s[0] + s[2]) / 2 - target.x, (s[1] + s[3]) / 2 - target.y) <= rangeM) out.push([s[0], s[1], heights[i], s[2], s[3], heights[i], elevationBand((s[0] + s[2]) / 2, (s[1] + s[3]) / 2, heights[i])]); }
+                return out;
+            }
+            for (let i=0;i<roadSegCount;i++) {
+                const o = i * 8;
+                if (roadSegs[o+6] !== drawType || Math.hypot((roadSegs[o] + roadSegs[o+3]) / 2 - target.x, (roadSegs[o+1] + roadSegs[o+4]) / 2 - target.y) > rangeM) continue;
+                out.push([roadSegs[o], roadSegs[o+1], roadSegs[o+2], roadSegs[o+3], roadSegs[o+4], roadSegs[o+5], roadSegs[o+7]]);
+            }
+            return out;
+        }
+        function trailRuns(frame, agent) {
+            const frames = H.dt ? Math.round(VIEW_STYLE.trail_seconds / H.dt) : 0, runs = [];
+            let run = [];
+            for (let k=Math.max(0, frame - frames); k<=frame; k++) {
+                const ib = (k * H.agent_cap + agent.idx) * F.ai, fb = (k * H.agent_cap + agent.idx) * F.af;
+                const alive = C.agent_i32[ib+2] === 1 && C.agent_i32[ib+5] === 0, x = C.agent_f32[fb], y = C.agent_f32[fb+1], z = C.agent_f32[fb+2];
+                const jumped = run.length > 0 && Math.hypot(x - run[run.length-1][0], y - run[run.length-1][1]) > VIEW_STYLE.trail_break_distance_m;
+                if (!alive || jumped) { if (run.length > 1) runs.push(run); run = []; }
+                if (alive) run.push([x, y, z]);
+            }
+            if (run.length > 1) runs.push(run);
+            return runs;
+        }
+        function loggedFutureRuns(frame, agent) {
+            if (!C.ghost_f32 || agent.slot < 0 || agent.slot >= H.chunks.ghost_f32.shape[1]) return [];
+            const slots = H.chunks.ghost_f32.shape[1], frames = H.dt ? Math.round(VIEW_STYLE.logged_future_seconds / H.dt) : 0, runs = [];
+            let run = [];
+            for (let k=frame; k<Math.min(H.frames, frame + frames + 1); k++) {
+                const b = (k * slots + agent.slot) * 5;
+                if (C.ghost_f32[b+4] <= 0) { if (run.length > 1) runs.push(run); run = []; continue; }
+                run.push([C.ghost_f32[b], C.ghost_f32[b+1], C.ghost_z_f32 ? C.ghost_z_f32[k * slots + agent.slot] : 0]);
+            }
+            if (run.length > 1) runs.push(run);
+            return runs;
+        }
+        function agentPathPoints(frame, agent) {
+            const base = (frame * H.agent_cap + agent.idx) * F.af + H.agent_path_field, n = H.agent_path_sample_count;
+            if (C.agent_f32[base] === 0 && C.agent_f32[base+1] === 0) return null;
+            const out = [];
+            for (let k=0;k<n;k++) out.push([C.agent_f32[base+2*k], C.agent_f32[base+2*k+1]]);
+            return out;
+        }
+        function elevatedPath(path, startZ) {
+            // each sample takes the road height on the level nearest the previous sample, so bridges keep the car's level
+            const out = [];
+            let previousZ = startZ;
+            for (const point of path) { previousZ = groundHeightM(point[0], point[1], previousZ); out.push([point[0], point[1], previousZ]); }
+            return out;
+        }
+        function resamplePolyline(points, pieceM) {
+            const out = [points[0]];
+            for (let i=1;i<points.length;i++) {
+                const a = points[i-1], b = points[i], pieces = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / pieceM));
+                for (let k=1;k<=pieces;k++) { const t = k / pieces; out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]); }
+            }
+            return out;
+        }
+        function ribbonQuads(points, halfWidthM) {
+            const normals = [];
+            for (let i=0;i<points.length;i++) {
+                const prev = points[Math.max(0, i-1)], next = points[Math.min(points.length-1, i+1)];
+                const dx = next[0] - prev[0], dy = next[1] - prev[1], len = Math.hypot(dx, dy);
+                normals.push(len > 0 ? [-dy / len, dx / len] : [0, 0]);
+            }
+            const quads = [];
+            for (let i=1;i<points.length;i++) {
+                const a = points[i-1], b = points[i], na = normals[i-1], nb = normals[i];
+                if (Math.hypot(b[0] - a[0], b[1] - a[1]) <= 0) continue;
+                quads.push([[a[0] + na[0] * halfWidthM, a[1] + na[1] * halfWidthM, a[2]], [b[0] + nb[0] * halfWidthM, b[1] + nb[1] * halfWidthM, b[2]], [b[0] - nb[0] * halfWidthM, b[1] - nb[1] * halfWidthM, b[2]], [a[0] - na[0] * halfWidthM, a[1] - na[1] * halfWidthM, a[2]]]);
+            }
+            return quads;
+        }
+        function hexAlpha(hex, alpha) { return 'rgba(' + parseInt(hex.slice(1,3),16) + ',' + parseInt(hex.slice(3,5),16) + ',' + parseInt(hex.slice(5,7),16) + ',' + alpha + ')'; }
+        function shadeColor(hex, normal) {
+            const light = VIEW_STYLE.box_light_direction, lightNorm = Math.sqrt(light[0]*light[0] + light[1]*light[1] + light[2]*light[2]);
+            const shade = VIEW_STYLE.box_ambient + VIEW_STYLE.box_diffuse * Math.max(0, (normal[0]*light[0] + normal[1]*light[1] + normal[2]*light[2]) / lightNorm);
+            const channel = offset => Math.min(255, Math.round(parseInt(hex.slice(offset, offset + 2), 16) * shade));
+            return 'rgb(' + channel(1) + ',' + channel(3) + ',' + channel(5) + ')';
+        }
+        function boxHeightM(agentType) { return agentType === 2 ? VIEW_STYLE.box_height_m.pedestrian : (agentType === 3 ? VIEW_STYLE.box_height_m.cyclist : VIEW_STYLE.box_height_m.vehicle); }
+        function boxChunks(a, heightM) {
+            const fx = Math.cos(a.h), fy = Math.sin(a.h), lx = -Math.sin(a.h), ly = Math.cos(a.h), halfW = a.w / 2, baseZ = a.z || 0;
+            const chunkCount = Math.max(1, Math.ceil(a.l / VIEW_STYLE.sort_chunk_length_m)), chunkLen = a.l / chunkCount, out = [];
+            const at = (along, side, z) => [a.x + fx * along + lx * side, a.y + fy * along + ly * side, baseZ + z];
+            for (let k=0;k<chunkCount;k++) {
+                const rear = -a.l / 2 + k * chunkLen, front = rear + chunkLen, mid = (rear + front) / 2;
+                const faces = [
+                    {corners:[at(rear, halfW, heightM), at(rear, -halfW, heightM), at(front, -halfW, heightM), at(front, halfW, heightM)], normal:[0, 0, 1], center:at(mid, 0, heightM)},
+                    {corners:[at(rear, halfW, 0), at(front, halfW, 0), at(front, halfW, heightM), at(rear, halfW, heightM)], normal:[lx, ly, 0], center:at(mid, halfW, heightM / 2)},
+                    {corners:[at(front, -halfW, 0), at(rear, -halfW, 0), at(rear, -halfW, heightM), at(front, -halfW, heightM)], normal:[-lx, -ly, 0], center:at(mid, -halfW, heightM / 2)},
+                ];
+                if (k === 0) faces.push({corners:[at(rear, -halfW, 0), at(rear, halfW, 0), at(rear, halfW, heightM), at(rear, -halfW, heightM)], normal:[-fx, -fy, 0], center:at(rear, 0, heightM / 2)});
+                if (k === chunkCount - 1) faces.push({corners:[at(front, halfW, 0), at(front, -halfW, 0), at(front, -halfW, heightM), at(front, halfW, heightM)], normal:[fx, fy, 0], center:at(front, 0, heightM / 2)});
+                out.push({centroid:at(mid, 0, heightM / 2), faces:faces});
+            }
+            return out;
+        }
+        function agentViewPrimitives(frame, target, observed, view) {
+            // painter's list per elevation band (bridge decks after the roads beneath); within a band ground layers sort before cars
+            const colors = VIEW_STYLE.agent_view_colors, lineWidths = VIEW_STYLE.agent_view_line_width_px, bias = VIEW_STYLE.agent_view_sort_bias_m;
+            const pieceM = VIEW_STYLE.agent_view_piece_length_m, halfLaneM = VIEW_STYLE.lane_surface_width_m / 2, primitives = [];
+            const distanceM = (x, y, z) => Math.hypot(x - view.eye[0], y - view.eye[1], z - view.eye[2]);
+            const pushLine = (a, b, color, widthPx, sortBias, band) => primitives.push({kind:'line', band:band, key:distanceM((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2) + sortBias, a:a, b:b, stroke:color, strokeWidth:widthPx});
+            const bandAt = (a, b) => elevationBand((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2);
+            for (const s of viewSegments(observed, 0, target)) {
+                const dx = s[3] - s[0], dy = s[4] - s[1], dz = s[5] - s[2], len = Math.hypot(dx, dy);
+                if (len <= 0) continue;
+                const nx = -dy / len * halfLaneM, ny = dx / len * halfLaneM, pieces = Math.max(1, Math.ceil(len / pieceM));
+                for (let k=0;k<pieces;k++) {
+                    const t0 = k / pieces, t1 = (k + 1) / pieces;
+                    const ax = s[0] + dx * t0, ay = s[1] + dy * t0, az = s[2] + dz * t0, bx = s[0] + dx * t1, by = s[1] + dy * t1, bz = s[2] + dz * t1;
+                    primitives.push({kind:'polygon', band:s[6], key:distanceM((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2) + bias.surface, points:[[ax - nx, ay - ny, az], [bx - nx, by - ny, bz], [bx + nx, by + ny, bz], [ax + nx, ay + ny, az]], fill:colors.road, stroke:colors.road, strokeWidth:dpr});
+                }
+            }
+            for (const lineType of [[1, colors.line, lineWidths.road_line], [2, colors.edge, lineWidths.edge]]) {
+                for (const s of viewSegments(observed, lineType[0], target)) {
+                    const pieces = Math.max(1, Math.ceil(Math.hypot(s[3] - s[0], s[4] - s[1]) / pieceM));
+                    for (let k=0;k<pieces;k++) {
+                        const t0 = k / pieces, t1 = (k + 1) / pieces;
+                        pushLine([s[0] + (s[3] - s[0]) * t0, s[1] + (s[4] - s[1]) * t0, s[2] + (s[5] - s[2]) * t0], [s[0] + (s[3] - s[0]) * t1, s[1] + (s[4] - s[1]) * t1, s[2] + (s[5] - s[2]) * t1], lineType[1], lineType[2] * dpr, bias.line, s[6]);
+                    }
+                }
+            }
+            const controls = observed ? observed.stopLines : [];
+            if (!observed) for (let i=0;i<H.traffic_static_count;i++) { const t = trafficAt(frame, i); if (t) controls.push({x0:t.stop_line[0], y0:t.stop_line[1], z0:t.stop_line[2], x1:t.stop_line[3], y1:t.stop_line[4], z1:t.stop_line[5], type:t.type, state:t.state}); }
+            for (const t of controls) {
+                if (Math.hypot((t.x0 + t.x1) / 2 - target.x, (t.y0 + t.y1) / 2 - target.y) > VIEW_STYLE.cull_range_m) continue;
+                const color = t.type === 1 ? trafficColor(t) : (t.type === 2 ? VIEW_STYLE.stop_sign_color : VIEW_STYLE.yield_sign_color);
+                pushLine([t.x0, t.y0, t.z0], [t.x1, t.y1, t.z1], color, lineWidths.stop_line * dpr, bias.stop_line, bandAt([t.x0, t.y0, t.z0], [t.x1, t.y1, t.z1]));
+            }
+            const vertexCount = VIEW_STYLE.goal_polygon_vertex_count;
+            for (const g of selectedGoals(frame, target)) {
+                const goalZ = groundHeightM(g.x, g.y, target.z), polygon = [];
+                for (let k=0;k<vertexCount;k++) polygon.push([g.x + g.radius * Math.cos(k * 2 * Math.PI / vertexCount), g.y + g.radius * Math.sin(k * 2 * Math.PI / vertexCount), goalZ]);
+                primitives.push({kind:'polygon', band:elevationBand(g.x, g.y, goalZ), key:distanceM(g.x, g.y, goalZ) + bias.goal, points:polygon, fill:hexAlpha(VIEW_STYLE.goal_color, VIEW_STYLE.goal_fill_alpha), stroke:VIEW_STYLE.goal_color, strokeWidth:dpr});
+            }
+            const trajectoryWidth = lineWidths.trajectory * dpr;
+            for (const run of trailRuns(frame, target)) for (let i=1;i<run.length;i++) pushLine(run[i-1], run[i], hexAlpha(target.c, VIEW_STYLE.trail_alpha), trajectoryWidth, bias.trajectory, bandAt(run[i-1], run[i]));
+            for (const run of loggedFutureRuns(frame, target)) for (let i=1;i<run.length;i++) pushLine(run[i-1], run[i], hexAlpha(VIEW_STYLE.logged_future_color, VIEW_STYLE.logged_future_alpha), trajectoryWidth, bias.trajectory, bandAt(run[i-1], run[i]));
+            const path = agentPathPoints(frame, target);
+            if (path) {
+                for (const quad of ribbonQuads(resamplePolyline(elevatedPath(path, target.z), pieceM), target.w / 2)) {
+                    const center = [(quad[0][0] + quad[2][0]) / 2, (quad[0][1] + quad[2][1]) / 2, (quad[0][2] + quad[2][2]) / 2];
+                    primitives.push({kind:'polygon', band:elevationBand(center[0], center[1], center[2]), key:distanceM(center[0], center[1], center[2]) + bias.trajectory, points:quad, fill:hexAlpha(VIEW_STYLE.predicted_path_color, VIEW_STYLE.predicted_path_alpha)});
+                }
+            }
+            const drawEgo = VIEW_STYLE.cameras[agentViewPreset].draw_ego;
+            for (let i=0;i<H.agent_cap;i++) {
+                const a = agentAt(frame, i);
+                if (!a || (a.idx === target.idx && !drawEgo) || (visibleAgentIdx && !visibleAgentIdx.has(a.idx))) continue;
+                if (Math.hypot(a.x - target.x, a.y - target.y) > VIEW_STYLE.cull_range_m) continue;
+                const band = elevationBand(a.x, a.y, a.z || 0);
+                for (const chunk of boxChunks(a, boxHeightM(a.type))) primitives.push({kind:'box', band:band, key:distanceM(chunk.centroid[0], chunk.centroid[1], chunk.centroid[2]), faces:chunk.faces, color:a.c});
+            }
+            const heightM = VIEW_STYLE.box_height_m.vehicle;
+            for (const p of (observed ? observed.unmatchedPartners : [])) {
+                const fx = Math.cos(p.h), fy = Math.sin(p.h), halfL = p.l / 2, halfW = p.w / 2;
+                const footprint = [[-halfL, halfW], [halfL, halfW], [halfL, -halfW], [-halfL, -halfW]].map(q => [p.x + fx * q[0] - fy * q[1], p.y + fy * q[0] + fx * q[1]]);
+                for (let k=0;k<4;k++) {
+                    const a = footprint[k], b = footprint[(k+1) % 4];
+                    const band = elevationBand(p.x, p.y, p.z);
+                    pushLine([a[0], a[1], p.z], [b[0], b[1], p.z], colors.box_outline, 1.5 * dpr, 0, band);
+                    pushLine([a[0], a[1], p.z + heightM], [b[0], b[1], p.z + heightM], colors.box_outline, 1.5 * dpr, 0, band);
+                    pushLine([a[0], a[1], p.z], [a[0], a[1], p.z + heightM], colors.box_outline, 1.5 * dpr, 0, band);
+                }
+            }
+            primitives.sort((p, q) => (p.band - q.band) || (q.key - p.key));
+            return primitives;
+        }
+        function drawAgentView(frame, target, observed) {
+            const rect = avC.getBoundingClientRect();
+            if (rect.width <= 0) return;
+            const aspect = VIEW_STYLE.agent_view_aspect, widthPx = Math.max(2, Math.floor(rect.width * dpr)), heightPx = Math.max(2, Math.floor(widthPx * aspect[1] / aspect[0]));
+            if (avC.width !== widthPx || avC.height !== heightPx) { avC.width = widthPx; avC.height = heightPx; }
+            const view = agentViewCamera(target, agentViewPreset, avC.width, avC.height), colors = VIEW_STYLE.agent_view_colors, nearM = VIEW_STYLE.near_plane_m;
+            avCtx.setTransform(1, 0, 0, 1, 0, 0);
+            avCtx.fillStyle = colors.ground; avCtx.fillRect(0, 0, avC.width, avC.height);
+            avCtx.fillStyle = colors.sky; avCtx.fillRect(0, 0, avC.width, Math.min(Math.max(view.horizonYPx, 0), avC.height));
+            avCtx.lineCap = 'round'; avCtx.lineJoin = 'round';
+            for (const p of agentViewPrimitives(frame, target, observed, view)) {
+                if (p.kind === 'line') {
+                    avCtx.beginPath();
+                    if (!appendClippedSegment(view, p.a, p.b, nearM)) continue;
+                    avCtx.strokeStyle = p.stroke; avCtx.lineWidth = p.strokeWidth; avCtx.stroke();
+                    continue;
+                }
+                if (p.kind === 'polygon') {
+                    avCtx.beginPath();
+                    if (!appendClippedPolygon(view, p.points, nearM)) continue;
+                    avCtx.fillStyle = p.fill; avCtx.fill();
+                    if (p.stroke) { avCtx.strokeStyle = p.stroke; avCtx.lineWidth = p.strokeWidth; avCtx.stroke(); }
+                    continue;
+                }
+                for (const face of p.faces) {
+                    const toEye = [view.eye[0] - face.center[0], view.eye[1] - face.center[1], view.eye[2] - face.center[2]];
+                    if (toEye[0] * face.normal[0] + toEye[1] * face.normal[1] + toEye[2] * face.normal[2] <= 0) continue;
+                    avCtx.beginPath();
+                    if (!appendClippedPolygon(view, face.corners, nearM)) continue;
+                    avCtx.fillStyle = shadeColor(p.color, face.normal); avCtx.fill();
+                    avCtx.strokeStyle = colors.box_outline; avCtx.lineWidth = dpr; avCtx.stroke();
+                }
+            }
         }
         let panelKey = null, refs = null, lastWarnKey = "";
         function ensurePanels() {
@@ -1625,7 +2128,10 @@ self.onmessage = async event => {
             const warnings = []; if(C.metrics_f32[mb] === 1) warnings.push("COLLISION"); if(C.metrics_f32[mb+1] === 1) warnings.push("OFFROAD"); if(C.metrics_f32[mb+2] === 1) warnings.push("RED LIGHT"); if(C.metrics_f32[mb+3] === 1) warnings.push("STOP SIGN");
             const warnKey = warnings.join('|'), warnRow = document.getElementById('warn-row');
             if (warnKey !== lastWarnKey) { lastWarnKey = warnKey; warnRow.style.display = warnings.length ? 'flex' : 'none'; warnRow.innerHTML = warnings.map(w=>`<span class="warn-chip">${w}</span>`).join(''); }
-            const obs = decodeObs(f, agent.slot); if (obs) { obsBox.style.display='block'; drawObs(obs); } else obsBox.style.display='none';
+            const obs = decodeObs(f, agent.slot), obsTitle = document.getElementById('obs-title-text');
+            if (obs) { obsBox.style.display='block'; obsTitle.textContent='Ego-centric observation'; drawObs(obs); }
+            else if (C.obs && agent.slot >= 0) { obsBox.style.display='block'; obsTitle.textContent=missingObservationsText(); obsCtx.fillStyle='#fff'; obsCtx.fillRect(0,0,obsC.width,obsC.height); }
+            else obsBox.style.display='none';
         }
         function draw(force=false) {
             if(!H) return;
@@ -1634,15 +2140,20 @@ self.onmessage = async event => {
             const target = followedId !== null ? findAgent(f, followedId) : null;
             if (target) { cam.x = target.x; cam.y = target.y; }
             updateUI(target);
+            const observed = observedSetFor(f, target);
+            visibleAgentIdx = observed ? new Set([target.idx].concat(observed.partnerAgentIdx)) : null;
+            visibleAgentSlots = observed ? new Set(Array.from(visibleAgentIdx, i => agentAt(f, i)).filter(a => a && a.slot >= 0).map(a => a.slot)) : null;
             const colors = getColors(); ctx.fillStyle = colors.bg; ctx.fillRect(0,0,c.width,c.height); ctx.save(); ctx.translate(c.width/2,c.height/2); ctx.scale(cam.z,-cam.z); if(isEgoCam && target) ctx.rotate(Math.PI/2 - target.h); ctx.translate(-cam.x,-cam.y);
-            ctx.lineCap='round'; ctx.strokeStyle=colors.road; ctx.lineWidth=.5; ctx.stroke(paths[0]); ctx.strokeStyle=colors.line; ctx.setLineDash([1,1]); ctx.stroke(paths[1]); ctx.setLineDash([]); ctx.strokeStyle=colors.edge; ctx.lineWidth=.8; ctx.stroke(paths[2]);
-            drawCurrentLane(target, colors);
+            if (observed) drawObservedMap(observed, colors);
+            else { ctx.lineCap='round'; ctx.strokeStyle=colors.road; ctx.lineWidth=.5; ctx.stroke(paths[0]); ctx.strokeStyle=colors.line; ctx.setLineDash([1,1]); ctx.stroke(paths[1]); ctx.setLineDash([]); ctx.strokeStyle=colors.edge; ctx.lineWidth=.8; ctx.stroke(paths[2]); drawCurrentLane(target, colors); }
             drawGhosts(f);
             drawPredictedPath(f);
-            for(const a of getFrameAgents(f)){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
-            for(let i=0;i<H.traffic_static_count;i++){ const t=trafficAt(f,i); if(!t) continue; const sl=t.stop_line; ctx.lineCap='butt'; if(t.type === 1){ ctx.strokeStyle=trafficColor(t); ctx.lineWidth=Math.min(1.5,3/cam.z); } else { ctx.strokeStyle=t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth=Math.min(1.2,2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]); } ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke(); ctx.setLineDash([]); }
+            for(const a of getFrameAgents(f)){ if(visibleAgentIdx && !visibleAgentIdx.has(a.idx)) continue; ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
+            if (observed) { drawUnmatchedPartners(observed, colors); drawObservedStopLines(observed); }
+            for(let i=0;i<H.traffic_static_count && !observed;i++){ const t=trafficAt(f,i); if(!t) continue; const sl=t.stop_line; ctx.lineCap='butt'; if(t.type === 1){ ctx.strokeStyle=trafficColor(t); ctx.lineWidth=Math.min(1.5,3/cam.z); } else { ctx.strokeStyle=t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth=Math.min(1.2,2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]); } ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke(); ctx.setLineDash([]); }
             if(target){ for(const g of selectedGoals(f,target)){ ctx.strokeStyle='#38bdf8'; ctx.fillStyle='rgba(56,189,248,.22)'; ctx.lineWidth=Math.max(.25,2.5/cam.z); ctx.beginPath(); ctx.arc(g.x,g.y,g.radius,0,7); ctx.fill(); ctx.stroke(); } }
             ctx.restore(); lastDrawn = f;
+            if (agentViewOn && target) drawAgentView(f, target, observed);
         }
         function toggle(){ play=!play; lastTick=performance.now(); updateBtn(); if(play) requestAnimationFrame(loop); }
         function updateBtn(){ document.getElementById('btnPlay').innerHTML = play ? SVG_PAUSE : SVG_PLAY; }
@@ -1651,7 +2162,7 @@ self.onmessage = async event => {
             if(!play) return;
             const dt = Math.min((ts-lastTick)/1000, 0.25);
             lastTick = ts;
-            step += dt * speed * 10;
+            step += dt * speed * VIEW_STYLE.replay_frames_per_second;
             while(step > frameMax()) step -= frameMax() + 1;
             draw();
             requestAnimationFrame(loop);
@@ -1670,10 +2181,18 @@ self.onmessage = async event => {
         f"{payload[chunk_start : chunk_start + PAYLOAD_CHUNK_SIZE]}</script>"
         for chunk_start in range(0, len(payload), PAYLOAD_CHUNK_SIZE)
     )
+    map_colors = replay_format.REPLAY_VIEW_STYLE["map_colors"]
     final_html = (
-        html_template.replace("__PAYLOAD_CHUNKS__", payload_chunks)
-        .replace("__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":")))
+        html_template.replace("__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":")))
         .replace("__VEHICLE_COLORS__", json.dumps(VEHICLE_COLORS, separators=(",", ":")))
+        .replace("__REPLAY_VIEW_STYLE__", json.dumps(replay_format.REPLAY_VIEW_STYLE, separators=(",", ":")))
+        .replace("__MAP_ROAD_LIGHT__", map_colors["light"]["road"])
+        .replace("__MAP_LINE_LIGHT__", map_colors["light"]["line"])
+        .replace("__MAP_EDGE_LIGHT__", map_colors["light"]["edge"])
+        .replace("__MAP_ROAD_DARK__", map_colors["dark"]["road"])
+        .replace("__MAP_LINE_DARK__", map_colors["dark"]["line"])
+        .replace("__MAP_EDGE_DARK__", map_colors["dark"]["edge"])
+        .replace("__PAYLOAD_CHUNKS__", payload_chunks)
     )
     with open(filename, "w") as f:
         f.write(final_html)

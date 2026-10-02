@@ -25,6 +25,8 @@ import shlex
 from datetime import datetime
 from threading import Thread
 from collections import defaultdict, deque
+from dataclasses import dataclass
+import json
 import yaml
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
@@ -88,6 +90,12 @@ HIDDEN_DASHBOARD_METRICS = {
 # Metric key prefixes for benchmark results. Training evaluation logs a step series;
 # a standalone eval writes run-level summaries, so the two never share a key.
 TRAINING_EVAL_KEY_PREFIX = "eval_"
+# Bounded wait for a background video job; stays under the 10-minute NCCL collective timeout under DDP.
+RENDER_WAIT_TIMEOUT_SECONDS = 480
+CHECKPOINT_RENDER_DIR_NAME = "render"
+CHECKPOINT_RENDER_LOG_NAME = "render.log"
+CHECKPOINT_RENDER_VIDEO_DIR_NAME = "videos"
+CHECKPOINT_RENDER_MANIFEST_NAME = "manifest.json"
 
 # Environment variables coordinate the perf launcher and profiled child.
 PROFILE_SUBPROCESS_ENV = "PUFFER_PROFILE_SUBPROCESS"
@@ -1476,6 +1484,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     if vecenv is None:
         validate_puffer_drive_resources(args, "training")
     training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
+    checkpoint_render_scheduled = drive_benchmark.validate_checkpoint_render_config(args)
 
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -1581,6 +1590,13 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
     all_logs = []
     last_training_evaluation_epoch = None
+    pending_render = None
+    last_rendered_epoch = None
+    render_interval_epochs = (
+        args["train"]["checkpoint_interval"] * args["render"]["interval_checkpoints"]
+        if checkpoint_render_scheduled
+        else None
+    )
 
     while pufferl.global_step < train_config["total_timesteps"]:
         if is_cuda_device(train_config["device"]):
@@ -1617,6 +1633,22 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                     run_dir=path,
                 )
 
+        if pending_render is not None and pending_render.process.poll() is not None:
+            log_checkpoint_render(pending_render, pufferl.logger, _global_agent_steps(pufferl))
+            pending_render = None
+        if checkpoint_render_scheduled and is_rank0 and pufferl.epoch % render_interval_epochs == 0:
+            last_rendered_epoch = pufferl.epoch
+            if pending_render is not None:
+                _finish_checkpoint_render(pending_render, pufferl.logger, _global_agent_steps(pufferl))
+            pending_render = run_checkpoint_render(
+                env_name=env_name,
+                args=args,
+                policy=pufferl.uncompiled_policy,
+                epoch=pufferl.epoch,
+                global_step=_global_agent_steps(pufferl),
+                run_dir=path,
+            )
+
         if logs is not None:
             should_stop_early = False
             if early_stop_fn is not None:
@@ -1631,6 +1663,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 all_logs.append(logs)
 
             if should_stop_early:
+                if pending_render is not None:
+                    _finish_checkpoint_render(pending_render, pufferl.logger, _global_agent_steps(pufferl))
                 model_path = pufferl.close()
                 pufferl.logger.close(model_path, early_stop=True)
                 return all_logs
@@ -1655,6 +1689,20 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             run_dir=path,
         )
 
+    if checkpoint_render_scheduled and is_rank0 and last_rendered_epoch != pufferl.epoch:
+        if pending_render is not None:
+            _finish_checkpoint_render(pending_render, pufferl.logger, _global_agent_steps(pufferl))
+        pending_render = run_checkpoint_render(
+            env_name=env_name,
+            args=args,
+            policy=pufferl.uncompiled_policy,
+            epoch=pufferl.epoch,
+            global_step=_global_agent_steps(pufferl),
+            run_dir=path,
+        )
+    if pending_render is not None:
+        _finish_checkpoint_render(pending_render, pufferl.logger, _global_agent_steps(pufferl))
+
     logs = pufferl.mean_and_log()
     if logs is not None:
         all_logs.append(logs)
@@ -1673,9 +1721,10 @@ def eval(
     eval_output_subdir=None,
     use_training_config=False,
     benchmark_names=None,
+    overrides=None,
 ):
     """Run configured benchmarks or replay failures from an existing CSV."""
-    cli_overrides = list(sys.argv[1:]) if args is None else []
+    cli_overrides = list(sys.argv[1:]) if args is None else list(overrides or ())
     if any(override.split("=", 1)[0] == "env.num_agents" for override in cli_overrides):
         raise pufferlib.APIUsageError("Use eval.num_agents to configure evaluation agent count")
     args = args or load_config(env_name)
@@ -1694,9 +1743,7 @@ def eval(
     if use_training_config:
         if policy is None:
             raise pufferlib.APIUsageError("Training evaluation requires the live policy")
-        base_args = copy.deepcopy(args)
-        environment_config["obs_dropout_lane"] = base_args["env"]["obs_dropout_lane"]
-        environment_config["obs_dropout_boundary"] = base_args["env"]["obs_dropout_boundary"]
+        base_args = drive_benchmark.training_benchmark_base_args(args, environment_config)
         checkpoint_config_path = None
     else:
         base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
@@ -1788,6 +1835,7 @@ def eval(
         benchmark_results[benchmark["name"]] = {
             "episodes": summaries,
             "summary": summary,
+            "output_dir": benchmark_output_dir,
         }
 
         if render_scenarios:
@@ -2391,6 +2439,142 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
         if hasattr(policy, "train"):
             policy.train(policy_was_training)
         restore_rng_state({"rng_state": rng_state})
+
+
+@dataclass
+class CheckpointRender:
+    process: subprocess.Popen
+    video_dir: str
+    log_path: str
+    epoch: int
+
+
+def run_checkpoint_render(env_name, args, policy, epoch, global_step, run_dir):
+    """Roll out the live policy on the render benchmark, write its HTML replays, and start the background video job."""
+    render_config = args["render"]
+    benchmark_name = render_config["benchmark"]
+    render_output_dir = os.path.join(run_dir, CHECKPOINT_RENDER_DIR_NAME)
+    render_subdir = f"epoch_{epoch:06d}_step_{global_step}"
+    if os.path.exists(os.path.join(render_output_dir, benchmark_name, render_subdir)):
+        print(
+            f"[checkpoint render] {benchmark_name}/{render_subdir} already exists; skipping the render at epoch {epoch}"
+        )
+        return None
+
+    rng_state = capture_rng_state()
+    policy_was_training = bool(getattr(policy, "training", False))
+    try:
+        render_args = drive_benchmark.checkpoint_render_args(args)
+        environment_config, benchmarks = drive_benchmark.load_benchmark_config(
+            render_args["eval"]["benchmark_config"], benchmark_name
+        )
+        overrides = drive_benchmark.checkpoint_render_overrides(render_args, benchmarks[0], environment_config)
+        benchmark_result = eval(
+            env_name=env_name,
+            args=render_args,
+            policy=policy,
+            eval_output_dir=render_output_dir,
+            eval_output_subdir=render_subdir,
+            use_training_config=True,
+            benchmark_names=benchmark_name,
+            overrides=overrides,
+        )[benchmark_name]
+        if not benchmark_result["episodes"]:
+            print(f"[checkpoint render] The render at epoch {epoch} recorded no episodes; no videos")
+            return None
+
+        benchmark_output_dir = benchmark_result["output_dir"]
+        video_dir = os.path.join(benchmark_output_dir, CHECKPOINT_RENDER_VIDEO_DIR_NAME)
+        os.makedirs(video_dir)
+        log_path = os.path.join(video_dir, CHECKPOINT_RENDER_LOG_NAME)
+        command = [
+            sys.executable,
+            "-m",
+            "pufferlib.replay_video",
+            "--replay-dir",
+            os.path.join(benchmark_output_dir, drive_eval_replay.ZLIB_REPLAY_DIR_NAME),
+            "--video-dir",
+            video_dir,
+            "--views",
+            ",".join(render_config["views"]),
+        ]
+        if not args["eval"]["keep_zlib_replays"]:
+            command.append("--delete-replays")
+        git_commit = (args.get("git") or {}).get("commit_hash")
+        if git_commit:
+            command += ["--git-commit", git_commit]
+        with open(log_path, "w") as log_file:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                env={**os.environ, "PYTHONUNBUFFERED": "1", "OMP_NUM_THREADS": "1"},
+            )
+        print(
+            f"[checkpoint render] Epoch {epoch}: HTML replays in {benchmark_output_dir}; "
+            f"videos render in the background (log: {log_path})"
+        )
+        return CheckpointRender(process=process, video_dir=video_dir, log_path=log_path, epoch=epoch)
+    except Exception:
+        print(f"\n[checkpoint render] Render failed at epoch {epoch}; continuing training:")
+        traceback.print_exc()
+        return None
+    finally:
+        if hasattr(policy, "train"):
+            policy.train(policy_was_training)
+        restore_rng_state({"rng_state": rng_state})
+
+
+def log_checkpoint_render(render, logger, global_step):
+    """Log a finished video job's videos under render/<view>; never raises into the training loop."""
+    try:
+        if render.process.returncode != 0:
+            print(
+                f"[checkpoint render] Video job for epoch {render.epoch} exited with code "
+                f"{render.process.returncode}; see {render.log_path}"
+            )
+        manifest_path = os.path.join(render.video_dir, CHECKPOINT_RENDER_MANIFEST_NAME)
+        if not os.path.isfile(manifest_path):
+            print(f"[checkpoint render] No video manifest for epoch {render.epoch}; see {render.log_path}")
+            return
+        with open(manifest_path) as manifest_file:
+            manifest = json.load(manifest_file)
+        videos_by_view = defaultdict(list)
+        for video in manifest["videos"]:
+            videos_by_view[video["view"]].append(video)
+        if not videos_by_view:
+            return
+        wandb = getattr(logger, "wandb", None)
+        if wandb is None:
+            video_paths = [video["path"] for videos in videos_by_view.values() for video in videos]
+            print(f"[checkpoint render] Epoch {render.epoch} videos: {', '.join(video_paths)}")
+            return
+        logs = {
+            f"render/{view}": [
+                wandb.Video(video["path"], format="mp4", caption=f"epoch {render.epoch} · {video['stem']}")
+                for video in videos
+            ]
+            for view, videos in videos_by_view.items()
+        }
+        logs["render/epoch"] = render.epoch
+        logger.log(logs, global_step)
+    except Exception:
+        print(f"[checkpoint render] Logging the videos for epoch {render.epoch} failed; continuing training:")
+        traceback.print_exc()
+
+
+def _finish_checkpoint_render(render, logger, global_step):
+    try:
+        render.process.wait(timeout=RENDER_WAIT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        render.process.kill()
+        render.process.wait()
+        print(
+            f"[checkpoint render] Video job for epoch {render.epoch} exceeded {RENDER_WAIT_TIMEOUT_SECONDS}s "
+            f"and was killed; see {render.log_path}"
+        )
+    log_checkpoint_render(render, logger, global_step)
 
 
 def _render_eval_failures(

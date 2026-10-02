@@ -469,7 +469,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
         assert (header["obs_dim"] > 0) is capture_observations
         assert required_chunks <= set(header["chunks"])
         assert header["agent_goal_radius_field"] == 12
-        assert header["chunks"]["agent_f32"]["shape"][2] == 13
+        assert header["chunks"]["agent_f32"]["shape"][2] == binding.AGENT_F32_FIELDS
         assert header["chunks"]["rewards_f32"]["shape"][2] == 14
         agent_frames = _read_replay_float32_chunk(replay_path, "agent_f32")
         assert np.any(agent_frames[..., header["agent_goal_radius_field"]] > 0.0)

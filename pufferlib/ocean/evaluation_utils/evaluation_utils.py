@@ -1,5 +1,6 @@
 import copy
 import os
+import subprocess
 
 import numpy as np
 import pandas as pd
@@ -25,6 +26,8 @@ FAILURE_RENDER_FILTER_COLUMNS = (
     "offroad_rate",
     "red_light_violation_rate",
 )
+FFMPEG_ENCODER_PROBE_COMMAND = ("ffmpeg", "-hide_banner", "-encoders")
+CHECKPOINT_RENDER_VIDEO_ENCODER = "libx264"
 
 
 def _require_mapping(value, label):
@@ -91,6 +94,100 @@ def validate_training_evaluation_config(args):
         raise pufferlib.APIUsageError("train.evaluation_benchmarks must select at least one benchmark")
 
     load_benchmark_config(eval_config["benchmark_config"], evaluation_benchmarks)
+    return True
+
+
+def training_benchmark_base_args(args, environment_config):
+    """Base args for benchmarks run with the live training policy; benchmarks inherit its observation dropout."""
+    base_args = copy.deepcopy(args)
+    environment_config["obs_dropout_lane"] = base_args["env"]["obs_dropout_lane"]
+    environment_config["obs_dropout_boundary"] = base_args["env"]["obs_dropout_boundary"]
+    return base_args
+
+
+def checkpoint_render_args(args):
+    render_args = copy.deepcopy(args)
+    render_args["load_model_path"] = None
+    render_args["eval"].update(
+        benchmarks=render_args["render"]["benchmark"],
+        render_scenarios=True,
+        capture_observations=True,
+        keep_zlib_replays=True,
+        render_filter=None,
+        failure_replay_csv=None,
+        output_name=None,
+    )
+    return render_args
+
+
+def checkpoint_render_overrides(args, benchmark, environment_config):
+    """Benchmark overrides for a checkpoint render: short, non-terminating episodes without padding agent slots."""
+    render_config = args["render"]
+    overrides = [f"num_scenarios={render_config['num_scenarios']}", "env.termination_mode=false", "train.compile=false"]
+    if render_config["scenario_length"] is not None:
+        overrides += [
+            f"env.scenario_length={render_config['scenario_length']}",
+            f"env.resample_frequency={render_config['scenario_length']}",
+        ]
+    probe_environment_config = copy.deepcopy(environment_config)
+    probe_args = build_benchmark_args(
+        training_benchmark_base_args(args, probe_environment_config),
+        benchmark,
+        probe_environment_config,
+        overrides,
+    )
+    if probe_args["env"]["simulation_mode"] == "gigaflow":
+        overrides.append(f"eval.num_agents={probe_args['env']['max_agents_per_env']}")
+    return overrides
+
+
+def validate_checkpoint_render_config(args):
+    render_config = args.get("render")
+    if render_config is None or render_config["interval_checkpoints"] is None:
+        return False
+
+    views = render_config["views"]
+    if not views or len(set(views)) != len(views):
+        raise pufferlib.APIUsageError("render.views must list each of world, bev, agent at most once, and at least one")
+    benchmark_name = render_config["benchmark"]
+    if "," in benchmark_name:
+        raise pufferlib.APIUsageError("render.benchmark must name exactly one benchmark")
+
+    render_args = checkpoint_render_args(args)
+    environment_config, benchmarks = load_benchmark_config(render_args["eval"]["benchmark_config"], benchmark_name)
+    benchmark = benchmarks[0]
+    scenario_length = render_config["scenario_length"]
+    trains_render_env = bool(benchmark["env"].get("eval_training_render"))
+    simulation_mode = (
+        render_args["env"]["simulation_mode"]
+        if trains_render_env
+        else benchmark["env"].get("simulation_mode", environment_config.get("simulation_mode"))
+    )
+    if trains_render_env and scenario_length is None:
+        raise pufferlib.APIUsageError(
+            f"render.scenario_length is required for {benchmark_name}, which otherwise runs the training "
+            f"scenario_length ({render_args['env']['scenario_length']} steps)"
+        )
+    if simulation_mode == "replay" and scenario_length is not None:
+        raise pufferlib.APIUsageError(
+            f"render.scenario_length must be null for replay benchmark {benchmark_name}; its logged data fixes the length"
+        )
+    final_environment_config = copy.deepcopy(environment_config)
+    build_benchmark_args(
+        training_benchmark_base_args(render_args, final_environment_config),
+        benchmark,
+        final_environment_config,
+        checkpoint_render_overrides(render_args, benchmark, environment_config),
+    )
+
+    try:
+        encoder_probe = subprocess.run(FFMPEG_ENCODER_PROBE_COMMAND, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        raise pufferlib.APIUsageError(f"Checkpoint renders need ffmpeg on PATH: {exc}") from exc
+    if encoder_probe.returncode != 0 or CHECKPOINT_RENDER_VIDEO_ENCODER not in encoder_probe.stdout.split():
+        raise pufferlib.APIUsageError(
+            f"Checkpoint renders need ffmpeg with the {CHECKPOINT_RENDER_VIDEO_ENCODER} encoder"
+        )
     return True
 
 

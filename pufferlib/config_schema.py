@@ -240,6 +240,12 @@ class ProfileMode(Enum):
     all = 2
 
 
+class RenderView(Enum):
+    world = 0
+    bev = 1
+    agent = 2
+
+
 @dataclass
 class VectorConfig:
     backend: VectorBackend = MISSING
@@ -481,6 +487,15 @@ class EvaluationConfig:
 
 
 @dataclass
+class CheckpointRenderConfig:
+    interval_checkpoints: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    views: list[RenderView] = MISSING
+    benchmark: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
+    num_scenarios: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    scenario_length: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
+
+
+@dataclass
 class PufferDriveConfig:
     load_model_path: str | None = MISSING
     load_id: str | None = MISSING
@@ -511,6 +526,7 @@ class PufferDriveConfig:
     train: TrainingConfig = MISSING
     sweep: dict = MISSING
     eval: EvaluationConfig | None = None
+    render: CheckpointRenderConfig | None = None
     controlled_exp: dict = MISSING
 
     # Known runtime metadata/options are optional and are not materialized in
@@ -931,7 +947,12 @@ def _validate_cross_field_constraints(config, context):
                         f"the effective minibatch size ({effective_minibatch_size}) must be divisible by the auto-computed bptt_horizon ({horizon})",
                     )
     eval_config = config["eval"]
-    evaluation_required = context.startswith("evaluation") or config["train"]["evaluation_interval_epochs"] is not None
+    checkpoint_render_required = (config.get("render") or {}).get("interval_checkpoints") is not None
+    evaluation_required = (
+        context.startswith("evaluation")
+        or config["train"]["evaluation_interval_epochs"] is not None
+        or checkpoint_render_required
+    )
     if not eval_config:
         if evaluation_required:
             _raise_config_error(context, "eval", "a complete eval section is required")

@@ -357,6 +357,17 @@ eval:
   observation_replay_writer_count: 4
   # Options: sample | mode | mean
   action_selection: mean
+# Videos of the live policy rendered from saved checkpoints and logged to wandb under render/<view>.
+render:
+  # Render every N saved checkpoints (N * train.checkpoint_interval epochs); null disables. Each render blocks ~1 min, videos take ~5 min in the background, ~150 MiB disk.
+  interval_checkpoints: null
+  # Any of world | bev | agent; bev and agent follow the first policy agent of each scenario.
+  views: [world, bev, agent]
+  # Exactly one benchmark from eval.benchmark_config.
+  benchmark: carla_render
+  num_scenarios: 4
+  # Required for eval_training_render benchmarks, optional for gigaflow ones, must be null for replay benchmarks.
+  scenario_length: 300
 controlled_exp:
   train:
     # [sweep.train.learning_rate]

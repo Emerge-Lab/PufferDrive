@@ -839,6 +839,24 @@ class Drive(pufferlib.PufferEnv):
 
     # ====== Replay capture (active when capture_replay=True) ======
 
+    def observation_layout(self):
+        return {
+            "ego_features": self.ego_features + self.spline_intent_features + self.lattice_plan_features,
+            "reward_coef_features": self.num_reward_coefs,
+            "goal_count": self.num_goals,
+            "goal_features": self.goal_features,
+            "partner_count": self.obs_slots_partners_n,
+            "partner_features": self.partner_features,
+            "lane_count": self.obs_slots_lane_kept,
+            "lane_features": self.lane_features,
+            "boundary_count": self.obs_slots_boundary_kept,
+            "boundary_features": self.boundary_features,
+            "traffic_count": self.obs_slots_traffic_controls_n,
+            "traffic_features": self.traffic_control_features,
+            "valid_count_features": self.obs_valid_count_features,
+            "lattice_mask_features": self.lattice_mask_features,
+        }
+
     def _normalize_scenarios(self, state):
         if isinstance(state, list):
             return state
@@ -863,6 +881,7 @@ class Drive(pufferlib.PufferEnv):
                 "worker_idx": self.replay_worker_idx,
                 "active_agent_offset": active_agent_offset,
                 "active_agent_count": active_agent_count,
+                "obs_layout": self.observation_layout(),
             },
             "scenario": scenario,
             "agent_capacity": len(scenario["agents"] or []),

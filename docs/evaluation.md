@@ -112,6 +112,22 @@ compressed files are removed after rendering by default; use
 
 `eval.capture_observations=true` also stores policy observations.
 
+### Viewer controls
+
+Click an agent to open its info box. Its `agent view` chip opens a perspective
+view from that agent at the top of the box. The default camera is the 3.0 chase
+camera: 25 m behind, 15 m up, looking 40 m ahead. The `chase/driver` tool
+switches to a driver-seat camera, and `expand` widens the box. Roads, cars and
+the camera follow the replay's elevation, so bridges stand above the roads they
+cross. The view draws the agent's past trail, logged future, goals, and its
+planned path as a car-wide ribbon.
+
+With an agent selected, `V` shows only the lanes, road edges, stop lines and
+agents that agent observes. The set is decoded from its captured observation,
+so it needs `eval.capture_observations=true` and a policy-controlled agent.
+Observation dropout makes the observed segments change from frame to frame.
+`V` also filters the agent view. `Esc` or clicking empty space clears it.
+
 To evaluate and render the environment distribution used during training, run:
 
 ```bash
@@ -215,3 +231,55 @@ training. Mid-training evaluation currently shares
 final evaluation runs at the last epoch. Training evaluation logs benchmark
 metric means to the active logger and writes reports under the training run's
 `eval/training` hierarchy.
+
+## Checkpoint renders during training
+
+```yaml
+render:
+  interval_checkpoints: 5      # every 5 saved checkpoints = 5 * train.checkpoint_interval epochs
+  views: [world, bev, agent]
+  benchmark: carla_render
+  num_scenarios: 4
+  scenario_length: 300
+```
+
+At every `interval_checkpoints`-th saved checkpoint, and once more at the final
+epoch, rank 0 rolls the live policy out on `render.benchmark`. Episode
+termination is turned off and observations are captured. Then:
+
+- HTML replays go to `<run_dir>/render/<benchmark>/epoch_<epoch>_step_<step>/rendered_replays/`.
+- A background process (`python -m pufferlib.replay_video`) rasterizes the
+  selected views to mp4 in `videos/` next to them, and writes a `manifest.json`
+  and a `render.log`.
+- When the process finishes, the videos are logged to wandb as `render/world`,
+  `render/bev` and `render/agent`, plus `render/epoch`, at the current step.
+
+The three views:
+
+| View | Shows |
+|---|---|
+| `world` | The scene top-down |
+| `bev` | The decoded observation of the first policy agent, heading-up |
+| `agent` | The chase camera on that agent |
+
+Videos play at the viewer's 1x rate of 10 frames per second.
+
+Requirements and constraints:
+
+- ffmpeg with libx264 must be on PATH; this is checked at train start.
+- `scenario_length` is required for `eval_training_render` benchmarks, which
+  otherwise run the training length. It must be null for replay benchmarks.
+- For gigaflow benchmarks, the render uses `eval.num_agents` equal to
+  `max_agents_per_env`. Scenarios stay the same across checkpoints as long as
+  `num_scenarios` is at most `vec.num_envs`.
+
+Costs at the defaults:
+
+- About 1 minute of blocking rollout and HTML.
+- About 5 minutes of background video work.
+- About 150 MiB of disk per render.
+
+Keep the render period longer than the video job. If the next render comes due
+while videos are still rendering, training waits up to 8 minutes for the job
+and then kills it. A render still running when the job is preempted is never
+logged, but its HTML stays on disk.
