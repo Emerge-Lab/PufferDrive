@@ -86,6 +86,8 @@ env:
   lattice_oncoming_overtake: false
   # Extra longitudinal cell: turn around from rest (one-shot or multi-point, inside the road edges, away from stop lines and traffic)
   lattice_turnaround: false
+  # A started overtake keeps its lateral plan until its car is passed or a car in the oncoming lane is near (needs lattice_oncoming_overtake)
+  lattice_overtake_commit: false
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap

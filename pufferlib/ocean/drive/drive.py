@@ -144,6 +144,7 @@ class Drive(pufferlib.PufferEnv):
         lattice_light_in_view=True,
         lattice_oncoming_overtake=False,
         lattice_turnaround=False,
+        lattice_overtake_commit=False,
     ):
         self.dt = dt
         self.base_max_speed_mps = float(base_max_speed_mps)
@@ -243,6 +244,7 @@ class Drive(pufferlib.PufferEnv):
         self.lattice_light_in_view = bool(lattice_light_in_view)
         self.lattice_oncoming_overtake = bool(lattice_oncoming_overtake)
         self.lattice_turnaround = bool(lattice_turnaround)
+        self.lattice_overtake_commit = bool(lattice_overtake_commit)
         # [lat gate, lat cell, lon gate, lon cell, exit slot]; must match init_lattice_config in lattice.h
         self.lattice_nvec = [
             binding.LATTICE_GATE_COUNT,
@@ -627,6 +629,7 @@ class Drive(pufferlib.PufferEnv):
             "lattice_light_in_view": self.lattice_light_in_view,
             "lattice_oncoming_overtake": self.lattice_oncoming_overtake,
             "lattice_turnaround": self.lattice_turnaround,
+            "lattice_overtake_commit": self.lattice_overtake_commit,
         }
 
     def _sample_init_step(self):

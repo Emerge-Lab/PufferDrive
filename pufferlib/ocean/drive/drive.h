@@ -135,6 +135,10 @@ struct Log {
     float lattice_oncoming_collisions;
     float lattice_turn_route_gap;
     float lattice_exit_switches;
+    float lattice_overtake_commits;
+    float lattice_overtake_completions;
+    float lattice_overtake_yields;
+    float lattice_overtake_abandons;
 };
 
 struct GridMapEntity {

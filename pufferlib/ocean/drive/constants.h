@@ -495,6 +495,11 @@ static const int ROAD_OFFSETS[25][2]
 #define LATTICE_ONCOMING_START_S 6.0f
 #define LATTICE_ONCOMING_KEEP_MIN_M 20.0f
 #define LATTICE_ONCOMING_KEEP_S 4.0f
+#define LATTICE_OVERTAKE_YIELD_S 5.0f       // a committed overtake yields to an oncoming-lane car it reaches this soon
+#define LATTICE_OVERTAKE_YIELD_GAP_M 20.0f  // or to a standing or oncoming one this close ahead
+#define LATTICE_OVERTAKE_STANDING_MPS 1.0f  // a car slower than this along the rail stands in the way
+#define LATTICE_OVERTAKE_COMMIT_MAX_S 15.0f // a committed overtake that has not reached its car by then is released
+#define LATTICE_PASS_MIN_COS 0.5f           // a car to pass heads within 60 deg of the rail
 #define LATTICE_PASS_LOOKAHEAD_M 60.0f      // a borrow passes the nearest car ahead in the own lane within this
 #define LATTICE_ONCOMING_COLLISION_STEPS 10 // a collision this soon after a borrow ends still counts as the borrow's
 

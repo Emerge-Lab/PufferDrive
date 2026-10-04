@@ -351,6 +351,7 @@ class DriveEnvConfig:
     lattice_light_in_view: bool = MISSING
     lattice_oncoming_overtake: bool = MISSING
     lattice_turnaround: bool = MISSING
+    lattice_overtake_commit: bool = MISSING
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
@@ -669,6 +670,8 @@ def _validate_lattice_config(config, context):
             f"a whole episode at standstill would cost {env['reward_wait_penalty_frac'] * wait_horizon_steps:.2f} "
             "of the cheapest infraction penalty; it must stay below 1 so crashing never pays",
         )
+    if env["lattice_overtake_commit"] and not env["lattice_oncoming_overtake"]:
+        _raise_config_error(context, "env.lattice_overtake_commit", "needs env.lattice_oncoming_overtake")
     if env["reward_oncoming_penalty_frac"] > 0.0 and not env["lattice_oncoming_overtake"]:
         _raise_config_error(context, "env.reward_oncoming_penalty_frac", "needs env.lattice_oncoming_overtake")
     standstill_borrowing_cost = (

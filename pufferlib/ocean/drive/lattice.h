@@ -155,6 +155,11 @@ static int init_lattice_config(Drive *env) {
     if (cfg->turnaround != 0 && cfg->turnaround != 1) {
         return lattice_config_error("lattice_turnaround", (float) cfg->turnaround);
     }
+    if ((cfg->overtake_commit != 0 && cfg->overtake_commit != 1) || (cfg->overtake_commit && !cfg->oncoming_overtake)) {
+        return lattice_config_error(
+            "lattice_overtake_commit must be 0 or 1 and needs lattice_oncoming_overtake",
+            (float) cfg->overtake_commit);
+    }
     if (cfg->oncoming_overtake && !(cfg->lat_offsets_m[cfg->lat_offset_count - 1] < LATTICE_BORROW_MIN_D_M)) {
         return lattice_config_error("lattice_oncoming_overtake needs every lattice_lat_offsets_m below 1.25 m", cfg->lat_offsets_m[cfg->lat_offset_count - 1]);
     }
@@ -1876,6 +1881,87 @@ static int lattice_oncoming_clear(const Drive *env, const struct LatticeAgent *l
     return 1;
 }
 
+// nearest car ahead in the own lane within LATTICE_PASS_LOOKAHEAD_M and heading its way, as an agent index; -1 if none
+static int lattice_car_ahead_in_lane(
+    const Drive *env,
+    const struct LatticeAgent *lattice_agent,
+    const Agent *agent,
+    const LatticeFrenet *frenet) {
+    int best_idx = -1;
+    float best_gap_m = LATTICE_PASS_LOOKAHEAD_M;
+    for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
+        const Agent *other = &env->agents[agent_idx];
+        if (other == agent || other->removed || other->sim_x == INVALID_POSITION
+            || fabsf(other->sim_z - agent->sim_z) > Z_BUFFER) {
+            continue;
+        }
+        LatticeFrenet on_rail = lattice_frenet_state(&lattice_agent->rail, other, -1);
+        float gap_m = on_rail.s - frenet->s;
+        if (gap_m > 0.0f && gap_m < best_gap_m && fabsf(on_rail.d) < 0.5f * LANE_WIDTH
+            && cosf(on_rail.heading_error) > LATTICE_PASS_MIN_COS) {
+            best_gap_m = gap_m;
+            best_idx = agent_idx;
+        }
+    }
+    return best_idx;
+}
+
+// a car ahead in the oncoming lane reached within LATTICE_OVERTAKE_YIELD_S, or standing or oncoming and close
+static int lattice_oncoming_threat(
+    const Drive *env,
+    const struct LatticeAgent *lattice_agent,
+    const Agent *agent,
+    const LatticeFrenet *frenet) {
+    float offset_m = lattice_oncoming_offset_at(env, lattice_agent, frenet->sample_idx);
+    for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
+        const Agent *other = &env->agents[agent_idx];
+        if (other == agent || other->removed || other->sim_x == INVALID_POSITION
+            || fabsf(other->sim_z - agent->sim_z) > Z_BUFFER) {
+            continue;
+        }
+        LatticeFrenet on_rail = lattice_frenet_state(&lattice_agent->rail, other, -1);
+        float along_mps = other->sim_speed_signed * cosf(on_rail.heading_error);
+        float closing_mps = fabsf(agent->sim_speed_signed) - along_mps;
+        float gap_m = on_rail.s - frenet->s - 0.5f * (agent->sim_length + other->sim_length);
+        int in_oncoming_lane
+            = on_rail.d > LATTICE_BORROW_FRACTION * offset_m && on_rail.d < offset_m + 0.5f * LANE_WIDTH;
+        int closing_in = closing_mps > 0.0f && gap_m < closing_mps * LATTICE_OVERTAKE_YIELD_S;
+        int in_the_way = along_mps < LATTICE_OVERTAKE_STANDING_MPS && gap_m < LATTICE_OVERTAKE_YIELD_GAP_M;
+        if (on_rail.s > frenet->s && in_oncoming_lane && (closing_in || in_the_way)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// a committed overtake ends when its car is gone or passed, as a yield to an oncoming-lane threat, or abandoned
+static void update_lattice_overtake_commit(
+    Drive *env,
+    struct LatticeAgent *lattice_agent,
+    const Agent *agent,
+    const LatticeFrenet *frenet,
+    int now_step) {
+    if (lattice_agent->overtake_target < 0) {
+        return;
+    }
+    const Agent *target = &env->agents[lattice_agent->overtake_target];
+    LatticeFrenet on_rail = lattice_frenet_state(&lattice_agent->rail, target, -1);
+    int gone = target->removed || fabsf(on_rail.d) >= LANE_WIDTH;
+    int passed = !gone && on_rail.s + 0.5f * target->sim_length < frenet->s - 0.5f * agent->sim_length;
+    int reached = on_rail.s - 0.5f * target->sim_length < frenet->s + 0.5f * agent->sim_length;
+    float held_s = (float) (now_step - lattice_agent->overtake_commit_step) * env->dt;
+    int yield = !gone && !passed && lattice_oncoming_threat(env, lattice_agent, agent, frenet);
+    int abandoned = !gone && !passed && !yield
+        && ((held_s > LATTICE_OVERTAKE_COMMIT_MAX_S && !reached)
+            || !lattice_plan_in_oncoming(env, lattice_agent, frenet));
+    if (gone || passed || yield || abandoned) {
+        lattice_agent->counters.overtake_completions += passed;
+        lattice_agent->counters.overtake_yields += yield;
+        lattice_agent->counters.overtake_abandons += abandoned;
+        lattice_agent->overtake_target = -1;
+    }
+}
+
 // lane-graph distance from the start of lane_idx to the start of goal_lane_idx; INFINITY when unreachable or unknown
 static float lattice_goal_distance_m(const Drive *env, int lane_idx, int goal_lane_idx) {
     if (lane_idx < 0 || goal_lane_idx < 0 || goal_lane_idx >= env->num_road_elements || lane_idx >= env->num_road_elements) {
@@ -2675,6 +2761,8 @@ static void reset_lattice_slot(Drive *env, int active_idx) {
     lattice_agent->pass_target = -1;
     lattice_agent->was_borrowing = 0;
     lattice_agent->steps_since_borrow = LATTICE_ONCOMING_COLLISION_STEPS + 1;
+    lattice_agent->overtake_target = -1;
+    lattice_agent->overtake_commit_step = 0;
     lattice_agent->counters.first_motion_step = -1.0f;
     lattice_agent->sigma_m = 0.0;
     lattice_agent->lane_change_active = 0;
@@ -3838,7 +3926,8 @@ static void compute_lattice_masks(Drive *env, int active_idx, int now_step) {
         }
     }
     mask[lat_gate + LATTICE_GATE_KEEP] = (unsigned char) !(must_return && any_lat);
-    mask[lat_gate + LATTICE_GATE_NEW] = (unsigned char) any_lat;
+    mask[lat_gate + LATTICE_GATE_NEW]
+        = (unsigned char) (any_lat && !(lattice_agent->overtake_target >= 0 && !must_return));
     if (!any_lat) {
         mask[lat_cells] = 1;
     }
@@ -3957,6 +4046,7 @@ static void run_lattice_context(Drive *env, int active_idx) {
     if (lattice_next_split(env, lattice_agent, frenet.s, LATTICE_EXIT_FREEZE_M, 0) < 0) {
         lattice_agent->late_exit_pending = 0;
     }
+    update_lattice_overtake_commit(env, lattice_agent, agent, &frenet, now_step);
     compute_lattice_masks(env, active_idx, now_step);
     struct LatticeTurnState *turn = &lattice_agent->turn;
     int probe_due = now_step - turn->probe_step >= LATTICE_TURN_PROBE_STEPS * cfg->decision_period_steps;
@@ -4127,9 +4217,16 @@ static void apply_lattice_action(Drive *env, int active_idx, Agent *agent, int n
     int same_plan = candidate.mode == LATTICE_LAT_MODE_TIME && committed->mode == LATTICE_LAT_MODE_TIME && candidate.target_d_m == committed->target_d_m
         && candidate.end_step == committed->end_step;
     if (!same_plan) {
-        lattice_agent->counters.oncoming_starts += lattice_lat_is_oncoming(cfg, lat_cell) && !lattice_plan_in_oncoming(env, lattice_agent, &ctx.frenet);
+        int starts_borrow
+            = lattice_lat_is_oncoming(cfg, lat_cell) && !lattice_plan_in_oncoming(env, lattice_agent, &ctx.frenet);
+        lattice_agent->counters.oncoming_starts += starts_borrow;
         *committed = candidate;
         lattice_agent->counters.lat_new += 1.0f;
+        if (starts_borrow && cfg->overtake_commit && !lattice_oncoming_threat(env, lattice_agent, agent, &ctx.frenet)) {
+            lattice_agent->overtake_target = lattice_car_ahead_in_lane(env, lattice_agent, agent, &ctx.frenet);
+            lattice_agent->overtake_commit_step = now_step;
+            lattice_agent->counters.overtake_commits += lattice_agent->overtake_target >= 0;
+        }
     }
 }
 
@@ -4152,30 +4249,6 @@ static float lattice_plan_change_rms_m(Drive *env, const struct LatticeAgent *la
         sum_m2 += dx * dx + dy * dy;
     }
     return sqrtf(sum_m2 / LATTICE_CONSISTENCY_SAMPLES);
-}
-
-// the nearest car ahead in the car's own lane within LATTICE_PASS_LOOKAHEAD_M, as an agent index; -1 when none
-static int lattice_car_ahead_in_lane(
-    const Drive *env,
-    const struct LatticeAgent *lattice_agent,
-    const Agent *agent,
-    const LatticeFrenet *frenet) {
-    int best_idx = -1;
-    float best_gap_m = LATTICE_PASS_LOOKAHEAD_M;
-    for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
-        const Agent *other = &env->agents[agent_idx];
-        if (other == agent || other->removed || other->sim_x == INVALID_POSITION
-            || fabsf(other->sim_z - agent->sim_z) > Z_BUFFER) {
-            continue;
-        }
-        LatticeFrenet on_rail = lattice_frenet_state(&lattice_agent->rail, other, -1);
-        float gap_m = on_rail.s - frenet->s;
-        if (gap_m > 0.0f && gap_m < best_gap_m && fabsf(on_rail.d) < 0.5f * LANE_WIDTH) {
-            best_gap_m = gap_m;
-            best_idx = agent_idx;
-        }
-    }
-    return best_idx;
 }
 
 // a borrow passes each car ahead in its own lane that falls behind it, then tracks the next car ahead
@@ -4643,6 +4716,10 @@ static void add_lattice_log(Drive *env, int active_idx, Log *episode_log) {
     episode_log->lattice_oncoming_collisions += counters->oncoming_collisions;
     episode_log->lattice_turn_route_gap += counters->turn_route_gap;
     episode_log->lattice_exit_switches += counters->exit_switches;
+    episode_log->lattice_overtake_commits += counters->overtake_commits;
+    episode_log->lattice_overtake_completions += counters->overtake_completions;
+    episode_log->lattice_overtake_yields += counters->overtake_yields;
+    episode_log->lattice_overtake_abandons += counters->overtake_abandons;
 }
 
 // all active slots: follow the rails every step, recompute context and masks on context steps

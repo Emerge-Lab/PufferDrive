@@ -1326,6 +1326,383 @@ static int test_oncoming_overtake_stopped_car(void) {
     return 0;
 }
 
+// a borrow behind a stopped car keeps its plan until the car is passed though every decision asks to turn back
+static int test_overtake_commit_holds_until_passed(void) {
+    Drive probe = make_overtake_env(TOWN01, 2);
+    int lane = find_overtake_lane(&probe);
+    free_allocated(&probe);
+    EXPECT_TRUE(lane >= 0);
+    float passes[2] = {0}, held_steps[2] = {0}, end_d_m[2] = {0}, collided[2] = {0};
+    for (int commit = 0; commit < 2; commit++) {
+        Drive env = make_overtake_env(TOWN01, 2);
+        env.lattice.overtake_commit = commit;
+        place_lattice_agent(&env, 1, lane, 45.0f, 0.0f);
+        place_lattice_agent(&env, 0, lane, 10.0f, 6.0f);
+        struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+        const struct LatticeConfig *cfg = &env.lattice;
+        int choice_count = lattice_lat_choice_count(cfg);
+        int lat_gate = lattice_mask_offset(cfg, LATTICE_FACTOR_LAT_GATE);
+        int lat_cells = lattice_mask_offset(cfg, LATTICE_FACTOR_LAT_CELL);
+        Agent *ego = slot0_agent(&env);
+        step_with_action(&env, 1, choice_count + ONCOMING_CHOICE, 0, 0, 0);
+        EXPECT_EQ_INT(lattice_agent->overtake_target, commit ? env.active_agent_indices[1] : -1);
+        for (int step = 0; step < 80 && !ego->stopped; step++) {
+            held_steps[commit]
+                += lattice_agent->overtake_target >= 0 && !lattice_agent->mask[lat_gate + LATTICE_GATE_NEW];
+            int turn_back = lattice_agent->mask[lat_gate + LATTICE_GATE_NEW]
+                && lattice_agent->mask[lat_cells + choice_count + CENTRE_CHOICE];
+            step_with_action(&env, turn_back, turn_back ? choice_count + CENTRE_CHOICE : 0, 0, 0, 0);
+            collided[commit] += ego->metrics_array[COLLISION_IDX] > 0.0f;
+        }
+        passes[commit] = lattice_agent->counters.oncoming_passes;
+        end_d_m[commit] = lattice_frenet_state(&lattice_agent->rail, ego, lattice_agent->projection_hint).d;
+        printf(
+            "  overtake commit %d: commits %.0f, held %.0f steps, completions %.0f, passes %.0f, yields %.0f, abandons "
+            "%.0f, collision steps %.0f, end d %.2f m\n",
+            commit,
+            lattice_agent->counters.overtake_commits,
+            held_steps[commit],
+            lattice_agent->counters.overtake_completions,
+            passes[commit],
+            lattice_agent->counters.overtake_yields,
+            lattice_agent->counters.overtake_abandons,
+            collided[commit],
+            end_d_m[commit]);
+        EXPECT_NEAR(lattice_agent->counters.overtake_commits, (float) commit, 0.0f);
+        EXPECT_NEAR(lattice_agent->counters.overtake_completions, (float) commit, 0.0f);
+        EXPECT_NEAR(lattice_agent->counters.overtake_yields, 0.0f, 0.0f);
+        EXPECT_NEAR(lattice_agent->counters.overtake_abandons, 0.0f, 0.0f);
+        EXPECT_EQ_INT(lattice_agent->overtake_target, -1);
+        free_allocated(&env);
+    }
+    EXPECT_NEAR(passes[0], 0.0f, 0.0f);
+    EXPECT_NEAR(passes[1], 1.0f, 0.0f);
+    EXPECT_TRUE(held_steps[1] > 10.0f);
+    EXPECT_NEAR(collided[1], 0.0f, 0.0f);
+    EXPECT_TRUE(fabsf(end_d_m[1]) < 0.3f);
+    return 0;
+}
+
+// shortest valid lateral cell that returns to the lane centre; -1 when none is offered
+static int first_valid_centre_cell(const Drive *env) {
+    const struct LatticeConfig *cfg = &env->lattice;
+    int lat_cells = lattice_mask_offset(cfg, LATTICE_FACTOR_LAT_CELL);
+    for (int duration_idx = 0; duration_idx < cfg->lat_duration_count; duration_idx++) {
+        int cell = duration_idx * lattice_lat_choice_count(cfg) + CENTRE_CHOICE;
+        if (env->lattice_agents[0].mask[lat_cells + cell]) {
+            return cell;
+        }
+    }
+    return -1;
+}
+
+// a committed overtake yields to a car coming at it; a borrow with that car near or nothing ahead commits to nothing
+static int test_overtake_commit_yields(void) {
+    Drive env = make_overtake_env(TOWN01, 3);
+    env.lattice.overtake_commit = 1;
+    int lane = find_overtake_lane(&env);
+    EXPECT_TRUE(lane >= 0);
+    const struct LatticeProfileSample *beside = lattice_profile_at(&env, lane, 95.0f);
+    EXPECT_TRUE(beside->turn_lane >= 0);
+    place_lattice_agent(&env, 2, beside->turn_lane, beside->turn_arc_m, 8.0f);
+    place_lattice_agent(&env, 1, lane, 45.0f, 0.0f);
+    place_lattice_agent(&env, 0, lane, 10.0f, 6.0f);
+    struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+    const struct LatticeConfig *cfg = &env.lattice;
+    int choice_count = lattice_lat_choice_count(cfg);
+    int lat_gate = lattice_mask_offset(cfg, LATTICE_FACTOR_LAT_GATE);
+    Agent *ego = slot0_agent(&env);
+    Agent *oncoming = &env.agents[env.active_agent_indices[2]];
+    step_with_action(&env, 1, choice_count + ONCOMING_CHOICE, 0, 0, 0);
+    EXPECT_EQ_INT(lattice_agent->overtake_target, env.active_agent_indices[1]);
+    int released_step = -1;
+    float collided = 0.0f;
+    for (int step = 0; step < 60 && !ego->stopped; step++) {
+        released_step = released_step < 0 && lattice_agent->overtake_target < 0 ? step : released_step;
+        // steer back with any valid centre cell at speed, then stop behind the stopped car
+        int centre_cell = first_valid_centre_cell(&env);
+        int turn_back = lattice_agent->mask[lat_gate + LATTICE_GATE_NEW] && centre_cell >= 0;
+        float d_m = lattice_frenet_state(&lattice_agent->rail, ego, lattice_agent->projection_hint).d;
+        int lon_gate, lon_cell;
+        pick_greedy_lon(&env, released_step >= 0 && d_m < 0.5f ? 0.0f : 6.0f, &lon_gate, &lon_cell);
+        step_with_action(&env, turn_back, turn_back ? centre_cell : 0, lon_gate, lon_cell, 0);
+        lattice_set_action(&env, 2, 0, 0, 0, 0, 0);
+        collided += ego->metrics_array[COLLISION_IDX] > 0.0f || oncoming->metrics_array[COLLISION_IDX] > 0.0f;
+    }
+    LatticeFrenet end = lattice_frenet_state(&lattice_agent->rail, ego, lattice_agent->projection_hint);
+    printf(
+        "  committed overtake meets an oncoming car: released after %d steps, yields %.0f, passes %.0f, collisions "
+        "%.0f, end d %.2f m\n",
+        released_step,
+        lattice_agent->counters.overtake_yields,
+        lattice_agent->counters.oncoming_passes,
+        collided,
+        end.d);
+    EXPECT_TRUE(released_step >= 0);
+    EXPECT_NEAR(lattice_agent->counters.overtake_yields, 1.0f, 0.0f);
+    EXPECT_NEAR(lattice_agent->counters.overtake_completions, 0.0f, 0.0f);
+    EXPECT_NEAR(lattice_agent->counters.overtake_abandons, 0.0f, 0.0f);
+    EXPECT_NEAR(collided, 0.0f, 0.0f);
+    EXPECT_TRUE(end.d < LATTICE_BORROW_MIN_D_M);
+    free_allocated(&env);
+    Drive threatened = make_overtake_env(TOWN01, 3);
+    threatened.lattice.overtake_commit = 1;
+    const struct LatticeProfileSample *near = lattice_profile_at(&threatened, lane, 60.0f);
+    EXPECT_TRUE(near->turn_lane >= 0);
+    place_lattice_agent(&threatened, 2, near->turn_lane, near->turn_arc_m, 8.0f);
+    place_lattice_agent(&threatened, 1, lane, 45.0f, 0.0f);
+    place_lattice_agent(&threatened, 0, lane, 10.0f, 6.0f);
+    step_with_action(&threatened, 1, choice_count + ONCOMING_CHOICE, 0, 0, 0);
+    printf(
+        "  borrow toward an oncoming car 50 m ahead: borrow starts %.0f, target %d, commits %.0f\n",
+        threatened.lattice_agents[0].counters.oncoming_starts,
+        threatened.lattice_agents[0].overtake_target,
+        threatened.lattice_agents[0].counters.overtake_commits);
+    EXPECT_NEAR(threatened.lattice_agents[0].counters.oncoming_starts, 1.0f, 0.0f);
+    EXPECT_EQ_INT(threatened.lattice_agents[0].overtake_target, -1);
+    EXPECT_NEAR(threatened.lattice_agents[0].counters.overtake_commits, 0.0f, 0.0f);
+    free_allocated(&threatened);
+    Drive empty = make_overtake_env(TOWN01, 1);
+    empty.lattice.overtake_commit = 1;
+    place_lattice_agent(&empty, 0, lane, 10.0f, 6.0f);
+    step_with_action(&empty, 1, choice_count + ONCOMING_CHOICE, 0, 0, 0);
+    printf(
+        "  borrow on an empty road: target %d, commits %.0f, new lateral plans offered %d\n",
+        empty.lattice_agents[0].overtake_target,
+        empty.lattice_agents[0].counters.overtake_commits,
+        empty.lattice_agents[0].mask[lattice_mask_offset(&empty.lattice, LATTICE_FACTOR_LAT_GATE) + LATTICE_GATE_NEW]);
+    EXPECT_EQ_INT(empty.lattice_agents[0].overtake_target, -1);
+    EXPECT_NEAR(empty.lattice_agents[0].counters.overtake_commits, 0.0f, 0.0f);
+    EXPECT_EQ_INT(
+        empty.lattice_agents[0].mask[lattice_mask_offset(&empty.lattice, LATTICE_FACTOR_LAT_GATE) + LATTICE_GATE_NEW],
+        1);
+    free_allocated(&empty);
+    return 0;
+}
+
+// a committed overtake creeping up on a car parked in the oncoming lane yields LATTICE_OVERTAKE_YIELD_GAP_M short of it
+static int test_overtake_commit_yields_to_parked_car(void) {
+    Drive env = make_overtake_env(TOWN01, 3);
+    env.lattice.overtake_commit = 1;
+    int lane = find_overtake_lane(&env);
+    EXPECT_TRUE(lane >= 0);
+    const struct LatticeProfileSample *beside = lattice_profile_at(&env, lane, 60.0f);
+    EXPECT_TRUE(beside->turn_lane >= 0);
+    place_lattice_agent(&env, 2, beside->turn_lane, beside->turn_arc_m, 0.0f);
+    place_lattice_agent(&env, 1, lane, 45.0f, 0.0f);
+    place_lattice_agent(&env, 0, lane, 10.0f, 6.0f);
+    struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+    int choice_count = lattice_lat_choice_count(&env.lattice);
+    Agent *ego = slot0_agent(&env);
+    Agent *parked = &env.agents[env.active_agent_indices[2]];
+    step_with_action(&env, 1, choice_count + ONCOMING_CHOICE, 0, 0, 0);
+    EXPECT_EQ_INT(lattice_agent->overtake_target, env.active_agent_indices[1]);
+    float gap_m = 0.0f, speed_mps = 0.0f, collided = 0.0f;
+    int held_steps = 0;
+    for (; held_steps < 80 && lattice_agent->overtake_target >= 0; held_steps++) {
+        int lon_gate, lon_cell;
+        pick_greedy_lon(&env, 2.5f, &lon_gate, &lon_cell);
+        step_with_action(&env, 0, 0, lon_gate, lon_cell, 0);
+        collided += ego->metrics_array[COLLISION_IDX] > 0.0f;
+        LatticeFrenet ego_frenet = lattice_frenet_state(&lattice_agent->rail, ego, lattice_agent->projection_hint);
+        gap_m = lattice_frenet_state(&lattice_agent->rail, parked, -1).s - ego_frenet.s
+            - 0.5f * (ego->sim_length + parked->sim_length);
+        speed_mps = fabsf(ego->sim_speed_signed);
+    }
+    printf(
+        "  committed overtake creeping toward a parked oncoming-lane car: released after %d steps, %.1f m short "
+        "at %.1f m/s, yields %.0f, completions %.0f, abandons %.0f, collisions %.0f\n",
+        held_steps,
+        gap_m,
+        speed_mps,
+        lattice_agent->counters.overtake_yields,
+        lattice_agent->counters.overtake_completions,
+        lattice_agent->counters.overtake_abandons,
+        collided);
+    EXPECT_EQ_INT(lattice_agent->overtake_target, -1);
+    EXPECT_NEAR(lattice_agent->counters.overtake_yields, 1.0f, 0.0f);
+    EXPECT_NEAR(lattice_agent->counters.overtake_completions, 0.0f, 0.0f);
+    EXPECT_NEAR(lattice_agent->counters.overtake_abandons, 0.0f, 0.0f);
+    EXPECT_TRUE(gap_m < LATTICE_OVERTAKE_YIELD_GAP_M && gap_m > LATTICE_OVERTAKE_YIELD_GAP_M - 2.0f);
+    EXPECT_TRUE(speed_mps * LATTICE_OVERTAKE_YIELD_S < gap_m);
+    EXPECT_TRUE(lattice_agent->mask[lattice_mask_offset(&env.lattice, LATTICE_FACTOR_LAT_GATE) + LATTICE_GATE_NEW]);
+    EXPECT_NEAR(collided, 0.0f, 0.0f);
+    free_allocated(&env);
+    return 0;
+}
+
+// close ahead in the oncoming lane a standing car is a threat to a slow overtake, a car driving the same way is not
+static int test_overtake_threat_standing_or_driving(void) {
+    Drive env = make_overtake_env(TOWN01, 2);
+    int lane = find_overtake_lane(&env);
+    EXPECT_TRUE(lane >= 0);
+    const struct LatticeProfileSample *beside = lattice_profile_at(&env, lane, 40.0f);
+    EXPECT_TRUE(beside->turn_lane >= 0);
+    int threat[2] = {0};
+    float gap_m = 0.0f;
+    for (int driving = 0; driving < 2; driving++) {
+        place_lattice_agent(&env, 1, beside->turn_lane, beside->turn_arc_m, 0.0f);
+        Agent *other = &env.agents[env.active_agent_indices[1]];
+        if (driving) {
+            other->sim_heading = lattice_wrap_angle(other->sim_heading + (float) M_PI);
+            other->cos_heading = cosf(other->sim_heading);
+            other->sin_heading = sinf(other->sim_heading);
+            other->sim_vx = 1.5f * other->cos_heading;
+            other->sim_vy = 1.5f * other->sin_heading;
+            update_agent_speed(other);
+            copy_pose_to_prev(other);
+        }
+        place_lattice_agent(&env, 0, lane, 25.0f, 1.5f);
+        struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+        Agent *ego = slot0_agent(&env);
+        LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, ego, lattice_agent->projection_hint);
+        gap_m = lattice_frenet_state(&lattice_agent->rail, other, -1).s - frenet.s
+            - 0.5f * (ego->sim_length + other->sim_length);
+        threat[driving] = lattice_oncoming_threat(&env, lattice_agent, ego, &frenet);
+    }
+    printf(
+        "  oncoming-lane car %.1f m ahead of a car at 1.5 m/s: threat standing %d, driving its way %d\n",
+        gap_m,
+        threat[0],
+        threat[1]);
+    EXPECT_TRUE(gap_m < LATTICE_OVERTAKE_YIELD_GAP_M && gap_m > 1.5f * LATTICE_OVERTAKE_YIELD_S);
+    EXPECT_EQ_INT(threat[0], 1);
+    EXPECT_EQ_INT(threat[1], 0);
+    free_allocated(&env);
+    return 0;
+}
+
+// a commitment level with its slow car outlasts LATTICE_OVERTAKE_COMMIT_MAX_S; one that fell back is abandoned then
+static int test_overtake_commit_expiry(void) {
+    Drive probe = make_overtake_env(TOWN01, 2);
+    int lane = find_overtake_lane(&probe);
+    free_allocated(&probe);
+    EXPECT_TRUE(lane >= 0);
+    int held_steps[2] = {0}, released_step[2] = {-1, -1};
+    float collided[2] = {0}, completions[2] = {0}, abandons[2] = {0};
+    for (int falls_back = 0; falls_back < 2; falls_back++) {
+        Drive env = make_overtake_env(TOWN01, 2);
+        env.lattice.overtake_commit = 1;
+        place_lattice_agent(&env, 1, lane, 40.0f, 4.0f);
+        place_lattice_agent(&env, 0, lane, 10.0f, 6.0f);
+        struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+        const struct LatticeConfig *cfg = &env.lattice;
+        int lat_gate = lattice_mask_offset(cfg, LATTICE_FACTOR_LAT_GATE);
+        Agent *ego = slot0_agent(&env);
+        step_with_action(&env, 1, lattice_lat_choice_count(cfg) + ONCOMING_CHOICE, 0, 0, 0);
+        EXPECT_EQ_INT(lattice_agent->overtake_target, env.active_agent_indices[1]);
+        for (int step = 0; step < 90 && !ego->stopped; step++) {
+            held_steps[falls_back] += lattice_agent->overtake_target >= 0;
+            released_step[falls_back] = released_step[falls_back] < 0 && lattice_agent->overtake_target < 0
+                ? step
+                : released_step[falls_back];
+            int centre_cell = first_valid_centre_cell(&env);
+            int turn_back = lattice_agent->mask[lat_gate + LATTICE_GATE_NEW] && centre_cell >= 0
+                && (!falls_back || lattice_agent->overtake_target < 0);
+            int lon_gate = 0, lon_cell = 0;
+            if (falls_back) {
+                pick_greedy_lon(&env, 2.5f, &lon_gate, &lon_cell);
+            }
+            step_with_action(&env, turn_back, turn_back ? centre_cell : 0, lon_gate, lon_cell, 0);
+            collided[falls_back] += ego->metrics_array[COLLISION_IDX] > 0.0f;
+        }
+        completions[falls_back] = lattice_agent->counters.overtake_completions;
+        abandons[falls_back] = lattice_agent->counters.overtake_abandons;
+        printf(
+            "  slow car, %s: held %d steps (%.1f s), released at step %d, completions %.0f, abandons %.0f, "
+            "yields %.0f, collision steps %.0f\n",
+            falls_back ? "ego falls back" : "ego keeps 6 m/s and asks to turn back",
+            held_steps[falls_back],
+            (float) held_steps[falls_back] * env.dt,
+            released_step[falls_back],
+            completions[falls_back],
+            abandons[falls_back],
+            lattice_agent->counters.overtake_yields,
+            collided[falls_back]);
+        EXPECT_NEAR(lattice_agent->counters.overtake_yields, 0.0f, 0.0f);
+        free_allocated(&env);
+    }
+    float max_steps = LATTICE_OVERTAKE_COMMIT_MAX_S / 0.3f;
+    EXPECT_TRUE((float) held_steps[0] > max_steps);
+    EXPECT_NEAR(completions[0], 1.0f, 0.0f);
+    EXPECT_NEAR(abandons[0], 0.0f, 0.0f);
+    EXPECT_NEAR(collided[0], 0.0f, 0.0f);
+    EXPECT_TRUE(fabsf((float) held_steps[1] - max_steps) <= 1.0f);
+    EXPECT_NEAR(completions[1], 0.0f, 0.0f);
+    EXPECT_NEAR(abandons[1], 1.0f, 0.0f);
+    EXPECT_NEAR(collided[1], 0.0f, 0.0f);
+    Drive env = make_overtake_env(TOWN01, 2);
+    env.lattice.overtake_commit = 1;
+    place_lattice_agent(&env, 1, lane, 40.0f, 4.0f);
+    place_lattice_agent(&env, 0, lane, 10.0f, 6.0f);
+    step_with_action(&env, 1, lattice_lat_choice_count(&env.lattice) + ONCOMING_CHOICE, 0, 0, 0);
+    EXPECT_TRUE(env.lattice_agents[0].overtake_target >= 0);
+    c_reset(&env);
+    EXPECT_EQ_INT(env.lattice_agents[0].overtake_target, -1);
+    free_allocated(&env);
+    return 0;
+}
+
+// a car coming head-on in the car's own lane is neither an overtake target nor counted as passed
+static int test_overtake_commit_skips_facing_car(void) {
+    Drive env = make_overtake_env(TOWN01, 2);
+    env.lattice.overtake_commit = 1;
+    int lane = find_overtake_lane(&env);
+    EXPECT_TRUE(lane >= 0);
+    place_lattice_agent(&env, 1, lane, 55.0f, 4.0f);
+    Agent *facing = &env.agents[env.active_agent_indices[1]];
+    facing->sim_heading = lattice_wrap_angle(facing->sim_heading + (float) M_PI);
+    facing->cos_heading = cosf(facing->sim_heading);
+    facing->sin_heading = sinf(facing->sim_heading);
+    facing->sim_vx = 4.0f * facing->cos_heading;
+    facing->sim_vy = 4.0f * facing->sin_heading;
+    update_agent_speed(facing);
+    copy_pose_to_prev(facing);
+    place_lattice_agent(&env, 0, lane, 10.0f, 6.0f);
+    struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+    Agent *ego = slot0_agent(&env);
+    step_with_action(&env, 1, lattice_lat_choice_count(&env.lattice) + ONCOMING_CHOICE, 0, 0, 0);
+    EXPECT_NEAR(lattice_agent->counters.oncoming_starts, 1.0f, 0.0f);
+    EXPECT_EQ_INT(lattice_agent->overtake_target, -1);
+    EXPECT_EQ_INT(lattice_agent->pass_target, -1);
+    float collided = 0.0f;
+    for (int step = 0; step < 40; step++) {
+        LatticeFrenet ego_frenet = lattice_frenet_state(&lattice_agent->rail, ego, lattice_agent->projection_hint);
+        LatticeFrenet facing_frenet = lattice_frenet_state(&lattice_agent->rail, facing, -1);
+        int past = ego_frenet.s - 0.5f * ego->sim_length > facing_frenet.s + 0.5f * facing->sim_length + 3.0f;
+        int centre_cell = first_valid_centre_cell(&env);
+        int turn_back = past && centre_cell >= 0 && lattice_plan_in_oncoming(&env, lattice_agent, &ego_frenet)
+            && lattice_agent->mask[lattice_mask_offset(&env.lattice, LATTICE_FACTOR_LAT_GATE) + LATTICE_GATE_NEW];
+        step_with_action(&env, turn_back, turn_back ? centre_cell : 0, 0, 0, 0);
+        collided += ego->metrics_array[COLLISION_IDX] > 0.0f;
+    }
+    printf(
+        "  borrow past a car coming head-on in the own lane: commits %.0f, passes %.0f, collision steps %.0f\n",
+        lattice_agent->counters.overtake_commits,
+        lattice_agent->counters.oncoming_passes,
+        collided);
+    EXPECT_NEAR(lattice_agent->counters.overtake_commits, 0.0f, 0.0f);
+    EXPECT_NEAR(lattice_agent->counters.oncoming_passes, 0.0f, 0.0f);
+    EXPECT_NEAR(collided, 0.0f, 0.0f);
+    free_allocated(&env);
+    return 0;
+}
+
+// init rejects lattice_overtake_commit outside 0/1 or without lattice_oncoming_overtake
+static int test_overtake_commit_config(void) {
+    Drive env = make_overtake_env(TOWN01, 1);
+    env.lattice.overtake_commit = 1;
+    EXPECT_EQ_INT(init_lattice_config(&env), 0);
+    env.lattice.oncoming_overtake = 0;
+    EXPECT_EQ_INT(init_lattice_config(&env), -1);
+    env.lattice.oncoming_overtake = 1;
+    env.lattice.overtake_commit = 2;
+    EXPECT_EQ_INT(init_lattice_config(&env), -1);
+    env.lattice.overtake_commit = 0;
+    free_allocated(&env);
+    return 0;
+}
+
 // stacking diagnostics: queued behind a live and a frozen car, slow-following, a crash just after a borrow
 static int test_stacking_counters(void) {
     Drive env = make_overtake_env(TOWN01, 2);
@@ -1451,12 +1828,16 @@ static int test_oncoming_forced_return_before_junction(void) {
 
 // random valid actions with the sixth choice in every town: finite observations, no invalid actions, deterministic
 static int test_oncoming_random_rollouts(void) {
-    float starts = 0.0f, borrow_steps = 0.0f, steps = 0.0f, invalid = 0.0f;
-    for (size_t town_idx = 0; town_idx < sizeof(CARLA_TOWNS) / sizeof(CARLA_TOWNS[0]); town_idx++) {
+    float starts = 0.0f, borrow_steps = 0.0f, steps = 0.0f, invalid = 0.0f, commits = 0.0f, completions = 0.0f,
+          yields = 0.0f, abandons = 0.0f;
+    for (size_t run_idx = 0; run_idx < 2 * sizeof(CARLA_TOWNS) / sizeof(CARLA_TOWNS[0]); run_idx++) {
+        size_t town_idx = run_idx / 2;
         char path[512];
         carla_town_path(path, sizeof path, CARLA_TOWNS[town_idx]);
         Drive env = make_overtake_env(path, 16);
         Drive twin = make_overtake_env(path, 16);
+        env.lattice.overtake_commit = (int) (run_idx % 2);
+        twin.lattice.overtake_commit = (int) (run_idx % 2);
         env.reward_oncoming_penalty_frac = 5e-4f;
         twin.reward_oncoming_penalty_frac = 5e-4f;
         unsigned long long rng_state = 21 + town_idx, twin_rng = 21 + town_idx;
@@ -1477,14 +1858,29 @@ static int test_oncoming_random_rollouts(void) {
             borrow_steps += counters->oncoming_steps;
             steps += counters->steps;
             invalid += counters->invalid_actions;
+            commits += counters->overtake_commits;
+            completions += counters->overtake_completions;
+            yields += counters->overtake_yields;
+            abandons += counters->overtake_abandons;
         }
         free_allocated(&env);
         free_allocated(&twin);
     }
-    printf("  random rollouts with overtaking: %.0f borrow starts, borrowing %.2f%% of steps, invalid %.0f\n", starts, 100.0f * borrow_steps / fmaxf(steps, 1.0f), invalid);
+    printf(
+        "  random rollouts with overtaking (commit off and on): %.0f borrow starts, borrowing %.2f%% of steps, invalid "
+        "%.0f, commits %.0f, completions %.0f, yields %.0f, abandons %.0f\n",
+        starts,
+        100.0f * borrow_steps / fmaxf(steps, 1.0f),
+        invalid,
+        commits,
+        completions,
+        yields,
+        abandons);
     EXPECT_TRUE(starts > 0.0f);
     EXPECT_TRUE(borrow_steps > 0.0f);
     EXPECT_NEAR(invalid, 0.0f, 0.0f);
+    EXPECT_TRUE(commits > 0.0f);
+    EXPECT_TRUE(completions + yields + abandons <= commits);
     return 0;
 }
 
@@ -1871,6 +2267,13 @@ int main(void) {
     RUN_TEST(test_oncoming_menu_layout);
     RUN_TEST(test_oncoming_profiles);
     RUN_TEST(test_oncoming_overtake_stopped_car);
+    RUN_TEST(test_overtake_commit_holds_until_passed);
+    RUN_TEST(test_overtake_commit_yields);
+    RUN_TEST(test_overtake_commit_yields_to_parked_car);
+    RUN_TEST(test_overtake_threat_standing_or_driving);
+    RUN_TEST(test_overtake_commit_expiry);
+    RUN_TEST(test_overtake_commit_skips_facing_car);
+    RUN_TEST(test_overtake_commit_config);
     RUN_TEST(test_stacking_counters);
     RUN_TEST(test_oncoming_forced_return_before_junction);
     RUN_TEST(test_oncoming_random_rollouts);

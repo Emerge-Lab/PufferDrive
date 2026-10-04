@@ -201,6 +201,7 @@ struct LatticeConfig {
     int exit_mode;
     int light_in_view; // stop-line features only for a stop line the traffic-control observation lists
     int oncoming_overtake; // extra lateral choice: borrow the oncoming lane on one-lane-per-direction roads
+    int overtake_commit;   // a started overtake keeps its lateral plan until it has passed its car
     int turnaround;        // extra longitudinal cell: turn around (one-shot or multi-point) from rest
     int decision_period_steps;
     int lat_duration_steps[LATTICE_MAX_LAT_DURATIONS];
@@ -403,6 +404,10 @@ struct LatticeCounters {
     float wait_exempt_steps;
     float oncoming_collisions;
     float turn_route_gap;
+    float overtake_commits;
+    float overtake_completions;
+    float overtake_yields;
+    float overtake_abandons;
 };
 
 // route-progress reward memory: the current goal it was measured against and last step's route distance
@@ -467,6 +472,8 @@ struct LatticeAgent {
     int pass_target; // agent index of the car a borrow is passing, -1 when none
     int was_borrowing;
     int steps_since_borrow;
+    int overtake_target; // agent index a committed overtake must pass, -1 when not committed
+    int overtake_commit_step;
     unsigned char mask[LATTICE_MAX_MASK_FEATURES];
     struct LatticeCounters counters;
 };

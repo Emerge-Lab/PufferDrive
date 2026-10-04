@@ -116,6 +116,16 @@ def test_light_facing_flag_config():
     assert normalized["env"]["obs_light_facing_only"] is True
 
 
+def test_overtake_commit_needs_oncoming_overtake():
+    args = _lattice_args()
+    assert args["env"]["lattice_overtake_commit"] is False
+    args["env"].update({"lattice_overtake_commit": True, "lattice_oncoming_overtake": True})
+    assert _validate(args)["env"]["lattice_overtake_commit"] is True
+    args["env"]["lattice_oncoming_overtake"] = False
+    with pytest.raises(pufferlib.APIUsageError, match="lattice_overtake_commit"):
+        _validate(args)
+
+
 def test_wait_guard_uses_bootstrapped_horizon():
     args = _lattice_args()
     assert args["train"]["use_value_bootstrapping"] is True

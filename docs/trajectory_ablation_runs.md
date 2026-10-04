@@ -544,3 +544,60 @@ Cancelled 2026-10-04 08:20 EDT at the user's request, because they ran the pre-f
 - their continuations had already been cancelled.
 
 `spline_werling_tune_base` (19064424, running) was kept.
+
+## 12. Committing to an overtake (`env.lattice_overtake_commit`, 2026-10-04)
+
+Why: in fix20b no borrow ever finished an overtake (`lattice/oncoming_passes` 0 at 1.43B). The lateral gate picks a
+new plan on about 40 % of decisions, and passing a stopped car takes about 35 decisions, so a borrow survives
+start-to-pass with probability about 0.6^35 = 4e-6. Turn-arounds, which are committed manoeuvres, complete 95 %.
+
+What it does (default false; needs `lattice_oncoming_overtake`):
+- **Start:** a new lateral plan into the oncoming lane commits when a car heading the same way (within 60 deg of the
+  rail, `LATTICE_PASS_MIN_COS`) is ahead in the own lane within 60 m and nothing in the oncoming lane is already a
+  threat. That car is the target.
+- **While committed:** the lateral gate's "new" is masked, so the borrow keeps its plan. It is unmasked whenever
+  `must_return` holds (the oncoming lane ends or stops being clear ahead), so the forced return always works.
+  Longitudinal control and the exit slot's committed exit are unchanged.
+- **Release**, checked every step; each release is counted once:
+  - `overtake_completions`: the target is passed (its front behind the car's rear).
+  - `overtake_yields`: a car ahead in the oncoming lane would be reached within 5 s at the current closing speed, or a
+    standing (< 1 m/s along the rail) or oncoming car is within 20 m.
+  - `overtake_abandons`: the lateral plan left the oncoming lane (a stop request before the car is fully across
+    re-targets the lateral plan), or 15 s passed while the car's front has not reached the target's rear.
+  - Not counted: the target is removed or leaves the lane.
+- The pass counter (`oncoming_passes`) uses the same target rule. Before, it also counted cars driving head-on in the
+  own lane, which the review found to be 85 % of counted passes in random rollouts. It is not comparable with runs
+  before this commit.
+
+Independent review (`/scratch/ag11023/tmp/claude/review_commit/`; recheck `/scratch/ag11023/tmp/claude/recheck/`):
+- **Found, fixed and tested:**
+  - Targets driving head-on: 299 of 661 commitments before, 0 now.
+  - Stopped in the oncoming lane short of a parked car with "new" masked for up to 11 s: fixed by the 20 m standing rule.
+  - 20 % of commitments released in the step they started: fixed by requiring no threat at the start (161 down to 6).
+  - The 15 s cap firing mid-pass and turning the car into its target: no cap while the car is level with the target.
+    Longitudinal control (pass, or fall back) always ends such a commitment.
+- **No regressions found:** no invalid actions, empty masks or determinism breaks. Threat detection found 1755 of
+  1757 oncoming cars placed 10-100 m ahead (curves included), with no false positive for a same-way car.
+- **Collisions with random actions** (8 towns x 2 seeds x 600 steps x 24 cars):
+  - while committed: 16 (1 head-on) uniform and 9 (0) borrow-happy, against 32 (15) and 45 (27) before the fixes;
+  - all collisions per 1k agent-steps, off vs on: 3.13 vs 3.27 uniform, 3.52 vs 3.46 borrow-happy. Committed
+    borrows last longer, so more collisions happen while borrowing (49 vs 103 uniform).
+- **Known and accepted:**
+  - A faster same-way car coming from behind in the oncoming lane is not a threat; it is the pre-existing borrowing
+    blind spot.
+  - While committed the exit slot is not read. `must_return` forces a decision before the split, but at 14 m/s or
+    more a turning exit may no longer be feasible by then.
+  - A commitment level with a target that matches its speed holds until longitudinal control changes, a threat
+    appears or `must_return`.
+  - Cost: one threat check is about 1.5 % of a `c_step` per committed car.
+
+Tests (`tests/drive/test_drive_spline_werling.c`):
+- held until passed against a turn-back-every-decision policy (23 steps, no collision; without the flag: hits the car);
+- yields to an oncoming car after 2 steps;
+- no commitment toward an oncoming car 50 m ahead, or with nothing ahead;
+- yields 19.6 m short of a parked oncoming-lane car at 2.7 m/s;
+- standing vs same-way car within 20 m;
+- a slow car: held 18.3 s until passed, and abandoned at 14.7 s after falling back;
+- a head-on car in the own lane is neither target nor pass;
+- reset clears; init rejects bad values;
+- random rollouts in 8 towns, off and on.
