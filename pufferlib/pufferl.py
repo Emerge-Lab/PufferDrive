@@ -257,6 +257,20 @@ def load_coplayer_policy(policy_path, driver_env, device):
     return policy.to(device)
 
 
+def apply_coplayer_env_setup(env_config, coplayer_policy_path):
+    """Turn a learner's env config into the one it trains in against the co-player at coplayer_policy_path."""
+    coplayer_env = load_coplayer_config(coplayer_policy_path).get("env") or {}
+    changed = {
+        key: (env_config.get(key), value) for key, value in COPLAYER_ENV_SETUP.items() if env_config.get(key) != value
+    }
+    env_config.update(COPLAYER_ENV_SETUP)
+    if coplayer_env.get("reward_conditioning") and not env_config["reward_conditioning"]:
+        changed["reward_conditioning"] = (False, True)
+        env_config["reward_conditioning"] = True
+    if changed:
+        print(f"Co-player training env overrides (configured, used): {changed}")
+
+
 class FrozenCoplayer:
     """A frozen policy acting for every vecenv row that is not a learner row."""
 
@@ -1790,8 +1804,16 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
     torch_seed, env_seed = derive_rank_seeds(args["vec"]["seed"], train_seed, world_size, global_rank)
     torch.manual_seed(torch_seed)
+    # The run's own config (saved below, read by evals) keeps the learner's env, not the co-player harness.
+    learner_env = None
+    if args["train"].get("coplayer_policy_path"):
+        learner_env = copy.deepcopy(args["env"])
+        apply_coplayer_env_setup(args["env"], args["train"]["coplayer_policy_path"])
     vecenv = vecenv or load_env(env_name, args, seed=env_seed)
-    policy = policy or load_policy(args, vecenv, env_name)
+    learner_reward_conditioning = None if learner_env is None else learner_env["reward_conditioning"]
+    policy = policy or load_policy(args, vecenv, env_name, reward_conditioning=learner_reward_conditioning)
+    if learner_env is not None:
+        args["env"] = learner_env
 
     if "LOCAL_RANK" in os.environ:
         args["train"]["device"] = "cuda"
@@ -1824,7 +1846,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             )
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
-    pufferl = PuffeRL(train_config, vecenv, policy, logger)
+    try:
+        pufferl = PuffeRL(train_config, vecenv, policy, logger)
+    except Exception:
+        # Live vecenv workers would otherwise keep the process from exiting.
+        vecenv.close()
+        raise
 
     # A run is identified by its name, and its directory is train.data_dir. Relaunching
     # the same run therefore finds its own trainer_state.pt and continues from it rather

@@ -255,6 +255,15 @@ def summarize_benchmark_metrics(benchmark_results, key_prefix):
     return metrics
 
 
+# Training-harness env keys a benchmark never inherits from the run it evaluates.
+TRAINING_HARNESS_ENV_DEFAULTS = {
+    "reward_coef_overrides": None,
+    "reward_coef_overrides_normalized": False,
+    "learner_agents": "all",
+    "log_sdc_only": False,
+}
+
+
 def build_benchmark_args(base_args, benchmark, environment_config):
     """Apply the benchmark evaluation overrides."""
     args = copy.deepcopy(base_args)
@@ -269,6 +278,7 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     seed = benchmark["seed"]
     args["train"]["seed"] = seed
     args["vec"]["seed"] = seed
+    args["env"].update(TRAINING_HARNESS_ENV_DEFAULTS)
     args["env"].update(copy.deepcopy(environment_config))
     args["env"].update(copy.deepcopy(benchmark_environment_config))
     args["env"]["num_agents"] = eval_agent_count
