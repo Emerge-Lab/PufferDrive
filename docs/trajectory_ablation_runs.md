@@ -391,9 +391,13 @@ That max is set by rare crash events (4.6), so the threshold is 0.046. The value
 
 - Goal-mode exits (`lattice_goal_exit_slot`) and the route features use `lane_graph.distances`, which follows lane
   links only.
-- That table leaves 14-35 of ~64 first goals per town unreachable (section 1, item 2), although lane changes reach
-  all of them.
-- For an unreachable goal, every exit is INFINITY, so the car always takes exit 0 (straight on).
+- Following links from the spawn lane, 14-35 of ~64 first goals per town are unreachable (Town04 / 05 / 06 / 10HD,
+  section 1, item 2); with lane changes, 0 of 510 are.
+- For an unreachable goal, every exit is INFINITY, so the car takes exit 0, the straightest branch.
+- Measured effect (section 5): goal mode picks a different exit from the lane-change-aware shortest route at 58 of 351
+  first junctions (17 %) with map goals and 11 of 354 with route goals.
+- The route features and the progress reward read 167 of 234 lane changes on offer as a >= 100 m detour or a dead
+  end, although the true route changes by < 30 m.
 - The baseline steers freely (offroad 0.10 at the end), so it is not held to the lane graph.
 
 ### Other findings
@@ -407,10 +411,11 @@ That max is set by rare crash events (4.6), so the threshold is 0.046. The value
   wait penalty off, at any distance. That covers 22 % of all steps.
 - **Wrecks stay in the lane:** `collision_behavior=stop` leaves crashed cars in place for the rest of the 2560-step
   episode, and with no completed overtakes the cars behind them never move again.
-- **Dead run:** `trajD2_mapgoals_wait_pen` (18956057) went NaN between 12.0B and 12.5B and has been running ever since.
+- **Dead run:** `trajD2_mapgoals_wait_pen` (18956057) went NaN between 12.0B and 12.5B and kept running until it finished.
   - Its entropy, KL and value loss are NaN, it keeps 0 % of samples, gets 0.015 goals and collides at 0.34.
   - `vel5x_goal` shows the same signature.
   - Nothing aborts a run on a non-finite loss.
+  - Its main job timed out at 03:35 and the continuation (18956058) ran to completion at 21:09 on 2026-10-03.
 
 ### What should help (ranked by expected impact / cost)
 
