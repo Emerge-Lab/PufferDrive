@@ -2095,6 +2095,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
     env->traffic_lights_enabled = (bool) unpack(kwargs, "traffic_lights_enabled");
+    env->obs_light_facing_only = (bool) unpack(kwargs, "obs_light_facing_only");
     env->stop_signs_enabled = (bool) unpack(kwargs, "stop_signs_enabled");
     env->yield_signs_enabled = (bool) unpack(kwargs, "yield_signs_enabled");
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
@@ -2366,6 +2367,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         assign_to_dict(dict, "lattice/wait_exempt_rate", log->lattice_wait_exempt_rate);
         assign_to_dict(dict, "lattice/oncoming_collisions", log->lattice_oncoming_collisions);
         assign_to_dict(dict, "lattice/turn_route_gap", log->lattice_turn_route_gap);
+        assign_to_dict(dict, "lattice/exit_switches", log->lattice_exit_switches);
     }
 
     if (env->compute_eval_metrics) {

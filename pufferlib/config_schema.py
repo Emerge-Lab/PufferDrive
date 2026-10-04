@@ -285,6 +285,7 @@ class DriveEnvConfig:
     traffic_light_behavior: InfractionBehavior = MISSING
     stop_sign_behavior: InfractionBehavior = MISSING
     traffic_lights_enabled: bool = MISSING
+    obs_light_facing_only: bool = MISSING
     stop_signs_enabled: bool = MISSING
     yield_signs_enabled: bool = MISSING
     use_map_cache: bool = MISSING

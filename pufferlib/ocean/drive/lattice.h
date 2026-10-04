@@ -1917,8 +1917,13 @@ static int lattice_agent_goal_lane(const Agent *agent) {
     return agent->list_goal_lane[agent->current_goal_idx];
 }
 
-// nearest undecided split ahead of the car on the chain; -1 if none within max_distance_m
-static int lattice_next_split(const Drive *env, const struct LatticeAgent *lattice_agent, float car_s_m, float max_distance_m) {
+// nearest split ahead of the car on the chain (undecided only unless include_decided); -1 if none within max_distance_m
+static int lattice_next_split(
+    const Drive *env,
+    const struct LatticeAgent *lattice_agent,
+    float car_s_m,
+    float max_distance_m,
+    int include_decided) {
     const struct LatticeRail *rail = &lattice_agent->rail;
     if (!lattice_agent->has_reference || rail->is_straight_fallback) {
         return -1;
@@ -1930,7 +1935,8 @@ static int lattice_next_split(const Drive *env, const struct LatticeAgent *latti
         if (rail->lane_end_s_m[lane_slot] < car_s_m) {
             continue;
         }
-        if (env->lattice_lanes[rail->lanes[lane_slot]].exit_count >= 2 && !rail->exit_decided[lane_slot]) {
+        if (env->lattice_lanes[rail->lanes[lane_slot]].exit_count >= 2
+            && (include_decided || !rail->exit_decided[lane_slot])) {
             return lane_slot;
         }
     }
@@ -1957,10 +1963,17 @@ static void apply_lattice_exit(Drive *env, struct LatticeAgent *lattice_agent, c
     struct LatticeRail *rail = &lattice_agent->rail;
     const struct LatticeLaneInfo *info = &env->lattice_lanes[rail->lanes[lane_slot]];
     int exit_lane = info->exit_slots[exit_slot];
+    int unchanged = lane_slot + 1 < rail->lane_count && rail->lanes[lane_slot + 1] == exit_lane;
+    if (!rail->exit_decided[lane_slot]) {
+        lattice_agent->counters.exit_decisions += 1.0f;
+        lattice_agent->counters.exit_nonstraight += exit_slot != 0;
+    } else if (!unchanged) {
+        int was_nonstraight = lane_slot + 1 < rail->lane_count && rail->lanes[lane_slot + 1] != info->exit_slots[0];
+        lattice_agent->counters.exit_switches += 1.0f;
+        lattice_agent->counters.exit_nonstraight += (float) (exit_slot != 0) - (float) was_nonstraight;
+    }
     rail->exit_decided[lane_slot] = 1;
-    lattice_agent->counters.exit_decisions += 1.0f;
-    lattice_agent->counters.exit_nonstraight += exit_slot != 0;
-    if (lane_slot + 1 < rail->lane_count && rail->lanes[lane_slot + 1] == exit_lane) {
+    if (unchanged) {
         return;
     }
     LatticeFrenet frenet = lattice_project(rail, agent->sim_x, agent->sim_y, lattice_agent->projection_hint);
@@ -3284,7 +3297,7 @@ static LatticeReportedLight lattice_reported_light(const Drive *env, const struc
     }
     reported.distance_m = stop_line.distance_m;
     const TrafficControlElement *light = &env->traffic_elements[stop_line.traffic_idx];
-    if (env->timestep < light->state_size) {
+    if (env->timestep < light->state_size && !traffic_light_state_hidden(env, light, agent)) {
         reported.light_state = light->states[env->timestep];
     }
     return reported;
@@ -3725,8 +3738,11 @@ static int lattice_exit_slot_feasible(const Drive *env, const Agent *agent, int 
         return 1;
     }
     float exit_speed = sqrtf(ACCEL_LAT_LIMIT[1] * LATTICE_ENVELOPE_MARGIN / max_curvature);
-    float braking_m = fmaxf(0.0f, distance_m - 0.5f * agent->sim_length);
-    return fabsf(agent->sim_speed_signed) <= sqrtf(exit_speed * exit_speed + 2.0f * LATTICE_ENVELOPE_BRAKE_MPS2 * braking_m);
+    // the plan chosen for the old route still runs one decision period
+    float coast_m = fabsf(agent->sim_speed_signed) * env->lattice.decision_period_s;
+    float braking_m = fmaxf(0.0f, distance_m - 0.5f * agent->sim_length - coast_m);
+    return fabsf(agent->sim_speed_signed)
+        <= sqrtf(exit_speed * exit_speed + 2.0f * LATTICE_EXIT_SWITCH_BRAKE_MPS2 * braking_m);
 }
 
 // all per-factor masks for one decision, in one context
@@ -3779,7 +3795,7 @@ static void compute_lattice_masks(Drive *env, int active_idx, int now_step) {
             mask[lat_cells + cell] = (unsigned char) ok;
             any_lat |= ok;
         }
-        int lane_change_allowed = !exit_live && forward && !lattice_car_on_connector(env, lattice_agent) && !plan_in_oncoming
+        int lane_change_allowed = forward && !lattice_car_on_connector(env, lattice_agent) && !plan_in_oncoming
             && !lattice_is_borrowing(env, lattice_agent, &ctx.frenet);
         for (int side_idx = 0; side_idx < 2 && lane_change_allowed; side_idx++) {
             int neighbour_lane = lattice_agent->neighbour_lane[side_idx];
@@ -3827,7 +3843,9 @@ static void compute_lattice_masks(Drive *env, int active_idx, int now_step) {
         mask[lat_cells] = 1;
     }
     int any_lon = 0;
-    lattice_agent->stop_line_distance_m = lattice_next_stop_line(env, lattice_agent, agent, ctx.frenet.s).distance_m;
+    lattice_agent->stop_line_distance_m = cfg->light_in_view
+        ? lattice_reported_light(env, lattice_agent, agent, ctx.frenet.s).distance_m
+        : lattice_next_stop_line(env, lattice_agent, agent, ctx.frenet.s).distance_m;
     int forward_allowed = !ctx.reversing && (lattice_agent->gear > 0 || ctx.stopped_exactly);
     for (int cell = 0; cell < cfg->lon_cell_count; cell++) {
         if (cell == cfg->lon_turn_cell) {
@@ -3861,8 +3879,14 @@ static void compute_lattice_masks(Drive *env, int active_idx, int now_step) {
         int split_lane = rail->lanes[lattice_agent->live_split_slot];
         const struct LatticeLaneInfo *info = &env->lattice_lanes[split_lane];
         float distance_m = rail->lane_end_s_m[lattice_agent->live_split_slot] - ctx.frenet.s;
+        int committed_lane = lattice_agent->live_split_slot + 1 < rail->lane_count
+            ? rail->lanes[lattice_agent->live_split_slot + 1]
+            : -1;
         for (int slot_idx = 1; slot_idx < info->exit_count; slot_idx++) {
-            mask[exit_offset + slot_idx] = (unsigned char) lattice_exit_slot_feasible(env, agent, info->exit_slots[slot_idx], distance_m);
+            int exit_lane = info->exit_slots[slot_idx];
+            mask[exit_offset + slot_idx]
+                = (unsigned char) (exit_lane == committed_lane
+                                   || lattice_exit_slot_feasible(env, agent, exit_lane, distance_m));
         }
     }
 }
@@ -3922,14 +3946,15 @@ static void run_lattice_context(Drive *env, int active_idx) {
         lattice_neighbours_at(env, lattice_agent);
     }
     if (lattice_agent->has_reference && lattice_agent->gear > 0 && !lattice_is_reversing(lattice_agent, agent)) {
-        int split_slot = lattice_next_split(env, lattice_agent, frenet.s, LATTICE_EXIT_FREEZE_M);
-        if (split_slot >= 0 && cfg->exit_mode == LATTICE_EXIT_MODE_GOAL) {
+        int policy_exits = cfg->exit_mode == LATTICE_EXIT_MODE_POLICY;
+        int split_slot = lattice_next_split(env, lattice_agent, frenet.s, LATTICE_EXIT_FREEZE_M, policy_exits);
+        if (split_slot >= 0 && !policy_exits) {
             apply_lattice_exit(env, lattice_agent, agent, split_slot, lattice_goal_exit_slot(env, agent, lattice_agent->rail.lanes[split_slot]));
         } else {
             lattice_agent->live_split_slot = split_slot;
         }
     }
-    if (lattice_agent->live_split_slot < 0 && lattice_next_split(env, lattice_agent, frenet.s, LATTICE_EXIT_FREEZE_M) < 0) {
+    if (lattice_next_split(env, lattice_agent, frenet.s, LATTICE_EXIT_FREEZE_M, 0) < 0) {
         lattice_agent->late_exit_pending = 0;
     }
     compute_lattice_masks(env, active_idx, now_step);
@@ -4020,13 +4045,17 @@ static void apply_lattice_action(Drive *env, int active_idx, Agent *agent, int n
     if (lattice_agent->turn.active) {
         return;
     }
-    if (lattice_agent->live_split_slot >= 0) {
+    // the exit belongs to a new lateral plan on this rail; a lane change leaves it for the neighbour's split
+    int route_choice = lat_gate == LATTICE_GATE_NEW && lattice_lat_lane_side(cfg, lat_cell) == 0;
+    if (lattice_agent->live_split_slot >= 0 && route_choice) {
         int split_slot = lattice_agent->live_split_slot;
         float split_distance_m = lattice_agent->rail.lane_end_s_m[split_slot] - lattice_frenet_state(&lattice_agent->rail, agent, lattice_agent->projection_hint).s;
-        lattice_agent->counters.late_exit_decisions += lattice_agent->late_exit_pending && split_distance_m < LATTICE_EXIT_FREEZE_M - LATTICE_LOOKAHEAD_FREEZE_PAD_M;
+        lattice_agent->counters.late_exit_decisions += lattice_agent->late_exit_pending
+            && !lattice_agent->rail.exit_decided[split_slot]
+            && split_distance_m < LATTICE_EXIT_FREEZE_M - LATTICE_LOOKAHEAD_FREEZE_PAD_M;
         apply_lattice_exit(env, lattice_agent, agent, split_slot, exit_slot);
-        lattice_agent->live_split_slot = -1;
     }
+    lattice_agent->live_split_slot = -1;
     LatticeContext ctx = lattice_make_context(env, lattice_agent, agent, now_step);
     const struct LatticeLonPlan *new_lon = NULL;
     if (lon_gate == LATTICE_GATE_NEW && lon_cell == cfg->lon_turn_cell) {
@@ -4192,8 +4221,10 @@ static LatticeCommand move_lattice_agent(Drive *env, int active_idx, Agent *agen
         float plans_committed = lattice_agent->counters.lat_new + lattice_agent->counters.lon_new;
         apply_lattice_action(env, active_idx, agent, now_step);
         if (lattice_agent->counters.lat_new + lattice_agent->counters.lon_new > plans_committed) {
-            lattice_agent->plan_change_rms_m = lattice_plan_change_rms_m(env, lattice_agent, agent, now_step);
-            lattice_agent->counters.plan_change_rms_m += lattice_agent->plan_change_rms_m;
+            float change_rms_m = lattice_plan_change_rms_m(env, lattice_agent, agent, now_step);
+            lattice_agent->counters.plan_change_rms_m += change_rms_m;
+            lattice_agent->plan_change_rms_m
+                = fabsf(agent->sim_speed) < LATTICE_CONSISTENCY_REST_MPS ? 0.0f : change_rms_m;
         }
     }
     if (lattice_agent->turn.active) {
@@ -4527,7 +4558,22 @@ static float lattice_leader_gap_m(const Drive *env, const Agent *agent, int *lea
     return best_gap_m;
 }
 
-// log only, after the step's rewards: queued or slow behind a car ahead (no red/yellow reported), borrow collisions
+// waiting is waived at a reported red / yellow only near its stop line or queued behind a car
+static int lattice_wait_exempt(const Drive *env, const struct LatticeAgent *lattice_agent, const Agent *agent) {
+    if (lattice_agent->rail.sample_count < 2) {
+        return 0;
+    }
+    LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, agent, lattice_agent->projection_hint);
+    LatticeReportedLight light = lattice_reported_light(env, lattice_agent, agent, frenet.s);
+    if (light.light_state != TRAFFIC_CONTROL_STATE_RED && light.light_state != TRAFFIC_CONTROL_STATE_YELLOW) {
+        return 0;
+    }
+    int leader_idx;
+    return light.distance_m <= LATTICE_WAIT_LIGHT_NEAR_M
+        || lattice_leader_gap_m(env, agent, &leader_idx) < LATTICE_QUEUE_GAP_M;
+}
+
+// log only, after the step's rewards: queued or slow behind a car ahead (no waived wait), borrow collisions
 static void update_lattice_traffic_counters(Drive *env, int active_idx) {
     struct LatticeAgent *lattice_agent = &env->lattice_agents[active_idx];
     const Agent *agent = &env->agents[env->active_agent_indices[active_idx]];
@@ -4538,9 +4584,7 @@ static void update_lattice_traffic_counters(Drive *env, int active_idx) {
         || lattice_agent->rail.sample_count < 2) {
         return;
     }
-    LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, agent, lattice_agent->projection_hint);
-    int light_state = lattice_reported_light(env, lattice_agent, agent, frenet.s).light_state;
-    if (light_state == TRAFFIC_CONTROL_STATE_RED || light_state == TRAFFIC_CONTROL_STATE_YELLOW) {
+    if (lattice_wait_exempt(env, lattice_agent, agent)) {
         counters->wait_exempt_steps += agent->sim_speed < env->reward_wait_full_speed_mps;
         return;
     }
@@ -4598,6 +4642,7 @@ static void add_lattice_log(Drive *env, int active_idx, Log *episode_log) {
     episode_log->lattice_wait_exempt_rate += counters->wait_exempt_steps / steps;
     episode_log->lattice_oncoming_collisions += counters->oncoming_collisions;
     episode_log->lattice_turn_route_gap += counters->turn_route_gap;
+    episode_log->lattice_exit_switches += counters->exit_switches;
 }
 
 // all active slots: follow the rails every step, recompute context and masks on context steps

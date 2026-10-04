@@ -101,6 +101,8 @@ env:
   # Stop sign behavior - options: "ignore", "stop", "remove"
   stop_sign_behavior: stop
   traffic_lights_enabled: true
+  # Observe a light's state only from within 60 deg of the way its face points (its controlled lane's approach)
+  obs_light_facing_only: false
   stop_signs_enabled: false
   yield_signs_enabled: false
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map
@@ -187,8 +189,8 @@ env:
   # Lattice only: reward per meter of lane-route distance gained toward the current goal (0 = off)
   reward_route_progress: 0.0
   # Lattice only: per-step share of the car's cheapest infraction penalty charged at standstill, fading to 0 at
-  # reward_wait_full_speed_mps (not while a red/yellow light is reported ahead); must keep a whole episode of it below one
-  # infraction
+  # reward_wait_full_speed_mps (waived at a reported red/yellow within 30 m of its stop line or when queued behind a car);
+  # must keep a whole episode of it below one infraction
   reward_wait_penalty_frac: 0.0
   # Speed at which the waiting penalty reaches 0: 1 m/s charges only (near) standstill, higher also charges slow driving
   reward_wait_full_speed_mps: 1.0

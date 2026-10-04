@@ -134,6 +134,7 @@ struct Log {
     float lattice_wait_exempt_rate;
     float lattice_oncoming_collisions;
     float lattice_turn_route_gap;
+    float lattice_exit_switches;
 };
 
 struct GridMapEntity {
@@ -307,6 +308,7 @@ struct Drive {
     int obs_slots_partners_n;
     int obs_slots_traffic_controls_n;
     int traffic_lights_enabled;
+    int obs_light_facing_only; // light states only for lights whose face points at the car
     int stop_signs_enabled;
     int yield_signs_enabled;
     int obs_lane_stride;
@@ -695,6 +697,38 @@ static int traffic_control_observable(const Drive *env, const TrafficControlElem
         || (tc->type == TRAFFIC_CONTROL_TYPE_YIELD_SIGN && !env->yield_signs_enabled));
 }
 
+// seen from ahead of its stop line's nearest point, inside the cone its face (against its controlled lane) points into
+static int traffic_light_visible(const Drive *env, const TrafficControlElement *tc, const Agent *agent) {
+    if (tc->num_controlled_lanes <= 0) {
+        return 0;
+    }
+    const RoadMapElement *lane = &env->road_elements[tc->controlled_lanes[0]];
+    float flow_x = 0.0f;
+    float flow_y = 0.0f;
+    for (int seg_idx = 0; seg_idx + 1 < lane->segment_size && flow_x == 0.0f && flow_y == 0.0f; seg_idx++) {
+        flow_x = lane->x[seg_idx + 1] - lane->x[seg_idx];
+        flow_y = lane->y[seg_idx + 1] - lane->y[seg_idx];
+    }
+    float line_x = tc->stop_line[3] - tc->stop_line[0];
+    float line_y = tc->stop_line[4] - tc->stop_line[1];
+    float line_sq = line_x * line_x + line_y * line_y;
+    float along = line_sq > 0.0f
+        ? ((agent->sim_x - tc->stop_line[0]) * line_x + (agent->sim_y - tc->stop_line[1]) * line_y) / line_sq
+        : 0.0f;
+    along = fminf(fmaxf(along, 0.0f), 1.0f);
+    float to_car_x = agent->sim_x - (tc->stop_line[0] + along * line_x);
+    float to_car_y = agent->sim_y - (tc->stop_line[1] + along * line_y);
+    float line_ahead_m = -(to_car_x * cosf(agent->sim_heading) + to_car_y * sinf(agent->sim_heading));
+    float scale = sqrtf((flow_x * flow_x + flow_y * flow_y) * (to_car_x * to_car_x + to_car_y * to_car_y));
+    return (flow_x != 0.0f || flow_y != 0.0f) && line_ahead_m >= 0.0f
+        && -(flow_x * to_car_x + flow_y * to_car_y) >= TRAFFIC_LIGHT_VIEW_COS * scale;
+}
+
+static int traffic_light_state_hidden(const Drive *env, const TrafficControlElement *tc, const Agent *agent) {
+    return env->obs_light_facing_only && tc->type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT
+        && !traffic_light_visible(env, tc, agent);
+}
+
 static float traffic_control_dist_sq(const TrafficControlElement *tc, const Agent *agent) {
     float dx = (tc->stop_line[0] + tc->stop_line[3]) * 0.5f - agent->sim_x;
     float dy = (tc->stop_line[1] + tc->stop_line[4]) * 0.5f - agent->sim_y;
@@ -710,16 +744,22 @@ static int traffic_control_in_view(const Drive *env, const Agent *agent, int tra
         || target_dist_sq > env->obs_range_traffic_control_m * env->obs_range_traffic_control_m) {
         return 0;
     }
-    int nearer_count = 0;
-    for (int j = 0; j < env->num_traffic_elements && nearer_count < env->obs_slots_traffic_controls_n; j++) {
+    float range_sq = env->obs_range_traffic_control_m * env->obs_range_traffic_control_m;
+    int target_hidden = traffic_light_state_hidden(env, target, agent);
+    int ranked_before = 0;
+    for (int j = 0; j < env->num_traffic_elements && ranked_before < env->obs_slots_traffic_controls_n; j++) {
         const TrafficControlElement *other = &env->traffic_elements[j];
         if (j == traffic_idx || !traffic_control_observable(env, other)) {
             continue;
         }
         float other_dist_sq = traffic_control_dist_sq(other, agent);
-        nearer_count += other_dist_sq < target_dist_sq || (other_dist_sq == target_dist_sq && j < traffic_idx);
+        int nearer = other_dist_sq < target_dist_sq || (other_dist_sq == target_dist_sq && j < traffic_idx);
+        // visible lights rank first, then distance
+        ranked_before += target_hidden
+            ? nearer || (other_dist_sq <= range_sq && !traffic_light_state_hidden(env, other, agent))
+            : nearer && !traffic_light_state_hidden(env, other, agent);
     }
-    return nearer_count < env->obs_slots_traffic_controls_n;
+    return ranked_before < env->obs_slots_traffic_controls_n;
 }
 
 #include "lattice.h"
@@ -3157,6 +3197,26 @@ void remove_bad_trajectories(Drive *env) {
     env->timestep = 0;
 }
 
+// controlled-lane indices come from the map file; the light-facing test indexes road elements with them
+static int validate_traffic_control_lanes(const Drive *env) {
+    for (int traffic_idx = 0; traffic_idx < env->num_traffic_elements; traffic_idx++) {
+        const TrafficControlElement *tc = &env->traffic_elements[traffic_idx];
+        int bad_lane = 0;
+        for (int lane_idx = 0; lane_idx < tc->num_controlled_lanes && !bad_lane; lane_idx++) {
+            bad_lane = tc->controlled_lanes[lane_idx] < 0 || tc->controlled_lanes[lane_idx] >= env->num_road_elements;
+        }
+        if (bad_lane) {
+            fprintf(
+                stderr,
+                "[ERROR] -> traffic control %d controls a lane outside [0, %d)\n",
+                traffic_idx,
+                env->num_road_elements);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int init(Drive *env) {
     env->timestep = 0;
     struct SharedMapData *shared = env->use_map_cache ? map_cache_lookup(env) : NULL;
@@ -3196,6 +3256,10 @@ int init(Drive *env) {
             // this env borrows (ref_count starts at 1).
             env->shared_map = map_cache_store(env);
         }
+    }
+    if (env->obs_light_facing_only && validate_traffic_control_lanes(env) != 0) {
+        fprintf(stderr, "[ERROR] -> Invalid traffic controls in map: %s\n", env->map_name);
+        return -1;
     }
     if (env->use_neighbor_cache && env->grid_map->neighbor_cache_entities == NULL) {
         cache_neighbor_offsets(env);
@@ -3950,20 +4014,14 @@ static void compute_lattice_rewards(Drive *env, int i) {
     agent_log->reward_trajectory_consistency += consistency_penalty;
     // sized against the cheapest infraction so sitting still for a whole episode never beats crashing out
     float slowness = fmaxf(0.0f, 1.0f - agent->sim_speed / env->reward_wait_full_speed_mps);
-    if (env->reward_wait_penalty_frac > 0.0f && slowness > 0.0f && !agent->stopped && !lattice_agent->turn.active) {
-        int light_state = TRAFFIC_CONTROL_STATE_UNKNOWN;
-        if (lattice_agent->rail.sample_count >= 2) {
-            LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, agent, lattice_agent->projection_hint);
-            light_state = lattice_reported_light(env, lattice_agent, agent, frenet.s).light_state;
-        }
-        if (light_state != TRAFFIC_CONTROL_STATE_RED && light_state != TRAFFIC_CONTROL_STATE_YELLOW) {
-            float cheapest_infraction = fminf(
-                fminf(agent->reward_coefs[REWARD_COEF_COLLISION], agent->reward_coefs[REWARD_COEF_OFFROAD]),
-                agent->reward_coefs[REWARD_COEF_STOP_LINE]);
-            float wait_penalty = -env->reward_wait_penalty_frac * cheapest_infraction * slowness;
-            env->rewards[i] += wait_penalty;
-            agent_log->reward_wait += wait_penalty;
-        }
+    if (env->reward_wait_penalty_frac > 0.0f && slowness > 0.0f && !agent->stopped && !lattice_agent->turn.active
+        && !lattice_wait_exempt(env, lattice_agent, agent)) {
+        float cheapest_infraction = fminf(
+            fminf(agent->reward_coefs[REWARD_COEF_COLLISION], agent->reward_coefs[REWARD_COEF_OFFROAD]),
+            agent->reward_coefs[REWARD_COEF_STOP_LINE]);
+        float wait_penalty = -env->reward_wait_penalty_frac * cheapest_infraction * slowness;
+        env->rewards[i] += wait_penalty;
+        agent_log->reward_wait += wait_penalty;
     }
     if (env->reward_oncoming_penalty_frac > 0.0f && !agent->stopped && lattice_agent->rail.sample_count >= 2) {
         LatticeFrenet frenet = lattice_frenet_state(&lattice_agent->rail, agent, lattice_agent->projection_hint);
@@ -4541,6 +4599,7 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
 static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *traffic_control_count) {
     typedef struct {
         int idx;
+        int hidden;
         float dist_sq;
     } TrafficControlDist;
     TrafficControlDist visible_controls[env->num_traffic_elements > 0 ? env->num_traffic_elements : 1];
@@ -4556,6 +4615,7 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
             continue;
         }
         visible_controls[visible_count].idx = j;
+        visible_controls[visible_count].hidden = traffic_light_state_hidden(env, tc, ego);
         visible_controls[visible_count].dist_sq = dist_sq;
         visible_count++;
     }
@@ -4565,7 +4625,10 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
     for (int k = 0; k < controls_to_observe; k++) {
         int nearest_idx = k;
         for (int j = k + 1; j < visible_count; j++) {
-            if (visible_controls[j].dist_sq < visible_controls[nearest_idx].dist_sq) {
+            const TrafficControlDist *candidate = &visible_controls[j];
+            const TrafficControlDist *best = &visible_controls[nearest_idx];
+            if (candidate->hidden < best->hidden
+                || (candidate->hidden == best->hidden && candidate->dist_sq < best->dist_sq)) {
                 nearest_idx = j;
             }
         }
@@ -4579,12 +4642,13 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
     int controls_written = 0;
     for (int j = 0; j < controls_to_observe && controls_written < env->obs_slots_traffic_controls_n; j++) {
         TrafficControlElement *tc = &env->traffic_elements[visible_controls[j].idx];
+        int state_hidden = visible_controls[j].hidden;
         float rel_x1, rel_y1, rel_x2, rel_y2;
         project_point_to_ego_frame(ego, tc->stop_line[0], tc->stop_line[1], &rel_x1, &rel_y1);
         project_point_to_ego_frame(ego, tc->stop_line[3], tc->stop_line[4], &rel_x2, &rel_y2);
         float rel_z = (tc->stop_line[2] + tc->stop_line[5]) * 0.5f - ego->sim_z;
         int light_state = TRAFFIC_CONTROL_STATE_UNKNOWN;
-        if (tc->type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
+        if (tc->type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT && !state_hidden) {
             light_state = (env->timestep >= 0 && env->timestep < tc->state_size && tc->states != NULL)
                 ? tc->states[env->timestep]
                 : TRAFFIC_CONTROL_STATE_OFF;

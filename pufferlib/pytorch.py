@@ -143,7 +143,7 @@ def entropy(logits):
 
 
 class LatticeLogits(NamedTuple):
-    """Masked logits of the five lattice factors; a cell only acts when its gate (index 1 = new) is chosen."""
+    """Masked logits of the five lattice factors; cells and the exit slot act only with their gate (index 1 = new)."""
 
     lat_gate: torch.Tensor
     lat_cell: torch.Tensor
@@ -156,7 +156,7 @@ LATTICE_GATE_NEW = 1
 
 
 def sample_lattice_logits(logits, action=None, action_selection=ACTION_SELECT_SAMPLE):
-    """Conditional log-prob and entropy: cells count only when their gate says new, so keep rows give cell logits no gradient."""
+    """Conditional log-prob and entropy: cells and the exit (with the lateral gate) count only on new rows."""
     if action_selection == ACTION_SELECT_MEAN:
         raise ValueError("action_selection='mean' is undefined for the lattice action type")
     min_real = torch.finfo(logits.lat_gate.dtype).min
@@ -174,7 +174,13 @@ def sample_lattice_logits(logits, action=None, action_selection=ACTION_SELECT_SA
     factor_entropies = [-(lp.exp() * lp).sum(-1) for lp in log_probs]
     lat_new = (action[:, 0] == LATTICE_GATE_NEW).to(factor_log_probs[0].dtype)
     lon_new = (action[:, 2] == LATTICE_GATE_NEW).to(factor_log_probs[0].dtype)
-    logprob = factor_log_probs[0] + lat_new * factor_log_probs[1] + factor_log_probs[2] + lon_new * factor_log_probs[3] + factor_log_probs[4]
+    logprob = (
+        factor_log_probs[0]
+        + lat_new * factor_log_probs[1]
+        + factor_log_probs[2]
+        + lon_new * factor_log_probs[3]
+        + lat_new * factor_log_probs[4]
+    )
     p_lat_new = log_probs[0][:, LATTICE_GATE_NEW].exp().detach()
     p_lon_new = log_probs[2][:, LATTICE_GATE_NEW].exp().detach()
     entropy_sum = (
@@ -182,7 +188,7 @@ def sample_lattice_logits(logits, action=None, action_selection=ACTION_SELECT_SA
         + p_lat_new * factor_entropies[1]
         + factor_entropies[2]
         + p_lon_new * factor_entropies[3]
-        + factor_entropies[4]
+        + p_lat_new * factor_entropies[4]
     )
     return action, logprob, entropy_sum, None
 

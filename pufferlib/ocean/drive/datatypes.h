@@ -381,6 +381,7 @@ struct LatticeCounters {
     float unfollowable_steps;
     float exit_decisions;
     float exit_nonstraight;
+    float exit_switches;
     float late_exit_decisions;
     float backups;
     float backup_m;

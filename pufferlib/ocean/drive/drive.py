@@ -105,6 +105,7 @@ class Drive(pufferlib.PufferEnv):
         obs_slots_partners_n=16,
         obs_slots_traffic_controls_n=4,
         traffic_lights_enabled=True,
+        obs_light_facing_only=False,
         stop_signs_enabled=False,
         yield_signs_enabled=False,
         starting_map=0,
@@ -294,6 +295,7 @@ class Drive(pufferlib.PufferEnv):
         self.obs_boundary_stride = obs_boundary_stride
         self.obs_slots_partners_n = obs_slots_partners_n
         self.traffic_lights_enabled = traffic_lights_enabled
+        self.obs_light_facing_only = obs_light_facing_only
         self.stop_signs_enabled = stop_signs_enabled
         self.yield_signs_enabled = yield_signs_enabled
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
@@ -562,6 +564,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_partners_n": self.obs_slots_partners_n,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_lights_enabled": self.traffic_lights_enabled,
+            "obs_light_facing_only": self.obs_light_facing_only,
             "stop_signs_enabled": self.stop_signs_enabled,
             "yield_signs_enabled": self.yield_signs_enabled,
             "dt": self.dt,

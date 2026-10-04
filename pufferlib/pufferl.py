@@ -592,6 +592,12 @@ class PuffeRL:
             v_loss = v_loss.mean()
         entropy_loss = entropy.mean()
         loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+        if not torch.isfinite(loss):
+            raise RuntimeError(
+                f"non-finite PPO loss: policy {pg_loss.item()}, value {v_loss.item()}, entropy {entropy_loss.item()}; "
+                f"all finite: observations {bool(torch.isfinite(mb_obs).all())}, advantages {bool(torch.isfinite(mb_adv).all())}, "
+                f"returns {bool(torch.isfinite(mb_returns).all())}, new values {bool(torch.isfinite(newvalue).all())}"
+            )
 
         return (
             loss,
@@ -759,17 +765,10 @@ class PuffeRL:
         total_minibatches = 0
         pending_minibatches = 0
 
-        # Disabled for now: dropping the partial final minibatch means zero optimizer
-        # steps (silently) whenever fewer than minibatch_size transitions survive the
-        # advantage filter, which permanently freezes a plateaued policy.
-        # full_minibatch_transitions = (keep_idx.numel() // self.minibatch_size) * self.minibatch_size
-        full_minibatch_transitions = keep_idx.numel()
-
         for _ in range(config["update_epochs"]):
             permutation = keep_idx[torch.randperm(keep_idx.numel(), device=keep_idx.device)]
-            for start in range(0, full_minibatch_transitions, self.minibatch_size):
+            for mb_idx in minibatch_chunks(permutation, self.minibatch_size):
                 profile("train_copy", epoch)
-                mb_idx = permutation[start : start + self.minibatch_size]
                 if config["cpu_offload"]:
                     mb_obs = flat_obs[mb_idx.cpu()].to(device, non_blocking=True)
                 else:
@@ -1025,6 +1024,13 @@ class PuffeRL:
             console.print(dashboard)
 
         print("\033[0;0H" + capture.get())
+
+
+def minibatch_chunks(indices, minibatch_size):
+    """Near-equal chunks of at most minibatch_size: a 1-sample remainder has no advantage std and turned two runs NaN."""
+    if indices.numel() < 2:
+        return ()
+    return torch.tensor_split(indices, -(-indices.numel() // minibatch_size))
 
 
 def compute_puff_advantage(
@@ -1458,6 +1464,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "lattice_exit_mode",
             "lattice_oncoming_overtake",
             "lattice_turnaround",
+            "lattice_light_in_view",
+            "obs_light_facing_only",
         }
         if os.path.exists(config_yaml_path):
             print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")

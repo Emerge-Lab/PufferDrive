@@ -453,3 +453,65 @@ That max is set by rare crash events (4.6), so the threshold is 0.046. The value
 - **trajF:** turn-arounds shorten some map-goal routes. At 4B it looks like trajE (0.37 goals) with a 2.5 s first motion.
 - **v2_h100 (50B):** a map-goal control for a longer horizon. It had 1.25 goals at 25B.
 - **Gap:** no queued run tests items 1, 3, 4 or 5.
+
+## 11. Fixes for the stall, and the 20B run (2026-10-04)
+
+Requested by the user after section 10: map goals stay, exits are chosen by the policy and can be changed, the car
+gets no light information it could not see, the advantage filter is relaxed, turn-arounds are on, and the smaller
+items are fixed. Lane-change-aware routing is dropped for now.
+
+Code (one commit), after an independent code review (`/scratch/ag11023/tmp/claude/review_fix/`):
+- **Exits** (`lattice_exit_mode=policy`):
+  - The nearest split within 160 m stays live until the car's centre passes it.
+  - The exit is part of a new lateral plan: it is applied on decisions whose lateral gate is new and is not a lane
+    change. It counts in the log-prob and entropy with the lateral gate, like the cells, so keep decisions never flip
+    the route. A switch therefore goes through a new lateral plan, which the consistency term prices.
+  - The exit already on the chain stays offered; feasibility applies only to switching. The review found the old
+    every-decision check revoked a committed turn in 181 of 194 runs at mask-allowed speeds; 0 now.
+  - A switch must leave room to brake at 1.5 m/s^2 (`LATTICE_EXIT_SWITCH_BRAKE_MPS2`) after one decision period of
+    coasting. Late switches the mask allows (6-30 m, 4-13 m/s): emergencies 7 of 1386, none over the speed envelope
+    by > 0.5 m/s. At 2.5 m/s^2 it was 23 of 1692, with 7 over (worst 3.05 m/s).
+  - Lane changes are no longer masked while an exit is live. New counter `lattice/exit_switches`. Goal mode is
+    unchanged (bit-identical trajectories in the review). `late_exit_pending` clears once no undecided split is near.
+  - Cost with random actions: `c_step` +10-12 % per agent-step (330-398 switches per 64 agents x 400 steps).
+- **Lights** (`env.obs_light_facing_only`, new, default false; the run sets it true together with
+  `lattice_light_in_view=true`):
+  - A light's state is observed only when the nearest point of its stop line is ahead of the car and the car is
+    within 60 deg of the way its face points (against its first controlled lane, a junction connector). A degenerate
+    lane hides it.
+  - Visible lights rank before hidden ones in the 4 traffic-control slots and in the in-view test. The review found
+    the own light outside the slots for 20-43 % of cars 30-80 m back; ranking visible first puts it in for 98-100 %.
+  - This applies to the slots and to the plan block's red / yellow flags, which also drive the wait exemption.
+  - The stop-line cell needs the stop line in view. Controlled-lane ids are validated at init when the flag is on.
+  - Partner `seconds_stopped` (an audit leak unrelated to lights) is unchanged.
+- **Wait exemption:** a reported red / yellow waives the waiting penalty only within 30 m of its stop line or when
+  queued behind a car within 15 m. Before, any reported red anywhere ahead waived it (22 % of steps in the replay).
+- **Consistency:** a plan committed below 0.5 m/s is a start, not a plan change, and costs nothing. The RMS metric
+  still records it.
+- **NaN root cause:**
+  - `_train_ppo_transition` kept the remainder minibatch; with exactly k * 65536 + 1 kept samples it held one sample,
+    whose advantage std (Bessel) is NaN.
+  - W&B confirms both dead runs: trajD2 at epoch 4670 with 327681 = 5 * 65536 + 1 kept, and vel5x_goal at epoch 3648
+    with 393217 = 6 * 65536 + 1.
+  - Minibatches are now near-equal chunks (`minibatch_chunks`), and `_ppo_loss` raises on a non-finite loss.
+- `obs_light_facing_only` and `lattice_light_in_view` join the fine-tune keys copied from a checkpoint's config.
+- `scripts/launch_fairshare.py` (untracked) gained `--total-timesteps`.
+
+Hyperparameters, reviewed for balance (`/scratch/ag11023/tmp/claude/review_hp/`):
+- **`train.adv_filter_threshold_scale=1e-3`:**
+  - In the replay it keeps 71 % of live samples and 64 % of samples at rest, against 10.8 % / 2.8 % at 0.01.
+  - 3e-3 keeps rest samples at only 0.31x the moving rate.
+  - Turning the filter off adds samples with no signal and about 18 optimizer steps per epoch.
+- **`train.update_epochs=2`:** about 46 optimizer steps per epoch, against the baseline's 45 (44 % kept x 3 epochs).
+- **`train.learning_rate=4e-4`:** per optimizer step the lattice's approx_kl is about 1.5x the baseline's
+  (0.0011-0.0015 vs 0.00086). At 5e-4 with 46 steps the peak KL would reach about 0.05-0.06; at 4e-4 about
+  0.03-0.04, like trajB / C / D.
+- **`ent_coef=0.01` kept:**
+  - Normalised advantages average about 0.39 among kept samples, so entropy is about 2.6 % of a typical sample's
+    policy-gradient weight (8 % at rest).
+  - Stop rule: drop to 0.005 if entropy keeps rising above about 3.5 nats after 3B steps while goals stay flat.
+- **Rewards:** wait 7e-4, oncoming 2.5e-4, full speed 5 m/s, consistency 2e-3 (guard 0.95). The lane-centre term is
+  not covered by the guard.
+- **20B steps, cosine to zero.** Read whether the stall is fixed at 4-8B: kept fraction at rest, time to first
+  motion, goals against consist10x and the baseline.
+- **Expected time:** about 55-61 h on H100 and 73-80 h on A100, i.e. one main job plus one continuation.

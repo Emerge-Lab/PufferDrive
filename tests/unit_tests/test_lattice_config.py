@@ -108,6 +108,14 @@ def test_wait_speed_and_guard_config():
     assert _validate(over)["env"]["reward_wait_penalty_frac"] == 1e-2
 
 
+def test_light_facing_flag_config():
+    args = _lattice_args()
+    assert args["env"]["obs_light_facing_only"] is False
+    args["env"].update({"obs_light_facing_only": True, "lattice_light_in_view": True, "lattice_exit_mode": "policy"})
+    normalized = _validate(args)
+    assert normalized["env"]["obs_light_facing_only"] is True
+
+
 def test_wait_guard_uses_bootstrapped_horizon():
     args = _lattice_args()
     assert args["train"]["use_value_bootstrapping"] is True

@@ -29,7 +29,7 @@ static Agent *slot0_agent(Drive *env) {
 }
 
 // fastest valid speed cell <= speed_set_mps (shortest duration first), keep if the committed plan already targets it
-static void step_greedy(Drive *env, float speed_set_mps) {
+static void pick_greedy_lon(Drive *env, float speed_set_mps, int *lon_gate, int *lon_cell) {
     const struct LatticeConfig *cfg = &env->lattice;
     struct LatticeAgent *lattice_agent = &env->lattice_agents[0];
     const unsigned char *mask = lattice_agent->mask;
@@ -47,11 +47,14 @@ static void step_greedy(Drive *env, float speed_set_mps) {
     }
     int keep = keep_valid && pick >= 0 && lattice_agent->lon.kind == LATTICE_LON_KIND_SPEED
         && lattice_agent->lon.target_speed_mps == cfg->lon_speeds_mps[pick % cfg->lon_speed_count];
-    if (pick < 0) {
-        step_with_action(env, 0, 0, 1, cfg->lon_emergency_cell, 0);
-    } else {
-        step_with_action(env, 0, 0, keep ? 0 : 1, keep ? 0 : pick, 0);
-    }
+    *lon_gate = pick < 0 || !keep;
+    *lon_cell = pick < 0 ? cfg->lon_emergency_cell : (keep ? 0 : pick);
+}
+
+static void step_greedy(Drive *env, float speed_set_mps) {
+    int lon_gate, lon_cell;
+    pick_greedy_lon(env, speed_set_mps, &lon_gate, &lon_cell);
+    step_with_action(env, 0, 0, lon_gate, lon_cell, 0);
 }
 
 static int test_polynomials_and_bellman(void) {
@@ -543,8 +546,17 @@ static int test_gear_change_sequence(void) {
     return 0;
 }
 
-// a split within the freeze distance makes the exit factor live once; +-lane is masked on that decision; the slot is applied
-static int test_exit_live_once_per_split(void) {
+static int lattice_slot_after(const struct LatticeRail *rail, int lane_idx, int next_lane_idx) {
+    for (int lane_slot = 0; lane_slot + 1 < rail->lane_count; lane_slot++) {
+        if (rail->lanes[lane_slot] == lane_idx && rail->lanes[lane_slot + 1] == next_lane_idx) {
+            return lane_slot;
+        }
+    }
+    return -1;
+}
+
+// policy exits: a split within the freeze distance stays live until the car reaches it, and the chosen exit can change
+static int test_exit_redecidable_until_split(void) {
     char path[512];
     carla_town_path(path, sizeof path, "Town03");
     Drive env = make_lattice_env(path, 1, 0.3f);
@@ -559,25 +571,88 @@ static int test_exit_live_once_per_split(void) {
     place_lattice_agent(&env, 0, split_lane, env.lattice_lanes[split_lane].length_m - 25.0f, 3.0f);
     struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
     const struct LatticeConfig *cfg = &env.lattice;
-    EXPECT_TRUE(lattice_agent->live_split_slot >= 0);
-    int exit_offset = lattice_mask_offset(cfg, LATTICE_FACTOR_EXIT);
-    EXPECT_TRUE(lattice_agent->mask[exit_offset + 1]);
-    for (int cell = 0; cell < cfg->lat_cell_count; cell++) {
-        if (lattice_lat_lane_side(cfg, cell) != 0) {
-            EXPECT_FALSE(lattice_agent->mask[lattice_mask_offset(cfg, LATTICE_FACTOR_LAT_CELL) + cell]);
-        }
-    }
-    int chosen_exit = env.lattice_lanes[split_lane].exit_slots[1];
-    step_with_action(&env, 0, 0, 0, 0, 1);
     const struct LatticeRail *rail = &lattice_agent->rail;
-    int split_slot = -1;
-    for (int lane_slot = 0; lane_slot + 1 < rail->lane_count; lane_slot++) {
-        split_slot = rail->lanes[lane_slot] == split_lane && rail->lanes[lane_slot + 1] == chosen_exit ? lane_slot : split_slot;
-    }
+    int exit_offset = lattice_mask_offset(cfg, LATTICE_FACTOR_EXIT);
+    EXPECT_TRUE(lattice_agent->live_split_slot >= 0);
+    EXPECT_TRUE(lattice_agent->mask[exit_offset + 1]);
+    int turn_exit = env.lattice_lanes[split_lane].exit_slots[1];
+    int straight_exit = env.lattice_lanes[split_lane].exit_slots[0];
+    int centre_cell = (cfg->lat_duration_count - 1) * lattice_lat_choice_count(cfg) + 2;
+    step_with_action(&env, 0, 0, 0, 0, 1);
+    EXPECT_TRUE(lattice_slot_after(rail, split_lane, straight_exit) >= 0);
+    EXPECT_NEAR(lattice_agent->counters.exit_decisions, 0.0f, 0.0f);
+    EXPECT_TRUE(lattice_agent->mask[lattice_mask_offset(cfg, LATTICE_FACTOR_LAT_CELL) + centre_cell]);
+    step_with_action(&env, 1, centre_cell, 0, 0, 1);
+    int split_slot = lattice_slot_after(rail, split_lane, turn_exit);
     EXPECT_TRUE(split_slot >= 0);
     EXPECT_EQ_INT(rail->exit_decided[split_slot], 1);
-    EXPECT_TRUE(lattice_agent->live_split_slot != split_slot);
+    EXPECT_EQ_INT(lattice_agent->live_split_slot, split_slot);
     EXPECT_NEAR(lattice_agent->counters.exit_decisions, 1.0f, 0.0f);
+    EXPECT_NEAR(lattice_agent->counters.exit_nonstraight, 1.0f, 0.0f);
+    EXPECT_TRUE(lattice_agent->mask[lattice_mask_offset(cfg, LATTICE_FACTOR_LAT_CELL) + centre_cell]);
+    step_with_action(&env, 1, centre_cell, 0, 0, 0);
+    EXPECT_TRUE(lattice_slot_after(rail, split_lane, straight_exit) >= 0);
+    EXPECT_NEAR(lattice_agent->counters.exit_decisions, 1.0f, 0.0f);
+    EXPECT_NEAR(lattice_agent->counters.exit_switches, 1.0f, 0.0f);
+    EXPECT_NEAR(lattice_agent->counters.exit_nonstraight, 0.0f, 0.0f);
+    Agent *agent = slot0_agent(&env);
+    int reached_lane = -1;
+    for (int step = 0; step < 60 && reached_lane != straight_exit; step++) {
+        step_with_action(&env, 0, 0, 0, 0, 0);
+        reached_lane = rail->lanes[rail->chain_slot[lattice_agent->projection_hint]];
+    }
+    printf(
+        "  exit re-decided: decisions %.0f, switches %.0f, car reached the straight exit %d, speed %.2f\n",
+        lattice_agent->counters.exit_decisions,
+        lattice_agent->counters.exit_switches,
+        reached_lane == straight_exit,
+        agent->sim_speed);
+    EXPECT_EQ_INT(reached_lane, straight_exit);
+    EXPECT_NEAR(lattice_agent->counters.exit_switches, 1.0f, 0.0f);
+    free_allocated(&env);
+    return 0;
+}
+
+// a turn committed 40 m before the split stays offered while the car drives as fast as its masks allow, and is taken
+static int test_committed_exit_stays_offered(void) {
+    char path[512];
+    carla_town_path(path, sizeof path, "Town03");
+    Drive env = make_lattice_env(path, 1, 0.3f);
+    struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+    const struct LatticeConfig *cfg = &env.lattice;
+    int exit_offset = lattice_mask_offset(cfg, LATTICE_FACTOR_EXIT);
+    int centre_cell = (cfg->lat_duration_count - 1) * lattice_lat_choice_count(cfg) + 2;
+    int tried = 0, reached = 0, revoked = 0;
+    for (int lane = 0; lane < env.num_road_elements && tried < 12; lane++) {
+        const struct LatticeLaneInfo *info = &env.lattice_lanes[lane];
+        if (!is_drivable_road_lane(env.road_elements[lane].type) || info->exit_count < 2 || info->is_connector
+            || info->length_m < 45.0f) {
+            continue;
+        }
+        place_lattice_agent(&env, 0, lane, info->length_m - 40.0f, 8.0f);
+        if (lattice_agent->live_split_slot < 0 || !lattice_agent->mask[exit_offset + 1]) {
+            continue;
+        }
+        tried++;
+        int turn_exit = info->exit_slots[1];
+        int on_turn = 0;
+        for (int step = 0; step < 80 && !on_turn; step++) {
+            int live_here = lattice_agent->live_split_slot >= 0
+                && lattice_agent->rail.lanes[lattice_agent->live_split_slot] == lane;
+            revoked += live_here && step > 0 && !lattice_agent->mask[exit_offset + 1];
+            int lat_ok = lattice_agent->mask[lattice_mask_offset(cfg, LATTICE_FACTOR_LAT_CELL) + centre_cell];
+            int lon_gate, lon_cell;
+            pick_greedy_lon(&env, 20.0f, &lon_gate, &lon_cell);
+            step_with_action(&env, live_here && lat_ok, live_here && lat_ok ? centre_cell : 0, lon_gate, lon_cell, 1);
+            on_turn = lattice_agent->rail.lanes[lattice_agent->rail.chain_slot[lattice_agent->projection_hint]]
+                == turn_exit;
+        }
+        reached += on_turn;
+    }
+    printf("  committed turns at greedy speed: tried %d, reached %d, revoked decisions %d\n", tried, reached, revoked);
+    EXPECT_TRUE(tried >= 5);
+    EXPECT_EQ_INT(revoked, 0);
+    EXPECT_EQ_INT(reached, tried);
     free_allocated(&env);
     return 0;
 }
@@ -849,6 +924,184 @@ static int test_wait_penalty(void) {
         EXPECT_NEAR(light_env.logs[0].reward_wait - before, light_expected[case_idx], 2e-5f);
     }
     free_allocated(&light_env);
+    return 0;
+}
+
+// a light approach on Town06: the controlled lane and its predecessor, longer than min_approach_m
+static int find_light_approach(const Drive *env, float min_approach_m, int *approach_lane) {
+    for (int lane_idx = 0; lane_idx < env->num_road_elements; lane_idx++) {
+        const struct LatticeLaneInfo *info = &env->lattice_lanes[lane_idx];
+        if (!is_drivable_road_lane(env->road_elements[lane_idx].type) || info->traffic_light_idx < 0
+            || info->predecessor_count == 0) {
+            continue;
+        }
+        int predecessor = info->predecessors[0];
+        if (env->lattice_lanes[predecessor].exit_slots[0] == lane_idx
+            && env->lattice_lanes[predecessor].length_m > min_approach_m) {
+            *approach_lane = predecessor;
+            return lane_idx;
+        }
+    }
+    return -1;
+}
+
+// the slot state the traffic-control observation shows for this light; -1 when the light is not in a slot
+static float light_slot_state(Drive *env, Agent *ego, const TrafficControlElement *light) {
+    float slots[16 * TRAFFIC_CONTROL_FEATURES] = {0};
+    int count = 0;
+    write_traffic_control_obs(env, ego, slots, 0, &count);
+    float rel_x, rel_y;
+    project_point_to_ego_frame(ego, light->stop_line[0], light->stop_line[1], &rel_x, &rel_y);
+    for (int slot = 0; slot < count; slot++) {
+        const float *row = &slots[slot * TRAFFIC_CONTROL_FEATURES];
+        if (fabsf(row[0] - rel_x / env->obs_norm_xy_offset_m) < 1e-5f
+            && fabsf(row[1] - rel_y / env->obs_norm_xy_offset_m) < 1e-5f) {
+            return row[6];
+        }
+    }
+    return -1.0f;
+}
+
+// obs_light_facing_only: a light's state shows on the approach, not once the car is past its stop line
+static int test_light_state_only_when_facing(void) {
+    Drive env = make_lattice_env(TOWN06, 1, 0.3f);
+    int approach_lane = -1;
+    int light_lane = find_light_approach(&env, 25.0f, &approach_lane);
+    EXPECT_TRUE(light_lane >= 0);
+    TrafficControlElement *light = &env.traffic_elements[env.lattice_lanes[light_lane].traffic_light_idx];
+    light->states[env.timestep] = TRAFFIC_CONTROL_STATE_RED;
+    EXPECT_EQ_INT(validate_traffic_control_lanes(&env), 0);
+    env.obs_light_facing_only = 1;
+    place_lattice_agent(&env, 0, approach_lane, env.lattice_lanes[approach_lane].length_m - 20.0f, 0.0f);
+    light->states[env.timestep] = TRAFFIC_CONTROL_STATE_RED;
+    float approaching = light_slot_state(&env, slot0_agent(&env), light);
+    Agent *ego = slot0_agent(&env);
+    ego->sim_heading += (float) M_PI;
+    float facing_away = light_slot_state(&env, ego, light);
+    place_lattice_agent(&env, 0, light_lane, 10.0f, 0.0f);
+    light->states[env.timestep] = TRAFFIC_CONTROL_STATE_RED;
+    float past_hidden = light_slot_state(&env, slot0_agent(&env), light);
+    env.obs_light_facing_only = 0;
+    float past_shown = light_slot_state(&env, slot0_agent(&env), light);
+    printf(
+        "  light slot state: approaching %.0f, turned away %.0f, past the line %.0f (facing only) / %.0f (all)\n",
+        approaching,
+        facing_away,
+        past_hidden,
+        past_shown);
+    EXPECT_NEAR(approaching, (float) TRAFFIC_CONTROL_STATE_RED, 0.0f);
+    EXPECT_NEAR(facing_away, (float) TRAFFIC_CONTROL_STATE_UNKNOWN, 0.0f);
+    EXPECT_NEAR(past_hidden, (float) TRAFFIC_CONTROL_STATE_UNKNOWN, 0.0f);
+    EXPECT_NEAR(past_shown, (float) TRAFFIC_CONTROL_STATE_RED, 0.0f);
+    free_allocated(&env);
+    return 0;
+}
+
+// with light_in_view the stop-line cell needs the stop line in the traffic-control view
+static int test_stop_line_cell_needs_view(void) {
+    Drive env = make_lattice_env(TOWN06, 1, 0.3f);
+    int approach_lane = -1;
+    int light_lane = find_light_approach(&env, 25.0f, &approach_lane);
+    EXPECT_TRUE(light_lane >= 0);
+    const struct LatticeConfig *cfg = &env.lattice;
+    int stop_line_mask = lattice_mask_offset(cfg, LATTICE_FACTOR_LON_CELL) + cfg->lon_stop_line_cell;
+    int offered[3];
+    float ranges[3] = {200.0f, 5.0f, 5.0f};
+    int in_view[3] = {1, 1, 0};
+    for (int case_idx = 0; case_idx < 3; case_idx++) {
+        env.obs_range_traffic_control_m = ranges[case_idx];
+        env.lattice.light_in_view = in_view[case_idx];
+        place_lattice_agent(&env, 0, approach_lane, env.lattice_lanes[approach_lane].length_m - 20.0f, 3.0f);
+        offered[case_idx] = env.lattice_agents[0].mask[stop_line_mask];
+    }
+    printf(
+        "  stop-line cell offered: in view %d, out of view %d, out of view without light_in_view %d\n",
+        offered[0],
+        offered[1],
+        offered[2]);
+    EXPECT_EQ_INT(offered[0], 1);
+    EXPECT_EQ_INT(offered[1], 0);
+    EXPECT_EQ_INT(offered[2], 1);
+    free_allocated(&env);
+    return 0;
+}
+
+// a reported red waives the waiting penalty near its stop line or in a queue, not for a car standing far back alone
+static int test_wait_exempt_near_or_queued(void) {
+    Drive env = make_lattice_env(TOWN06, 2, 0.3f);
+    env.reward_wait_penalty_frac = 5e-4f;
+    env.lattice.light_in_view = 1;
+    int approach_lane = -1;
+    int light_lane = find_light_approach(&env, 2.0f * LATTICE_WAIT_LIGHT_NEAR_M + 20.0f, &approach_lane);
+    EXPECT_TRUE(light_lane >= 0);
+    TrafficControlElement *light = &env.traffic_elements[env.lattice_lanes[light_lane].traffic_light_idx];
+    for (int t = 0; t < light->state_size; t++) {
+        light->states[t] = TRAFFIC_CONTROL_STATE_RED;
+    }
+    float approach_m = env.lattice_lanes[approach_lane].length_m;
+    float back_arc_m = approach_m - 2.0f * LATTICE_WAIT_LIGHT_NEAR_M;
+    float waits[3];
+    for (int case_idx = 0; case_idx < 3; case_idx++) {
+        // case 0 alone far back, case 1 far back behind a stopped car 8 m ahead, case 2 alone near the line
+        float ego_arc_m = case_idx == 2 ? approach_m - 10.0f : back_arc_m;
+        float other_arc_m = case_idx == 1 ? back_arc_m + 8.0f : 5.0f;
+        place_lattice_agent(&env, 1, case_idx == 1 ? approach_lane : STRAIGHT_LANE_TOWN06, other_arc_m, 0.0f);
+        place_lattice_agent(&env, 0, approach_lane, ego_arc_m, 0.0f);
+        Agent *agent = slot0_agent(&env);
+        agent->reward_coefs[REWARD_COEF_COLLISION] = 1.5f;
+        agent->reward_coefs[REWARD_COEF_OFFROAD] = 1.5f;
+        agent->reward_coefs[REWARD_COEF_STOP_LINE] = 1.0f;
+        float before = env.logs[0].reward_wait;
+        lattice_set_action(&env, 1, 0, 0, 0, 0, 0);
+        step_keep(&env, 1);
+        waits[case_idx] = env.logs[0].reward_wait - before;
+    }
+    printf(
+        "  wait penalty at a red: alone %.0f m back %.6f, queued there %.6f, alone 10 m before the line %.6f\n",
+        2.0f * LATTICE_WAIT_LIGHT_NEAR_M,
+        waits[0],
+        waits[1],
+        waits[2]);
+    EXPECT_NEAR(waits[0], -5e-4f, 2e-5f);
+    EXPECT_NEAR(waits[1], 0.0f, 0.0f);
+    EXPECT_NEAR(waits[2], 0.0f, 0.0f);
+    free_allocated(&env);
+    return 0;
+}
+
+// a plan committed at rest is a start: no consistency penalty, while the RMS metric still records it
+static int test_consistency_free_from_rest(void) {
+    Drive env = make_lattice_env(TOWN06, 1, 0.3f);
+    env.reward_trajectory_consistency = 2e-3f;
+    place_lattice_agent(&env, 0, STRAIGHT_LANE_TOWN06, 20.0f, 0.0f);
+    Agent *agent = slot0_agent(&env);
+    agent->reward_coefs[REWARD_COEF_TRAJECTORY_CONSISTENCY] = 2e-3f;
+    struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+    const struct LatticeConfig *cfg = &env.lattice;
+    step_keep(&env, 5);
+    int start_cell = 1 * cfg->lon_speed_count + 2;
+    EXPECT_TRUE(lattice_agent->mask[lattice_mask_offset(cfg, LATTICE_FACTOR_LON_CELL) + start_cell]);
+    float before = env.logs[0].reward_trajectory_consistency;
+    float rms_before = lattice_agent->counters.plan_change_rms_m;
+    step_with_action(&env, 0, 0, 1, start_cell, 0);
+    float start_penalty = env.logs[0].reward_trajectory_consistency - before;
+    float start_rms = lattice_agent->counters.plan_change_rms_m - rms_before;
+    step_keep(&env, 15);
+    int change_cell = 2 * cfg->lon_speed_count + 1;
+    EXPECT_TRUE(lattice_agent->mask[lattice_mask_offset(cfg, LATTICE_FACTOR_LON_CELL) + change_cell]);
+    before = env.logs[0].reward_trajectory_consistency;
+    step_with_action(&env, 0, 0, 1, change_cell, 0);
+    float moving_penalty = env.logs[0].reward_trajectory_consistency - before;
+    printf(
+        "  consistency: start from rest %.5f (RMS %.2f m), slowing down at %.1f m/s %.5f\n",
+        start_penalty,
+        start_rms,
+        agent->sim_speed,
+        moving_penalty);
+    EXPECT_NEAR(start_penalty, 0.0f, 0.0f);
+    EXPECT_TRUE(start_rms > 0.5f);
+    EXPECT_TRUE(moving_penalty < 0.0f);
+    free_allocated(&env);
     return 0;
 }
 
@@ -1601,7 +1854,8 @@ int main(void) {
     RUN_TEST(test_invalid_actions_fall_back);
     RUN_TEST(test_determinism);
     RUN_TEST(test_gear_change_sequence);
-    RUN_TEST(test_exit_live_once_per_split);
+    RUN_TEST(test_exit_redecidable_until_split);
+    RUN_TEST(test_committed_exit_stays_offered);
     RUN_TEST(test_drift_switch_with_hysteresis);
     RUN_TEST(test_no_lane_mode_and_removed_rows);
     RUN_TEST(test_rail_changed_flag_timing_dt_01);
@@ -1609,6 +1863,10 @@ int main(void) {
     RUN_TEST(test_route_progress_reward);
     RUN_TEST(test_stop_line_light_features);
     RUN_TEST(test_wait_penalty);
+    RUN_TEST(test_light_state_only_when_facing);
+    RUN_TEST(test_stop_line_cell_needs_view);
+    RUN_TEST(test_wait_exempt_near_or_queued);
+    RUN_TEST(test_consistency_free_from_rest);
     RUN_TEST(test_random_rollouts_all_towns);
     RUN_TEST(test_oncoming_menu_layout);
     RUN_TEST(test_oncoming_profiles);

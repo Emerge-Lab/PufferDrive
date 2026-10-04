@@ -1,7 +1,7 @@
 """Lattice factored action (spline_werling): masking and the conditional log-prob / entropy used by PPO.
 
-A cell only acts when its gate says "new", so its log-prob and entropy must count only then: keep rows give the
-cell logits exactly zero gradient, and masked choices are never sampled.
+A cell only acts when its gate says "new" (the exit slot with the lateral gate), so its log-prob and entropy count
+only then: keep rows give those logits exactly zero gradient, and masked choices are never sampled.
 """
 
 import pytest
@@ -43,13 +43,14 @@ def test_conditional_log_prob_and_zero_cell_gradient_on_keep_rows():
     action = torch.tensor([[0, 3, 0, 10, 1]] * 4 + [[1, 3, 1, 10, 1]] * 4)
     _, logprob, _, _ = P.sample_logits(logits, action=action)
     log_softmax = [torch.log_softmax(f, dim=-1) for f in raw]
-    keep_expected = log_softmax[0][:4, 0] + log_softmax[2][:4, 0] + log_softmax[4][:4, 1]
+    keep_expected = log_softmax[0][:4, 0] + log_softmax[2][:4, 0]
     new_expected = log_softmax[0][4:, 1] + log_softmax[1][4:, 3] + log_softmax[2][4:, 1] + log_softmax[3][4:, 10] + log_softmax[4][4:, 1]
     assert torch.allclose(logprob[:4], keep_expected, atol=1e-5)
     assert torch.allclose(logprob[4:], new_expected, atol=1e-5)
     logprob[:4].sum().backward()
     assert raw[1].grad[:4].abs().max().item() == 0.0
     assert raw[3].grad[:4].abs().max().item() == 0.0
+    assert raw[4].grad[:4].abs().max().item() == 0.0
     assert raw[0].grad[:4].abs().max().item() > 0.0
 
 
@@ -60,7 +61,7 @@ def test_entropy_weights_cells_by_detached_gate_probability():
     _, _, entropy, _ = P.sample_logits(logits, action=action)
     probs = [torch.softmax(f, dim=-1) for f in raw]
     ent = [-(p * torch.log(p)).sum(-1) for p in probs]
-    expected = ent[0] + probs[0][:, 1] * ent[1] + ent[2] + probs[2][:, 1] * ent[3] + ent[4]
+    expected = ent[0] + probs[0][:, 1] * ent[1] + ent[2] + probs[2][:, 1] * ent[3] + probs[0][:, 1] * ent[4]
     assert torch.allclose(entropy, expected, atol=1e-5)
 
 
