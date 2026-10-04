@@ -149,8 +149,9 @@ CHECKPOINT_OBS_ENV_KEYS = frozenset(
         "traffic_control_scope",
     }
 )
-# A frozen co-player may differ from the training env only in reward conditioning.
-COPLAYER_MATCHED_ENV_KEYS = CHECKPOINT_OBS_ENV_KEYS - {"reward_conditioning", "reward_randomization"}
+# A frozen co-player may differ from the training env only in reward conditioning; action_type only changes
+# how a discrete head's action reaches the env.
+COPLAYER_MATCHED_ENV_KEYS = CHECKPOINT_OBS_ENV_KEYS - {"reward_conditioning", "reward_randomization", "action_type"}
 # The learner drives each scenario's SDC, the co-player every other vehicle, the log replays the rest.
 COPLAYER_ENV_SETUP = {
     "control_mode": "control_vehicles",
