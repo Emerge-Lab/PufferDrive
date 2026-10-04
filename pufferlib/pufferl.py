@@ -215,9 +215,12 @@ def load_coplayer_config(policy_path):
         return yaml.safe_load(config_file)
 
 
-def load_coplayer_policy(policy_path, driver_env, device):
-    """Frozen co-player with the architecture saved by the run that produced `policy_path`."""
+def load_coplayer_policy(policy_path, driver_env, device, env_name="puffer_drive"):
+    """Frozen co-player with the architecture saved by the run that produced `policy_path`; keys an older
+    config.yaml lacks fall back to the env's default config, as for fine-tuning."""
     checkpoint_config = load_coplayer_config(policy_path)
+    with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "config", f"{env_name}.yaml")) as config_file:
+        default_config = yaml.safe_load(config_file)
     checkpoint_env = checkpoint_config.get("env") or {}
     matched_keys = sorted(COPLAYER_MATCHED_ENV_KEYS & set(driver_env.env_kwargs))
     mismatched = {
@@ -248,12 +251,19 @@ def load_coplayer_policy(policy_path, driver_env, device):
     package = checkpoint_config.get("package", "ocean")
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
-    policy = getattr(env_module.torch, checkpoint_config["policy_name"])(layout_env, **checkpoint_config["policy"])
+    policy_kwargs = {**default_config["policy"], **checkpoint_config["policy"]}
+    policy = getattr(env_module.torch, checkpoint_config["policy_name"])(layout_env, **policy_kwargs)
     if checkpoint_config.get("rnn_name"):
-        rnn_cls = getattr(env_module.torch, checkpoint_config["rnn_name"])
-        policy = rnn_cls(layout_env, policy, **checkpoint_config["rnn"])
+        rnn_kwargs = {**default_config["rnn"], **(checkpoint_config.get("rnn") or {})}
+        policy = getattr(env_module.torch, checkpoint_config["rnn_name"])(layout_env, policy, **rnn_kwargs)
     state_dict = torch.load(policy_path, map_location=device)
-    policy.load_state_dict(clean_policy_state_dict(state_dict.get("policy_state_dict", state_dict)))
+    try:
+        policy.load_state_dict(clean_policy_state_dict(state_dict.get("policy_state_dict", state_dict)))
+    except RuntimeError as exc:
+        raise pufferlib.APIUsageError(
+            f"Co-player {policy_path} does not fit the network its config.yaml describes for this env "
+            f"(trained on an older observation format?): {exc}"
+        ) from exc
     return policy.to(device)
 
 
@@ -394,7 +404,9 @@ class PuffeRL:
         if coplayer_policy is not None and coplayer_policy_path:
             raise pufferlib.APIUsageError("Pass either coplayer_policy or train.coplayer_policy_path, not both")
         if coplayer_policy_path:
-            coplayer_policy = load_coplayer_policy(coplayer_policy_path, vecenv.driver_env, torch_device(device))
+            coplayer_policy = load_coplayer_policy(
+                coplayer_policy_path, vecenv.driver_env, torch_device(device), config["env"]
+            )
         buffer_obs_shape = obs_space.shape
         if coplayer_policy is not None:
             self.coplayer = FrozenCoplayer(
