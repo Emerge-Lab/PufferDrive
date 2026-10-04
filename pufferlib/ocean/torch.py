@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import pufferlib
 import pufferlib.models
 from pufferlib.ocean.drive import binding
+from pufferlib.ocean.drive.drive import drive_io_layout
 
 from pufferlib.models import Default as Policy  # noqa: F401
 from pufferlib.models import Convolutional as Conv  # noqa: F401
@@ -372,6 +373,7 @@ class Drive(nn.Module):
         # Configuration flags from policy kwargs
         self.shared_network = shared_network
         self.ego_dim = env.ego_features
+        self.io_layout = drive_io_layout(env)
 
         # Prepare arguments for the Backbone
         backbone_args = {

@@ -104,6 +104,42 @@ def resolve_reward_coef_overrides(overrides, normalized=False):
     return entries
 
 
+def drive_io_layout(env):
+    """Obs block sizes and action decoding a policy built from `env` expects."""
+    return {
+        "ego_features": env.ego_features,
+        "num_reward_coefs": env.num_reward_coefs,
+        "goal_dim": env.goal_dim,
+        "obs_slots_partners_n": env.obs_slots_partners_n,
+        "partner_features": env.partner_features,
+        "obs_slots_lane_kept": env.obs_slots_lane_kept,
+        "lane_features": env.lane_features,
+        "obs_slots_boundary_kept": env.obs_slots_boundary_kept,
+        "boundary_features": env.boundary_features,
+        "obs_slots_traffic_controls_n": env.obs_slots_traffic_controls_n,
+        "traffic_control_features": env.traffic_control_features,
+        "obs_valid_count_features": env.obs_valid_count_features,
+        "dynamics_model": env.dynamics_model,
+    }
+
+
+class RewardConditioningView:
+    """Stand-in for `env` with its reward-conditioning obs slice dropped (or kept), to build a policy
+    for observations that differ from the live env's only in that slice."""
+
+    def __init__(self, env, reward_conditioning):
+        if reward_conditioning and not env.reward_conditioning:
+            raise ValueError("The env has no reward-conditioning slice to give a reward-conditioned policy")
+        self._env = env
+        self.reward_conditioning = bool(reward_conditioning)
+        self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
+        self.num_obs = env.num_obs - env.num_reward_coefs + self.num_reward_coefs
+        self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
+
+    def __getattr__(self, name):
+        return getattr(self._env, name)
+
+
 def compute_effective_road_obs_count(max_count, dropout):
     if max_count <= 0:
         return 0
@@ -223,6 +259,7 @@ class Drive(pufferlib.PufferEnv):
         phantom_braking_trigger_prob=0.0,
         phantom_braking_duration_seconds=1.0,
     ):
+        self.env_kwargs = {name: value for name, value in locals().items() if name not in ("self", "buf")}
         self.dt = dt
         self.spawn_initial_speed = float(spawn_initial_speed)
         self.goal_speed = float(goal_speed)
