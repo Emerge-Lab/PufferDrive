@@ -38,6 +38,7 @@ def map_dir_missing_message(map_dir):
 
 # Order of Agent.reward_coefs and of the reward-conditioning obs slice (right after the ego features).
 REWARD_COEF_NAMES = binding.reward_coef_names()
+LEARNER_AGENTS_VALUES = {"all": binding.LEARNER_AGENTS_ALL, "sdc": binding.LEARNER_AGENTS_SDC}
 REWARD_COEF_OVERRIDE_SDC_KEY = "sdc"
 REWARD_COEF_OVERRIDE_OTHERS_KEY = "others"
 
@@ -189,6 +190,7 @@ class Drive(pufferlib.PufferEnv):
         reward_log_sampling=False,
         reward_coef_overrides=None,
         reward_coef_overrides_normalized=False,
+        learner_agents="all",
         compute_eval_metrics=True,
         shared_network=True,
         obs_slots_lane_n=32,
@@ -235,6 +237,9 @@ class Drive(pufferlib.PufferEnv):
         )
         if self.reward_coef_override_entries and not reward_conditioning:
             raise ValueError("reward_coef_overrides require reward_conditioning=True")
+        if learner_agents not in LEARNER_AGENTS_VALUES:
+            raise ValueError(f"learner_agents must be one of {sorted(LEARNER_AGENTS_VALUES)}. Got: {learner_agents}")
+        self.learner_agents = learner_agents
         self.compute_eval_metrics = compute_eval_metrics
         self.shared_network = shared_network
         self.render_mode = render_mode
@@ -497,6 +502,11 @@ class Drive(pufferlib.PufferEnv):
         self.sdc_controller = controller_values[self.sdc_controller_str]
         self.non_sdc_controller = controller_values[self.non_sdc_controller_str]
         self.non_vehicle_controller = controller_values[self.non_vehicle_controller_str]
+        if self.learner_agents == "sdc" and (self.sdc_controller_str != "policy" or not self.log_sdc_only):
+            raise ValueError(
+                "learner_agents='sdc' requires sdc_controller='policy' and log_sdc_only=True "
+                f"(got sdc_controller={self.sdc_controller_str!r}, log_sdc_only={self.log_sdc_only})"
+            )
 
         if self.init_mode_str == "create_all_valid":
             self.init_mode = binding.INIT_MODE_CREATE_ALL_VALID
@@ -585,11 +595,14 @@ class Drive(pufferlib.PufferEnv):
                 self.truncations[cur:nxt],
                 self.masks[cur:nxt],
                 env_seed,
+                learner_masks=self.learner_masks[cur:nxt],
                 **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
             )
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
+        self.learner_masks[agent_offsets[-1] :] = False
+        self.log_agent_count = self._logged_agent_count()
 
     def _env_init_kwargs(self, map_file, max_agents):
         # render_mode_flag: 0 = live viewer (RENDER_WINDOW), 1 = headless batch
@@ -669,6 +682,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_randomization": self.reward_randomization,
             "reward_log_sampling": self.reward_log_sampling,
             "reward_coef_overrides": self.reward_coef_override_entries,
+            "learner_agents": LEARNER_AGENTS_VALUES[self.learner_agents],
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
             "use_exact_episode_seed": int(self.use_exact_episode_seed),
@@ -709,6 +723,12 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError("reward_coef_overrides require reward_conditioning=True")
         binding.vec_set_reward_coef_overrides(self.c_envs, entries)
         self.reward_coef_override_entries = entries
+
+    def _logged_agent_count(self):
+        # vec_log waits for this many finished agent-episodes; with log_sdc_only only SDCs finish one.
+        if not self.log_sdc_only:
+            return self.num_agents
+        return max(1, sum(int(state["sdc_active"]) for state in binding.vec_get(self.c_envs)))
 
     def _sample_init_step(self):
         # randomizer for the initialization of the C environment
@@ -767,7 +787,7 @@ class Drive(pufferlib.PufferEnv):
         # vec_log is the training aggregate; it resets env->log, which eval reads
         # per episode, so it must not run in eval mode.
         if not self.eval_mode and self.tick % self.report_interval == 0:
-            log = binding.vec_log(self.c_envs, self.num_agents)
+            log = binding.vec_log(self.c_envs, self.log_agent_count)
             if log:
                 info.append(log)
                 # print(log)
@@ -835,10 +855,13 @@ class Drive(pufferlib.PufferEnv):
                         self.truncations[cur:nxt],
                         self.masks[cur:nxt],
                         env_seed,
+                        learner_masks=self.learner_masks[cur:nxt],
                         **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
+                self.learner_masks[agent_offsets[-1] :] = False
+                self.log_agent_count = self._logged_agent_count()
 
                 binding.vec_reset(self.c_envs)
                 if self.capture_replay:

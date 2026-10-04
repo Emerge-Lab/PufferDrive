@@ -1,4 +1,4 @@
-"""Per-agent reward-coef overrides on the Drive env."""
+"""Per-agent reward-coef overrides and per-row learner masks on the Drive env."""
 
 import numpy as np
 import pytest
@@ -139,3 +139,20 @@ def test_runtime_set_applies_at_next_reset_and_survives_resample():
     env.reset(seed=4)
     assert not np.allclose(env.observations[others, column], 0.0, atol=1e-6)
     env.close()
+
+
+def test_learner_masks_mark_sdc_rows_only():
+    with pytest.raises(ValueError, match="log_sdc_only"):
+        Drive(**REPLAY_KWARGS, learner_agents="sdc")
+    env = Drive(**{**REPLAY_KWARGS, "num_agents": 60}, learner_agents="sdc", log_sdc_only=True)
+    expected = np.zeros(env.num_agents, dtype=bool)
+    for offset, state in zip(env.agent_offsets, env.get_state()):
+        expected[offset] = state["active_agent_indices"][0] == 0
+    assert expected.sum() >= 2
+    np.testing.assert_array_equal(env.learner_masks, expected)
+    assert env.log_agent_count == expected.sum()
+    env.close()
+
+    default_env = Drive(**REPLAY_KWARGS)
+    assert default_env.learner_masks[: default_env.agent_offsets[-1]].all()
+    default_env.close()

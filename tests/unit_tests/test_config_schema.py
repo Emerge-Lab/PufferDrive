@@ -24,6 +24,7 @@ from pufferlib.config_schema import (
     GoalSource,
     InfractionBehavior,
     InitMode,
+    LearnerAgents,
     NonVehicleController,
     SimulationMode,
 )
@@ -48,6 +49,7 @@ _DRIFT_CHECKED_ENUMS = [
     (ControlMode, lambda member: member.name.removeprefix("control_")),
     (Controller, lambda member: member.name),
     (InitMode, lambda member: member.name),
+    (LearnerAgents, lambda member: member.name),
     (GoalRegen, lambda member: member.name),
     (GoalSource, lambda member: member.name),
 ]

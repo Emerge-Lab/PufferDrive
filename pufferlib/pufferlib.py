@@ -24,6 +24,7 @@ def set_buffers(env, buf=None):
         env.terminals = np.zeros(env.num_agents, dtype=bool)
         env.truncations = np.zeros(env.num_agents, dtype=bool)
         env.masks = np.ones(env.num_agents, dtype=bool)
+        env.learner_masks = np.ones(env.num_agents, dtype=bool)
 
         # TODO: Major kerfuffle on inferring action space dtype. This needs some asserts?
         atn_space = pufferlib.spaces.joint_space(env.single_action_space, env.num_agents)
@@ -37,6 +38,7 @@ def set_buffers(env, buf=None):
         env.terminals = buf["terminals"]
         env.truncations = buf["truncations"]
         env.masks = buf["masks"]
+        env.learner_masks = buf["learner_masks"]
         env.actions = buf["actions"]
 
 

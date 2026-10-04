@@ -68,6 +68,11 @@ class NonVehicleController(Enum):
     idm = 3
 
 
+class LearnerAgents(Enum):
+    all = 0
+    sdc = 1
+
+
 class InitMode(Enum):
     create_all_valid = 0
     create_only_controlled = 1
@@ -130,6 +135,8 @@ class DriveEnvConfig:
     reward_log_sampling: bool = MISSING
     reward_coef_overrides: Optional[Dict[Any, Dict[str, float]]] = MISSING
     reward_coef_overrides_normalized: bool = MISSING
+    learner_agents: LearnerAgents = MISSING
+    log_sdc_only: bool = MISSING
     reward_goal: float = MISSING
     reward_collision: float = MISSING
     reward_collision_speed_coef: float = MISSING

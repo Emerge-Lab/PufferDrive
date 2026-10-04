@@ -102,6 +102,7 @@ class Serial:
                 terminals=self.terminals[ptr:end],
                 truncations=self.truncations[ptr:end],
                 masks=self.masks[ptr:end],
+                learner_masks=self.learner_masks[ptr:end],
                 actions=self.actions[ptr:end],
             )
             ptr = end
@@ -241,9 +242,11 @@ def _worker_process(
         terminals=np.ndarray(shape, dtype=bool, buffer=shm["terminals"])[worker_idx],
         truncations=np.ndarray(shape, dtype=bool, buffer=shm["truncateds"])[worker_idx],
         masks=np.ndarray(shape, dtype=bool, buffer=shm["masks"])[worker_idx],
+        learner_masks=np.ndarray(shape, dtype=bool, buffer=shm["learner_masks"])[worker_idx],
         actions=atn_arr,
     )
     buf["masks"][:] = True
+    buf["learner_masks"][:] = True
 
     if is_native and num_envs == 1:
         envs = env_creators[0](*env_args[0], **env_kwargs[0], buf=buf, seed=seed)
@@ -393,6 +396,7 @@ class Multiprocessing:
             terminals=RawArray("b", num_agents),
             truncateds=RawArray("b", num_agents),
             masks=RawArray("b", num_agents),
+            learner_masks=RawArray("b", num_agents),
             semaphores=RawArray("c", num_workers),
             notify=RawArray("b", num_workers),
             # Lock-free, eventually-consistent broadcast of the current training epoch to
@@ -405,6 +409,8 @@ class Multiprocessing:
         self.obs_batch_shape = (self.agents_per_batch, *obs_shape)
         self.atn_batch_shape = (self.workers_per_batch, agents_per_worker, *atn_shape)
         self.epoch_arr = np.ndarray(1, dtype=np.int32, buffer=self.shm["epoch"])
+        # Flat view indexed by global agent row, the same ids recv() returns.
+        self.learner_masks = np.ndarray(num_agents, dtype=bool, buffer=self.shm["learner_masks"])
         self.actions = np.ndarray((*shape, *atn_shape), dtype=atn_dtype, buffer=self.shm["actions"])
         self.buf = dict(
             observations=np.ndarray((*shape, *obs_shape), dtype=obs_dtype, buffer=self.shm["observations"]),

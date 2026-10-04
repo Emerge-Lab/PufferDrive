@@ -189,11 +189,31 @@ static int test_reward_coef_override_changes_collision_reward(void) {
     return 0;
 }
 
+static int test_learner_rows_follow_mode(void) {
+    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 16, 0);
+    env.control_mode = CONTROL_MODE_VEHICLES;
+    env.goal_source = GOAL_SOURCE_GT;
+    env.learner_agents = LEARNER_AGENTS_SDC;
+    allocate(&env);
+    EXPECT_TRUE(env.active_agent_count >= 2);
+    for (int row = 0; row < env.active_agent_count; row++) {
+        EXPECT_EQ_INT(env.learner_masks[row], env.active_agent_indices[row] == EGO_IDX);
+    }
+    env.learner_agents = LEARNER_AGENTS_ALL;
+    assign_learner_rows(&env);
+    for (int row = 0; row < env.active_agent_count; row++) {
+        EXPECT_EQ_INT(env.learner_masks[row], 1);
+    }
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_reward_coef_normalization_round_trip);
     RUN_TEST(test_reward_coef_overrides_replay_targets_and_reset);
     RUN_TEST(test_reward_coef_overrides_survive_gigaflow_respawn);
     RUN_TEST(test_reward_coef_override_changes_collision_reward);
+    RUN_TEST(test_learner_rows_follow_mode);
     return test_summary(failures);
 }

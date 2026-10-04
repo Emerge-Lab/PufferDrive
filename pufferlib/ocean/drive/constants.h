@@ -91,6 +91,10 @@
 #define CONTROLLER_REPLAY 2
 #define CONTROLLER_IDM 3
 
+// Which policy-controlled rows the learner trains on; the others belong to a frozen co-player
+#define LEARNER_AGENTS_ALL 0
+#define LEARNER_AGENTS_SDC 1
+
 // Episode generation
 #define SIMULATION_MODE_GIGAFLOW 0
 #define SIMULATION_MODE_REPLAY 1

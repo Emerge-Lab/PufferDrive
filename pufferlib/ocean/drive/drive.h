@@ -200,6 +200,7 @@ struct Drive {
     unsigned char *terminals;
     unsigned char *truncations;
     unsigned char *masks;
+    unsigned char *learner_masks; // per active row: 1 when the learner (not a frozen co-player) owns it
     // Agents
     Agent *agents;
     int num_controllable_agents;
@@ -282,6 +283,7 @@ struct Drive {
     float reward_collision_speed_coef; // Extra collision penalty per m/s of ego speed at impact; 0 disables it
     int disable_comfort_penalty;       // Force REWARD_COEF_COMFORT to 0 regardless of reward_randomization
     int log_sdc_only;                  // add_log: only count the SDC (EGO_IDX), not other policy-controlled agents
+    int learner_agents;                // LEARNER_AGENTS_*
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
@@ -3426,6 +3428,13 @@ static int compute_observation_size(Drive *env) {
         + env->reward_conditioning * NUM_REWARD_COEFS + env->num_goals * GOAL_FEATURES;
 }
 
+static void assign_learner_rows(Drive *env) {
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int is_sdc_row = env->active_agent_indices[i] == EGO_IDX;
+        env->learner_masks[i] = env->learner_agents == LEARNER_AGENTS_ALL || is_sdc_row;
+    }
+}
+
 void allocate(Drive *env) {
     init(env);
     int max_obs = compute_observation_size(env);
@@ -3435,6 +3444,8 @@ void allocate(Drive *env) {
     env->terminals = (unsigned char *) calloc(env->active_agent_count, sizeof(unsigned char));
     env->truncations = (unsigned char *) calloc(env->active_agent_count, sizeof(unsigned char));
     env->masks = (unsigned char *) calloc(env->active_agent_count, sizeof(unsigned char));
+    env->learner_masks = (unsigned char *) calloc(env->active_agent_count, sizeof(unsigned char));
+    assign_learner_rows(env);
 }
 
 void free_allocated(Drive *env) {
@@ -3444,6 +3455,7 @@ void free_allocated(Drive *env) {
     free(env->terminals);
     free(env->truncations);
     free(env->masks);
+    free(env->learner_masks);
     c_close(env);
 }
 

@@ -1405,6 +1405,8 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "CONTROLLER_POLICY", CONTROLLER_POLICY);
     PyModule_AddIntConstant(m, "CONTROLLER_REPLAY", CONTROLLER_REPLAY);
     PyModule_AddIntConstant(m, "CONTROLLER_IDM", CONTROLLER_IDM);
+    PyModule_AddIntConstant(m, "LEARNER_AGENTS_ALL", LEARNER_AGENTS_ALL);
+    PyModule_AddIntConstant(m, "LEARNER_AGENTS_SDC", LEARNER_AGENTS_SDC);
     PyModule_AddIntConstant(m, "REWARD_COEF_TARGET_OTHERS", REWARD_COEF_TARGET_OTHERS);
     PyModule_AddIntConstant(m, "MAX_REWARD_COEF_OVERRIDES", MAX_REWARD_COEF_OVERRIDES);
     PyModule_AddIntConstant(m, "EGO_IDX", EGO_IDX);

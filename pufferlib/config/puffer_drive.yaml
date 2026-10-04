@@ -131,6 +131,10 @@ env:
   reward_coef_overrides: null
   # Read reward_coef_overrides values as conditioning-obs values in [-1, 1] instead of raw coefs
   reward_coef_overrides_normalized: false
+  # Rows the learner trains on - options: "all", "sdc" (requires log_sdc_only; see train.coplayer_policy_path)
+  learner_agents: all
+  # Episode metrics and terminate_on_goal only look at the SDC
+  log_sdc_only: false
   reward_goal: 1.0
   reward_collision: 4.0
   # Extra collision penalty per m/s of ego speed at impact, on top of reward_collision.
