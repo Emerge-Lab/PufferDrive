@@ -681,3 +681,12 @@ Tests:
 - Python: config bounds.
 - Python rollout, weight 0 vs on: identical driving, rewards differ by exactly the formula, and the episode log reports it (`tests/smoke_tests/test_drive_speed_bonus.py`).
 - The reviewer's 12 deliberately broken variants are all caught by the C test.
+
+Run: `spline_werling_fix20b_commit_speed4.5e-3_from5` (prefix `s20bspeed`, 20B steps, nice 0), main 19172093 / continuation 19172095. Submitted 2026-10-04 from commit `1adc041f`; the snapshot matches it. Its resolved config equals `spline_werling_fix20b_commit` (19160082) except `env.reward_speed_bonus=4.5e-3` and `env.reward_speed_bonus_from_mps=5.0` (250 keys checked).
+
+Compare against `fix20b_commit` at equal steps:
+- the share of moving time above 5.5 m/s (a render), and `avg_speed_per_agent`;
+- goals and DNF;
+- `collision_rate`, `reward_components/overspeed`, red-light violations;
+- `lattice/oncoming_starts`, `lattice/oncoming_collisions`;
+- `reward_components/speed_bonus`.
