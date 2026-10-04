@@ -515,3 +515,25 @@ Hyperparameters, reviewed for balance (`/scratch/ag11023/tmp/claude/review_hp/`)
 - **20B steps, cosine to zero.** Read whether the stall is fixed at 4-8B: kept fraction at rest, time to first
   motion, goals against consist10x and the baseline.
 - **Expected time:** about 55-61 h on H100 and 73-80 h on A100, i.e. one main job plus one continuation.
+
+Run: `spline_werling_fix20b` (prefix `s20bfix`, 20B steps), main 19142026 / continuation 19142027, submitted 2026-10-04
+from commit `8449f8e2`; the snapshot diffs clean against it. Overrides: `env.goal_source=map
+env.lattice_exit_mode=policy env.lattice_light_in_view=true env.obs_light_facing_only=true
+env.lattice_oncoming_overtake=true env.lattice_turnaround=true env.reward_trajectory_consistency=2e-3
+env.reward_wait_penalty_frac=7e-4 env.reward_oncoming_penalty_frac=2.5e-4 env.reward_wait_full_speed_mps=5.0
+train.adv_filter_threshold_scale=1e-3 train.update_epochs=2 train.learning_rate=4e-4`.
+
+Cancelled 2026-10-04 at the user's request:
+- the running continuations of `trajE_overtake_wait_pen` (18986344) and `trajD_consistency` (18935236);
+- every queued continuation: consist10x 19026615, trajF 19032830, the v2_h100 chain 19053277 / 278 / 280, and the
+  eight s30btune continuations 19064426 / 432 / 436 / 439 / 452 / 464 / 472 / 738.
+
+The s30btune main jobs and trajF's main job were kept.
+
+What to read first, at 4-8B against consist10x and the baseline:
+- `losses/kept_fraction` (expect about 0.7);
+- `lattice/time_to_first_motion_s` and `moving_fraction`;
+- `lattice/queued_rate`;
+- goals and DNF;
+- `losses/approx_kl` (expect at most about 0.04);
+- `lattice/exit_switches`.
