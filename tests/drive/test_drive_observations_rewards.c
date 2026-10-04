@@ -172,6 +172,83 @@ static int test_reward_lane_align_wrong_way(void) {
     return 0;
 }
 
+// speed bonus: weight x dt x forward lane alignment x speed's share of [from, base_max_speed_mps], not on turn legs
+static int test_reward_speed_bonus(void) {
+    Drive env;
+    Agent agent;
+    Log log;
+    int active[1];
+    float reward[1] = {0};
+    const float cases[][3]
+        = {{10.0f, 1.0f, 0.5f},
+           {30.0f, 1.0f, 1.0f},
+           {-5.0f, 1.0f, 0.0f},
+           {10.0f, -1.0f, 0.0f},
+           {10.0f, 0.5f, 0.25f},
+           {0.0f, 1.0f, 0.0f}};
+    for (int case_idx = 0; case_idx < (int) (sizeof(cases) / sizeof(cases[0])); case_idx++) {
+        init_reward_env(&env, &agent, &log, active, reward);
+        reward[0] = 0.0f;
+        env.base_max_speed_mps = 20.0f;
+        env.reward_speed_bonus = 4e-3f;
+        agent.sim_speed_signed = cases[case_idx][0];
+        agent.sim_speed = fabsf(cases[case_idx][0]);
+        agent.metrics_array[LANE_ANGLE_IDX] = cases[case_idx][1];
+        compute_rewards(&env, 0);
+        EXPECT_NEAR(log.reward_speed_bonus, 4e-3f * env.dt * cases[case_idx][2], 1e-9f);
+    }
+    // counted from 5 m/s: nothing up to 5, then the share of the 15 m/s above it
+    const float from_cases[][3]
+        = {{3.0f, 1.0f, 0.0f}, {5.0f, 1.0f, 0.0f}, {12.5f, 1.0f, 0.5f}, {12.5f, 0.5f, 0.25f}, {25.0f, 1.0f, 1.0f}};
+    for (int case_idx = 0; case_idx < (int) (sizeof(from_cases) / sizeof(from_cases[0])); case_idx++) {
+        init_reward_env(&env, &agent, &log, active, reward);
+        reward[0] = 0.0f;
+        env.base_max_speed_mps = 20.0f;
+        env.reward_speed_bonus = 4e-3f;
+        env.reward_speed_bonus_from_mps = 5.0f;
+        agent.sim_speed_signed = from_cases[case_idx][0];
+        agent.sim_speed = from_cases[case_idx][0];
+        agent.metrics_array[LANE_ANGLE_IDX] = from_cases[case_idx][1];
+        compute_rewards(&env, 0);
+        EXPECT_NEAR(log.reward_speed_bonus, 4e-3f * env.dt * from_cases[case_idx][2], 1e-9f);
+    }
+
+    init_reward_env(&env, &agent, &log, active, reward);
+    reward[0] = 0.0f;
+    env.base_max_speed_mps = 20.0f;
+    agent.sim_speed_signed = 10.0f;
+    agent.sim_speed = 10.0f;
+    compute_rewards(&env, 0);
+    float reward_without = reward[0];
+    EXPECT_NEAR(log.reward_speed_bonus, 0.0f, 0.0f);
+    init_reward_env(&env, &agent, &log, active, reward);
+    reward[0] = 0.0f;
+    env.base_max_speed_mps = 20.0f;
+    env.reward_speed_bonus = 4e-3f;
+    agent.sim_speed_signed = 10.0f;
+    agent.sim_speed = 10.0f;
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(reward[0] - reward_without, 4e-3f * env.dt * 0.5f, 1e-9f);
+
+    struct LatticeAgent *lattice_agent = (struct LatticeAgent *) calloc(1, sizeof(struct LatticeAgent));
+    for (int turn_active = 0; turn_active < 2; turn_active++) {
+        init_reward_env(&env, &agent, &log, active, reward);
+        reward[0] = 0.0f;
+        env.dynamics_model = DYNAMICS_MODEL_SPLINE_WERLING;
+        env.lattice_agents = lattice_agent;
+        env.reward_wait_full_speed_mps = 5.0f;
+        env.base_max_speed_mps = 20.0f;
+        env.reward_speed_bonus = 4e-3f;
+        lattice_agent->turn.active = turn_active;
+        agent.sim_speed_signed = 2.0f;
+        agent.sim_speed = 2.0f;
+        compute_rewards(&env, 0);
+        EXPECT_NEAR(log.reward_speed_bonus, turn_active ? 0.0f : 4e-3f * env.dt * 0.1f, 1e-9f);
+    }
+    free(lattice_agent);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_observation_size_formula);
@@ -179,5 +256,6 @@ int main(void) {
     RUN_TEST(test_reward_terminal_components);
     RUN_TEST(test_reward_goal_speed_gating);
     RUN_TEST(test_reward_lane_align_wrong_way);
+    RUN_TEST(test_reward_speed_bonus);
     return test_summary(failures);
 }

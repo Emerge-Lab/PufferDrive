@@ -1703,6 +1703,35 @@ static int test_overtake_commit_config(void) {
     return 0;
 }
 
+// a lattice car cruising along its lane earns reward_speed_bonus x dt x its speed's share above the start speed
+static int test_speed_bonus_while_cruising(void) {
+    float per_step[3] = {0};
+    for (int variant = 0; variant < 3; variant++) {
+        Drive env = make_overtake_env(TOWN01, 1);
+        env.base_max_speed_mps = 20.0f;
+        env.reward_speed_bonus = variant > 0 ? 4e-3f : 0.0f;
+        env.reward_speed_bonus_from_mps = variant == 2 ? 5.0f : 0.0f;
+        int lane = find_overtake_lane(&env);
+        EXPECT_TRUE(lane >= 0);
+        place_lattice_agent(&env, 0, lane, 10.0f, 10.0f);
+        step_keep(&env, 3);
+        Log before = env.logs[0];
+        step_keep(&env, 10);
+        per_step[variant] = (env.logs[0].reward_speed_bonus - before.reward_speed_bonus) / 10.0f;
+        EXPECT_NEAR(slot0_agent(&env)->sim_speed, 10.0f, 0.05f);
+        free_allocated(&env);
+    }
+    printf(
+        "  speed bonus while cruising at 10 m/s: off %.2e, from 0 %.2e, from 5 m/s %.2e per step\n",
+        per_step[0],
+        per_step[1],
+        per_step[2]);
+    EXPECT_NEAR(per_step[0], 0.0f, 0.0f);
+    EXPECT_NEAR(per_step[1], 4e-3f * 0.3f * 0.5f, 2e-6f);
+    EXPECT_NEAR(per_step[2], 4e-3f * 0.3f / 3.0f, 2e-6f);
+    return 0;
+}
+
 // stacking diagnostics: queued behind a live and a frozen car, slow-following, a crash just after a borrow
 static int test_stacking_counters(void) {
     Drive env = make_overtake_env(TOWN01, 2);
@@ -2274,6 +2303,7 @@ int main(void) {
     RUN_TEST(test_overtake_commit_expiry);
     RUN_TEST(test_overtake_commit_skips_facing_car);
     RUN_TEST(test_overtake_commit_config);
+    RUN_TEST(test_speed_bonus_while_cruising);
     RUN_TEST(test_stacking_counters);
     RUN_TEST(test_oncoming_forced_return_before_junction);
     RUN_TEST(test_oncoming_random_rollouts);

@@ -328,6 +328,8 @@ class DriveEnvConfig:
     reward_center_bias: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_velocity: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_velocity_scale: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    reward_speed_bonus: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    reward_speed_bonus_from_mps: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     reward_reverse: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_timestep: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_overspeed: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
@@ -763,6 +765,8 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.init_step", "must be smaller than env.scenario_length")
     if env["spawn_initial_speed"] > env["base_max_speed_mps"]:
         _raise_config_error(context, "env.spawn_initial_speed", "must not exceed env.base_max_speed_mps")
+    if env["reward_speed_bonus_from_mps"] >= env["base_max_speed_mps"]:
+        _raise_config_error(context, "env.reward_speed_bonus_from_mps", "must be below env.base_max_speed_mps")
     if env["min_goal_spacing"] > env["max_goal_spacing"]:
         _raise_config_error(context, "env.min_goal_spacing", "must not exceed env.max_goal_spacing")
     if env["preload_map_cache"] and not env["use_map_cache"]:

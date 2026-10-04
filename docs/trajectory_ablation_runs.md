@@ -622,3 +622,62 @@ What to read first:
 - `lattice/oncoming_steps`;
 - `lattice/oncoming_collisions`;
 - goals and speed against fix20b at the same step count.
+
+## 13. A speed bonus (`env.reward_speed_bonus`, 2026-10-04)
+
+Why: every lattice run cruises at exactly 5 m/s, in renders of fix20b (2.6B) and consist10x (5.2B, 7.6B):
+- 53-75 % of moving time is at 4.5-5.5 m/s;
+- the policy puts 60-76 % of its target-speed probability on the 5 m/s cell and about 1 % on 7.5 m/s, although 7.5 m/s is offered on 85 % of moving frames;
+- the flat velocity reward pays the same at any speed above 2.5 m/s, and 5 m/s is the first menu speed above that;
+- spline_baseline, which picks continuous speeds and has no such plateau, sped up with training: 74 % of its cars exceed 10 m/s at 25.6B.
+
+Rejected options:
+- a reward normalised by the lane speed limit: the user does not want a lane-limit-bound bonus;
+- per-metre route progress: its total per trip is fixed, so it does not pay for speed (trajC vs trajB moved at about the same speed);
+- the user picked a speed bonus measured against a fixed top speed, on top of today's flat bonus.
+
+What it does (default off, so existing runs are unchanged):
+- Per step: `reward_speed_bonus x dt x max(lane cos, 0) x min(max(v - from, 0) / (base_max_speed_mps - from), 1)`, with `from` = `env.reward_speed_bonus_from_mps`.
+- No pay while reversing, facing the wrong way, off the lane, or on turn-around legs.
+- Lane speed limits bind only through the existing overspeed penalty.
+- Logged as `reward_components/speed_bonus`.
+- `binding.c` now also rejects `base_max_speed_mps <= 0` and a `from` outside [0, base_max_speed_mps).
+
+Why count from 5 m/s (review finding): with `from = 0`, a car at today's 5 m/s would earn up to 60 % more for just moving. That makes stopping at lights, queues and turn-arounds relatively costlier, which the waiting-penalty exemptions deliberately avoid. From 5 m/s:
+- below 5 m/s every incentive is identical to the base run, and the waiting penalty keeps covering 0-5 m/s;
+- the bonus covers 5-20 m/s.
+
+Tuning (measured; `/scratch/ag11023/tmp/claude/speedtune/`, reviewer `/scratch/ag11023/tmp/claude/review_speed/`):
+- The landscape harness: 64 scripted lattice cars x 8 towns x 2500 steps with training rewards (randomised weights, lights, map goals, wait, consistency, oncoming). Cars obey the current lane's limit and slow for curves; collisions are not modelled.
+- Its per-step reward excluding crashes, off-road and goals: at weight 0 the best target is 5 m/s, which matches training.
+- Counted from 5 m/s:
+
+  | target V (m/s) | w = 3e-3 | 4e-3 | 4.5e-3 | 5e-3 | 8e-3 |
+  |---|---|---|---|---|---|
+  | 5 | 1.31e-4 | 1.31e-4 | 1.31e-4 | 1.31e-4 | 1.32e-4 |
+  | 7.5 | 1.34e-4 | 1.70e-4 | 1.89e-4 | 2.07e-4 | 3.16e-4 |
+  | 10 | 1.08e-4 | 1.68e-4 | 1.98e-4 | 2.28e-4 | 4.08e-4 |
+  | 12.5 | 0.18e-4 | 0.93e-4 | 1.31e-4 | 1.68e-4 | 3.93e-4 |
+  | 15 | 0.22e-4 | 1.02e-4 | 1.42e-4 | 1.83e-4 | 4.23e-4 |
+  | 20 | -0.07e-4 | 0.75e-4 | 1.17e-4 | 1.58e-4 | 4.06e-4 |
+
+- **Chosen weight 4.5e-3.**
+  - 7.5-10 m/s beats 5 m/s by 44-51 %, while 12.5-20 m/s stays at or below the 5 m/s level, which leaves room for crash risk.
+  - 3e-3 only ties with 5 m/s. From 8e-3 up, 10-20 m/s is flat, so speed would be set by crash risk alone.
+- **Pay per extra m/s:** 9e-5 per step, about 1.6x the waiting penalty's relief below 5 m/s (5.6e-5 for the mean car).
+- **Payback:** a +2.5 m/s speed-up recovers its plan-change cost (5.1 / 3.3 / 2.1 / 1.5e-3 for 2.4 / 3.6 / 4.8 / 6.0 s plans) in 6.8 / 4.3 / 2.8 / 2.0 s.
+- **Scale:** about +0.08 per episode at a 7.5 m/s cruise and +0.17 at 10 m/s. Compare fix20b's goals +0.52, consistency -0.17, lane centre -0.18 and collisions -0.23.
+- **Overspeed:** above limit + 2 m/s it pays only for cars whose overspeed weight is below 6e-4 (0.06 %). Comfort (lateral acceleration above 3 m/s^2 at speed) outweighs the bonus.
+- **Only the bonus changes;** everything else stays at the base run's values, for a clean A/B.
+
+Watch items from the review:
+- **Grace band:** the bonus pays up to the overspeed threshold (limit + 2 m/s). On Town01/02 (11.2 m/s limits), 12.5 m/s cruising scores 0.59 on the eval's speed-limit compliance, which has no tolerance. This was left unbounded by choice. A stop-line plan issued far from the line can also accelerate before braking, which crosses limit + 2 occasionally.
+- **Overtaking moving traffic now pays:** passing a 5 m/s car to drive at 10 m/s earns 4.5e-4 per step, against the oncoming penalty of at most 2.5e-4. Watch `oncoming_starts`, `overtake_commits` and `oncoming_collisions`.
+- **Final-goal arrival-speed gate:** watch goals forfeited at the final waypoint.
+
+Tests:
+- C: the formula with and without the start point, alignment, reversing, the clamp, and the turn-around gate (`test_drive_observations_rewards.c`).
+- C: a lattice car at 10 m/s earns 4.0e-4 per step counted from 5 m/s (`test_drive_spline_werling.c`).
+- Python: config bounds.
+- Python rollout, weight 0 vs on: identical driving, rewards differ by exactly the formula, and the episode log reports it (`tests/smoke_tests/test_drive_speed_bonus.py`).
+- The reviewer's 12 deliberately broken variants are all caught by the C test.

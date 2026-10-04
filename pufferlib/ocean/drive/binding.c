@@ -2007,6 +2007,14 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         PyErr_Format(PyExc_ValueError, "reward_velocity_scale must be a positive finite number. Got: %g", env->reward_velocity_scale);
         return -1;
     }
+    env->reward_speed_bonus = (float) unpack(kwargs, "reward_speed_bonus");
+    if (!(env->reward_speed_bonus >= 0.0f) || !isfinite(env->reward_speed_bonus)) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "reward_speed_bonus must be a finite number >= 0. Got: %g",
+            env->reward_speed_bonus);
+        return -1;
+    }
     env->reward_reverse = (float) unpack(kwargs, "reward_reverse");
     env->reward_stop_line = (float) unpack(kwargs, "reward_stop_line");
     env->reward_timestep = (float) unpack(kwargs, "reward_timestep");
@@ -2102,6 +2110,21 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
     env->dt = (float) unpack(kwargs, "dt");
     env->base_max_speed_mps = (float) unpack(kwargs, "base_max_speed_mps");
+    if (!(env->base_max_speed_mps > 0.0f) || !isfinite(env->base_max_speed_mps)) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "base_max_speed_mps must be a positive finite number. Got: %g",
+            env->base_max_speed_mps);
+        return -1;
+    }
+    env->reward_speed_bonus_from_mps = (float) unpack(kwargs, "reward_speed_bonus_from_mps");
+    if (!(env->reward_speed_bonus_from_mps >= 0.0f) || !(env->reward_speed_bonus_from_mps < env->base_max_speed_mps)) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "reward_speed_bonus_from_mps must lie in [0, base_max_speed_mps). Got: %g",
+            env->reward_speed_bonus_from_mps);
+        return -1;
+    }
     // Shared with the C test fixture (drive_fixture.h), which never goes through this
     // function — the formula must live in drive.h, not inline here.
     init_spline_dynamics_fields(env);
@@ -2324,6 +2347,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/route_progress", log->reward_route_progress);
     assign_to_dict(dict, "reward_components/wait", log->reward_wait);
     assign_to_dict(dict, "reward_components/oncoming", log->reward_oncoming);
+    assign_to_dict(dict, "reward_components/speed_bonus", log->reward_speed_bonus);
     assign_to_dict(dict, "spline/consistency_msd_m2", log->spline_consistency_msd_m2);
     assign_to_dict(dict, "spline/consistency_lag1_msd_m2", log->spline_consistency_lag1_msd_m2);
     assign_to_dict(dict, "spline/slip_angle_rad", log->spline_slip_angle_rad);

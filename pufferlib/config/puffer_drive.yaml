@@ -181,6 +181,9 @@ env:
   # Multiplies the velocity coefficient (the pinned 2.5e-3 under reward_randomization, else reward_velocity) and its
   # conditioning bounds, so the conditioning observation stays at its midpoint
   reward_velocity_scale: 1.0
+  # Per second at base_max_speed_mps, x lane alignment x the speed's share of [reward_speed_bonus_from_mps, base_max_speed_mps], on top of reward_velocity
+  reward_speed_bonus: 0.0
+  reward_speed_bonus_from_mps: 0.0
   reward_reverse: 0.005
   reward_timestep: 2.5e-05
   reward_overspeed: 0.05

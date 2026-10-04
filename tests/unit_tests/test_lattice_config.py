@@ -126,6 +126,21 @@ def test_overtake_commit_needs_oncoming_overtake():
         _validate(args)
 
 
+def test_speed_bonus_config():
+    args = _lattice_args()
+    assert args["env"]["reward_speed_bonus"] == 0.0
+    args["env"]["reward_speed_bonus"] = 4e-3
+    assert _validate(args)["env"]["reward_speed_bonus"] == 4e-3
+    args["env"]["reward_speed_bonus"] = -1e-3
+    with pytest.raises(pufferlib.APIUsageError, match="reward_speed_bonus"):
+        _validate(args)
+    args["env"].update({"reward_speed_bonus": 4e-3, "reward_speed_bonus_from_mps": 5.0})
+    assert _validate(args)["env"]["reward_speed_bonus_from_mps"] == 5.0
+    args["env"]["reward_speed_bonus_from_mps"] = args["env"]["base_max_speed_mps"]
+    with pytest.raises(pufferlib.APIUsageError, match="reward_speed_bonus_from_mps"):
+        _validate(args)
+
+
 def test_wait_guard_uses_bootstrapped_horizon():
     args = _lattice_args()
     assert args["train"]["use_value_bootstrapping"] is True

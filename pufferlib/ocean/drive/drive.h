@@ -122,6 +122,7 @@ struct Log {
     float lattice_oncoming_rate;
     float lattice_oncoming_starts;
     float reward_oncoming;
+    float reward_speed_bonus;
     float lattice_turn_rate;
     float lattice_turn_starts;
     float lattice_turn_completions;
@@ -283,6 +284,8 @@ struct Drive {
     float reward_center_bias;
     float reward_velocity;
     float reward_velocity_scale; // multiplies the velocity coefficient (pinned or configured) and its conditioning bounds
+    float reward_speed_bonus; // per second at base_max_speed_mps, scaled by lane alignment and the speed's share of it
+    float reward_speed_bonus_from_mps; // the share counts speed from here up to base_max_speed_mps
     float reward_reverse;
     float reward_stop_line;
     float reward_timestep;
@@ -2396,6 +2399,7 @@ static void add_log(Drive *env) {
         episode_log.reward_route_progress += env->logs[i].reward_route_progress;
         episode_log.reward_wait += env->logs[i].reward_wait;
         episode_log.reward_oncoming += env->logs[i].reward_oncoming;
+        episode_log.reward_speed_bonus += env->logs[i].reward_speed_bonus;
         episode_log.spline_consistency_msd_m2 += env->logs[i].spline_consistency_msd_m2 / safe_timestep;
         episode_log.spline_consistency_lag1_msd_m2 += env->logs[i].spline_consistency_lag1_msd_m2 / safe_timestep;
         episode_log.spline_slip_angle_rad += env->logs[i].spline_slip_angle_rad / safe_timestep;
@@ -4167,6 +4171,15 @@ static void compute_rewards(Drive *env, int i) {
     env->rewards[i] += velocity_reward;
     agent_log->velocity_progress_sum += velocity_progress;
     agent_log->reward_velocity += velocity_reward;
+    // on top of the flat velocity reward; lane speed limits bind only through the overspeed penalty
+    if (env->reward_speed_bonus > 0.0f) {
+        float speed_above_mps = fmaxf(agent->sim_speed_signed - env->reward_speed_bonus_from_mps, 0.0f);
+        float speed_share = fminf(speed_above_mps / (env->base_max_speed_mps - env->reward_speed_bonus_from_mps), 1.0f);
+        float speed_bonus = !turning * env->reward_speed_bonus * env->dt
+            * fmaxf(agent->metrics_array[LANE_ANGLE_IDX], 0.0f) * speed_share;
+        env->rewards[i] += speed_bonus;
+        agent_log->reward_speed_bonus += speed_bonus;
+    }
 
     // Timestep reward
     float accel = sqrtf(agent->accel_long * agent->accel_long + agent->accel_lat * agent->accel_lat);
