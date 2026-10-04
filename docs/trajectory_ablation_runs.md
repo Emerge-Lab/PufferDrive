@@ -537,3 +537,10 @@ What to read first, at 4-8B against consist10x and the baseline:
 - goals and DNF;
 - `losses/approx_kl` (expect at most about 0.04);
 - `lattice/exit_switches`.
+
+Cancelled 2026-10-04 08:20 EDT at the user's request, because they ran the pre-fix code:
+- the seven pending s30btune main jobs: control 19064431, wait7e-5 19064435, wait7e-3 19064438, onc2.5e-5 19064449,
+  onc2.5e-3 19064460, vfull0.5 19064469, vfull50 19064735;
+- their continuations had already been cancelled.
+
+`spline_werling_tune_base` (19064424, running) was kept.
