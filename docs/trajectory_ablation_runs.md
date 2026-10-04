@@ -398,7 +398,17 @@ That max is set by rare crash events (4.6), so the threshold is 0.046. The value
   first junctions (17 %) with map goals and 11 of 354 with route goals.
 - The route features and the progress reward read 167 of 234 lane changes on offer as a >= 100 m detour or a dead
   end, although the true route changes by < 30 m.
-- The baseline steers freely (offroad 0.10 at the end), so it is not held to the lane graph.
+- Correction (same day): the per-lane goal-distance columns use the same table for every policy. Moving into the right
+  lane drops the observed distance (median 409 m over the 192 of 510 spawns where a lane change shortens the route;
+  96 more read unreachable until the change), so 'take the lane with the smaller number' is a clear local hint for
+  both policies. Town01 / 02 / 07 have no same-direction neighbour lanes, so there routes are long because the lane
+  graph has no U-turns.
+- The baseline follows lanes too. In a replay of 2.0M moving agent-steps it is lane-aligned (cos > 0.5) 96.1 % of the
+  time, across a lane or off any lane 3.3 %, wrong way 0.6 %, more than 2 m off centre 0.6 %, and reversing 3.3 %.
+  The reversing and crossing are consistent with occasional turn-arounds, which the lattice lacked before trajF.
+- So links-only routing explains only part of the gap: goal-mode exit picks (17 % of first junctions) and the progress
+  reward (off in consist10x). Runs where the policy picks exits on map goals are no faster (v2_h100: 0.60 goals at 12B,
+  1.25 at 25B).
 
 ### Other findings
 
@@ -423,13 +433,16 @@ That max is set by rare crash events (4.6), so the threshold is 0.046. The value
    samples, or use `train.adv_filter_enabled=false`.
    - Cost: the learn phase (about 22 % of wall time) grows with the kept share, so SPS may fall 30-50 %.
    - Better long-term: a threshold from a quantile of |adv| rather than the max.
-2. **Code: a lane-change-aware route distance** (plus turn-around edges when that flag is on) for goal-mode exits,
-   route features and `reward_route_progress`. Then turn the progress reward on for map goals.
+2. **Turn-arounds on map goals:** trajF is running. Town01 / 02 / 07 routes are long because there are no U-turns,
+   and the baseline reverses or crosses lanes about 3 % of the time it moves.
+3. **Code, lower priority: a lane-change-aware route distance** for goal-mode exits, route features and
+   `reward_route_progress`. It matters for goal-mode exits and before the progress reward is turned on for map
+   goals; the lane columns already point to the right lane.
    - At 12B, route goals plus progress reach 5.9 goals against 3.5 without progress (trajC vs trajB).
-3. **Code, small: exempt starts from rest from the consistency penalty** (old plan at a standstill).
-4. **Code, small: limit the red-light wait exemption to a stop line within braking reach.**
-5. **Code, small: fail fast on a non-finite loss**, and find why trajD2 and vel5x_goal went NaN.
-6. **Revisit `ent_coef`** after item 1. The gates sit at maximum entropy, so it may be too high for the factored lattice.
+4. **Code, small: exempt starts from rest from the consistency penalty** (old plan at a standstill).
+5. **Code, small: limit the red-light wait exemption to a stop line within braking reach.**
+6. **Code, small: fail fast on a non-finite loss**, and find why trajD2 and vel5x_goal went NaN.
+7. **Revisit `ent_coef`** after item 1. The gates sit at maximum entropy, so it may be too high for the factored lattice.
 
 ### What the queued runs can and cannot show
 
@@ -439,4 +452,4 @@ That max is set by rare crash events (4.6), so the threshold is 0.046. The value
   - None of them change the filter or the routing.
 - **trajF:** turn-arounds shorten some map-goal routes. At 4B it looks like trajE (0.37 goals) with a 2.5 s first motion.
 - **v2_h100 (50B):** a map-goal control for a longer horizon. It had 1.25 goals at 25B.
-- **Gap:** no queued run tests items 1-4.
+- **Gap:** no queued run tests items 1, 3, 4 or 5.
