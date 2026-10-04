@@ -601,3 +601,24 @@ Tests (`tests/drive/test_drive_spline_werling.c`):
 - a head-on car in the own lane is neither target nor pass;
 - reset clears; init rejects bad values;
 - random rollouts in 8 towns, off and on.
+
+Runs (prefix `s20bcommit`, 20B steps, submitted 2026-10-04 from commit `9bace7a3`; every snapshot matches it).
+Each run's resolved config equals fix20b's plus `env.lattice_overtake_commit=true`, except for the one listed change
+(checked key by key, 248 keys). All are at nice 1000 so they do not outrank fix20b's continuation.
+
+| run | change from fix20b + commit | main | continuation |
+|---|---|---|---|
+| `spline_werling_fix20b_commit` | none (the direct comparison with fix20b) | 19160082 | 19160083 |
+| `spline_werling_fix20b_commit_nofilter` | `train.adv_filter_enabled=false` | 19160086 | 19160087 |
+| `spline_werling_fix20b_commit_filter3e-3` | `train.adv_filter_threshold_scale=3e-3` | 19160089 | 19160090 |
+| `spline_werling_fix20b_commit_lr5e-4` | `train.learning_rate=5e-4` | 19160091 | 19160095 |
+| `spline_werling_fix20b_commit_ep3` | `train.update_epochs=3` | 19160124 | 19160125 |
+| `spline_werling_fix20b_commit_ent5e-3` | `train.ent_coef=0.005` | 19160127 | 19160128 |
+| `spline_werling_fix20b_commit_noconsist` | `env.reward_trajectory_consistency=0` | 19160135 | 19160136 |
+
+What to read first:
+- `lattice/overtake_completions` per commitment (fix20b had no passes at all);
+- yields and abandons;
+- `lattice/oncoming_steps`;
+- `lattice/oncoming_collisions`;
+- goals and speed against fix20b at the same step count.
