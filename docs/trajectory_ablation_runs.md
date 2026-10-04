@@ -317,3 +317,121 @@ Limits that tuning cannot change:
 - Passes are judged in the move stage: lower-indexed cars have already moved that step (no effect for stopped cars).
   A pass on the episode's last step is not counted. `turn_legs` counts planned legs, and re-plans at cusps can change
   that count.
+
+## 10. Why `trajE_overtake_wait_pen_consist10x` stalls against `spline_baseline` (measured 2026-10-03)
+
+Harnesses and raw results: `/scratch/ag11023/tmp/claude/flat/`.
+- `diag_rollout2.py` replays a checkpoint for a full episode exactly as `PuffeRL.evaluate` samples: 1024 agents, the
+  run's own code snapshot.
+- `analyze_npz.py` rebuilds the GAE advantages and applies the trainer's filter.
+- `start_cost.c` prices a start from rest.
+
+Checkpoints used:
+- consist10x epoch 6850 (17.9B steps). It replays bit-identically on its own snapshot and on `2f4d4aa3`.
+- spline_baseline epoch 11150.
+
+The replayed episodes match W&B:
+
+| | consist10x replay | consist10x W&B | baseline replay | baseline W&B |
+|---|---|---|---|---|
+| goals | 0.63 | 0.6-1.1 | 6.5 | 7.4 |
+| DNF | 0.58 | ~0.5 | 0.02 | 0.03 |
+| speed (m/s) | 0.98 | 1.2-1.6 | 4.1 | 4.9 |
+
+### What "flatlined" is
+
+| At equal steps | 4B | 8B | 12B | 16B |
+|---|---|---|---|---|
+| consist10x goals / DNF | 0.48 / 0.48 | 0.63 / 0.48 | 0.80 / 0.48 | 0.96 / 0.47 |
+| spline_baseline goals / DNF | 0.55 / 0.42 | 1.11 / 0.29 | 1.43 / 0.23 | 2.41 / 0.12 |
+
+- consist10x still improves slowly (1.16 goals at 17.9B). It is not collapsing.
+- Every map-goal lattice run plateaus the same way: v1, goal, trajA, trajE, consist10x and v2_h100 sit at 0.6-1.3
+  goals with DNF 0.4-0.6.
+- The route-goal lattice runs do not: trajB / C / D reach 3.5 / 5.9 / 5.3 goals at 12B with DNF 0.07-0.08.
+- So the lattice can learn to drive. It stalls on the baseline's task, map goals.
+
+### What the cars do (replay of consist10x)
+
+- **Stationary:** 74 % of live decisions are made at rest (< 0.3 m/s).
+- **Masks are not the cause:** a cell of 2.5 m/s or faster is valid at 99.98 % of those decisions.
+- **What the policy picks:** half the time it keeps its plan. When it picks a new speed plan at rest, it chooses
+  0 m/s 87 % of the time, EMERGENCY 12 % and any moving cell 0.9 %.
+- **Where the time goes** (share of all steps):
+  - queued behind a car within 15 m: 25.4 %, of which 4.4 % behind a car frozen after a crash for the rest of the episode;
+  - slow while a red / yellow light is reported somewhere ahead, which exempts the wait penalty: 22.1 %;
+  - slow-following: 2.8 %.
+- **Overtakes:** 23.5 borrow starts per agent-episode, 0 borrowing steps, 0 passes.
+- **Gates:** keep and new are a coin flip at every 0.3 s decision (lat gate entropy 0.52 of 0.69, lon gate 0.65 of
+  0.69, p(new) 0.45 / 0.50).
+
+### Why the policy never learns to start: the advantage filter
+
+`train.adv_filter_threshold_scale=0.01` drops every sample with |advantage| < 1 % of the EWMA batch-max |advantage|.
+That max is set by rare crash events (4.6), so the threshold is 0.046. The value loss uses only the kept samples too.
+
+| Live steps (frozen cars excluded) | consist10x | spline_baseline |
+|---|---|---|
+| share of steps at rest | 74 % | 11 % |
+| median abs advantage at rest / moving | 0.0069 / 0.027 | 0.068 / 0.082 |
+| kept at rest / moving | **2.7 %** / 33 % | 29 % / 36 % |
+| kept overall | 10.6 % | 35 % |
+
+- The decision to pull away is almost never in the gradient, so the stop habit is never corrected.
+- This matches W&B: `kept_fraction` stays at 0.11-0.16 for every map-goal lattice run, against 0.2-0.32 for the
+  route-goal runs and up to 0.44 for the baseline.
+- Why lattice advantages are small:
+  - with about 0.9 goals per episode the value function sees almost no big rewards (explained variance 0.99);
+  - the dense terms are tiny, about 7.5e-4 per step;
+  - so most advantages are 0.005-0.03.
+- Why the baseline keeps more: it collects 6-7 goals per episode, so its returns and value errors are 10x larger.
+- The trap is a loop: few goals, then tiny advantages, then filtered samples, then no learning to move, then few goals.
+
+### Why the map-goal task stays hard for the lattice
+
+- Goal-mode exits (`lattice_goal_exit_slot`) and the route features use `lane_graph.distances`, which follows lane
+  links only.
+- That table leaves 14-35 of ~64 first goals per town unreachable (section 1, item 2), although lane changes reach
+  all of them.
+- For an unreachable goal, every exit is INFINITY, so the car always takes exit 0 (straight on).
+- The baseline steers freely (offroad 0.10 at the end), so it is not held to the lane graph.
+
+### Other findings
+
+- **Consistency penalty at a start:** a start from rest costs 0.003-0.0065 at the 2e-3 coefficient (`start_cost.c`).
+  Going is still +0.026 better than staying over 12 s.
+  - Time to first motion is 52 s against 9 s for trajE, the same run without the penalty, and consist50x froze completely.
+  - But consist10x reaches more goals than trajE at equal steps (0.96 vs 0.76 at 16B) with fewer collisions, so the
+    penalty helps once moving.
+- **Red-light wait exemption:** with `light_in_view=false` any red / yellow reported ahead on the chain switches the
+  wait penalty off, at any distance. That covers 22 % of all steps.
+- **Wrecks stay in the lane:** `collision_behavior=stop` leaves crashed cars in place for the rest of the 2560-step
+  episode, and with no completed overtakes the cars behind them never move again.
+- **Dead run:** `trajD2_mapgoals_wait_pen` (18956057) went NaN between 12.0B and 12.5B and has been running ever since.
+  - Its entropy, KL and value loss are NaN, it keeps 0 % of samples, gets 0.015 goals and collides at 0.34.
+  - `vel5x_goal` shows the same signature.
+  - Nothing aborts a run on a non-finite loss.
+
+### What should help (ranked by expected impact / cost)
+
+1. **Config: stop the filter starving rest decisions.** `train.adv_filter_threshold_scale=1e-3` keeps about 70 % of
+   samples, or use `train.adv_filter_enabled=false`.
+   - Cost: the learn phase (about 22 % of wall time) grows with the kept share, so SPS may fall 30-50 %.
+   - Better long-term: a threshold from a quantile of |adv| rather than the max.
+2. **Code: a lane-change-aware route distance** (plus turn-around edges when that flag is on) for goal-mode exits,
+   route features and `reward_route_progress`. Then turn the progress reward on for map goals.
+   - At 12B, route goals plus progress reach 5.9 goals against 3.5 without progress (trajC vs trajB).
+3. **Code, small: exempt starts from rest from the consistency penalty** (old plan at a standstill).
+4. **Code, small: limit the red-light wait exemption to a stop line within braking reach.**
+5. **Code, small: fail fast on a non-finite loss**, and find why trajD2 and vel5x_goal went NaN.
+6. **Revisit `ent_coef`** after item 1. The gates sit at maximum entropy, so it may be too high for the factored lattice.
+
+### What the queued runs can and cannot show
+
+- **s30btune:** wait, oncoming and full-speed shaping.
+  - The base wait term is about 2.8e-4 per step, so its advantages stay below the filter threshold.
+  - Only `wait7e-3` (about 2.8e-3 per step) clears it, so expect the guarded sweep to look like the control.
+  - None of them change the filter or the routing.
+- **trajF:** turn-arounds shorten some map-goal routes. At 4B it looks like trajE (0.37 goals) with a 2.5 s first motion.
+- **v2_h100 (50B):** a map-goal control for a longer horizon. It had 1.25 goals at 25B.
+- **Gap:** no queued run tests items 1-4.
