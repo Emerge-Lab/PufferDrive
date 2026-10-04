@@ -4,6 +4,7 @@
 
 import contextlib
 import copy
+import inspect
 import warnings
 
 import pandas as pd
@@ -35,6 +36,7 @@ import torch.distributed
 from torch.distributed.elastic.multiprocessing.errors import record
 
 import pufferlib
+from pufferlib.ocean.drive.drive import RewardConditioningView, drive_io_layout
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
 import pufferlib.sweep
@@ -120,8 +122,202 @@ def logits_to_float(logits):
     return tuple(l.float() for l in logits)
 
 
+# Env keys that define what a policy observes; a fine-tuned checkpoint brings them along from its config.yaml.
+CHECKPOINT_OBS_ENV_KEYS = frozenset(
+    {
+        "action_type",
+        "dynamics_model",
+        "goal_source",
+        "goal_regen_mode",
+        "num_goals",
+        "min_goal_spacing",
+        "max_goal_spacing",
+        "obs_goal_lane_distance",
+        "reward_conditioning",
+        "reward_randomization",
+        "trajectory_prediction_length",
+        "num_trajectory_scaling_factors",
+        "trajectory_scaling_factors",
+        "obs_slots_boundary_n",
+        "obs_slots_lane_n",
+        "obs_boundary_stride",
+        "obs_lane_stride",
+        "obs_dropout_boundary",
+        "obs_dropout_lane",
+        "obs_slots_partners_n",
+        "obs_slots_traffic_controls_n",
+        "traffic_control_scope",
+    }
+)
+# A frozen co-player may differ from the training env only in reward conditioning.
+COPLAYER_MATCHED_ENV_KEYS = CHECKPOINT_OBS_ENV_KEYS - {"reward_conditioning", "reward_randomization"}
+# The learner drives each scenario's SDC, the co-player every other vehicle, the log replays the rest.
+COPLAYER_ENV_SETUP = {
+    "control_mode": "control_vehicles",
+    "non_sdc_controller": "policy",
+    "non_vehicle_controller": "replay",
+    "log_sdc_only": True,
+    "learner_agents": "sdc",
+}
+VALID_ACTION_SELECTIONS = (
+    pufferlib.pytorch.ACTION_SELECT_SAMPLE,
+    pufferlib.pytorch.ACTION_SELECT_MODE,
+    pufferlib.pytorch.ACTION_SELECT_MEAN,
+)
+
+
+def policy_io_layout(policy, label):
+    module = base_policy(policy)
+    for candidate in (module, getattr(module, "policy", None)):
+        layout = getattr(candidate, "io_layout", None)
+        if layout is not None:
+            return layout
+    raise pufferlib.APIUsageError(f"The {label} policy has no io_layout; co-player training needs Drive policies")
+
+
+def reward_conditioning_obs_columns(env, policy_layout, label, device):
+    """Env obs columns the policy reads: None for all of them, else all but the reward-conditioning slice."""
+    env_layout = drive_io_layout(env)
+    mismatched = {
+        key: (value, policy_layout.get(key))
+        for key, value in env_layout.items()
+        if key != "num_reward_coefs" and policy_layout.get(key) != value
+    }
+    if mismatched:
+        raise pufferlib.APIUsageError(
+            f"The {label} policy was built for a different observation layout than the env; "
+            f"(env, policy) per key: {mismatched}"
+        )
+    if policy_layout["num_reward_coefs"] == env_layout["num_reward_coefs"]:
+        return None
+    if policy_layout["num_reward_coefs"] > env_layout["num_reward_coefs"]:
+        raise pufferlib.APIUsageError(f"The {label} policy is reward-conditioned; set env.reward_conditioning=True")
+    conditioning_end = env_layout["ego_features"] + env_layout["num_reward_coefs"]
+    kept_columns = [*range(env_layout["ego_features"]), *range(conditioning_end, env.num_obs)]
+    return torch.tensor(kept_columns, dtype=torch.long, device=device)
+
+
+def policy_env_actions(policy, logits, action, cont_action, single_action_space):
+    """Env-format numpy actions for sample_logits output, as PuffeRL sends them."""
+    if isinstance(single_action_space, pufferlib.spaces.Box) and not policy.is_continuous:
+        return cont_action.reshape(-1, *single_action_space.shape).float().cpu().numpy()
+    env_action = action.reshape(-1, *single_action_space.shape).cpu().numpy()
+    if isinstance(logits, torch.distributions.Normal):
+        env_action = np.clip(env_action, single_action_space.low, single_action_space.high)
+    return env_action
+
+
+def load_coplayer_config(policy_path):
+    config_path = os.path.join(drive_benchmark.resolve_run_dir(policy_path), "config.yaml")
+    if not os.path.isfile(config_path):
+        raise pufferlib.APIUsageError(f"Co-player checkpoint {policy_path} has no config.yaml at {config_path}")
+    with open(config_path) as config_file:
+        return yaml.safe_load(config_file)
+
+
+def load_coplayer_policy(policy_path, driver_env, device):
+    """Frozen co-player with the architecture saved by the run that produced `policy_path`."""
+    checkpoint_config = load_coplayer_config(policy_path)
+    checkpoint_env = checkpoint_config.get("env") or {}
+    matched_keys = sorted(COPLAYER_MATCHED_ENV_KEYS & set(driver_env.env_kwargs))
+    mismatched = {
+        key: (driver_env.env_kwargs[key], checkpoint_env[key])
+        for key in matched_keys
+        if key in checkpoint_env and checkpoint_env[key] != driver_env.env_kwargs[key]
+    }
+    if mismatched:
+        raise pufferlib.APIUsageError(
+            f"Co-player {policy_path} was trained on different observations; (training env, co-player) per key: "
+            f"{mismatched}"
+        )
+    env_defaults = inspect.signature(type(driver_env).__init__).parameters
+    unverified_keys = [
+        key
+        for key in matched_keys
+        if key not in checkpoint_env and driver_env.env_kwargs[key] != env_defaults[key].default
+    ]
+    if unverified_keys:
+        print(f"Co-player config.yaml does not record {unverified_keys}; assuming it used the training env's values")
+
+    coplayer_reward_conditioning = bool(checkpoint_env.get("reward_conditioning", False))
+    if coplayer_reward_conditioning and not driver_env.reward_conditioning:
+        raise pufferlib.APIUsageError(
+            f"Co-player {policy_path} is reward-conditioned; set env.reward_conditioning=True"
+        )
+    layout_env = RewardConditioningView(driver_env, coplayer_reward_conditioning)
+    package = checkpoint_config.get("package", "ocean")
+    module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
+    env_module = importlib.import_module(module_name)
+    policy = getattr(env_module.torch, checkpoint_config["policy_name"])(layout_env, **checkpoint_config["policy"])
+    if checkpoint_config.get("rnn_name"):
+        rnn_cls = getattr(env_module.torch, checkpoint_config["rnn_name"])
+        policy = rnn_cls(layout_env, policy, **checkpoint_config["rnn"])
+    state_dict = torch.load(policy_path, map_location=device)
+    policy.load_state_dict(clean_policy_state_dict(state_dict.get("policy_state_dict", state_dict)))
+    return policy.to(device)
+
+
+class FrozenCoplayer:
+    """A frozen policy acting for every vecenv row that is not a learner row."""
+
+    def __init__(self, policy, vecenv, action_selection, device):
+        if action_selection not in VALID_ACTION_SELECTIONS:
+            raise pufferlib.APIUsageError(
+                f"coplayer_action_selection must be one of {VALID_ACTION_SELECTIONS}, got {action_selection!r}"
+            )
+        if not hasattr(vecenv, "learner_masks"):
+            raise pufferlib.APIUsageError("Co-player training needs a PufferEnv, Serial or Multiprocessing vecenv")
+        driver_env = vecenv.driver_env
+        wrong_setup = {
+            key: driver_env.env_kwargs.get(key)
+            for key, value in COPLAYER_ENV_SETUP.items()
+            if driver_env.env_kwargs.get(key) != value
+        }
+        if wrong_setup:
+            raise pufferlib.APIUsageError(
+                f"Training against a frozen co-player needs env {COPLAYER_ENV_SETUP}; got {wrong_setup}"
+            )
+        self.policy = policy.to(device).eval().requires_grad_(False)
+        self.uncompiled_policy = base_policy(policy)
+        if self.uncompiled_policy.is_continuous and not isinstance(vecenv.single_action_space, pufferlib.spaces.Box):
+            raise pufferlib.APIUsageError("A continuous co-player policy cannot drive a discrete-action env")
+        self.single_action_space = vecenv.single_action_space
+        self.action_selection = action_selection
+        self.obs_columns = reward_conditioning_obs_columns(
+            driver_env, policy_io_layout(policy, "co-player"), "co-player", device
+        )
+        hidden_size = getattr(self.uncompiled_policy, "hidden_size", None)
+        self.lstm_h = self.lstm_c = None
+        if hidden_size is not None:
+            self.lstm_h = torch.zeros(vecenv.num_agents, hidden_size, device=device)
+            self.lstm_c = torch.zeros(vecenv.num_agents, hidden_size, device=device)
+
+    def act(self, observations, done_mask, global_rows):
+        """Env actions for `observations`, the rows `global_rows` of the vecenv."""
+        if self.obs_columns is not None:
+            observations = observations.index_select(1, self.obs_columns)
+        state = {}
+        if self.lstm_h is not None:
+            # A done row starts a new episode on this step's obs.
+            episode_start = (done_mask > 0).unsqueeze(1)
+            state["lstm_h"] = self.lstm_h[global_rows].masked_fill(episode_start, 0.0)
+            state["lstm_c"] = self.lstm_c[global_rows].masked_fill(episode_start, 0.0)
+        logits, _ = self.policy.forward_eval(observations, state)
+        logits = logits_to_float(logits)
+        action, _, _, cont_action = pufferlib.pytorch.sample_logits(
+            logits,
+            action_selection=self.action_selection,
+            env_continuous=isinstance(self.single_action_space, pufferlib.spaces.Box),
+            policy=self.uncompiled_policy,
+        )
+        if self.lstm_h is not None:
+            self.lstm_h[global_rows] = state["lstm_h"].to(self.lstm_h.dtype)
+            self.lstm_c[global_rows] = state["lstm_c"].to(self.lstm_c.dtype)
+        return policy_env_actions(self.uncompiled_policy, logits, action, cont_action, self.single_action_space)
+
+
 class PuffeRL:
-    def __init__(self, config, vecenv, policy, logger=None):
+    def __init__(self, config, vecenv, policy, logger=None, coplayer_policy=None):
         # Backend perf optimization
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.deterministic = config["torch_deterministic"]
@@ -177,10 +373,32 @@ class PuffeRL:
 
         obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
 
+        # Frozen co-player for the non-learner rows; it is never trained and its rows are masked out.
+        self.coplayer = None
+        self.learner_obs_columns = None
+        coplayer_policy_path = config.get("coplayer_policy_path")
+        if coplayer_policy is not None and coplayer_policy_path:
+            raise pufferlib.APIUsageError("Pass either coplayer_policy or train.coplayer_policy_path, not both")
+        if coplayer_policy_path:
+            coplayer_policy = load_coplayer_policy(coplayer_policy_path, vecenv.driver_env, torch_device(device))
+        buffer_obs_shape = obs_space.shape
+        if coplayer_policy is not None:
+            self.coplayer = FrozenCoplayer(
+                coplayer_policy,
+                vecenv,
+                config.get("coplayer_action_selection", pufferlib.pytorch.ACTION_SELECT_SAMPLE),
+                torch_device(device),
+            )
+            self.learner_obs_columns = reward_conditioning_obs_columns(
+                vecenv.driver_env, policy_io_layout(policy, "learner"), "learner", torch_device(device)
+            )
+            if self.learner_obs_columns is not None:
+                buffer_obs_shape = (len(self.learner_obs_columns),)
+
         self.observations = torch.zeros(
             segments,
             horizon,
-            *obs_space.shape,
+            *buffer_obs_shape,
             dtype=obs_dtype,
             pin_memory=device == "cuda" and config["cpu_offload"],
             device="cpu" if config["cpu_offload"] else device,
@@ -393,13 +611,22 @@ class PuffeRL:
             t = torch.as_tensor(t).to(device)  # , non_blocking=True)
             done_mask = (d + t).clamp(max=1.0)
             m = torch.as_tensor(mask).to(device)  # , non_blocking=True)
+            learner_rows = None
+            learner_obs = o_device
+            if self.coplayer is not None:
+                learner_rows = torch.as_tensor(np.array(self.vecenv.learner_masks[env_id]), device=device)
+                m = m & learner_rows
+                if self.learner_obs_columns is not None:
+                    learner_obs = o_device.index_select(1, self.learner_obs_columns)
+            stats_obs = learner_obs if learner_rows is None else learner_obs[learner_rows]
 
             # Obs distribution stats (max/min/mean across the batch and obs
             # dims, appended per env step). Surfaces clipping / unbounded
             # features / normalization regressions in wandb.
-            self.stats["obs/max"].append(o_device.max().item())
-            self.stats["obs/min"].append(o_device.min().item())
-            self.stats["obs/mean"].append(o_device.mean().item())
+            if stats_obs.numel() > 0:
+                self.stats["obs/max"].append(stats_obs.max().item())
+                self.stats["obs/min"].append(stats_obs.min().item())
+                self.stats["obs/mean"].append(stats_obs.mean().item())
 
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
@@ -414,11 +641,16 @@ class PuffeRL:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
-                logits, value = self.policy.forward_eval(o_device, state)
-                logits = logits_to_float(logits)
-                action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(
-                    logits, env_continuous=self.env_continuous, policy=self.uncompiled_policy
-                )
+                if learner_rows is None:
+                    logits, value = self.policy.forward_eval(o_device, state)
+                    logits = logits_to_float(logits)
+                    action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(
+                        logits, env_continuous=self.env_continuous, policy=self.uncompiled_policy
+                    )
+                else:
+                    action, logprob, value, env_action = self._act_with_coplayer(
+                        learner_obs, o_device, done_mask, learner_rows, env_id, state
+                    )
                 if config["normalize_rewards"]:
                     r = torch.sign(r) * torch.log1p(torch.abs(r))
 
@@ -432,7 +664,9 @@ class PuffeRL:
                 l = self.ep_lengths[env_id.start].item()
                 batch_rows = slice(self.ep_indices[env_id.start].item(), 1 + self.ep_indices[env_id.stop - 1].item())
 
-                if config["cpu_offload"]:
+                if learner_rows is not None:
+                    self.observations[batch_rows, l] = learner_obs
+                elif config["cpu_offload"]:
                     self.observations[batch_rows, l] = o
                 else:
                     self.observations[batch_rows, l] = o_device
@@ -473,7 +707,9 @@ class PuffeRL:
 
             profile("env", epoch)
 
-            if self.env_continuous and not self.uncompiled_policy.is_continuous:
+            if learner_rows is not None:
+                self.vecenv.send(env_action)
+            elif self.env_continuous and not self.uncompiled_policy.is_continuous:
                 cont_action = cont_action.cpu().numpy()
                 self.vecenv.send(cont_action.squeeze(0))
             else:
@@ -489,11 +725,56 @@ class PuffeRL:
         profile.end()
         return pufferlib.utils.reduce_environment_metrics(self.stats)
 
+    def _act_with_coplayer(self, learner_obs, observations, done_mask, learner_rows, env_id, state):
+        """Learner acts on its rows and the frozen co-player on the rest, whose action/logprob/value stay 0."""
+        config = self.config
+        device = learner_obs.device
+        row_count = env_id.stop - env_id.start
+        learner_idx = torch.nonzero(learner_rows).squeeze(1)
+        coplayer_idx = torch.nonzero(~learner_rows).squeeze(1)
+        action = torch.zeros(row_count, *self.actions.shape[2:], dtype=self.actions.dtype, device=device)
+        logprob = torch.zeros(row_count, device=device)
+        value = torch.zeros(row_count, device=device)
+        single_action_space = self.vecenv.single_action_space
+        env_action_dtype = np.float32 if self.env_continuous else np.int32
+        env_action = np.zeros((row_count, *single_action_space.shape), dtype=env_action_dtype)
+        if learner_idx.numel() > 0:
+            learner_state = dict(state)
+            if config["use_rnn"]:
+                learner_state["lstm_h"] = state["lstm_h"][learner_idx]
+                learner_state["lstm_c"] = state["lstm_c"][learner_idx]
+            logits, learner_value = self.policy.forward_eval(learner_obs[learner_idx], learner_state)
+            logits = logits_to_float(logits)
+            learner_action, learner_logprob, _, cont_action = pufferlib.pytorch.sample_logits(
+                logits, env_continuous=self.env_continuous, policy=self.uncompiled_policy
+            )
+            action[learner_idx] = learner_action.reshape(-1, *self.actions.shape[2:]).to(action.dtype)
+            logprob[learner_idx] = learner_logprob.float()
+            value[learner_idx] = learner_value.flatten().float()
+            env_action[learner_idx.cpu().numpy()] = policy_env_actions(
+                self.uncompiled_policy, logits, learner_action, cont_action, single_action_space
+            )
+            if config["use_rnn"]:
+                for key in ("lstm_h", "lstm_c"):
+                    full_state = state[key].clone()
+                    full_state[learner_idx] = learner_state[key].to(full_state.dtype)
+                    state[key] = full_state
+        if coplayer_idx.numel() > 0:
+            env_action[coplayer_idx.cpu().numpy()] = self.coplayer.act(
+                observations[coplayer_idx], done_mask[coplayer_idx], env_id.start + coplayer_idx
+            )
+        return action, logprob, value, env_action
+
     @record
     def train(self):
         profile = self.profile
         epoch = self.epoch
         config = self.config
+        if self.coplayer is not None and not self.masks.any():
+            raise RuntimeError(
+                "The rollout holds no learner transitions: every learner (SDC) row was masked or absent. "
+                "Check that each scenario's SDC is policy-controlled."
+            )
         profile("train", epoch)
         profile("train_misc", epoch, nest=True)
         losses = defaultdict(float)
@@ -556,8 +837,12 @@ class PuffeRL:
 
         return logs
 
-    def _ppo_loss(self, mb_obs, mb_actions, mb_logprobs, mb_values, mb_returns, mb_adv, adv_weights=None):
+    def _ppo_loss(
+        self, mb_obs, mb_actions, mb_logprobs, mb_values, mb_returns, mb_adv, adv_weights=None, mb_masks=None
+    ):
         config = self.config
+        # mb_masks drops masked steps from every mean; None means all steps count.
+        weights = None if mb_masks is None else mb_masks.float()
         state = dict(action=mb_actions, lstm_h=None, lstm_c=None)
         with self.amp_context:
             logits, newvalue = self.policy(mb_obs, state)
@@ -571,12 +856,14 @@ class PuffeRL:
         ratio = logratio.exp()
 
         with torch.no_grad():
-            old_approx_kl = (-logratio).mean()
-            approx_kl = ((ratio - 1) - logratio).mean()
-            clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
+            old_approx_kl = masked_mean(-logratio, weights)
+            approx_kl = masked_mean((ratio - 1) - logratio, weights)
+            clipfrac = masked_mean(((ratio - 1.0).abs() > config["clip_coef"]).float(), weights)
 
         with torch.no_grad():
-            if torch.distributed.is_initialized():
+            if weights is not None:
+                advantage_mean, advantage_std = masked_mean_std(mb_adv, weights)
+            elif torch.distributed.is_initialized():
                 # This mean computation assumes that all GPUs use the same batch size. This is currently guaranteed.
                 world_size = torch.distributed.get_world_size()
                 # Distributed mean
@@ -598,17 +885,17 @@ class PuffeRL:
 
         pg_loss1 = -mb_adv * ratio
         pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - config["clip_coef"], 1 + config["clip_coef"])
-        pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+        pg_loss = masked_mean(torch.max(pg_loss1, pg_loss2), weights)
 
         if config["vf_clip_coef"] is not None:
             v_clipped = mb_values + torch.clamp(newvalue - mb_values, -config["vf_clip_coef"], config["vf_clip_coef"])
             v_loss_unclipped = (newvalue - mb_returns) ** 2
             v_loss_clipped = (v_clipped - mb_returns) ** 2
-            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+            v_loss = 0.5 * masked_mean(torch.max(v_loss_unclipped, v_loss_clipped), weights)
         else:
             v_loss = 0.5 * (newvalue - mb_returns) ** 2
-            v_loss = v_loss.mean()
-        entropy_loss = entropy.mean()
+            v_loss = masked_mean(v_loss, weights)
+        entropy_loss = masked_mean(entropy if weights is None else entropy.view_as(weights), weights)
         loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
 
         return (
@@ -677,6 +964,7 @@ class PuffeRL:
             mb_values = self.values[idx]
             mb_returns = returns[idx]
             mb_adv = advantages[idx]
+            mb_masks = masks[idx] if self.coplayer is not None else None
 
             profile("train_forward", epoch)
             loss, newvalue, ratio, stats = self._ppo_loss(
@@ -687,6 +975,7 @@ class PuffeRL:
                 mb_returns,
                 mb_adv,
                 adv_weights=mb_prio,
+                mb_masks=mb_masks,
             )
             self.ratio[idx] = ratio.detach()
 
@@ -704,8 +993,13 @@ class PuffeRL:
                 self.optimizer.step()
                 self.optimizer.zero_grad()
 
-        y_pred = self.values.flatten()
-        y_true = returns.flatten()
+        if self.coplayer is None:
+            y_pred = self.values.flatten()
+            y_true = returns.flatten()
+        else:
+            y_pred = self.values[masks]
+            y_true = returns[masks]
+            losses["masked_fraction"] = 1.0 - masks.float().mean().item()
         var_y = y_true.var()
         losses["explained_variance"] = (
             float("nan") if var_y == 0 else (1 - (y_true - y_pred).var(unbiased=False) / var_y).item()
@@ -721,7 +1015,7 @@ class PuffeRL:
             1.0,
         )
 
-        obs_shape = self.vecenv.single_observation_space.shape
+        obs_shape = self.observations.shape[2:]
         flat_obs = self.observations.reshape(-1, *obs_shape)
         flat_actions = self.actions.reshape(-1, *self.actions.shape[2:])
         flat_logprobs = self.logprobs.reshape(-1)
@@ -1043,6 +1337,25 @@ class PuffeRL:
             console.print(dashboard)
 
         print("\033[0;0H" + capture.get())
+
+
+def masked_mean(values, weights):
+    if weights is None:
+        return values.mean()
+    return (values * weights).sum() / weights.sum().clamp(min=1.0)
+
+
+def masked_mean_std(values, weights):
+    """Mean and Bessel-corrected std of the weighted entries, pooled across DDP ranks."""
+    totals = torch.stack([(values * weights).sum(), weights.sum()])
+    if torch.distributed.is_initialized():
+        torch.distributed.all_reduce(totals, op=torch.distributed.ReduceOp.SUM)
+    count = totals[1].clamp(min=1.0)
+    mean = totals[0] / count
+    squared_error = (torch.square(values - mean) * weights).sum()
+    if torch.distributed.is_initialized():
+        torch.distributed.all_reduce(squared_error, op=torch.distributed.ReduceOp.SUM)
+    return mean, torch.sqrt(squared_error / (count - 1.0).clamp(min=1.0))
 
 
 def compute_puff_advantage(
@@ -1440,30 +1753,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     if args["load_model_path"]:
         experiment_dir = drive_benchmark.resolve_run_dir(args["load_model_path"])
         config_yaml_path = os.path.join(experiment_dir, "config.yaml")
-        KEYS_OF_INTEREST = {
-            "action_type",
-            "dynamics_model",
-            "goal_source",
-            "goal_regen_mode",
-            "num_goals",
-            "min_goal_spacing",
-            "max_goal_spacing",
-            "obs_goal_lane_distance",
-            "reward_conditioning",
-            "reward_randomization",
-            "trajectory_prediction_length",
-            "num_trajectory_scaling_factors",
-            "trajectory_scaling_factors",
-            "obs_slots_boundary_n",
-            "obs_slots_lane_n",
-            "obs_boundary_stride",
-            "obs_lane_stride",
-            "obs_dropout_boundary",
-            "obs_dropout_lane",
-            "obs_slots_partners_n",
-            "obs_slots_traffic_controls_n",
-            "traffic_control_scope",
-        }
         if os.path.exists(config_yaml_path):
             print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")
             with open(config_yaml_path, "r") as f:
@@ -1477,7 +1766,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             # Override ENV parameters for observation size from model config
             if "env" in yaml_config and isinstance(yaml_config["env"], dict):
                 for k, v in yaml_config["env"].items():
-                    if k in KEYS_OF_INTEREST:
+                    if k in CHECKPOINT_OBS_ENV_KEYS:
                         args["env"][k] = v
         else:
             print(
@@ -2361,19 +2650,24 @@ def load_env(env_name, args, seed=None):
     return pufferlib.vector.make(make_env, env_kwargs=args["env"], **vec_kwargs)
 
 
-def load_policy(args, vecenv, env_name=""):
+def load_policy(args, vecenv, env_name="", reward_conditioning=None):
+    """reward_conditioning, when given, builds the policy with (True) or without (False) the env's
+    reward-conditioning obs slice, e.g. for a learner trained against a frozen co-player."""
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
 
     device = torch_device(args["train"]["device"])
+    policy_env = vecenv.driver_env
+    if reward_conditioning is not None and bool(reward_conditioning) != bool(policy_env.reward_conditioning):
+        policy_env = RewardConditioningView(policy_env, reward_conditioning)
     policy_cls = getattr(env_module.torch, args["policy_name"])
-    policy = policy_cls(vecenv.driver_env, **args["policy"])
+    policy = policy_cls(policy_env, **args["policy"])
 
     rnn_name = args["rnn_name"]
     if rnn_name is not None:
         rnn_cls = getattr(env_module.torch, args["rnn_name"])
-        policy = rnn_cls(vecenv.driver_env, policy, **args["rnn"])
+        policy = rnn_cls(policy_env, policy, **args["rnn"])
 
     policy = policy.to(device)
 

@@ -265,6 +265,11 @@ train:
   ent_coef: 0.01
   # enable value bootstrap to simulate infinite time horizon
   use_value_bootstrapping: true
+  # Frozen co-player checkpoint (.pt) driving the non-SDC vehicles while the learner trains only the SDC;
+  # null disables. Its architecture comes from the config.yaml of the run that produced it.
+  coplayer_policy_path: null
+  # Co-player action selection - options: "sample", "mode" (argmax), "mean"
+  coplayer_action_selection: sample
   # ---
   adam_beta1: 0.9
   adam_beta2: 0.999
