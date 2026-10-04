@@ -306,6 +306,38 @@ static const int ROAD_OFFSETS[25][2]
 #define METRIC_SCORE_WINDOW_SECONDS 10.0f
 #define PUFFER_PROGRESS_REFERENCE_SPEED 10.0f
 
+// nuPlan closed-loop score (nuplan-devkit closed_loop_nonreactive_agents_weighted_average)
+#define NUPLAN_WEIGHT_PROGRESS 5.0f
+#define NUPLAN_WEIGHT_TTC 5.0f
+#define NUPLAN_WEIGHT_SPEED_LIMIT 4.0f
+#define NUPLAN_WEIGHT_COMFORT 2.0f
+#define NUPLAN_WEIGHT_TOTAL                                                                                            \
+    (NUPLAN_WEIGHT_PROGRESS + NUPLAN_WEIGHT_TTC + NUPLAN_WEIGHT_SPEED_LIMIT + NUPLAN_WEIGHT_COMFORT)
+
+#define NUPLAN_PROGRESS_FLOOR_METERS 2.0f
+#define NUPLAN_MIN_PROGRESS_RATIO 0.2f
+#define NUPLAN_EXPERT_MATCH_LOOKAHEAD 16 // waypoints scanned forward when matching ego to expert route
+
+#define NUPLAN_DIRECTION_COMPLIANCE_METERS 2.0f
+#define NUPLAN_DIRECTION_VIOLATION_METERS 6.0f
+#define NUPLAN_DIRECTION_WINDOW_SECONDS 1.0f
+#define NUPLAN_DIRECTION_WINDOW_MAX_STEPS 32 // ring capacity; requires dt >= 1/32 s
+
+#define NUPLAN_TTC_HORIZON_SECONDS 3.0f
+#define NUPLAN_TTC_STEP_SECONDS 0.1f
+#define NUPLAN_TTC_LEAST_MIN_SECONDS 0.95f
+#define NUPLAN_TTC_CROSSING_COS_MAX 0.707f // |cos(heading diff)| below this counts as cross traffic
+
+#define NUPLAN_MAX_OVERSPEED_MPS 2.23f
+
+#define NUPLAN_MIN_LON_ACCEL -4.05f
+#define NUPLAN_MAX_LON_ACCEL 2.40f
+#define NUPLAN_MAX_ABS_LAT_ACCEL 4.89f
+#define NUPLAN_MAX_ABS_YAW_RATE 0.95f
+#define NUPLAN_MAX_ABS_YAW_ACCEL 1.93f
+#define NUPLAN_MAX_ABS_LON_JERK 4.13f
+#define NUPLAN_MAX_ABS_MAG_JERK 8.37f
+
 // =====================================================================================
 // 11. TELEMETRY
 // =====================================================================================

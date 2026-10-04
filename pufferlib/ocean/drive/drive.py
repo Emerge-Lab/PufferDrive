@@ -55,6 +55,7 @@ class Drive(pufferlib.PufferEnv):
         reward_offroad=3.0,
         reward_comfort=0.05,
         disable_comfort_penalty=False,
+        log_sdc_only=False,
         reward_lane_align=0.025,
         reward_vel_align=1.0,
         reward_lane_center=0.0038,
@@ -169,6 +170,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_offroad = reward_offroad
         self.reward_comfort = reward_comfort
         self.disable_comfort_penalty = bool(disable_comfort_penalty)
+        self.log_sdc_only = bool(log_sdc_only)
         self.reward_lane_align = reward_lane_align
         self.reward_vel_align = reward_vel_align
         self.reward_lane_center = reward_lane_center
@@ -538,6 +540,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_offroad": self.reward_offroad,
             "reward_comfort": self.reward_comfort,
             "disable_comfort_penalty": self.disable_comfort_penalty,
+            "log_sdc_only": self.log_sdc_only,
             "reward_lane_align": self.reward_lane_align,
             "reward_vel_align": self.reward_vel_align,
             "reward_lane_center": self.reward_lane_center,

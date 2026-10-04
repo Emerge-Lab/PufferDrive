@@ -151,6 +151,17 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     }
     Py_DECREF(v);
 
+    // 1 when the SDC is policy-controlled and so sits at row 0 of this env's slice
+    v = PyLong_FromLong(env->active_agent_count > 0 && env->active_agent_indices[0] == EGO_IDX);
+    if (!v) {
+        return NULL;
+    }
+    if (PyDict_SetItemString(dict, "sdc_active", v) < 0) {
+        Py_DECREF(v);
+        return NULL;
+    }
+    Py_DECREF(v);
+
     v = PyLong_FromLong(env->num_total_agents);
     if (!v) {
         return NULL;
@@ -1858,6 +1869,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_offroad = (float) unpack(kwargs, "reward_offroad");
     env->reward_comfort = (float) unpack(kwargs, "reward_comfort");
     env->disable_comfort_penalty = (bool) unpack(kwargs, "disable_comfort_penalty");
+    env->log_sdc_only = (bool) unpack(kwargs, "log_sdc_only");
     env->reward_lane_align = (float) unpack(kwargs, "reward_lane_align");
     env->reward_vel_align = (float) unpack(kwargs, "reward_vel_align");
     env->reward_lane_center = (float) unpack(kwargs, "reward_lane_center");
@@ -1900,6 +1912,14 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
     env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
     env->dt = (float) unpack(kwargs, "dt");
+    if (!(env->dt >= NUPLAN_DIRECTION_WINDOW_SECONDS / NUPLAN_DIRECTION_WINDOW_MAX_STEPS)) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "dt must be >= %f seconds (got %f)",
+            NUPLAN_DIRECTION_WINDOW_SECONDS / NUPLAN_DIRECTION_WINDOW_MAX_STEPS,
+            env->dt);
+        return -1;
+    }
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
     env->default_speed_limit = (float) unpack(kwargs, "default_speed_limit");
@@ -2057,6 +2077,16 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         assign_to_dict(dict, "comfort_score", log->comfort_score);
         assign_to_dict(dict, "multi_lane_time", log->multi_lane_time);
         assign_to_dict(dict, "multi_lane_score", log->multi_lane_score);
+        // nuPlan closed-loop score components
+        assign_to_dict(dict, "nuplan/score", log->nuplan_score);
+        assign_to_dict(dict, "nuplan/no_ego_at_fault_collisions", log->nuplan_no_at_fault_collisions);
+        assign_to_dict(dict, "nuplan/drivable_area_compliance", log->nuplan_drivable_area_compliance);
+        assign_to_dict(dict, "nuplan/ego_is_making_progress", log->nuplan_ego_is_making_progress);
+        assign_to_dict(dict, "nuplan/driving_direction_compliance", log->nuplan_driving_direction_compliance);
+        assign_to_dict(dict, "nuplan/ego_progress_along_expert_route", log->nuplan_ego_progress_along_expert_route);
+        assign_to_dict(dict, "nuplan/time_to_collision_within_bound", log->nuplan_time_to_collision_within_bound);
+        assign_to_dict(dict, "nuplan/speed_limit_compliance", log->nuplan_speed_limit_compliance);
+        assign_to_dict(dict, "nuplan/ego_is_comfortable", log->nuplan_ego_is_comfortable);
     }
 
     return 0;

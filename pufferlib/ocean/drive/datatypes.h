@@ -101,6 +101,9 @@ struct Agent {
     int previous_lane_idx;
     int current_lane_geometry_idx;
     int reached_goal_this_episode;
+    // Infraction rewards pay once per episode; a negative coef would otherwise farm them per step.
+    int collision_rewarded_this_episode;
+    int offroad_rewarded_this_episode;
     int num_goals_reached;
     int active_agent;
     int mark_as_expert;
@@ -134,6 +137,12 @@ struct Agent {
     float jerk_lat;
     float steering_angle;
     float wheelbase;
+
+    // nuPlan metric state
+    float prev_yaw_rate;
+    int expert_route_idx;
+    float direction_window_progress[NUPLAN_DIRECTION_WINDOW_MAX_STEPS];
+    int direction_window_idx;
 
     // Reward conditioning coefficients (per-agent, randomized at spawn)
     float reward_coefs[NUM_REWARD_COEFS];

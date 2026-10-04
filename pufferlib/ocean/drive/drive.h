@@ -99,6 +99,21 @@ struct Log {
     float multi_lane_score;
     float total_distance_travelled;
     float total_infractions;
+    // nuPlan closed-loop score components (scored exactly as nuplan-devkit defines them)
+    float nuplan_score;
+    float nuplan_no_at_fault_collisions;
+    float nuplan_drivable_area_compliance;
+    float nuplan_ego_is_making_progress;
+    float nuplan_driving_direction_compliance;
+    float nuplan_ego_progress_along_expert_route;
+    float nuplan_time_to_collision_within_bound;
+    float nuplan_speed_limit_compliance;
+    float nuplan_ego_is_comfortable;
+    // nuPlan intermediate accumulators
+    float nuplan_ego_progress_meters;
+    float nuplan_worst_window_progress_meters;
+    float nuplan_ttc_violation;
+    float nuplan_comfort_violation;
     // Agent-only puffer display fields (for serialization)
     float no_at_fault;
     float no_offroad;
@@ -260,6 +275,7 @@ struct Drive {
     float default_speed_limit;         // Fallback target speed (m/s) when a lane has no mapped speed_limit
     float reward_collision_speed_coef; // Extra collision penalty per m/s of ego speed at impact; 0 disables it
     int disable_comfort_penalty;       // Force REWARD_COEF_COMFORT to 0 regardless of reward_randomization
+    int log_sdc_only;                  // add_log: only count the SDC (EGO_IDX), not other policy-controlled agents
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
@@ -332,8 +348,8 @@ typedef struct {
 static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {2.0f, 12.0f, 0},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
     {15.0f, 30.0f, 0},     // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(15, 30)
-    {2.0f, 6.0f, 0},       // REWARD_COEF_COLLISION       α_collision ~ U(2, 6)
-    {0.0f, 3.0f, 0},       // REWARD_COEF_OFFROAD         α_boundary ~ U(0, 3)
+    {-3.0f, 6.0f, 0},      // REWARD_COEF_COLLISION       α_collision ~ U(-3, 6); negative seeks collisions
+    {-1.5f, 3.0f, 0},      // REWARD_COEF_OFFROAD         α_boundary ~ U(-1.5, 3); negative seeks offroad
     {0.0f, 0.0f, 0},       // REWARD_COEF_COMFORT         fixed at 0 (matches reward_comfort=0 off-baseline)
     {2.5e-4f, 2.5e-2f, 0}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ U(2.5e-4, 2.5e-2)
     {0.0f, 1.0f, 0},       // REWARD_COEF_VEL_ALIGN       α_vel-align ~ U(0, 1)
@@ -353,8 +369,8 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
 static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {2.0f, 12.0f, 0},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
     {15.0f, 30.0f, 0},     // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(15, 30)
-    {2.0f, 6.0f, 0},       // REWARD_COEF_COLLISION       α_collision ~ U(2, 6)
-    {0.0f, 3.0f, 0},       // REWARD_COEF_OFFROAD         α_boundary ~ U(0, 3)
+    {-3.0f, 6.0f, 0},      // REWARD_COEF_COLLISION       α_collision ~ U(-3, 6); negative seeks collisions
+    {-1.5f, 3.0f, 0},      // REWARD_COEF_OFFROAD         α_boundary ~ U(-1.5, 3); negative seeks offroad
     {0.0f, 0.0f, 0},       // REWARD_COEF_COMFORT         fixed at 0 (matches reward_comfort=0 off-baseline)
     {2.5e-4f, 2.5e-2f, 1}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ logU(2.5e-4, 2.5e-2)
     {0.0f, 1.0f, 0},       // REWARD_COEF_VEL_ALIGN       α_vel-align ~ U(0, 1)
@@ -472,6 +488,8 @@ static void reset_agent_state(Agent *agent) {
     agent->displacement_sample_count = 0;
     agent->stopped = 0;
     agent->removed = 0;
+    agent->collision_rewarded_this_episode = 0;
+    agent->offroad_rewarded_this_episode = 0;
     agent->current_lane_idx = -1;
     agent->previous_lane_idx = -1;
     agent->current_route_idx = 0;
@@ -480,6 +498,12 @@ static void reset_agent_state(Agent *agent) {
     agent->jerk_long = 0.0f;
     agent->jerk_lat = 0.0f;
     agent->steering_angle = 0.0f;
+    agent->prev_yaw_rate = 0.0f;
+    agent->expert_route_idx = 0;
+    agent->direction_window_idx = 0;
+    for (int i = 0; i < NUPLAN_DIRECTION_WINDOW_MAX_STEPS; i++) {
+        agent->direction_window_progress[i] = 0.0f;
+    }
     agent->distance_since_spawn = 0.0f;
     agent->seconds_stopped = 0.0f;
     agent->phantom_braking_counter = 0;
@@ -1265,6 +1289,32 @@ static int roll_goals(Drive *env, Agent *agent) {
     return 1;
 }
 
+// Spaces goals over the agent's valid logged track; invalid steps hold (0,0), not a position.
+static void generate_new_goals_from_log(Drive *env, Agent *agent) {
+    int start = env->init_step > 0 ? env->init_step : 0;
+    int last_valid_step = start;
+    for (int t = start + 1; t < agent->trajectory_size; t++) {
+        if (agent->log_valid[t] == 1) {
+            last_valid_step = t;
+        }
+    }
+    int track_length = last_valid_step - start;
+    for (int goal_idx = 0; goal_idx < env->num_goals; goal_idx++) {
+        int t = start + (goal_idx + 1) * track_length / env->num_goals;
+        for (; t > start && agent->log_valid[t] != 1; t--) {
+        }
+        agent->list_goal_x[goal_idx] = agent->log_trajectory_x[t];
+        agent->list_goal_y[goal_idx] = agent->log_trajectory_y[t];
+        agent->list_goal_z[goal_idx] = agent->log_trajectory_z[t];
+        agent->list_goal_lane[goal_idx] = -1; // logged goals have no lane idx (no GPS lane-distance)
+    }
+    agent->goal_count = env->num_goals;
+    agent->current_goal_idx = 0;
+    agent->current_goal_x = agent->list_goal_x[0];
+    agent->current_goal_y = agent->list_goal_y[0];
+    agent->current_goal_z = agent->list_goal_z[0];
+}
+
 // ========================================
 // Metrics/Collision Functions
 // ========================================
@@ -1636,42 +1686,28 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
     return false;
 }
 
-static bool check_obb_collision(Agent *car1, Agent *car2) {
-    // OBB collision via SAT (Separating Axis Theorem).
-    // Projects both boxes onto 4 axes (2 per car) and checks for overlap on all axes.
+static bool check_obb_overlap_pose(
+    float x1,
+    float y1,
+    float cos1,
+    float sin1,
+    float half_length1,
+    float half_width1,
+    float x2,
+    float y2,
+    float cos2,
+    float sin2,
+    float half_length2,
+    float half_width2) {
+    // OBB overlap via SAT (Separating Axis Theorem).
+    // Projects both boxes onto 4 axes (2 per box) and checks for overlap on all axes.
     // No epsilon tolerance: exact boundary contact may flicker across steps.
-
-    // Early z-axis rejection
-    float car1_top = car1->sim_z + car1->sim_height;
-    float car2_top = car2->sim_z + car2->sim_height;
-    if (car1_top < car2->sim_z || car2_top < car1->sim_z) {
-        return false;
-    }
-
     float car1_corners[4][2];
-    compute_bounding_box_corners(
-        car1->sim_x,
-        car1->sim_y,
-        car1->cos_heading,
-        car1->sin_heading,
-        car1->sim_length / 2.0f,
-        car1->sim_width / 2.0f,
-        car1_corners);
+    compute_bounding_box_corners(x1, y1, cos1, sin1, half_length1, half_width1, car1_corners);
     float car2_corners[4][2];
-    compute_bounding_box_corners(
-        car2->sim_x,
-        car2->sim_y,
-        car2->cos_heading,
-        car2->sin_heading,
-        car2->sim_length / 2.0f,
-        car2->sim_width / 2.0f,
-        car2_corners);
+    compute_bounding_box_corners(x2, y2, cos2, sin2, half_length2, half_width2, car2_corners);
 
-    float axes[4][2]
-        = {{car1->cos_heading, car1->sin_heading},
-           {-car1->sin_heading, car1->cos_heading},
-           {car2->cos_heading, car2->sin_heading},
-           {-car2->sin_heading, car2->cos_heading}};
+    float axes[4][2] = {{cos1, sin1}, {-sin1, cos1}, {cos2, sin2}, {-sin2, cos2}};
 
     for (int i = 0; i < 4; i++) {
         float min1 = INFINITY, max1 = -INFINITY;
@@ -1689,6 +1725,29 @@ static bool check_obb_collision(Agent *car1, Agent *car2) {
         }
     }
     return true;
+}
+
+static bool check_obb_collision(Agent *car1, Agent *car2) {
+    // Early z-axis rejection
+    float car1_top = car1->sim_z + car1->sim_height;
+    float car2_top = car2->sim_z + car2->sim_height;
+    if (car1_top < car2->sim_z || car2_top < car1->sim_z) {
+        return false;
+    }
+
+    return check_obb_overlap_pose(
+        car1->sim_x,
+        car1->sim_y,
+        car1->cos_heading,
+        car1->sin_heading,
+        car1->sim_length / 2.0f,
+        car1->sim_width / 2.0f,
+        car2->sim_x,
+        car2->sim_y,
+        car2->cos_heading,
+        car2->sin_heading,
+        car2->sim_length / 2.0f,
+        car2->sim_width / 2.0f);
 }
 
 static bool check_moving_obb_collision(Agent *a, Agent *b, float a_disp, float b_disp) {
@@ -1990,6 +2049,219 @@ static void compute_agent_ttc(Drive *env, int agent_idx) {
     }
 }
 
+static bool nuplan_tracks_collide_within(Agent *ego, Agent *other, int max_steps) {
+    float ego_step_x = ego->cos_heading * ego->sim_speed * NUPLAN_TTC_STEP_SECONDS;
+    float ego_step_y = ego->sin_heading * ego->sim_speed * NUPLAN_TTC_STEP_SECONDS;
+    float other_step_x = other->cos_heading * other->sim_speed * NUPLAN_TTC_STEP_SECONDS;
+    float other_step_y = other->sin_heading * other->sim_speed * NUPLAN_TTC_STEP_SECONDS;
+
+    for (int step = 1; step <= max_steps; step++) {
+        bool overlaps = check_obb_overlap_pose(
+            ego->sim_x + ego_step_x * step,
+            ego->sim_y + ego_step_y * step,
+            ego->cos_heading,
+            ego->sin_heading,
+            ego->sim_length / 2.0f,
+            ego->sim_width / 2.0f,
+            other->sim_x + other_step_x * step,
+            other->sim_y + other_step_y * step,
+            other->cos_heading,
+            other->sin_heading,
+            other->sim_length / 2.0f,
+            other->sim_width / 2.0f);
+        if (overlaps) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool nuplan_ttc_below_bound(Drive *env, int agent_idx) {
+    Agent *ego = &env->agents[agent_idx];
+    float ego_edge_dist = fabsf(ego->metrics_array[LANE_DIST_IDX]) + 0.5f * ego->sim_width;
+    bool ego_spans_lanes = (ego->current_lane_idx == -1) || (ego_edge_dist > MULTI_LANE_THRESHOLD);
+    // Overlaps later than least_min_ttc never violate, so the scan stops there, not at the 3s horizon.
+    int max_steps = (int) (NUPLAN_TTC_LEAST_MIN_SECONDS / NUPLAN_TTC_STEP_SECONDS);
+    float scan_seconds = max_steps * NUPLAN_TTC_STEP_SECONDS;
+
+    for (int j = 0; j < env->num_agents; j++) {
+        int other_idx = (j < env->active_agent_count) ? env->active_agent_indices[j]
+                                                      : env->static_agent_indices[j - env->active_agent_count];
+        if (other_idx == agent_idx) {
+            continue;
+        }
+        Agent *other = &env->agents[other_idx];
+        if (other->sim_x == INVALID_POSITION || other->removed || other->sim_valid != 1) {
+            continue;
+        }
+
+        float dx = other->sim_x - ego->sim_x;
+        float dy = other->sim_y - ego->sim_y;
+        float reach = (ego->sim_speed + other->sim_speed) * scan_seconds + ego->radius + other->radius;
+        if (dx * dx + dy * dy > reach * reach) {
+            continue;
+        }
+
+        // Lead and cross traffic always count; same-heading side traffic only while ego spans lanes.
+        float forward = dx * ego->cos_heading + dy * ego->sin_heading;
+        float heading_cos = ego->cos_heading * other->cos_heading + ego->sin_heading * other->sin_heading;
+        bool is_crossing = fabsf(heading_cos) < NUPLAN_TTC_CROSSING_COS_MAX;
+        if (forward <= 0.0f && !is_crossing && !ego_spans_lanes) {
+            continue;
+        }
+        if (nuplan_tracks_collide_within(ego, other, max_steps)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static float nuplan_expert_route_progress(Agent *agent) {
+    int last_idx = agent->trajectory_size - 1;
+    int matched_idx = -1;
+    float best_distance_sq = INFINITY;
+
+    for (int offset = 0; offset < NUPLAN_EXPERT_MATCH_LOOKAHEAD; offset++) {
+        int idx = agent->expert_route_idx + offset;
+        if (idx > last_idx) {
+            break;
+        }
+        if (agent->log_valid[idx] != 1) {
+            continue;
+        }
+        float dx = agent->sim_x - agent->log_trajectory_x[idx];
+        float dy = agent->sim_y - agent->log_trajectory_y[idx];
+        float distance_sq = dx * dx + dy * dy;
+        if (distance_sq < best_distance_sq) {
+            best_distance_sq = distance_sq;
+            matched_idx = idx;
+        }
+    }
+    if (matched_idx == -1) {
+        return 0.0f;
+    }
+    agent->expert_route_idx = matched_idx;
+
+    int tangent_start = matched_idx;
+    int tangent_end = matched_idx + 1;
+    if (tangent_end > last_idx || agent->log_valid[tangent_end] != 1) {
+        tangent_start = matched_idx - 1;
+        tangent_end = matched_idx;
+    }
+    if (tangent_start < 0 || agent->log_valid[tangent_start] != 1) {
+        return 0.0f;
+    }
+
+    float tangent_x = agent->log_trajectory_x[tangent_end] - agent->log_trajectory_x[tangent_start];
+    float tangent_y = agent->log_trajectory_y[tangent_end] - agent->log_trajectory_y[tangent_start];
+    float tangent_length = sqrtf(tangent_x * tangent_x + tangent_y * tangent_y);
+    if (tangent_length < 1e-6f) {
+        return 0.0f;
+    }
+
+    float step_x = agent->sim_x - agent->prev_x;
+    float step_y = agent->sim_y - agent->prev_y;
+    return (step_x * tangent_x + step_y * tangent_y) / tangent_length;
+}
+
+static void accumulate_nuplan_metrics(Drive *env, int agent_idx, Log *agent_log) {
+    Agent *agent = &env->agents[agent_idx];
+
+    float step_progress_meters = nuplan_expert_route_progress(agent);
+    agent_log->nuplan_ego_progress_meters += step_progress_meters;
+
+    agent->direction_window_progress[agent->direction_window_idx] = step_progress_meters;
+    agent->direction_window_idx = (agent->direction_window_idx + 1) % NUPLAN_DIRECTION_WINDOW_MAX_STEPS;
+    int window_steps = (int) ceilf(NUPLAN_DIRECTION_WINDOW_SECONDS / env->dt);
+    float window_progress_meters = 0.0f;
+    for (int offset = 1; offset <= window_steps; offset++) {
+        int idx = (agent->direction_window_idx - offset + NUPLAN_DIRECTION_WINDOW_MAX_STEPS)
+            % NUPLAN_DIRECTION_WINDOW_MAX_STEPS;
+        window_progress_meters += agent->direction_window_progress[idx];
+    }
+    if (window_progress_meters < agent_log->nuplan_worst_window_progress_meters) {
+        agent_log->nuplan_worst_window_progress_meters = window_progress_meters;
+    }
+
+    float yaw_accel = (agent->yaw_rate - agent->prev_yaw_rate) / env->dt;
+    agent->prev_yaw_rate = agent->yaw_rate;
+    float jerk_magnitude = sqrtf(agent->jerk_long * agent->jerk_long + agent->jerk_lat * agent->jerk_lat);
+    bool comfort_violated = agent->accel_long < NUPLAN_MIN_LON_ACCEL || agent->accel_long > NUPLAN_MAX_LON_ACCEL
+        || fabsf(agent->accel_lat) > NUPLAN_MAX_ABS_LAT_ACCEL || fabsf(agent->yaw_rate) > NUPLAN_MAX_ABS_YAW_RATE
+        || fabsf(yaw_accel) > NUPLAN_MAX_ABS_YAW_ACCEL || fabsf(agent->jerk_long) > NUPLAN_MAX_ABS_LON_JERK
+        || jerk_magnitude > NUPLAN_MAX_ABS_MAG_JERK;
+    if (comfort_violated) {
+        agent_log->nuplan_comfort_violation = 1.0f;
+    }
+
+    // TTC is not scored while ego is stopped, nor after an at-fault collision has already happened.
+    if (agent->sim_speed <= AGENT_STOPPED_SPEED_THRESHOLD || agent_log->at_fault_collision_rate > 0.0f) {
+        return;
+    }
+    if (nuplan_ttc_below_bound(env, agent_idx)) {
+        agent_log->nuplan_ttc_violation = 1.0f;
+    }
+}
+
+static float nuplan_expert_progress_meters(Drive *env, Agent *agent) {
+    int last_idx = agent->trajectory_size - 1;
+    int end_idx = env->init_step + env->scenario_length;
+    if (end_idx > last_idx) {
+        end_idx = last_idx;
+    }
+
+    float expert_progress_meters = 0.0f;
+    for (int t = env->init_step; t < end_idx; t++) {
+        if (agent->log_valid[t] != 1 || agent->log_valid[t + 1] != 1) {
+            continue;
+        }
+        expert_progress_meters += compute_euclidean_distance(
+            agent->log_trajectory_x[t],
+            agent->log_trajectory_y[t],
+            agent->log_trajectory_x[t + 1],
+            agent->log_trajectory_y[t + 1]);
+    }
+    return expert_progress_meters;
+}
+
+static float calculate_nuplan_score(Drive *env, Agent *agent, Log *agent_log) {
+    float episode_duration_s = fmaxf(agent_log->episode_length * env->dt, env->dt);
+
+    float no_at_fault = (agent_log->at_fault_collision_rate > 0.0f) ? 0.0f : 1.0f;
+    float drivable_area = (agent_log->offroad_rate > 0.0f) ? 0.0f : 1.0f;
+
+    float ego_progress = fmaxf(agent_log->nuplan_ego_progress_meters, NUPLAN_PROGRESS_FLOOR_METERS);
+    float expert_progress = fmaxf(nuplan_expert_progress_meters(env, agent), NUPLAN_PROGRESS_FLOOR_METERS);
+    float progress_ratio = fminf(1.0f, ego_progress / expert_progress);
+    float making_progress = (progress_ratio > NUPLAN_MIN_PROGRESS_RATIO) ? 1.0f : 0.0f;
+
+    float worst_window = agent_log->nuplan_worst_window_progress_meters;
+    float direction_compliance = (worst_window >= -NUPLAN_DIRECTION_COMPLIANCE_METERS) ? 1.0f
+        : (worst_window >= -NUPLAN_DIRECTION_VIOLATION_METERS)                         ? 0.5f
+                                                                                       : 0.0f;
+
+    float ttc_score = (agent_log->nuplan_ttc_violation > 0.0f) ? 0.0f : 1.0f;
+    float comfort_score = (agent_log->nuplan_comfort_violation > 0.0f) ? 0.0f : 1.0f;
+    float overspeed_budget = NUPLAN_MAX_OVERSPEED_MPS * episode_duration_s;
+    float speed_score = fmaxf(0.0f, 1.0f - agent_log->speed_violation_sum / overspeed_budget);
+
+    float weighted_sum = NUPLAN_WEIGHT_PROGRESS * progress_ratio + NUPLAN_WEIGHT_TTC * ttc_score
+        + NUPLAN_WEIGHT_SPEED_LIMIT * speed_score + NUPLAN_WEIGHT_COMFORT * comfort_score;
+    float multiplier = no_at_fault * drivable_area * making_progress * direction_compliance;
+
+    agent_log->nuplan_no_at_fault_collisions = no_at_fault;
+    agent_log->nuplan_drivable_area_compliance = drivable_area;
+    agent_log->nuplan_ego_is_making_progress = making_progress;
+    agent_log->nuplan_driving_direction_compliance = direction_compliance;
+    agent_log->nuplan_ego_progress_along_expert_route = progress_ratio;
+    agent_log->nuplan_time_to_collision_within_bound = ttc_score;
+    agent_log->nuplan_speed_limit_compliance = speed_score;
+    agent_log->nuplan_ego_is_comfortable = comfort_score;
+    agent_log->nuplan_score = multiplier * weighted_sum / NUPLAN_WEIGHT_TOTAL;
+
+    return agent_log->nuplan_score;
+}
+
 // Puffer score computation
 // Uses hybrid weighted average: multiplier weights (binary gates) + average weights (continuous)
 static float calculate_duration_scaled_violation_score(float violation_timestep_count, float duration_steps, float dt) {
@@ -2061,6 +2333,9 @@ static void add_log(Drive *env) {
     int safe_timestep = (env->timestep > 0) ? env->timestep : 1;
     Log episode_log = {0};
     for (int i = 0; i < env->active_agent_count; i++) {
+        if (env->log_sdc_only && env->active_agent_indices[i] != EGO_IDX) {
+            continue;
+        }
         Agent *agent = &env->agents[env->active_agent_indices[i]];
         float episode_duration_s = env->logs[i].episode_length * env->dt;
         float reference_progress_distance = PUFFER_PROGRESS_REFERENCE_SPEED * episode_duration_s;
@@ -2121,6 +2396,16 @@ static void add_log(Drive *env) {
                 env->logs[i].episode_length,
                 env->dt);
             calculate_puffer_score(&env->logs[i], env->logs[i].episode_length, env->dt);
+            calculate_nuplan_score(env, agent, &env->logs[i]);
+            episode_log.nuplan_score += env->logs[i].nuplan_score;
+            episode_log.nuplan_no_at_fault_collisions += env->logs[i].nuplan_no_at_fault_collisions;
+            episode_log.nuplan_drivable_area_compliance += env->logs[i].nuplan_drivable_area_compliance;
+            episode_log.nuplan_ego_is_making_progress += env->logs[i].nuplan_ego_is_making_progress;
+            episode_log.nuplan_driving_direction_compliance += env->logs[i].nuplan_driving_direction_compliance;
+            episode_log.nuplan_ego_progress_along_expert_route += env->logs[i].nuplan_ego_progress_along_expert_route;
+            episode_log.nuplan_time_to_collision_within_bound += env->logs[i].nuplan_time_to_collision_within_bound;
+            episode_log.nuplan_speed_limit_compliance += env->logs[i].nuplan_speed_limit_compliance;
+            episode_log.nuplan_ego_is_comfortable += env->logs[i].nuplan_ego_is_comfortable;
             episode_log.at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
             episode_log.ttc_within_bound_rate += env->logs[i].ttc_within_bound_rate;
             episode_log.wrong_way_distance += env->logs[i].wrong_way_distance;
@@ -3007,29 +3292,7 @@ void init(Drive *env) {
             // For replay mode, always place goals along the logged
             // trajectory. Route-based goal generation can produce goals that
             // diverge from the actual path the SDC should follow.
-            {
-                int start = env->init_step > 0 ? env->init_step : 0;
-                int remaining = agent->trajectory_size - 1 - start;
-                if (remaining < 1) {
-                    remaining = 1;
-                }
-                int num_wp = env->num_goals;
-                for (int g = 0; g < num_wp; g++) {
-                    int t = start + (g + 1) * remaining / num_wp;
-                    if (t >= agent->trajectory_size) {
-                        t = agent->trajectory_size - 1;
-                    }
-                    agent->list_goal_x[g] = agent->log_trajectory_x[t];
-                    agent->list_goal_y[g] = agent->log_trajectory_y[t];
-                    agent->list_goal_z[g] = agent->log_trajectory_z[t];
-                    agent->list_goal_lane[g] = -1; // logged goals have no lane idx (no GPS lane-distance)
-                }
-                agent->goal_count = num_wp;
-                agent->current_goal_idx = 0;
-                agent->current_goal_x = agent->list_goal_x[0];
-                agent->current_goal_y = agent->list_goal_y[0];
-                agent->current_goal_z = agent->list_goal_z[0];
-            }
+            generate_new_goals_from_log(env, agent);
         }
     } else if (env->goal_source == GOAL_SOURCE_MAP) {
         for (int i = 0; i < env->active_agent_count; i++) {
@@ -3569,19 +3832,25 @@ static void compute_rewards(Drive *env, int i) {
         // agent couldn't avoid (e.g. rear-ended by non-reactive replayed traffic) -
         // that shape taught the policy to freeze in place instead of avoiding the
         // situation, so it's opt-in rather than the default.
-        float reward_collision
-            = -(agent->reward_coefs[REWARD_COEF_COLLISION] + env->reward_collision_speed_coef * agent->sim_speed);
-        env->rewards[i] += reward_collision;
+        if (!agent->collision_rewarded_this_episode) {
+            float reward_collision
+                = -(agent->reward_coefs[REWARD_COEF_COLLISION] + env->reward_collision_speed_coef * agent->sim_speed);
+            env->rewards[i] += reward_collision;
+            agent_log->reward_collision += reward_collision;
+            agent->collision_rewarded_this_episode = 1;
+        }
         agent_log->collision_rate = 1.0f;
-        agent_log->reward_collision += reward_collision;
     }
 
     // Offroad reward
     if (agent->metrics_array[OFFROAD_IDX] > 0.0f) {
-        float reward_offroad = -agent->reward_coefs[REWARD_COEF_OFFROAD];
-        env->rewards[i] += reward_offroad;
+        if (!agent->offroad_rewarded_this_episode) {
+            float reward_offroad = -agent->reward_coefs[REWARD_COEF_OFFROAD];
+            env->rewards[i] += reward_offroad;
+            agent_log->reward_offroad += reward_offroad;
+            agent->offroad_rewarded_this_episode = 1;
+        }
         agent_log->offroad_rate = 1.0f;
-        agent_log->reward_offroad += reward_offroad;
     }
 
     // Red light violation reward
@@ -3702,6 +3971,8 @@ static void compute_rewards(Drive *env, int i) {
             agent_log->comfort_violation_timestep_count,
             agent_log->episode_length,
             env->dt);
+
+        accumulate_nuplan_metrics(env, agent_idx, agent_log);
     } else {
         agent->metrics_array[TTC_IDX] = DEFAULT_TTC;
         agent->metrics_array[DISTANCE_TO_COLLISION_IDX] = DEFAULT_DTC;
@@ -4475,27 +4746,7 @@ void c_reset(Drive *env) {
         generate_reward_coefs(env, agent);
 
         if (env->goal_source == GOAL_SOURCE_GT) {
-            int start = env->init_step > 0 ? env->init_step : 0;
-            int remaining = agent->trajectory_size - 1 - start;
-            if (remaining < 1) {
-                remaining = 1;
-            }
-            int num_wp = env->num_goals;
-            for (int g = 0; g < num_wp; g++) {
-                int t = start + (g + 1) * remaining / num_wp;
-                if (t >= agent->trajectory_size) {
-                    t = agent->trajectory_size - 1;
-                }
-                agent->list_goal_x[g] = agent->log_trajectory_x[t];
-                agent->list_goal_y[g] = agent->log_trajectory_y[t];
-                agent->list_goal_z[g] = agent->log_trajectory_z[t];
-                agent->list_goal_lane[g] = -1; // logged goals have no lane idx (no GPS lane-distance)
-            }
-            agent->goal_count = num_wp;
-            agent->current_goal_idx = 0;
-            agent->current_goal_x = agent->list_goal_x[0];
-            agent->current_goal_y = agent->list_goal_y[0];
-            agent->current_goal_z = agent->list_goal_z[0];
+            generate_new_goals_from_log(env, agent);
         } else {
             generate_new_goals_from_route(env, agent);
         }
@@ -4605,8 +4856,11 @@ void c_step(Drive *env) {
     }
 
     if (env->terminate_on_goal == 1 && env->simulation_mode == SIMULATION_MODE_REPLAY
-        && env->control_mode == CONTROL_MODE_SDC_ONLY) {
+        && (env->control_mode == CONTROL_MODE_SDC_ONLY || env->log_sdc_only)) {
         for (int i = 0; i < env->active_agent_count; i++) {
+            if (env->log_sdc_only && env->active_agent_indices[i] != EGO_IDX) {
+                continue;
+            }
             Agent *agent = &env->agents[env->active_agent_indices[i]];
             if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f && agent->current_goal_idx == env->num_goals) {
                 early_reset = 1;
