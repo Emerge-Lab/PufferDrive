@@ -1,8 +1,9 @@
-"""Per-agent reward-coef overrides and per-row learner masks on the Drive env."""
+"""Per-agent reward-coef overrides and per-row learner masks on the Drive env and its vecenvs."""
 
 import numpy as np
 import pytest
 
+import pufferlib.vector
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import (
     REWARD_COEF_NAMES,
@@ -156,3 +157,25 @@ def test_learner_masks_mark_sdc_rows_only():
     default_env = Drive(**REPLAY_KWARGS)
     assert default_env.learner_masks[: default_env.agent_offsets[-1]].all()
     default_env.close()
+
+
+@pytest.mark.parametrize("backend", ["Serial", "Multiprocessing"])
+def test_vecenv_runtime_overrides_and_learner_masks(backend):
+    env_kwargs = {**REPLAY_KWARGS, "learner_agents": "sdc", "log_sdc_only": True}
+    vec_kwargs = dict(backend=backend, num_envs=2, seed=0)
+    if backend == "Multiprocessing":
+        vec_kwargs.update(num_workers=2, batch_size=2, overwork=True)
+    vecenv = pufferlib.vector.make(Drive, env_kwargs=env_kwargs, **vec_kwargs)
+    try:
+        vecenv.async_reset(0)
+        vecenv.recv()
+        vecenv.set_reward_coef_overrides({"others": {"collision": -1.0}, "sdc": {"collision": 2.0}})
+        vecenv.async_reset(1)
+        obs = vecenv.recv()[0]
+        learner = np.asarray(vecenv.learner_masks).reshape(-1)
+        column = coef_column(vecenv.driver_env, "collision")
+        assert learner.sum() >= 2
+        np.testing.assert_allclose(obs[learner, column], reward_coef_to_normalized("collision", 2.0), atol=1e-6)
+        np.testing.assert_allclose(obs[~learner, column], reward_coef_to_normalized("collision", -1.0), atol=1e-6)
+    finally:
+        vecenv.close()

@@ -16,6 +16,8 @@ CLOSE = 4
 MAIN = 5
 INFO = 6
 
+WORKER_CALL_TIMEOUT_SECONDS = 600
+
 
 def recv_precheck(vecenv):
     if vecenv.flag != RECV:
@@ -195,6 +197,10 @@ class Serial:
             if set_epoch is not None:
                 set_epoch(epoch)
 
+    def set_reward_coef_overrides(self, overrides, normalized=False):
+        for env in self.envs:
+            env.set_reward_coef_overrides(overrides, normalized)
+
     def recv(self):
         recv_precheck(self)
         return (
@@ -229,6 +235,7 @@ def _worker_process(
     worker_idx,
     send_pipe,
     recv_pipe,
+    control_pipe,
     shm,
     is_native,
     seed,
@@ -255,6 +262,7 @@ def _worker_process(
 
     semaphores = np.ndarray(num_workers, dtype=np.uint8, buffer=shm["semaphores"])
     notify = np.ndarray(num_workers, dtype=bool, buffer=shm["notify"])
+    control_pending = np.ndarray(num_workers, dtype=bool, buffer=shm["control_pending"])
     envs_set_epoch = getattr(envs, "set_epoch", None)
     epoch_arr = np.ndarray(1, dtype=np.int32, buffer=shm["epoch"])
     last_epoch_seen = None
@@ -263,6 +271,16 @@ def _worker_process(
         if notify[worker_idx]:
             envs.notify()
             notify[worker_idx] = False
+
+        if control_pending[worker_idx]:
+            method_name, method_args = control_pipe.recv()
+            # Cleared before the ack so a call sent right after the ack is never lost.
+            control_pending[worker_idx] = False
+            try:
+                getattr(envs, method_name)(*method_args)
+                control_pipe.send(None)
+            except Exception as exc:
+                control_pipe.send(repr(exc))
 
         if envs_set_epoch is not None:
             current_epoch = int(epoch_arr[0])
@@ -399,6 +417,7 @@ class Multiprocessing:
             learner_masks=RawArray("b", num_agents),
             semaphores=RawArray("c", num_workers),
             notify=RawArray("b", num_workers),
+            control_pending=RawArray("b", num_workers),
             # Lock-free, eventually-consistent broadcast of the current training epoch to
             # every worker (see set_epoch / _worker_process); single writer (main process),
             # many readers, no synchronization needed since being off by a step or two
@@ -427,6 +446,8 @@ class Multiprocessing:
 
         self.send_pipes, w_recv_pipes = zip(*[Pipe() for _ in range(num_workers)])
         w_send_pipes, self.recv_pipes = zip(*[Pipe() for _ in range(num_workers)])
+        self.control_pipes, w_control_pipes = zip(*[Pipe() for _ in range(num_workers)])
+        self.control_pending = np.ndarray(num_workers, dtype=bool, buffer=self.shm["control_pending"])
         self.recv_pipe_dict = {p: i for i, p in enumerate(self.recv_pipes)}
 
         worker_ss = np.random.SeedSequence(seed).spawn(num_workers) if seed is not None else [None] * num_workers
@@ -452,6 +473,7 @@ class Multiprocessing:
                     i,
                     w_send_pipes[i],
                     w_recv_pipes[i],
+                    w_control_pipes[i],
                     self.shm,
                     is_native,
                     worker_seeds[i],
@@ -602,6 +624,21 @@ class Multiprocessing:
         # on their own poll loop (see _worker_process), independent of the STEP/RESET
         # pipeline so this can be called at any point without racing it.
         self.epoch_arr[0] = int(epoch)
+
+    def set_reward_coef_overrides(self, overrides, normalized=False):
+        self._call_workers("set_reward_coef_overrides", overrides, normalized)
+
+    def _call_workers(self, method_name, *method_args):
+        # Each worker runs the call between steps and acks it; returns once every worker has applied it.
+        for worker_idx in range(self.num_workers):
+            self.control_pipes[worker_idx].send((method_name, method_args))
+            self.control_pending[worker_idx] = True
+        for worker_idx in range(self.num_workers):
+            if not self.control_pipes[worker_idx].poll(WORKER_CALL_TIMEOUT_SECONDS):
+                raise TimeoutError(f"worker {worker_idx} did not run {method_name} in {WORKER_CALL_TIMEOUT_SECONDS}s")
+            error = self.control_pipes[worker_idx].recv()
+            if error is not None:
+                raise RuntimeError(f"worker {worker_idx} failed in {method_name}: {error}")
 
     def close(self):
         for p in self.processes:
