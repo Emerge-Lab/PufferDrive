@@ -18,6 +18,7 @@ and PascalCase for C class names and values: every C #define is
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Dict, Optional
 
 from omegaconf import MISSING
 
@@ -127,6 +128,8 @@ class DriveEnvConfig:
     reward_conditioning: bool = MISSING
     reward_randomization: bool = MISSING
     reward_log_sampling: bool = MISSING
+    reward_coef_overrides: Optional[Dict[Any, Dict[str, float]]] = MISSING
+    reward_coef_overrides_normalized: bool = MISSING
     reward_goal: float = MISSING
     reward_collision: float = MISSING
     reward_collision_speed_coef: float = MISSING

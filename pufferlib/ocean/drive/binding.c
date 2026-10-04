@@ -26,10 +26,19 @@ static PyObject *map_cache_live_count_py(
     return PyLong_FromLong(live);
 }
 
+static PyObject *reward_coef_names_py(PyObject *self, PyObject *args);
+static PyObject *reward_coef_to_normalized_py(PyObject *self, PyObject *args);
+static PyObject *reward_coef_from_normalized_py(PyObject *self, PyObject *args);
+static PyObject *vec_set_reward_coef_overrides_py(PyObject *self, PyObject *args);
+
 // clang-format off
 #define MY_METHODS \
     {"map_cache_size", map_cache_size_py, METH_NOARGS, "Map cache slot count."}, \
-    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}
+    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}, \
+    {"reward_coef_names", reward_coef_names_py, METH_NOARGS, "Reward coef names in REWARD_COEF_* order."}, \
+    {"reward_coef_to_normalized", reward_coef_to_normalized_py, METH_VARARGS, "Raw coef -> conditioning obs value."}, \
+    {"reward_coef_from_normalized", reward_coef_from_normalized_py, METH_VARARGS, "Conditioning obs value -> raw coef."}, \
+    {"vec_set_reward_coef_overrides", vec_set_reward_coef_overrides_py, METH_VARARGS, "Replace per-agent coef overrides."}
 // clang-format on
 
 #include "../env_binding.h"
@@ -55,6 +64,133 @@ static void my_reseed(Env *env, uint64_t seed) {
     rng_seed(&env->seed_stream_rng, seed);
     // Defeat c_reset's timestep==0 fast path so the new stream regenerates the episode
     env->timestep = -1;
+}
+
+// Parses a list of (target_agent_idx, coef_idx, raw_value) tuples; nothing is written on failure.
+static int unpack_reward_coef_overrides(PyObject *overrides_obj, RewardCoefOverride *out, int *out_count) {
+    if (!PyList_Check(overrides_obj)) {
+        PyErr_SetString(
+            PyExc_TypeError,
+            "reward_coef_overrides must be a list of (target_agent_idx, coef_idx, value) tuples");
+        return -1;
+    }
+    Py_ssize_t override_count = PyList_Size(overrides_obj);
+    if (override_count > MAX_REWARD_COEF_OVERRIDES) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "reward_coef_overrides has %zd entries, more than MAX_REWARD_COEF_OVERRIDES (%d)",
+            override_count,
+            MAX_REWARD_COEF_OVERRIDES);
+        return -1;
+    }
+    RewardCoefOverride parsed[MAX_REWARD_COEF_OVERRIDES];
+    for (Py_ssize_t i = 0; i < override_count; i++) {
+        PyObject *entry = PyList_GetItem(overrides_obj, i);
+        int target_agent_idx = 0;
+        int coef_idx = 0;
+        float value = 0.0f;
+        if (!PyTuple_Check(entry) || !PyArg_ParseTuple(entry, "iif", &target_agent_idx, &coef_idx, &value)) {
+            if (!PyErr_Occurred()) {
+                PyErr_Format(PyExc_TypeError, "reward_coef_overrides[%zd] must be a tuple", i);
+            }
+            return -1;
+        }
+        if (target_agent_idx < 0 && target_agent_idx != REWARD_COEF_TARGET_OTHERS) {
+            PyErr_Format(PyExc_ValueError, "reward_coef_overrides[%zd]: invalid target %d", i, target_agent_idx);
+            return -1;
+        }
+        if (coef_idx < 0 || coef_idx >= NUM_REWARD_COEFS) {
+            PyErr_Format(PyExc_ValueError, "reward_coef_overrides[%zd]: coef_idx %d out of range", i, coef_idx);
+            return -1;
+        }
+        if (!isfinite(value)) {
+            PyErr_Format(PyExc_ValueError, "reward_coef_overrides[%zd]: value is not finite", i);
+            return -1;
+        }
+        parsed[i] = (RewardCoefOverride) {target_agent_idx, coef_idx, value};
+    }
+    memcpy(out, parsed, override_count * sizeof(RewardCoefOverride));
+    *out_count = (int) override_count;
+    return 0;
+}
+
+static PyObject *reward_coef_names_py(PyObject *self, PyObject *args) {
+    PyObject *names = PyTuple_New(NUM_REWARD_COEFS);
+    if (names == NULL) {
+        return NULL;
+    }
+    for (int coef_idx = 0; coef_idx < NUM_REWARD_COEFS; coef_idx++) {
+        PyObject *name = PyUnicode_FromString(REWARD_COEF_NAMES[coef_idx]);
+        if (name == NULL) {
+            Py_DECREF(names);
+            return NULL;
+        }
+        PyTuple_SET_ITEM(names, coef_idx, name);
+    }
+    return names;
+}
+
+static int unpack_coef_idx_and_value(PyObject *args, int *coef_idx, float *value) {
+    if (!PyArg_ParseTuple(args, "if", coef_idx, value)) {
+        return -1;
+    }
+    if (*coef_idx < 0 || *coef_idx >= NUM_REWARD_COEFS) {
+        PyErr_Format(PyExc_ValueError, "coef_idx %d out of range [0, %d)", *coef_idx, NUM_REWARD_COEFS);
+        return -1;
+    }
+    return 0;
+}
+
+static PyObject *reward_coef_to_normalized_py(PyObject *self, PyObject *args) {
+    int coef_idx = 0;
+    float raw_value = 0.0f;
+    if (unpack_coef_idx_and_value(args, &coef_idx, &raw_value) != 0) {
+        return NULL;
+    }
+    return PyFloat_FromDouble(normalize_reward_coef(coef_idx, raw_value));
+}
+
+static PyObject *reward_coef_from_normalized_py(PyObject *self, PyObject *args) {
+    int coef_idx = 0;
+    float normalized_value = 0.0f;
+    if (unpack_coef_idx_and_value(args, &coef_idx, &normalized_value) != 0) {
+        return NULL;
+    }
+    if (!(normalized_value >= -1.0f && normalized_value <= 1.0f)) {
+        char error_msg[96];
+        snprintf(error_msg, sizeof(error_msg), "normalized value %g is outside [-1, 1]", normalized_value);
+        PyErr_SetString(PyExc_ValueError, error_msg);
+        return NULL;
+    }
+    return PyFloat_FromDouble(denormalize_reward_coef(coef_idx, normalized_value));
+}
+
+// Takes effect at each agent's next coef sample (reset/respawn), not mid-episode.
+static PyObject *vec_set_reward_coef_overrides_py(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_reward_coef_overrides requires (vec_env, overrides)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    RewardCoefOverride parsed[MAX_REWARD_COEF_OVERRIDES];
+    int parsed_count = 0;
+    if (unpack_reward_coef_overrides(PyTuple_GetItem(args, 1), parsed, &parsed_count) != 0) {
+        return NULL;
+    }
+    for (int i = 0; i < vec->num_envs; i++) {
+        if (parsed_count > 0 && !vec->envs[i]->reward_conditioning) {
+            PyErr_SetString(PyExc_ValueError, "reward_coef_overrides require reward_conditioning");
+            return NULL;
+        }
+    }
+    for (int i = 0; i < vec->num_envs; i++) {
+        memcpy(vec->envs[i]->reward_coef_overrides, parsed, parsed_count * sizeof(RewardCoefOverride));
+        vec->envs[i]->reward_coef_override_count = parsed_count;
+    }
+    Py_RETURN_NONE;
 }
 
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
@@ -1949,6 +2085,19 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
     env->reward_log_sampling = (bool) unpack(kwargs, "reward_log_sampling");
+    PyObject *overrides_obj = PyDict_GetItemString(kwargs, "reward_coef_overrides");
+    if (overrides_obj == NULL) {
+        PyErr_SetString(PyExc_TypeError, "Missing required keyword argument 'reward_coef_overrides'");
+        return -1;
+    }
+    if (unpack_reward_coef_overrides(overrides_obj, env->reward_coef_overrides, &env->reward_coef_override_count)
+        != 0) {
+        return -1;
+    }
+    if (env->reward_coef_override_count > 0 && !env->reward_conditioning) {
+        PyErr_SetString(PyExc_ValueError, "reward_coef_overrides require reward_conditioning");
+        return -1;
+    }
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");

@@ -186,6 +186,12 @@ struct SharedMapData {
 static struct SharedMapData **g_map_cache = NULL;
 static int g_map_cache_count = 0;
 
+typedef struct {
+    int target_agent_idx; // agent index or REWARD_COEF_TARGET_OTHERS
+    int coef_idx;
+    float value; // raw coefficient, not the normalized obs value
+} RewardCoefOverride;
+
 struct Drive {
     // Buffers
     float *observations;
@@ -279,6 +285,8 @@ struct Drive {
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
+    RewardCoefOverride reward_coef_overrides[MAX_REWARD_COEF_OVERRIDES]; // re-applied after every coef sample
+    int reward_coef_override_count;
     // Goals
     float goal_radius;
     float goal_speed;
@@ -385,6 +393,52 @@ static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
 };
+
+static const char *const REWARD_COEF_NAMES[NUM_REWARD_COEFS] = {
+    [REWARD_COEF_GOAL_RADIUS] = "goal_radius",
+    [REWARD_COEF_GOAL_SPEED] = "goal_speed",
+    [REWARD_COEF_COLLISION] = "collision",
+    [REWARD_COEF_OFFROAD] = "offroad",
+    [REWARD_COEF_COMFORT] = "comfort",
+    [REWARD_COEF_LANE_ALIGN] = "lane_align",
+    [REWARD_COEF_VEL_ALIGN] = "vel_align",
+    [REWARD_COEF_LANE_CENTER] = "lane_center",
+    [REWARD_COEF_CENTER_BIAS] = "center_bias",
+    [REWARD_COEF_VELOCITY] = "velocity",
+    [REWARD_COEF_REVERSE] = "reverse",
+    [REWARD_COEF_STOP_LINE] = "stop_line",
+    [REWARD_COEF_TIMESTEP] = "timestep",
+    [REWARD_COEF_OVERSPEED] = "overspeed",
+    [REWARD_COEF_THROTTLE] = "throttle",
+    [REWARD_COEF_STEER] = "steer",
+    [REWARD_COEF_ACC] = "acc",
+};
+
+// Conditioning obs value in [-1, 1]; always REWARD_BOUNDS, whichever table sampled the coef.
+static float normalize_reward_coef(int coef_idx, float coef) {
+    float lo = REWARD_BOUNDS[coef_idx].min_val;
+    float hi = REWARD_BOUNDS[coef_idx].max_val;
+    float normalized_coef;
+    if (REWARD_BOUNDS[coef_idx].log_scale) {
+        // Match the log-uniform sampling so the conditioning signal stays even across [-1, 1].
+        float clamped = fmaxf(lo, fminf(hi, coef));
+        normalized_coef = (logf(clamped) - logf(lo)) / (logf(hi) - logf(lo));
+    } else {
+        normalized_coef = (coef - lo) / ((hi - lo) + REWARD_COEF_NORMALIZATION_EPSILON);
+    }
+    float clamped_coef = fmaxf(0.0f, fminf(1.0f, normalized_coef));
+    return 2.0f * clamped_coef - 1.0f;
+}
+
+static float denormalize_reward_coef(int coef_idx, float normalized) {
+    float lo = REWARD_BOUNDS[coef_idx].min_val;
+    float hi = REWARD_BOUNDS[coef_idx].max_val;
+    float unit_fraction = 0.5f * (normalized + 1.0f);
+    if (REWARD_BOUNDS[coef_idx].log_scale) {
+        return expf(logf(lo) + unit_fraction * (logf(hi) - logf(lo)));
+    }
+    return lo + unit_fraction * ((hi - lo) + REWARD_COEF_NORMALIZATION_EPSILON);
+}
 
 // ========================================
 // Utility Functions
@@ -2461,7 +2515,25 @@ static inline void sample_erratic_flags(Drive *env, Agent *agent) {
     agent->partner_blindness_counter = 0;
 }
 
-static void generate_reward_coefs(Drive *env, Agent *agent) {
+// Agent-specific entries are applied after REWARD_COEF_TARGET_OTHERS ones so they win.
+static void apply_reward_coef_overrides(Drive *env, int agent_idx) {
+    float *reward_coefs = env->agents[agent_idx].reward_coefs;
+    for (int i = 0; i < env->reward_coef_override_count; i++) {
+        const RewardCoefOverride *entry = &env->reward_coef_overrides[i];
+        if (entry->target_agent_idx == REWARD_COEF_TARGET_OTHERS && agent_idx != EGO_IDX) {
+            reward_coefs[entry->coef_idx] = entry->value;
+        }
+    }
+    for (int i = 0; i < env->reward_coef_override_count; i++) {
+        const RewardCoefOverride *entry = &env->reward_coef_overrides[i];
+        if (entry->target_agent_idx == agent_idx) {
+            reward_coefs[entry->coef_idx] = entry->value;
+        }
+    }
+}
+
+static void generate_reward_coefs(Drive *env, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
     if (env->reward_randomization) {
         static const int random_coefs[] = {
             REWARD_COEF_GOAL_RADIUS,
@@ -2511,6 +2583,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
     if (env->disable_comfort_penalty) {
         agent->reward_coefs[REWARD_COEF_COMFORT] = 0.0f;
     }
+    apply_reward_coef_overrides(env, agent_idx);
 }
 
 static void generate_traffic_light_states(Drive *env) {
@@ -2887,7 +2960,7 @@ static void set_start_position(Drive *env) {
         // Reset agent metrics and state
         reset_agent_metrics(env, i);
         reset_agent_state(agent);
-        generate_reward_coefs(env, agent);
+        generate_reward_coefs(env, i);
     }
 }
 
@@ -4010,19 +4083,7 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
 static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     if (env->reward_conditioning) {
         for (int coef_idx = 0; coef_idx < NUM_REWARD_COEFS; coef_idx++) {
-            float lo = REWARD_BOUNDS[coef_idx].min_val;
-            float hi = REWARD_BOUNDS[coef_idx].max_val;
-            float coef = ego->reward_coefs[coef_idx];
-            float normalized_coef;
-            if (REWARD_BOUNDS[coef_idx].log_scale) {
-                // Match the log-uniform sampling so the conditioning signal stays even across [-1, 1].
-                float clamped = fmaxf(lo, fminf(hi, coef));
-                normalized_coef = (logf(clamped) - logf(lo)) / (logf(hi) - logf(lo));
-            } else {
-                normalized_coef = (coef - lo) / ((hi - lo) + 1e-8f);
-            }
-            float clamped_coef = fmaxf(0.0f, fminf(1.0f, normalized_coef));
-            obs[obs_idx++] = 2.0f * clamped_coef - 1.0f;
+            obs[obs_idx++] = normalize_reward_coef(coef_idx, ego->reward_coefs[coef_idx]);
         }
     }
 
@@ -4726,7 +4787,7 @@ void c_reset(Drive *env) {
             reset_agent_metrics(env, agent_idx);
             reset_agent_state(agent);
             sample_erratic_flags(env, agent);
-            generate_reward_coefs(env, agent);
+            generate_reward_coefs(env, agent_idx);
             compute_metrics(env, agent_idx, x);
         }
         compute_observations(env);
@@ -4743,7 +4804,7 @@ void c_reset(Drive *env) {
         reset_agent_metrics(env, agent_idx);
         reset_agent_state(agent);
         sample_erratic_flags(env, agent);
-        generate_reward_coefs(env, agent);
+        generate_reward_coefs(env, agent_idx);
 
         if (env->goal_source == GOAL_SOURCE_GT) {
             generate_new_goals_from_log(env, agent);

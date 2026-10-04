@@ -125,6 +125,12 @@ env:
   reward_conditioning: false
   reward_randomization: false
   reward_log_sampling: false
+  # Per-agent reward coefs, e.g. {sdc: {collision: 4.0}, others: {collision: -1.0}, 3: {offroad: 0.5}}.
+  # Keys: sdc, others (all non-SDC agents) or an agent index in the scenario; an index wins over others.
+  # Requires reward_conditioning; re-applied at every reset/respawn, overriding reward_randomization per coef.
+  reward_coef_overrides: null
+  # Read reward_coef_overrides values as conditioning-obs values in [-1, 1] instead of raw coefs
+  reward_coef_overrides_normalized: false
   reward_goal: 1.0
   reward_collision: 4.0
   # Extra collision penalty per m/s of ego speed at impact, on top of reward_collision.

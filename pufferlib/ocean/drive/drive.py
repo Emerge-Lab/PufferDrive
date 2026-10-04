@@ -1,6 +1,8 @@
 import argparse
+import math
 import pickle
 import zlib
+from collections.abc import Mapping
 from pathlib import Path
 import numpy as np
 import gymnasium
@@ -32,6 +34,73 @@ def map_dir_missing_message(map_dir):
             f" — see docs/data_storage.md."
         )
     return message
+
+
+# Order of Agent.reward_coefs and of the reward-conditioning obs slice (right after the ego features).
+REWARD_COEF_NAMES = binding.reward_coef_names()
+REWARD_COEF_OVERRIDE_SDC_KEY = "sdc"
+REWARD_COEF_OVERRIDE_OTHERS_KEY = "others"
+
+
+def reward_coef_index(name):
+    if name not in REWARD_COEF_NAMES:
+        raise ValueError(f"Unknown reward coef {name!r}; valid names: {REWARD_COEF_NAMES}")
+    return REWARD_COEF_NAMES.index(name)
+
+
+def reward_coef_to_normalized(name, raw_value):
+    """Raw coefficient -> the value the policy sees in its reward-conditioning obs slice, in [-1, 1]."""
+    return binding.reward_coef_to_normalized(reward_coef_index(name), float(raw_value))
+
+
+def reward_coef_from_normalized(name, normalized_value):
+    """Inverse of reward_coef_to_normalized for normalized_value in [-1, 1]."""
+    return binding.reward_coef_from_normalized(reward_coef_index(name), float(normalized_value))
+
+
+def _reward_coef_override_target(key):
+    if key == REWARD_COEF_OVERRIDE_SDC_KEY:
+        return binding.EGO_IDX
+    if key == REWARD_COEF_OVERRIDE_OTHERS_KEY:
+        return binding.REWARD_COEF_TARGET_OTHERS
+    if isinstance(key, str) and key.isdigit():
+        return int(key)
+    if isinstance(key, int) and not isinstance(key, bool) and key >= 0:
+        return key
+    raise ValueError(
+        f"reward_coef_overrides key {key!r} must be 'sdc', 'others' or a non-negative agent index within the scenario"
+    )
+
+
+def resolve_reward_coef_overrides(overrides, normalized=False):
+    """{"sdc" | "others" | agent_idx: {coef_name: value}} -> [(target_agent_idx, coef_idx, raw_value)].
+
+    Agent indices address the scenario's agent array (0 = SDC); "others" covers every non-SDC agent and
+    loses to an explicit index. With normalized=True values are conditioning-obs values in [-1, 1].
+    """
+    if overrides is None:
+        return []
+    if not isinstance(overrides, Mapping):
+        raise TypeError(f"reward_coef_overrides must be a mapping, got {type(overrides).__name__}")
+    entries = []
+    key_by_target = {}
+    for key, coef_values in overrides.items():
+        target = _reward_coef_override_target(key)
+        if target in key_by_target:
+            raise ValueError(f"reward_coef_overrides keys {key_by_target[target]!r} and {key!r} address the same agent")
+        key_by_target[target] = key
+        if not isinstance(coef_values, Mapping):
+            raise TypeError(f"reward_coef_overrides[{key!r}] must map coef names to values")
+        for name, value in coef_values.items():
+            coef_idx = reward_coef_index(name)
+            value = float(value)
+            if not math.isfinite(value):
+                raise ValueError(f"reward_coef_overrides[{key!r}][{name!r}] is not finite: {value}")
+            raw_value = binding.reward_coef_from_normalized(coef_idx, value) if normalized else value
+            entries.append((target, coef_idx, raw_value))
+    if len(entries) > binding.MAX_REWARD_COEF_OVERRIDES:
+        raise ValueError(f"{len(entries)} reward coef overrides exceed {binding.MAX_REWARD_COEF_OVERRIDES}")
+    return entries
 
 
 def compute_effective_road_obs_count(max_count, dropout):
@@ -118,6 +187,8 @@ class Drive(pufferlib.PufferEnv):
         reward_conditioning=False,
         reward_randomization=False,
         reward_log_sampling=False,
+        reward_coef_overrides=None,
+        reward_coef_overrides_normalized=False,
         compute_eval_metrics=True,
         shared_network=True,
         obs_slots_lane_n=32,
@@ -159,6 +230,11 @@ class Drive(pufferlib.PufferEnv):
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
         self.reward_log_sampling = reward_log_sampling
+        self.reward_coef_override_entries = resolve_reward_coef_overrides(
+            reward_coef_overrides, bool(reward_coef_overrides_normalized)
+        )
+        if self.reward_coef_override_entries and not reward_conditioning:
+            raise ValueError("reward_coef_overrides require reward_conditioning=True")
         self.compute_eval_metrics = compute_eval_metrics
         self.shared_network = shared_network
         self.render_mode = render_mode
@@ -592,6 +668,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
             "reward_log_sampling": self.reward_log_sampling,
+            "reward_coef_overrides": self.reward_coef_override_entries,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
             "use_exact_episode_seed": int(self.use_exact_episode_seed),
@@ -621,6 +698,17 @@ class Drive(pufferlib.PufferEnv):
     def set_epoch(self, epoch):
         """Called by the trainer (once per PPO epoch) to drive the init_step_spread anneal."""
         self._current_epoch = int(epoch)
+
+    def set_reward_coef_overrides(self, overrides, normalized=False):
+        """Replace the per-agent reward coef overrides (same format as the reward_coef_overrides kwarg).
+
+        Each agent picks them up at its next reset/respawn, so call reset() to apply them now.
+        """
+        entries = resolve_reward_coef_overrides(overrides, normalized)
+        if entries and not self.reward_conditioning:
+            raise ValueError("reward_coef_overrides require reward_conditioning=True")
+        binding.vec_set_reward_coef_overrides(self.c_envs, entries)
+        self.reward_coef_override_entries = entries
 
     def _sample_init_step(self):
         # randomizer for the initialization of the C environment

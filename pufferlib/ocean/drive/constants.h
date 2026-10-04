@@ -259,6 +259,11 @@ static const int ROAD_OFFSETS[25][2]
 #define REWARD_COEF_ACC 16
 #define NUM_REWARD_COEFS 17
 
+// Reward-coef override targets: an agent index (>= 0) or every agent except EGO_IDX
+#define REWARD_COEF_TARGET_OTHERS -1
+#define MAX_REWARD_COEF_OVERRIDES 1024
+#define REWARD_COEF_NORMALIZATION_EPSILON 1e-8f
+
 // =====================================================================================
 // 10. METRICS & SCORING
 // =====================================================================================

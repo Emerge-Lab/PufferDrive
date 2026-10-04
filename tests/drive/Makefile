@@ -26,7 +26,8 @@ UNIT_SRCS := \
 	test_drive_red_light.c \
 	test_drive_dynamics.c \
 	test_drive_map_cache.c \
-	test_drive_idm.c
+	test_drive_idm.c \
+	test_drive_reward_overrides.c
 SMOKE_SRCS := test_drive_env_smoke.c
 RENDER_SRCS := test_render_smoke.c
 PERF_SRCS := test_perf.c
