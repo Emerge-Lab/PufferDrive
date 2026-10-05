@@ -96,7 +96,7 @@ class TestDriveConfig(unittest.TestCase):
     @patch("sys.argv", ["pufferl.py"])
     def test_training_performance_defaults(self):
         args = load_config("puffer_drive")
-        self.assertFalse(args["train"]["compile"])
+        self.assertTrue(args["train"]["compile"])
         self.assertEqual(args["train"]["precision"], "bfloat16")
 
     @patch("sys.argv", ["pufferl.py", "--train.learning-rate=0.5"])

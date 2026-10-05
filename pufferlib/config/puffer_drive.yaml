@@ -57,19 +57,19 @@ env:
   # Speed cap when reward_randomization is off (eval); null = base_max_speed_mps. Sets C_vel = max_speed_mps / base_max_speed_mps (training range [1/a, a] below)
   max_speed_mps: null
   # Training C_vel ~ X(a) = 0.5 U(1/a, 1) + 0.5 U(1, a): speed cap = base_max_speed_mps * [1/a, a]; 1.5 = paper (13.3-30 m/s), 2.0 = 10-40 m/s
-  conditioning_speed_scale: 1.5
+  conditioning_speed_scale: 2.0
   # Optional nonzero launch speed for gigaflow random spawns
   spawn_initial_speed: 0.0
   # Gigaflow spawn pose noise: lateral offset as a fraction of half the lane width, heading offset in degrees
   spawn_lateral_offset_max_frac: 1.0
   spawn_heading_max_deg: 30.0
   # Gigaflow dynamics randomization: per-step brownian pose buffeting (std in meters / degrees); 0 disables
-  pose_noise_xy_m: 0.0
-  pose_noise_yaw_deg: 0.0
+  pose_noise_xy_m: 0.025
+  pose_noise_yaw_deg: 0.25
   # Speed-limit randomization (needs SPDZONE1 maps): per episode, with this probability every speed zone shifts its
   # posted limit by one uniform offset in +-delta, clipped to [min, max]; junction lanes inherit the min over entries.
   # m/s: 9.72 = 35 km/h, 1.39 = 5 km/h, 36.11 = 130 km/h. 0 disables.
-  speed_limit_random_prob: 0.0
+  speed_limit_random_prob: 1.0
   speed_limit_random_delta_mps: 9.72
   speed_limit_random_min_mps: 1.39
   speed_limit_random_max_mps: 36.11
@@ -83,7 +83,7 @@ env:
   stop_sign_behavior: stop
   # Traffic controls observed and enforced; stop-sign runs are detected as in CaRL's RunStopSign2 (reward_stop_line)
   traffic_lights_enabled: true
-  stop_signs_enabled: false
+  stop_signs_enabled: true
   yield_signs_enabled: false
   # Skip red light violation detection (metrics, reward, behavior)
   disable_red_light_infractions: false
@@ -100,7 +100,7 @@ env:
   # Number of steps before reset; keep it off multiples of train.bptt_horizon so episode ends don't all land on the unused last buffer slot
   scenario_length: 2500
   # Frequency of resampling scenario (in steps), 0 to disable
-  resample_frequency: 256000
+  resample_frequency: 0
   # End the episode early when too many agents are inactive; otherwise use scenario_length
   termination_mode: true
   # Ratio of inactive agents (stopped/removed) that triggers early reset
@@ -152,9 +152,9 @@ env:
   # Maximum speed at final waypoint to count goal reward
   goal_speed: 3.0
   # true: goal-speed coef ~ U(0, 20) per agent under reward_randomization; false: pinned to goal_speed (GIGAFLOW v_goal = 3)
-  goal_speed_randomization: true
+  goal_speed_randomization: false
   # true: the final goal is only consumed below goal speed (GIGAFLOW R_goal); false: consumed on entry, reward gated
-  goal_reach_requires_speed: false
+  goal_reach_requires_speed: true
   # Number of target waypoints in the observation (including goal)
   num_goals: 3
   # Waypoint spacing range in meters when building path
@@ -195,11 +195,11 @@ env:
   obs_slots_boundary_n: 50
   obs_slots_partners_n: 20
   # Append the partner's velocity relative to ego (ego frame, 2 floats) to every partner row (GIGAFLOW observes velocity)
-  obs_partner_relative_velocity: false
+  obs_partner_relative_velocity: true
   # Ego lane-angle slot: true = signed heading error theta_f / pi (GIGAFLOW B.1), false = cos(theta_f)
-  obs_lane_heading_signed: false
+  obs_lane_heading_signed: true
   # Append each lane segment's speed limit (/ obs_norm_speed_mps) to its lane row so limit changes ahead are visible
-  obs_lane_speed_limit: false
+  obs_lane_speed_limit: true
   obs_slots_traffic_controls_n: 4
   # Fraction of segment observation slots to drop (reduces obs size)
   obs_dropout_lane: 0.5
@@ -255,7 +255,7 @@ policy:
   # Encoder activation - options: "relu", "tanh", "gelu"
   encoder_activation: relu
   encoder_layer_norm: true
-  mask_padded_features: false
+  mask_padded_features: true
   # Shared backbone layer
   backbone_hidden_size: 1024
   backbone_num_layers: 3
@@ -271,7 +271,7 @@ policy:
   critic_num_layers: 1
   critic_head_layer_norm: false
   # Run the actor/critic heads in float32 under bf16 autocast (backbone stays bf16)
-  fp32_heads: false
+  fp32_heads: true
   # Dual or shared actor-critic backbone
   shared_network: false
   action_type: discrete
@@ -297,7 +297,7 @@ train:
   anneal_lr: true
   precision: bfloat16
   # false: pure float32 matmuls/convs (no TensorFloat-32); requires precision float32
-  tf32: true
+  tf32: false
   rollout_dtype: float32
   total_timesteps: 500000000000
   learning_rate: 0.0005
@@ -333,7 +333,7 @@ train:
   # Accumulate gradients above this size
   max_minibatch_size: 65536
   bptt_horizon: 128
-  compile: false
+  compile: true
   compile_mode: default
   compile_fullgraph: false
   vtrace_rho_clip: 1
