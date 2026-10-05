@@ -341,6 +341,33 @@ class FrozenCoplayer:
         return policy_env_actions(self.uncompiled_policy, logits, action, cont_action, self.single_action_space)
 
 
+class LearnerBatchSlots:
+    """Where one vecenv batch's learner rows sit in the rollout buffer. They step together, so they share one
+    step index and a contiguous block of segments, one segment per buffered learner row."""
+
+    def __init__(self, learner_rows, device, hidden_size):
+        self.learner_rows = learner_rows
+        self.learner_positions_np = np.flatnonzero(learner_rows)
+        self.coplayer_positions_np = np.flatnonzero(~learner_rows)
+        self.learner_positions_cpu = torch.as_tensor(self.learner_positions_np)
+        self.learner_positions = self.learner_positions_cpu.to(device)
+        self.coplayer_positions = torch.as_tensor(self.coplayer_positions_np, device=device)
+        self.learner_count = len(self.learner_positions_np)
+        self.lstm_h = self.lstm_c = None
+        if hidden_size is not None:
+            self.lstm_h = torch.zeros(self.learner_count, hidden_size, device=device)
+            self.lstm_c = torch.zeros(self.learner_count, hidden_size, device=device)
+        self.start_rollout()
+
+    def start_rollout(self):
+        self.segment_start = 0
+        self.buffered_count = 0
+        self.step = 0
+        if self.lstm_h is not None:
+            self.lstm_h.zero_()
+            self.lstm_c.zero_()
+
+
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None, coplayer_policy=None):
         # Backend perf optimization
@@ -370,35 +397,9 @@ class PuffeRL:
             action_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[vecenv.single_action_space.dtype]
         total_agents = vecenv.num_agents
         self.total_agents = total_agents
-
-        # Experience
-        if config["batch_size"] == "auto" and config["bptt_horizon"] == "auto":
-            raise pufferlib.APIUsageError("Must specify batch_size or bptt_horizon")
-        elif config["batch_size"] == "auto":
-            config["batch_size"] = total_agents * config["bptt_horizon"]
-        elif config["bptt_horizon"] == "auto":
-            config["bptt_horizon"] = config["batch_size"] // total_agents
-
-        batch_size = config["batch_size"]
-        horizon = config["bptt_horizon"]
-        segments = batch_size // horizon
-        self.segments = segments
-        if total_agents > segments:
-            raise pufferlib.APIUsageError(f"Total agents {total_agents} <= segments {segments}")
-
         device = config["device"]
-        precision = config["precision"]
-        if precision not in ("float32", "bfloat16"):
-            raise pufferlib.APIUsageError(f"Invalid precision: {precision}: use float32 or bfloat16")
-        use_cuda = is_cuda_device(device)
-        if precision == "bfloat16" and use_cuda and not torch.cuda.is_bf16_supported():
-            raise pufferlib.APIUsageError("bfloat16 precision requires a CUDA device with bf16 support")
-        if precision == "bfloat16" and not config.get("amp", True):
-            raise pufferlib.APIUsageError("bfloat16 precision requires train.amp=True")
 
-        obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
-
-        # Frozen co-player for the non-learner rows; it is never trained and its rows are masked out.
+        # Frozen co-player for the non-learner rows; it is never trained and its rows never reach the buffer.
         self.coplayer = None
         self.learner_obs_columns = None
         coplayer_policy_path = config.get("coplayer_policy_path")
@@ -409,6 +410,7 @@ class PuffeRL:
                 coplayer_policy_path, vecenv.driver_env, torch_device(device), config["env"]
             )
         buffer_obs_shape = obs_space.shape
+        buffer_rows = total_agents
         if coplayer_policy is not None:
             self.coplayer = FrozenCoplayer(
                 coplayer_policy,
@@ -421,6 +423,41 @@ class PuffeRL:
             )
             if self.learner_obs_columns is not None:
                 buffer_obs_shape = (len(self.learner_obs_columns),)
+                self.learner_obs_columns_cpu = self.learner_obs_columns.cpu()
+            buffer_rows = vecenv.learner_row_count()
+            if buffer_rows == 0:
+                raise pufferlib.APIUsageError(
+                    "The vecenv has no learner rows; check that each SDC is policy-controlled"
+                )
+            self.learner_slots = {}
+            self.empty_learner_batches = set()
+
+        # Experience
+        if config["batch_size"] == "auto" and config["bptt_horizon"] == "auto":
+            raise pufferlib.APIUsageError("Must specify batch_size or bptt_horizon")
+        elif config["batch_size"] == "auto":
+            config["batch_size"] = buffer_rows * config["bptt_horizon"]
+        elif config["bptt_horizon"] == "auto":
+            config["bptt_horizon"] = config["batch_size"] // buffer_rows
+
+        batch_size = config["batch_size"]
+        horizon = config["bptt_horizon"]
+        segments = batch_size // horizon
+        self.segments = segments
+        if buffer_rows > segments:
+            rows_label = "Total agents" if self.coplayer is None else "Learner rows"
+            raise pufferlib.APIUsageError(f"{rows_label} {buffer_rows} <= segments {segments}")
+
+        precision = config["precision"]
+        if precision not in ("float32", "bfloat16"):
+            raise pufferlib.APIUsageError(f"Invalid precision: {precision}: use float32 or bfloat16")
+        use_cuda = is_cuda_device(device)
+        if precision == "bfloat16" and use_cuda and not torch.cuda.is_bf16_supported():
+            raise pufferlib.APIUsageError("bfloat16 precision requires a CUDA device with bf16 support")
+        if precision == "bfloat16" and not config.get("amp", True):
+            raise pufferlib.APIUsageError("bfloat16 precision requires train.amp=True")
+
+        obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
 
         self.observations = torch.zeros(
             segments,
@@ -448,14 +485,15 @@ class PuffeRL:
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
+        self.learner_steps = 0
         self.render = config["render"]
         self.render_interval = config["render_interval"]
 
         if self.render:
             ensure_drive_binary()
 
-        # LSTM
-        if config["use_rnn"]:
+        # LSTM (with a co-player, learner state lives in learner_slots)
+        if config["use_rnn"] and self.coplayer is None:
             n = vecenv.agents_per_batch
             h = policy.hidden_size
             self.lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
@@ -464,6 +502,11 @@ class PuffeRL:
         # Minibatching & gradient accumulation
         minibatch_size = config["minibatch_size"]
         max_minibatch_size = config["max_minibatch_size"]
+        if self.coplayer is not None and minibatch_size > batch_size:
+            # The learner-row rollout is data dependent; a larger minibatch can only mean the whole rollout.
+            print(f"Co-player training: minibatch_size {minibatch_size} -> {batch_size} (the learner rollout)")
+            minibatch_size = batch_size
+            max_minibatch_size = min(max_minibatch_size, batch_size)
         self.minibatch_size = min(minibatch_size, max_minibatch_size)
         if minibatch_size > max_minibatch_size and minibatch_size % max_minibatch_size != 0:
             raise pufferlib.APIUsageError(
@@ -589,6 +632,7 @@ class PuffeRL:
 
         self.epoch = state.get("epoch", state.get("update", 0))
         self.global_step = state.get("global_step", state.get("agent_step", 0))
+        self.learner_steps = state.get("learner_steps", self.global_step)
         self.last_log_step = self.global_step
         self.best_score = state.get("best_score", self.best_score)
         self.ema_max = state.get("ema_max", self.ema_max)
@@ -606,7 +650,14 @@ class PuffeRL:
 
         return (self.global_step - self.last_log_step) / (time.time() - self.last_log_time)
 
+    @property
+    def scheduled_steps(self):
+        """What total_timesteps counts: learner transitions with a co-player, every env row step otherwise."""
+        return self.global_step if self.coplayer is None else self.learner_steps
+
     def evaluate(self):
+        if self.coplayer is not None:
+            return self._evaluate_with_coplayer()
         profile = self.profile
         epoch = self.epoch
         profile("eval", epoch)
@@ -638,22 +689,13 @@ class PuffeRL:
             t = torch.as_tensor(t).to(device)  # , non_blocking=True)
             done_mask = (d + t).clamp(max=1.0)
             m = torch.as_tensor(mask).to(device)  # , non_blocking=True)
-            learner_rows = None
-            learner_obs = o_device
-            if self.coplayer is not None:
-                learner_rows = torch.as_tensor(np.array(self.vecenv.learner_masks[env_id]), device=device)
-                m = m & learner_rows
-                if self.learner_obs_columns is not None:
-                    learner_obs = o_device.index_select(1, self.learner_obs_columns)
-            stats_obs = learner_obs if learner_rows is None else learner_obs[learner_rows]
 
             # Obs distribution stats (max/min/mean across the batch and obs
             # dims, appended per env step). Surfaces clipping / unbounded
             # features / normalization regressions in wandb.
-            if stats_obs.numel() > 0:
-                self.stats["obs/max"].append(stats_obs.max().item())
-                self.stats["obs/min"].append(stats_obs.min().item())
-                self.stats["obs/mean"].append(stats_obs.mean().item())
+            self.stats["obs/max"].append(o_device.max().item())
+            self.stats["obs/min"].append(o_device.min().item())
+            self.stats["obs/mean"].append(o_device.mean().item())
 
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
@@ -668,16 +710,11 @@ class PuffeRL:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
-                if learner_rows is None:
-                    logits, value = self.policy.forward_eval(o_device, state)
-                    logits = logits_to_float(logits)
-                    action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(
-                        logits, env_continuous=self.env_continuous, policy=self.uncompiled_policy
-                    )
-                else:
-                    action, logprob, value, env_action = self._act_with_coplayer(
-                        learner_obs, o_device, done_mask, learner_rows, env_id, state
-                    )
+                logits, value = self.policy.forward_eval(o_device, state)
+                logits = logits_to_float(logits)
+                action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(
+                    logits, env_continuous=self.env_continuous, policy=self.uncompiled_policy
+                )
                 if config["normalize_rewards"]:
                     r = torch.sign(r) * torch.log1p(torch.abs(r))
 
@@ -691,9 +728,7 @@ class PuffeRL:
                 l = self.ep_lengths[env_id.start].item()
                 batch_rows = slice(self.ep_indices[env_id.start].item(), 1 + self.ep_indices[env_id.stop - 1].item())
 
-                if learner_rows is not None:
-                    self.observations[batch_rows, l] = learner_obs
-                elif config["cpu_offload"]:
+                if config["cpu_offload"]:
                     self.observations[batch_rows, l] = o
                 else:
                     self.observations[batch_rows, l] = o_device
@@ -734,9 +769,7 @@ class PuffeRL:
 
             profile("env", epoch)
 
-            if learner_rows is not None:
-                self.vecenv.send(env_action)
-            elif self.env_continuous and not self.uncompiled_policy.is_continuous:
+            if self.env_continuous and not self.uncompiled_policy.is_continuous:
                 cont_action = cont_action.cpu().numpy()
                 self.vecenv.send(cont_action.squeeze(0))
             else:
@@ -752,45 +785,197 @@ class PuffeRL:
         profile.end()
         return pufferlib.utils.reduce_environment_metrics(self.stats)
 
-    def _act_with_coplayer(self, learner_obs, observations, done_mask, learner_rows, env_id, state):
-        """Learner acts on its rows and the frozen co-player on the rest, whose action/logprob/value stay 0."""
+    def _evaluate_with_coplayer(self):
+        """Rollout in which the learner acts on its rows and only those rows reach the buffer; the frozen
+        co-player acts on every other row."""
+        profile = self.profile
+        epoch = self.epoch
+        profile("eval", epoch)
+        profile("eval_misc", epoch, nest=True)
+
         config = self.config
-        device = learner_obs.device
-        row_count = env_id.stop - env_id.start
-        learner_idx = torch.nonzero(learner_rows).squeeze(1)
-        coplayer_idx = torch.nonzero(~learner_rows).squeeze(1)
-        action = torch.zeros(row_count, *self.actions.shape[2:], dtype=self.actions.dtype, device=device)
-        logprob = torch.zeros(row_count, device=device)
-        value = torch.zeros(row_count, device=device)
+        device = config["device"]
+
+        for slots in self.learner_slots.values():
+            slots.start_rollout()
+        self.free_idx = 0
+        self.full_rows = 0
+        while self.full_rows < self.segments:
+            profile("env", epoch)
+            o, r, d, t, info, env_id, mask = self.vecenv.recv()
+
+            profile("eval_misc", epoch)
+            if env_id[-1] - env_id[0] + 1 != len(env_id):
+                raise pufferlib.APIUsageError("Co-player training needs contiguous vecenv batches (vec.zero_copy=True)")
+            env_id = slice(env_id[0], env_id[-1] + 1)
+            self.global_step += env_id.stop - env_id.start
+
+            profile("eval_copy", epoch)
+            o = torch.as_tensor(o)
+            o_device = o.to(device)
+            r = torch.as_tensor(r).to(device)
+            d = torch.as_tensor(d).to(device)
+            t = torch.as_tensor(t).to(device)
+            done_mask = (d + t).clamp(max=1.0)
+            m = torch.as_tensor(mask).to(device)
+            if config["normalize_rewards"]:
+                r = torch.sign(r) * torch.log1p(torch.abs(r))
+
+            slots = self._learner_slots(env_id, np.array(self.vecenv.learner_masks[env_id]), r, d, t)
+            if slots.buffered_count == 0:
+                self._allocate_learner_segments(slots)
+            learner_obs = o_device.index_select(0, slots.learner_positions)
+            if self.learner_obs_columns is not None:
+                learner_obs = learner_obs.index_select(1, self.learner_obs_columns)
+            if learner_obs.numel() > 0:
+                self.stats["obs/max"].append(learner_obs.max().item())
+                self.stats["obs/min"].append(learner_obs.min().item())
+                self.stats["obs/mean"].append(learner_obs.mean().item())
+            if slots.buffered_count < slots.learner_count:
+                self.stats["learner_rows_unbuffered"].append(slots.learner_count - slots.buffered_count)
+
+            profile("eval_forward", epoch)
+            with torch.no_grad(), self.amp_context:
+                env_action, learner_action, learner_logprob, learner_value = self._act_with_coplayer(
+                    o_device, learner_obs, done_mask, slots, env_id
+                )
+
+            profile("eval_copy", epoch)
+            with torch.no_grad():
+                if config["cpu_offload"]:
+                    buffer_obs = o.index_select(0, slots.learner_positions_cpu[: slots.buffered_count])
+                    if self.learner_obs_columns is not None:
+                        buffer_obs = buffer_obs.index_select(1, self.learner_obs_columns_cpu)
+                else:
+                    buffer_obs = learner_obs[: slots.buffered_count]
+                self._store_learner_step(
+                    slots, buffer_obs, learner_action, learner_logprob, learner_value, r, d, t, done_mask, m
+                )
+
+            profile("eval_misc", epoch)
+            for i in info:
+                for k, v in pufferlib.unroll_nested_dict(i):
+                    if isinstance(v, np.ndarray):
+                        v = v.tolist()
+                    elif isinstance(v, (list, tuple)):
+                        self.stats[k].extend(v)
+                    else:
+                        self.stats[k].append(v)
+
+            profile("env", epoch)
+            self.vecenv.send(env_action)
+
+        profile("eval_misc", epoch)
+        profile.end()
+        return pufferlib.utils.reduce_environment_metrics(self.stats)
+
+    def _learner_slots(self, env_id, learner_rows, rewards, dones, truncations):
+        """Buffer slots of this batch's learner rows; a changed learner set (e.g. a map resample) first ends the
+        segments still open for the previous one."""
+        slots = self.learner_slots.get(env_id.start)
+        if slots is not None and len(slots.learner_rows) != len(learner_rows):
+            raise pufferlib.APIUsageError("Co-player training needs fixed vecenv batches (vec.zero_copy=True)")
+        if slots is not None and np.array_equal(slots.learner_rows, learner_rows):
+            return slots
+        if slots is not None and slots.buffered_count > 0:
+            self._close_learner_segments(slots, rewards, dones, truncations)
+        hidden_size = self.uncompiled_policy.hidden_size if self.config["use_rnn"] else None
+        slots = LearnerBatchSlots(learner_rows, self.config["device"], hidden_size)
+        if slots.learner_count == 0:
+            self.empty_learner_batches.add(env_id.start)
+        else:
+            self.empty_learner_batches.discard(env_id.start)
+        if len(self.empty_learner_batches) == self.vecenv.num_agents // (env_id.stop - env_id.start):
+            raise RuntimeError("No vecenv batch has a learner row; check that each scenario's SDC is policy-controlled")
+        self.learner_slots[env_id.start] = slots
+        return slots
+
+    def _allocate_learner_segments(self, slots):
+        # Near the end of a rollout only the first rows that still fit get a segment.
+        slots.segment_start = self.free_idx
+        slots.buffered_count = min(slots.learner_count, self.segments - self.free_idx)
+        slots.step = 0
+        self.free_idx += slots.buffered_count
+
+    def _close_learner_segments(self, slots, rewards, dones, truncations):
+        """End the open segments early: this step's reward still belongs to them, the steps after are masked."""
+        config = self.config
+        segments = slice(slots.segment_start, slots.segment_start + slots.buffered_count)
+        positions = slots.learner_positions[: slots.buffered_count]
+        step = slots.step
+        reward = rewards[positions]
+        if config["use_value_bootstrapping"]:
+            trunc_mask = (truncations[positions] > 0) & (dones[positions] == 0)
+            reward = reward + trunc_mask.to(reward.dtype) * config["gamma"] * self.values[segments, step - 1]
+        self.rewards[segments, step] = reward
+        self.terminals[segments, step] = 1.0
+        self.truncations[segments, step] = truncations[positions].float()
+        self.masks[segments, step:] = False
+        self.full_rows += slots.buffered_count
+        slots.buffered_count = 0
+
+    def _store_learner_step(
+        self, slots, buffer_obs, action, logprob, value, rewards, dones, truncations, done_mask, masks
+    ):
+        config = self.config
+        count = slots.buffered_count
+        if count == 0:
+            return
+        segments = slice(slots.segment_start, slots.segment_start + count)
+        positions = slots.learner_positions[:count]
+        step = slots.step
+        self.observations[segments, step] = buffer_obs
+        self.actions[segments, step] = action[:count]
+        self.logprobs[segments, step] = logprob[:count]
+        reward = rewards[positions]
+        # Truncation bootstrap hack, as in evaluate(): values[step - 1] proxies the pre-reset terminal value.
+        if step > 0 and config["use_value_bootstrapping"]:
+            trunc_mask = (truncations[positions] > 0) & (dones[positions] == 0)
+            reward = reward + trunc_mask.to(reward.dtype) * config["gamma"] * self.values[segments, step - 1]
+        self.rewards[segments, step] = reward
+        self.terminals[segments, step] = done_mask[positions].float()
+        self.truncations[segments, step] = truncations[positions].float()
+        self.values[segments, step] = value[:count]
+        self.masks[segments, step] = masks[positions]
+        self.learner_steps += count
+        slots.step += 1
+        if slots.step >= config["bptt_horizon"]:
+            self.full_rows += count
+            slots.buffered_count = 0
+            slots.step = 0
+
+    def _act_with_coplayer(self, observations, learner_obs, done_mask, slots, env_id):
+        """Env actions for the whole batch, plus the learner rows' action/logprob/value for the buffer."""
+        config = self.config
         single_action_space = self.vecenv.single_action_space
         env_action_dtype = np.float32 if self.env_continuous else np.int32
-        env_action = np.zeros((row_count, *single_action_space.shape), dtype=env_action_dtype)
-        if learner_idx.numel() > 0:
-            learner_state = dict(state)
+        env_action = np.zeros((env_id.stop - env_id.start, *single_action_space.shape), dtype=env_action_dtype)
+        action = logprob = value = None
+        if slots.learner_count > 0:
+            state = {}
             if config["use_rnn"]:
-                learner_state["lstm_h"] = state["lstm_h"][learner_idx]
-                learner_state["lstm_c"] = state["lstm_c"][learner_idx]
-            logits, learner_value = self.policy.forward_eval(learner_obs[learner_idx], learner_state)
+                state = {"lstm_h": slots.lstm_h, "lstm_c": slots.lstm_c}
+            logits, value = self.policy.forward_eval(learner_obs, state)
             logits = logits_to_float(logits)
-            learner_action, learner_logprob, _, cont_action = pufferlib.pytorch.sample_logits(
+            action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(
                 logits, env_continuous=self.env_continuous, policy=self.uncompiled_policy
             )
-            action[learner_idx] = learner_action.reshape(-1, *self.actions.shape[2:]).to(action.dtype)
-            logprob[learner_idx] = learner_logprob.float()
-            value[learner_idx] = learner_value.flatten().float()
-            env_action[learner_idx.cpu().numpy()] = policy_env_actions(
-                self.uncompiled_policy, logits, learner_action, cont_action, single_action_space
-            )
             if config["use_rnn"]:
-                for key in ("lstm_h", "lstm_c"):
-                    full_state = state[key].clone()
-                    full_state[learner_idx] = learner_state[key].to(full_state.dtype)
-                    state[key] = full_state
-        if coplayer_idx.numel() > 0:
-            env_action[coplayer_idx.cpu().numpy()] = self.coplayer.act(
-                observations[coplayer_idx], done_mask[coplayer_idx], env_id.start + coplayer_idx
+                slots.lstm_h = state["lstm_h"].to(slots.lstm_h.dtype)
+                slots.lstm_c = state["lstm_c"].to(slots.lstm_c.dtype)
+            env_action[slots.learner_positions_np] = policy_env_actions(
+                self.uncompiled_policy, logits, action, cont_action, single_action_space
             )
-        return action, logprob, value, env_action
+            action = action.reshape(-1, *self.actions.shape[2:]).to(self.actions.dtype)
+            logprob = logprob.float()
+            value = value.flatten().float()
+        if len(slots.coplayer_positions_np) > 0:
+            env_action[slots.coplayer_positions_np] = self.coplayer.act(
+                observations[slots.coplayer_positions],
+                done_mask[slots.coplayer_positions],
+                env_id.start + slots.coplayer_positions,
+            )
+        return env_action, action, logprob, value
 
     @record
     def train(self):
@@ -820,7 +1005,7 @@ class PuffeRL:
         set_epoch = getattr(self.vecenv, "set_epoch", None)
         if set_epoch is not None:
             set_epoch(self.epoch)
-        done_training = self.global_step >= config["total_timesteps"]
+        done_training = self.scheduled_steps >= config["total_timesteps"]
         if done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25:
             self.losses = losses
             logs = self.mean_and_log()
@@ -1170,6 +1355,7 @@ class PuffeRL:
         logs = {
             "SPS": dist_sum(self.sps, device),
             "agent_steps": agent_steps,
+            **({} if self.coplayer is None else {"learner_steps": int(dist_sum(self.learner_steps, device))}),
             "uptime": time.time() - self.start_time,
             "epoch": int(dist_sum(self.epoch, device)),  # VB Why it is a sum ?
             "learning_rate": self.optimizer.param_groups[0]["lr"],
@@ -1230,6 +1416,7 @@ class PuffeRL:
             "scheduler_state_dict": self.scheduler.state_dict(),
             "global_step": self.global_step,
             "agent_step": self.global_step,
+            **({} if self.coplayer is None else {"learner_steps": self.learner_steps}),
             "epoch": self.epoch,
             "update": self.epoch,
             "model_name": model_name,
@@ -1286,8 +1473,10 @@ class PuffeRL:
 
         s = Table(box=None, expand=True)
         remaining = f"{b2}A hair past a freckle{c2}"
-        if sps != 0:
-            remaining = duration((config["total_timesteps"] - agent_steps) / sps, b2, c2)
+        scheduled_sps = sps if self.coplayer is None else sps * self.learner_steps / max(self.global_step, 1)
+        if scheduled_sps != 0:
+            scheduled_steps = agent_steps if self.coplayer is None else dist_sum(self.learner_steps, config["device"])
+            remaining = duration((config["total_timesteps"] - scheduled_steps) / scheduled_sps, b2, c2)
 
         s.add_column(f"{c1}Summary", justify="left", vertical="top", width=10)
         s.add_column(f"{c1}Value", justify="right", vertical="top", width=14)
@@ -1896,6 +2085,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             tstate = torch.load(trainer_state_path, map_location=train_config["device"], weights_only=False)
             pufferl.optimizer.load_state_dict(tstate["optimizer_state_dict"])
             pufferl.global_step = tstate.get("global_step", pufferl.global_step)
+            pufferl.learner_steps = tstate.get("learner_steps", pufferl.global_step)
             pufferl.epoch = tstate.get("update", pufferl.epoch)
             # Fast-forward the LR scheduler to the resumed epoch so the cosine
             # schedule continues where it left off.
@@ -1913,7 +2103,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     all_logs = []
     last_training_evaluation_epoch = None
 
-    while pufferl.global_step < train_config["total_timesteps"]:
+    while pufferl.scheduled_steps < train_config["total_timesteps"]:
         if is_cuda_device(train_config["device"]):
             torch.compiler.cudagraph_mark_step_begin()
         try:
@@ -1958,7 +2148,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                         {"environment/early_stop_threshold": logs["early_stop_threshold"]}, logs["agent_steps"]
                     )
 
-            if pufferl.global_step > logging_threshold:
+            if pufferl.scheduled_steps > logging_threshold:
                 all_logs.append(logs)
 
             if should_stop_early:

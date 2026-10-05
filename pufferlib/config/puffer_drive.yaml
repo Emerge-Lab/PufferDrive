@@ -266,7 +266,9 @@ train:
   # enable value bootstrap to simulate infinite time horizon
   use_value_bootstrapping: true
   # Frozen co-player checkpoint (.pt) driving the non-SDC vehicles while the learner trains only the SDC;
-  # null disables. Its architecture comes from the config.yaml of the run that produced it.
+  # null disables. Its architecture comes from the config.yaml of the run that produced it. The rollout buffer
+  # then holds learner rows only (batch_size auto = learner rows x bptt_horizon) and total_timesteps counts
+  # learner transitions.
   coplayer_policy_path: null
   # Co-player action selection - options: "sample", "mode" (argmax), "mean"
   coplayer_action_selection: sample

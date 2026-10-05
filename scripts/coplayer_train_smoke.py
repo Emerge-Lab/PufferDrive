@@ -1,5 +1,5 @@
 """~30 s PuffeRL run that trains the SDC against a frozen co-player checkpoint on one map, then checks
-that the co-player never changed, the learner did, only learner rows were trained on, metrics counted
+that the co-player never changed, the learner did, the buffer held only learner rows, metrics counted
 only SDCs, and the checkpoint holds just the learner.
 
     python scripts/coplayer_train_smoke.py --coplayer weights/mimolette/models/model_puffer_drive_003815.pt \
@@ -68,11 +68,11 @@ def build_args(cli):
         simulation_mode="replay",
         scenario_length=91,
         resample_frequency=0,
-        num_agents=256,
+        num_agents=cli.rows,
         min_agents_per_env=1,
-        max_agents_per_env=128,
+        max_agents_per_env=min(cli.rows, 128),
         init_step=0,
-        init_step_spread=False,
+        init_step_spread=cli.init_step_spread,
         terminate_on_goal=0,
         collision_behavior="ignore",
         offroad_behavior="ignore",
@@ -86,16 +86,19 @@ def build_args(cli):
         "sdc": {"collision": SDC_COLLISION},
         "others": {"collision": COPLAYER_COLLISION},
     }
-    args["vec"].update(backend="Multiprocessing", num_envs=2, num_workers=2, batch_size=2, seed=7)
+    args["vec"].update(
+        backend="Multiprocessing", num_envs=cli.workers, num_workers=cli.workers, batch_size=cli.workers, seed=7
+    )
     args["train"].update(
         device=cli.device,
         compile=False,
-        bptt_horizon=64,
-        minibatch_size=16384,
-        max_minibatch_size=16384,
+        bptt_horizon=cli.horizon,
+        minibatch_size=65536,
+        max_minibatch_size=65536,
         total_timesteps=10**12,
         checkpoint_interval=10**9,
-        data_dir=cli.data_dir,
+        # A fresh run dir: save_checkpoint never overwrites a model file left by an earlier run.
+        data_dir=os.path.join(cli.data_dir, f"run_{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"),
         coplayer_policy_path=cli.coplayer,
         coplayer_action_selection=cli.coplayer_action_selection,
     )
@@ -111,6 +114,10 @@ def main():
     parser.add_argument("--learner-reward-conditioning", type=int, default=0)
     parser.add_argument("--coplayer-action-selection", default="sample")
     parser.add_argument("--seconds", type=float, default=30.0)
+    parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--rows", type=int, default=256, help="rows per worker")
+    parser.add_argument("--horizon", type=int, default=64)
+    parser.add_argument("--init-step-spread", action="store_true")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--data-dir", default="experiments/coplayer_smoke")
     cli = parser.parse_args()
@@ -146,23 +153,25 @@ def main():
         return batch
 
     vecenv.recv = checked_recv
+    initial_learner_rows = int(np.count_nonzero(vecenv.learner_masks))
     coplayer_before = {k: v.clone() for k, v in trainer.coplayer.policy.state_dict().items()}
     learner_before = {k: v.clone() for k, v in trainer.uncompiled_policy.state_dict().items()}
-    masked_fraction_errors = []
+    buffer_errors = []
     logged_counts = []
     epochs = 0
     deadline = time.time() + cli.seconds
     try:
         while time.time() < deadline:
+            learner_steps_before = trainer.learner_steps
             trainer.evaluate()
             logged_counts.extend(trainer.stats.get("n", []))
             trainer.last_log_time = 0.0
             trainer.train()
             epochs += 1
-            coplayer_fraction = 1.0 - float(np.mean(vecenv.learner_masks))
+            rollout_steps = trainer.learner_steps - learner_steps_before
             masked_fraction = trainer.losses.get("masked_fraction")
-            if masked_fraction is None or abs(masked_fraction - coplayer_fraction) > 1e-6:
-                masked_fraction_errors.append((masked_fraction, coplayer_fraction))
+            if rollout_steps != trainer.segments * args["train"]["bptt_horizon"] or masked_fraction != 0.0:
+                buffer_errors.append((rollout_steps, masked_fraction))
         model_path = trainer.save_checkpoint()
     finally:
         vecenv.recv = original_recv
@@ -181,15 +190,20 @@ def main():
             not torch.equal(v, learner_before[k]) for k, v in trainer.uncompiled_policy.state_dict().items()
         ),
         "learner rows are exactly the SDC rows on every step": not split_errors,
-        "masked_fraction == co-player rows / total every epoch": not masked_fraction_errors,
-        "metrics logged and counted only SDCs": bool(logged_counts) and max(logged_counts) <= max(sdc_rows_per_worker),
+        "buffer holds only learner rows, each fully written every epoch": trainer.segments == initial_learner_rows
+        and not buffer_errors,
+        # Episodes end at different steps (e.g. init_step_spread), so an emission can count an SDC twice, but
+        # counting co-players would put it near the rows per worker.
+        "metrics logged and counted only SDCs": bool(logged_counts)
+        and max(logged_counts) < min(rows_per_worker - sdc_rows_per_worker),
         "checkpoint holds exactly the learner": saved.keys() == learner_state.keys()
         and all(torch.equal(saved[k].cpu(), learner_state[k]) for k in saved),
     }
     print(
         f"{epochs} epochs in {cli.seconds:.0f}s; co-player rows {1.0 - float(np.mean(vecenv.learner_masks)):.3f} "
         f"of {vecenv.num_agents}; SDC rows per worker {sdc_rows_per_worker.tolist()}; "
-        f"logged n per worker emission {sorted(set(logged_counts))}"
+        f"logged n per worker emission {sorted(set(logged_counts))}; buffer {trainer.segments} learner rows x "
+        f"{args['train']['bptt_horizon']} steps; learner_steps {trainer.learner_steps} of {trainer.global_step} env steps"
     )
     for name, passed in checks.items():
         print(f"{'PASS' if passed else 'FAIL'} {name}")

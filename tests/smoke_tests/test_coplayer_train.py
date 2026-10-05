@@ -1,9 +1,9 @@
-"""PuffeRL training of the SDC against a frozen, reward-conditioned co-player (Multiprocessing, 2 workers).
+"""PuffeRL training of the SDC against a frozen, reward-conditioned co-player (Multiprocessing).
 
-Each case checks that the co-player never changes, the learner does, only learner rows reach the PPO
-batch, metrics count only SDCs, and the saved checkpoint is the learner. SDC and co-player rows get
-distinct reward-coef overrides, so every recv() also proves the learner/co-player row split is right
-across workers and map resamples.
+Each case checks that the co-player never changes, the learner does, the buffer holds exactly the learner
+rows (each segment is one learner row's consecutive steps), metrics count only SDCs, and the saved
+checkpoint is the learner. SDC and co-player rows get distinct reward-coef overrides, so every recv() also
+proves the learner/co-player row split is right across workers, vecenv batches and map resamples.
 """
 
 import os
@@ -85,7 +85,7 @@ class NullLogger:
         return lambda *a, **k: None
 
 
-def base_args(map_dir, resample_frequency):
+def base_args(map_dir, resample_frequency, workers, workers_per_batch):
     saved_argv = sys.argv
     sys.argv = [saved_argv[0]]
     try:
@@ -95,7 +95,14 @@ def base_args(map_dir, resample_frequency):
     args["env"].update(ENV_OVERRIDES, map_dir=map_dir, num_maps=len(MAP_PATHS), resample_frequency=resample_frequency)
     args["policy"].update(POLICY_OVERRIDES)
     args["rnn"].update(RNN_OVERRIDES)
-    args["vec"].update(backend="Multiprocessing", num_envs=2, num_workers=2, batch_size=2, seed=3, overwork=True)
+    args["vec"].update(
+        backend="Multiprocessing",
+        num_envs=workers,
+        num_workers=workers,
+        batch_size=workers_per_batch,
+        seed=3,
+        overwork=True,
+    )
     args["train"]["device"] = "cpu"
     args["wandb"] = False
     args["eval"] = {}
@@ -141,15 +148,92 @@ def check_rows_match_learner_split(vecenv, env_id, observations, column, seen_la
     sdc_rows_per_worker.update(learner_rows.reshape(-1, vecenv.num_agents // vecenv.num_workers).sum(axis=1))
 
 
+class RolloutRecorder:
+    """Records, per vecenv batch and in recv order, what each learner row observed and the action sent for it."""
+
+    def __init__(self, vecenv, trainer, column):
+        self.vecenv = vecenv
+        self.trainer = trainer
+        self.column = column
+        self.recv = vecenv.recv
+        self.send = vecenv.send
+        self.seen_layouts = set()
+        self.sdc_rows_per_worker = set()
+        self.batches = {}
+        self.last_learner_rows = None
+        self.last_batch = None
+        vecenv.recv = self.checked_recv
+        vecenv.send = self.recording_send
+
+    def restore(self):
+        self.vecenv.recv = self.recv
+        self.vecenv.send = self.send
+
+    def start_rollout(self):
+        self.batches = {}
+
+    def checked_recv(self):
+        batch = self.recv()
+        observations, terminals, truncations, env_id = batch[0], batch[2], batch[3], batch[5]
+        check_rows_match_learner_split(
+            self.vecenv, env_id, observations, self.column, self.seen_layouts, self.sdc_rows_per_worker
+        )
+        learner_rows = np.array(self.vecenv.learner_masks[env_id[0] : env_id[-1] + 1])
+        columns = self.trainer.learner_obs_columns
+        learner_obs = observations[learner_rows]
+        if columns is not None:
+            learner_obs = learner_obs[:, columns.cpu().numpy()]
+        steps = self.batches.setdefault(int(env_id[0]), [])
+        steps.append({"obs": learner_obs.copy(), "done": (terminals | truncations)[learner_rows].copy()})
+        self.last_learner_rows = learner_rows
+        self.last_batch = int(env_id[0])
+        return batch
+
+    def recording_send(self, actions):
+        self.batches[self.last_batch][-1]["action"] = np.asarray(actions)[self.last_learner_rows].copy()
+        return self.send(actions)
+
+    def expected_buffer(self):
+        """(obs, action, done) per segment and step: a batch's learner rows take the next segments, in order."""
+        segment_obs, segment_actions, segment_dones = [], [], []
+        for steps in self.batches.values():
+            for row in range(len(steps[0]["obs"])):
+                segment_obs.append(np.stack([step["obs"][row] for step in steps[:HORIZON]]))
+                segment_actions.append(np.stack([step["action"][row] for step in steps[:HORIZON]]))
+                segment_dones.append(np.stack([step["done"][row] for step in steps[:HORIZON]]))
+        return np.stack(segment_obs), np.stack(segment_actions), np.stack(segment_dones)
+
+
 @pytest.mark.parametrize(
-    "learner_conditioned, coplayer_conditioned, learner_recurrent, coplayer_recurrent, coplayer_by_path, resample",
+    "learner_conditioned, coplayer_conditioned, learner_recurrent, coplayer_recurrent, coplayer_by_path, resample, "
+    "workers, workers_per_batch, device",
     [
-        (True, False, False, False, True, 0),
-        (False, True, False, True, False, 0),
-        (True, True, True, False, True, 0),
-        (True, False, False, True, True, 45),
+        (True, False, False, False, True, 0, 2, 2, "cpu"),
+        (False, True, False, True, False, 0, 2, 2, "cpu"),
+        (True, True, True, False, True, 0, 2, 2, "cpu"),
+        (True, False, False, True, True, 45, 2, 2, "cpu"),
+        (False, True, True, False, True, 0, 4, 2, "cpu"),
+        pytest.param(
+            False,
+            True,
+            False,
+            False,
+            True,
+            0,
+            4,
+            2,
+            "cuda",
+            marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA"),
+        ),
     ],
-    ids=["learner-cond", "coplayer-cond-rnn", "both-cond-learner-rnn", "resample-maps"],
+    ids=[
+        "learner-cond",
+        "coplayer-cond-rnn",
+        "both-cond-learner-rnn",
+        "resample-maps",
+        "two-vec-batches-rnn",
+        "cuda-cpu-offload",
+    ],
 )
 def test_ppo_against_frozen_coplayer(
     tmp_path,
@@ -159,12 +243,15 @@ def test_ppo_against_frozen_coplayer(
     coplayer_recurrent,
     coplayer_by_path,
     resample,
+    workers,
+    workers_per_batch,
+    device,
 ):
     map_dir = tmp_path / "maps"
     map_dir.mkdir()
     for map_path in MAP_PATHS:
         os.symlink(map_path, map_dir / os.path.basename(map_path))
-    args = base_args(str(map_dir), resample)
+    args = base_args(str(map_dir), resample, workers, workers_per_batch)
     args["env"]["reward_conditioning"] = learner_conditioned or coplayer_conditioned
     args["env"]["reward_coef_overrides"] = {
         "sdc": {"collision": SDC_COLLISION},
@@ -175,6 +262,7 @@ def test_ppo_against_frozen_coplayer(
     )
 
     torch.manual_seed(0)
+    args["train"]["device"] = device
     vecenv = load_env("puffer_drive", args)
     args["rnn_name"] = "Recurrent" if learner_recurrent else None
     args["train"]["use_rnn"] = learner_recurrent
@@ -187,13 +275,14 @@ def test_ppo_against_frozen_coplayer(
         update_epochs=1,
         bptt_horizon=HORIZON,
         batch_size="auto",
-        minibatch_size=vecenv.num_agents * HORIZON // 2,
-        max_minibatch_size=vecenv.num_agents * HORIZON // 2,
+        minibatch_size=vecenv.num_agents * HORIZON,
+        max_minibatch_size=vecenv.num_agents * HORIZON,
         total_timesteps=10_000_000,
         checkpoint_interval=10_000_000,
         data_dir=str(tmp_path / "learner_run"),
         adv_filter_enabled=False,
         render=False,
+        cpu_offload=device == "cuda",
         coplayer_policy_path=coplayer_path if coplayer_by_path else None,
         coplayer_action_selection="sample",
     )
@@ -202,31 +291,46 @@ def test_ppo_against_frozen_coplayer(
     trainer = PuffeRL(
         train_config, vecenv, learner, NullLogger(), coplayer_policy=None if coplayer_by_path else coplayer_policy
     )
+    column = vecenv.driver_env.ego_features + REWARD_COEF_NAMES.index("collision")
+    recorder = RolloutRecorder(vecenv, trainer, column)
     try:
-        column = vecenv.driver_env.ego_features + REWARD_COEF_NAMES.index("collision")
-        seen_layouts = set()
-        sdc_rows_per_worker = set()
-        original_recv = vecenv.recv
-
-        def checked_recv():
-            batch = original_recv()
-            check_rows_match_learner_split(vecenv, batch[5], batch[0], column, seen_layouts, sdc_rows_per_worker)
-            return batch
-
-        vecenv.recv = checked_recv
+        initial_learner_rows = int(np.count_nonzero(vecenv.learner_masks))
+        assert trainer.segments == initial_learner_rows, "the buffer is sized from learner rows only"
+        assert trainer.observations.shape[0] == initial_learner_rows
+        assert trainer.observations.device.type == "cpu" if device == "cuda" else True
         coplayer_before = {k: v.clone() for k, v in trainer.coplayer.policy.state_dict().items()}
         learner_before = {k: v.clone() for k, v in trainer.uncompiled_policy.state_dict().items()}
         logged_counts = []
         logged_keys = set()
-        for _ in range(EPOCHS):
+        closed_early = False
+        for epoch in range(EPOCHS):
+            recorder.start_rollout()
+            learner_steps_before = trainer.learner_steps
             trainer.evaluate()
+            masks = trainer.masks.cpu().numpy()
+            assert trainer.learner_steps - learner_steps_before == masks.sum(), "every written learner step counts"
+            # A segment ended early by a resample is unmasked up to that step, which is terminal, then masked.
+            first_masked = np.where(masks.all(axis=1), HORIZON, np.argmin(masks, axis=1))
+            for segment, step in enumerate(first_masked):
+                assert not masks[segment, step:].any()
+                assert step == HORIZON or trainer.terminals[segment, step] == 1.0
+            closed_early |= bool((first_masked < HORIZON).any())
             logged_counts.extend(trainer.stats.get("n", []))
             logged_keys.update(trainer.stats)
+            if resample == 0:
+                expected_obs, expected_actions, expected_dones = recorder.expected_buffer()
+                np.testing.assert_array_equal(trainer.observations.cpu().numpy(), expected_obs)
+                np.testing.assert_array_equal(
+                    trainer.actions.cpu().numpy().reshape(expected_actions.shape), expected_actions
+                )
+                np.testing.assert_array_equal(trainer.terminals.cpu().numpy(), expected_dones.astype(np.float32))
+                assert trainer.masks.all(), "no learner step is masked without infractions"
+                assert trainer.learner_steps == (epoch + 1) * trainer.segments * HORIZON
             trainer.last_log_time = 0.0
             trainer.train()
             if resample == 0:
-                learner_fraction = float(np.mean(vecenv.learner_masks))
-                assert trainer.losses["masked_fraction"] == pytest.approx(1.0 - learner_fraction, abs=1e-6)
+                assert trainer.losses["masked_fraction"] == 0.0
+        assert trainer.global_step >= EPOCHS * HORIZON * vecenv.num_agents
 
         for key, value in trainer.coplayer.policy.state_dict().items():
             assert torch.equal(value, coplayer_before[key]), f"co-player parameter {key} changed"
@@ -236,17 +340,80 @@ def test_ppo_against_frozen_coplayer(
         assert not any(p.requires_grad for p in trainer.coplayer.policy.parameters())
 
         assert logged_counts, "no episode metrics were logged"
-        assert max(logged_counts) <= max(sdc_rows_per_worker), "metrics counted co-player agents"
+        assert max(logged_counts) <= max(recorder.sdc_rows_per_worker), "metrics counted co-player agents"
         assert {"score", "collision_rate", "offroad_rate"} <= logged_keys
-        workers_seen = {first_row for first_row, _ in seen_layouts}
-        assert len(seen_layouts) > len(workers_seen) if resample else len(seen_layouts) == len(workers_seen)
+        assert closed_early == bool(resample), "only a map resample ends segments early"
+        workers_seen = {first_row for first_row, _ in recorder.seen_layouts}
+        if resample:
+            assert len(recorder.seen_layouts) > len(workers_seen)
+        else:
+            assert len(recorder.seen_layouts) == len(workers_seen)
 
         model_path = trainer.save_checkpoint()
         saved = torch.load(model_path, map_location="cpu")
         learner_state = trainer.uncompiled_policy.state_dict()
         assert saved.keys() == learner_state.keys()
-        assert all(torch.equal(saved[key], learner_state[key]) for key in saved)
+        assert all(torch.equal(saved[key], learner_state[key].cpu()) for key in saved)
     finally:
-        vecenv.recv = original_recv
+        recorder.restore()
+        vecenv.close()
+        trainer.utilization.stop()
+
+
+def test_rollout_longer_than_one_round_of_learner_rows(tmp_path):
+    """With a buffer of 1.5 rounds of learner rows, the second round only has room for half of them: those
+    rows' next HORIZON steps fill the remaining segments and the rest act without being stored."""
+    map_dir = tmp_path / "maps"
+    map_dir.mkdir()
+    for map_path in MAP_PATHS:
+        os.symlink(map_path, map_dir / os.path.basename(map_path))
+    args = base_args(str(map_dir), 0, 2, 2)
+    args["env"]["reward_conditioning"] = True
+    args["env"]["reward_coef_overrides"] = {
+        "sdc": {"collision": SDC_COLLISION},
+        "others": {"collision": COPLAYER_COLLISION},
+    }
+    coplayer_path, _ = write_coplayer_checkpoint(str(tmp_path / "coplayer_run"), args, True, False)
+    torch.manual_seed(0)
+    vecenv = load_env("puffer_drive", args)
+    learner = load_policy(args, vecenv, "puffer_drive", reward_conditioning=True)
+    learner_rows = vecenv.learner_row_count()
+    segments = learner_rows + learner_rows // 2
+    args["train"].update(
+        compile=False,
+        update_epochs=1,
+        bptt_horizon=HORIZON,
+        batch_size=segments * HORIZON,
+        minibatch_size=segments * HORIZON,
+        max_minibatch_size=segments * HORIZON,
+        total_timesteps=10_000_000,
+        checkpoint_interval=10_000_000,
+        data_dir=str(tmp_path / "learner_run"),
+        render=False,
+        coplayer_policy_path=coplayer_path,
+    )
+    trainer = PuffeRL(
+        dict(**args["train"], env="puffer_drive", eval={}, run_name="rounds"), vecenv, learner, NullLogger()
+    )
+    column = vecenv.driver_env.ego_features + REWARD_COEF_NAMES.index("collision")
+    recorder = RolloutRecorder(vecenv, trainer, column)
+    try:
+        assert trainer.segments == segments
+        recorder.start_rollout()
+        trainer.evaluate()
+        (steps,) = recorder.batches.values()
+        assert len(steps) == 2 * HORIZON
+        observations = trainer.observations.numpy()
+        for segment in range(segments):
+            row = segment if segment < learner_rows else segment - learner_rows
+            first_step = 0 if segment < learner_rows else HORIZON
+            expected = np.stack([steps[first_step + step]["obs"][row] for step in range(HORIZON)])
+            np.testing.assert_array_equal(observations[segment], expected)
+        assert trainer.learner_steps == segments * HORIZON
+        assert trainer.stats["learner_rows_unbuffered"] == [learner_rows - learner_rows // 2] * HORIZON
+        trainer.last_log_time = 0.0
+        trainer.train()
+    finally:
+        recorder.restore()
         vecenv.close()
         trainer.utilization.stop()
