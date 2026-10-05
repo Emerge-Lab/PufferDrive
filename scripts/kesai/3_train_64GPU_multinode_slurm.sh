@@ -44,6 +44,7 @@ export OMP_NUM_THREADS=1
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
+# Blocking env workers allow 2 workers per hardware thread (18 threads per rank); forked workers share the preloaded map cache
 # Execute torchrun across all nodes using srun
 srun torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -63,7 +64,8 @@ srun torchrun \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
-    vec.num_envs=16 \
+    vec.num_envs=32 \
+    env.preload_map_cache=True \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
     train.final_model_name=${FINAL_MODEL_NAME} \
