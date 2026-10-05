@@ -201,6 +201,9 @@ class Serial:
         for env in self.envs:
             env.set_reward_coef_overrides(overrides, normalized)
 
+    def learner_row_count(self):
+        return sum(env.learner_row_count() for env in self.envs)
+
     def recv(self):
         recv_precheck(self)
         return (
@@ -277,10 +280,9 @@ def _worker_process(
             # Cleared before the ack so a call sent right after the ack is never lost.
             control_pending[worker_idx] = False
             try:
-                getattr(envs, method_name)(*method_args)
-                control_pipe.send(None)
+                control_pipe.send((None, getattr(envs, method_name)(*method_args)))
             except Exception as exc:
-                control_pipe.send(repr(exc))
+                control_pipe.send((repr(exc), None))
 
         if envs_set_epoch is not None:
             current_epoch = int(epoch_arr[0])
@@ -628,17 +630,24 @@ class Multiprocessing:
     def set_reward_coef_overrides(self, overrides, normalized=False):
         self._call_workers("set_reward_coef_overrides", overrides, normalized)
 
+    def learner_row_count(self):
+        """Learner rows across all workers; waits until every worker has built its scenes."""
+        return sum(self._call_workers("learner_row_count"))
+
     def _call_workers(self, method_name, *method_args):
-        # Each worker runs the call between steps and acks it; returns once every worker has applied it.
+        # Each worker runs the call between steps and replies; returns every worker's result once all have run it.
         for worker_idx in range(self.num_workers):
             self.control_pipes[worker_idx].send((method_name, method_args))
             self.control_pending[worker_idx] = True
+        results = []
         for worker_idx in range(self.num_workers):
             if not self.control_pipes[worker_idx].poll(WORKER_CALL_TIMEOUT_SECONDS):
                 raise TimeoutError(f"worker {worker_idx} did not run {method_name} in {WORKER_CALL_TIMEOUT_SECONDS}s")
-            error = self.control_pipes[worker_idx].recv()
+            error, result = self.control_pipes[worker_idx].recv()
             if error is not None:
                 raise RuntimeError(f"worker {worker_idx} failed in {method_name}: {error}")
+            results.append(result)
+        return results
 
     def close(self):
         for p in self.processes:

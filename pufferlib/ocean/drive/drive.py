@@ -765,6 +765,9 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_set_reward_coef_overrides(self.c_envs, entries)
         self.reward_coef_override_entries = entries
 
+    def learner_row_count(self):
+        return int(np.count_nonzero(self.learner_masks))
+
     def _logged_agent_count(self):
         # vec_log waits for this many finished agent-episodes; with log_sdc_only only SDCs finish one.
         if not self.log_sdc_only:

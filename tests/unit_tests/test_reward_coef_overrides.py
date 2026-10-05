@@ -175,6 +175,7 @@ def test_vecenv_runtime_overrides_and_learner_masks(backend):
         learner = np.asarray(vecenv.learner_masks).reshape(-1)
         column = coef_column(vecenv.driver_env, "collision")
         assert learner.sum() >= 2
+        assert vecenv.learner_row_count() == learner.sum()
         np.testing.assert_allclose(obs[learner, column], reward_coef_to_normalized("collision", 2.0), atol=1e-6)
         np.testing.assert_allclose(obs[~learner, column], reward_coef_to_normalized("collision", -1.0), atol=1e-6)
     finally:
