@@ -832,7 +832,9 @@ class Drive(pufferlib.PufferEnv):
 
         return states
 
-    def set_agent_states(self, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long, seconds_stopped=None):
+    def set_agent_states(
+        self, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long, seconds_stopped=None, steering=None
+    ):
         """Co-sim: overwrite the sim state of agents at global indices `idx`
         (e.g. CARLA background) with world-frame pose/velocity. The C side
         subtracts world_mean, recaches heading trig and recomputes speed.
@@ -858,6 +860,7 @@ class Drive(pufferlib.PufferEnv):
             np.ascontiguousarray(yaw_rate, dtype=np.float32),
             np.ascontiguousarray(accel_long, dtype=np.float32),
             None if seconds_stopped is None else np.ascontiguousarray(seconds_stopped, dtype=np.float32),
+            None if steering is None else np.ascontiguousarray(steering, dtype=np.float32),
         )
 
     # ── Co-simulation external-state setters ─────────────────────────────────────
