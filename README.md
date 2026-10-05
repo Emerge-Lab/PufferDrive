@@ -266,7 +266,7 @@ To add a metric to the report: add its key to `TREND_METRICS` /
 | `reward_vel_align` | `1.0` | Speed matching road limit |
 | `reward_lane_center` | `0.0038` | Lane centering |
 | `reward_stop_line` | `1.0` | Stop line penalty |
-| `reward_overspeed` | `0.05` | Speeding penalty |
+| `reward_overspeed` | `0.005` | Speeding penalty |
 
 ### `train` — PPO
 
