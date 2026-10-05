@@ -6,6 +6,7 @@ import os
 import pufferlib
 from pufferlib.ocean.drive import binding
 
+LOG_MIN_AGENT_EPISODES = 1  # emit env logs as soon as any episode completed; the trainer weights them by n
 TRAFFIC_CONTROL_CATEGORICAL_FEATURE_COUNT = 2  # type and state
 
 
@@ -33,6 +34,7 @@ class Drive(pufferlib.PufferEnv):
         reward_stop_line=1.0,
         reward_timestep=0.000025,
         reward_overspeed=0.05,
+        overspeed_tolerance_mps=0.0,
         reward_ade=0.0,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
@@ -43,6 +45,7 @@ class Drive(pufferlib.PufferEnv):
         offroad_behavior="ignore",
         traffic_light_behavior="ignore",
         disable_red_light_infractions=False,
+        disable_stop_sign_infractions=False,
         traffic_light_junction_phases=False,
         stop_sign_behavior="ignore",
         use_map_cache=False,
@@ -58,8 +61,14 @@ class Drive(pufferlib.PufferEnv):
         spawn_heading_max_deg=0.0,
         pose_noise_xy_m=0.0,
         pose_noise_yaw_deg=0.0,
+        speed_limit_random_prob=0.0,
+        speed_limit_random_delta_mps=9.72,
+        speed_limit_random_min_mps=1.39,
+        speed_limit_random_max_mps=36.11,
         goal_speed=3.0,
         goal_speed_randomization=True,
+        conditioning_accel_scale=1.0,
+        conditioning_speed_scale=1.5,
         goal_reach_requires_speed=False,
         scenario_length=None,
         resample_frequency=91,
@@ -68,6 +77,8 @@ class Drive(pufferlib.PufferEnv):
         num_agents=512,
         min_agents_per_env=32,
         max_agents_per_env=64,
+        cosim_partner_slots=0,
+        cosim_eval_semantics=False,
         action_type="discrete",
         dynamics_model="classic",
         reset_accel_on_stop=False,
@@ -80,6 +91,7 @@ class Drive(pufferlib.PufferEnv):
         init_step=0,
         init_step_spread=False,
         init_step_min_horizon=20,
+        stagger_first_episode=False,
         eval_mode=0,
         num_eval_scenarios=16,
         max_scenarios_per_batch=None,
@@ -108,6 +120,8 @@ class Drive(pufferlib.PufferEnv):
         obs_boundary_stride=1,
         obs_slots_partners_n=16,
         obs_partner_relative_velocity=False,
+        obs_lane_heading_signed=False,
+        obs_lane_speed_limit=False,
         obs_slots_traffic_controls_n=4,
         traffic_lights_enabled=True,
         stop_signs_enabled=False,
@@ -152,8 +166,33 @@ class Drive(pufferlib.PufferEnv):
         self.pose_noise_yaw_deg = float(pose_noise_yaw_deg)
         if self.pose_noise_xy_m < 0.0 or self.pose_noise_yaw_deg < 0.0:
             raise ValueError(f"pose noise must be >= 0, got xy {pose_noise_xy_m}, yaw {pose_noise_yaw_deg}")
+        self.speed_limit_random_prob = float(speed_limit_random_prob)
+        self.speed_limit_random_delta_mps = float(speed_limit_random_delta_mps)
+        self.speed_limit_random_min_mps = float(speed_limit_random_min_mps)
+        self.speed_limit_random_max_mps = float(speed_limit_random_max_mps)
+        if not 0.0 <= self.speed_limit_random_prob <= 1.0:
+            raise ValueError(f"speed_limit_random_prob must be in [0, 1], got {speed_limit_random_prob}")
+        if not np.isfinite(self.speed_limit_random_delta_mps) or self.speed_limit_random_delta_mps < 0.0:
+            raise ValueError(
+                f"speed_limit_random_delta_mps must be finite and >= 0, got {speed_limit_random_delta_mps}"
+            )
+        if not (0.0 < self.speed_limit_random_min_mps <= self.speed_limit_random_max_mps < float("inf")):
+            raise ValueError(
+                "speed_limit_random_min_mps/max_mps must satisfy 0 < min <= max, "
+                f"got {speed_limit_random_min_mps} / {speed_limit_random_max_mps}"
+            )
         self.goal_speed = float(goal_speed)
         self.goal_speed_randomization = int(bool(goal_speed_randomization))
+        # Eval-time C_acc conditioning coefficient (training samples it in REWARD_BOUNDS[REWARD_COEF_ACC]).
+        self.conditioning_speed_scale = float(conditioning_speed_scale)
+        if not np.isfinite(self.conditioning_speed_scale) or self.conditioning_speed_scale < 1.0:
+            raise ValueError(f"conditioning_speed_scale must be finite and >= 1, got {conditioning_speed_scale}")
+        self.conditioning_accel_scale = float(conditioning_accel_scale)
+        if not (binding.CONDITIONING_ACC_MIN <= self.conditioning_accel_scale <= binding.CONDITIONING_ACC_MAX):
+            raise ValueError(
+                f"conditioning_accel_scale must be within the trained C_acc range "
+                f"[{binding.CONDITIONING_ACC_MIN}, {binding.CONDITIONING_ACC_MAX}]. Got: {conditioning_accel_scale}"
+            )
         self.goal_reach_requires_speed = int(bool(goal_reach_requires_speed))
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
@@ -176,6 +215,9 @@ class Drive(pufferlib.PufferEnv):
         self.reward_stop_line = reward_stop_line
         self.reward_timestep = reward_timestep
         self.reward_overspeed = reward_overspeed
+        self.overspeed_tolerance_mps = float(overspeed_tolerance_mps)
+        if not (self.overspeed_tolerance_mps >= 0.0) or not np.isfinite(self.overspeed_tolerance_mps):
+            raise ValueError(f"overspeed_tolerance_mps must be finite and >= 0, got {overspeed_tolerance_mps}")
         self.reward_ade = reward_ade
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
@@ -190,6 +232,8 @@ class Drive(pufferlib.PufferEnv):
             "route": binding.GOAL_SOURCE_ROUTE,
             "map": binding.GOAL_SOURCE_MAP,
             "gt": binding.GOAL_SOURCE_GT,
+            "external": binding.GOAL_SOURCE_EXTERNAL,
+            "gt_map": binding.GOAL_SOURCE_GT_MAP,
         }[goal_source]
         self.obs_goal_lane_distance = int(bool(obs_goal_lane_distance))
         infraction_behavior_values = {
@@ -201,6 +245,7 @@ class Drive(pufferlib.PufferEnv):
         self.offroad_behavior = infraction_behavior_values[offroad_behavior]
         self.traffic_light_behavior = infraction_behavior_values[traffic_light_behavior]
         self.disable_red_light_infractions = bool(disable_red_light_infractions)
+        self.disable_stop_sign_infractions = bool(disable_stop_sign_infractions)
         self.traffic_light_junction_phases = bool(traffic_light_junction_phases)
         if replay_expert_agents not in (0, 1):
             raise ValueError(f"replay_expert_agents must be 0 or 1. Got: {replay_expert_agents}")
@@ -240,6 +285,17 @@ class Drive(pufferlib.PufferEnv):
         self.rng = np.random.default_rng(seed)
         self.min_agents_per_env = min_agents_per_env
         self.max_agents_per_env = max_agents_per_env
+        # Co-sim: static agent slots per env owned by the external simulator (never spawned or stepped).
+        self.cosim_partner_slots = int(cosim_partner_slots)
+        if self.cosim_partner_slots < 0:
+            raise ValueError(f"cosim_partner_slots must be >= 0. Got: {cosim_partner_slots}")
+        if self.cosim_partner_slots > 0 and simulation_mode != "gigaflow":
+            raise ValueError("cosim_partner_slots is only supported in gigaflow simulation_mode")
+        # Co-sim envs stay out of eval_mode (its scenario batching needs a full agent pool) but still want the
+        # eval-only observation/action semantics: perceived-size margin and standstill jerk deadband.
+        self.cosim_eval_semantics = int(bool(cosim_eval_semantics))
+        if goal_source == "external" and simulation_mode != "gigaflow":
+            raise ValueError("goal_source 'external' is only supported in gigaflow simulation_mode (co-sim)")
 
         self.ego_features = binding.EGO_FEATURES
 
@@ -250,6 +306,8 @@ class Drive(pufferlib.PufferEnv):
         self.obs_boundary_stride = obs_boundary_stride
         self.obs_slots_partners_n = obs_slots_partners_n
         self.obs_partner_relative_velocity = int(bool(obs_partner_relative_velocity))
+        self.obs_lane_heading_signed = int(bool(obs_lane_heading_signed))
+        self.obs_lane_speed_limit = int(bool(obs_lane_speed_limit))
         self.traffic_lights_enabled = traffic_lights_enabled
         self.stop_signs_enabled = stop_signs_enabled
         self.yield_signs_enabled = yield_signs_enabled
@@ -295,7 +353,9 @@ class Drive(pufferlib.PufferEnv):
         self.partner_features = binding.PARTNER_FEATURES + (
             binding.PARTNER_RELATIVE_VELOCITY_FEATURES if self.obs_partner_relative_velocity else 0
         )
-        self.lane_features = binding.LANE_FEATURES
+        self.lane_features = binding.LANE_FEATURES + (
+            binding.LANE_SPEED_LIMIT_FEATURES if self.obs_lane_speed_limit else 0
+        )
         self.boundary_features = binding.BOUNDARY_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
         self.obs_valid_count_features = binding.OBS_VALID_COUNT_FEATURES
@@ -336,6 +396,7 @@ class Drive(pufferlib.PufferEnv):
         self.init_step_spread = bool(init_step_spread)
         # limit at which we set the starting point from the end of the total episode length
         self.init_step_min_horizon = int(init_step_min_horizon)
+        self.stagger_first_episode = int(bool(stagger_first_episode))
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
         self.sdc_controller_str = sdc_controller
@@ -490,11 +551,13 @@ class Drive(pufferlib.PufferEnv):
             "reward_stop_line": self.reward_stop_line,
             "reward_timestep": self.reward_timestep,
             "reward_overspeed": self.reward_overspeed,
+            "overspeed_tolerance_mps": self.overspeed_tolerance_mps,
             "reward_ade": self.reward_ade,
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
             "disable_red_light_infractions": self.disable_red_light_infractions,
+            "disable_stop_sign_infractions": self.disable_stop_sign_infractions,
             "traffic_light_junction_phases": self.traffic_light_junction_phases,
             "stop_sign_behavior": self.stop_sign_behavior,
             "use_map_cache": self.use_map_cache,
@@ -513,6 +576,8 @@ class Drive(pufferlib.PufferEnv):
             "obs_boundary_stride": self.obs_boundary_stride,
             "obs_slots_partners_n": self.obs_slots_partners_n,
             "obs_partner_relative_velocity": self.obs_partner_relative_velocity,
+            "obs_lane_heading_signed": self.obs_lane_heading_signed,
+            "obs_lane_speed_limit": self.obs_lane_speed_limit,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_lights_enabled": self.traffic_lights_enabled,
             "stop_signs_enabled": self.stop_signs_enabled,
@@ -525,8 +590,14 @@ class Drive(pufferlib.PufferEnv):
             "spawn_heading_max_deg": self.spawn_heading_max_deg,
             "pose_noise_xy_m": self.pose_noise_xy_m,
             "pose_noise_yaw_deg": self.pose_noise_yaw_deg,
+            "speed_limit_random_prob": self.speed_limit_random_prob,
+            "speed_limit_random_delta_mps": self.speed_limit_random_delta_mps,
+            "speed_limit_random_min_mps": self.speed_limit_random_min_mps,
+            "speed_limit_random_max_mps": self.speed_limit_random_max_mps,
             "goal_speed": self.goal_speed,
             "goal_speed_randomization": self.goal_speed_randomization,
+            "conditioning_accel_scale": self.conditioning_accel_scale,
+            "conditioning_speed_scale": self.conditioning_speed_scale,
             "goal_reach_requires_speed": self.goal_reach_requires_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),
@@ -535,7 +606,11 @@ class Drive(pufferlib.PufferEnv):
             "map_file": map_file,
             "max_agents": max_agents,
             "max_agents_per_env": self.max_agents_per_env,
+            "cosim_partner_slots": self.cosim_partner_slots,
+            "cosim_eval_semantics": self.cosim_eval_semantics,
             "init_step": self._sample_init_step(),
+            "init_step_min_horizon": self.init_step_min_horizon,
+            "stagger_first_episode": self.stagger_first_episode,
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,
             "sdc_controller": self.sdc_controller,
@@ -608,6 +683,7 @@ class Drive(pufferlib.PufferEnv):
         else:
             binding.vec_reset(self.c_envs)
         self.tick = 0
+        self._resample_pending = False
         self.truncations[:] = 0
         if self.capture_replay:
             self._initialize_replay_captures()
@@ -619,20 +695,27 @@ class Drive(pufferlib.PufferEnv):
             self.terminals[:] = 0
             self.truncations[:] = 0
             return (self.observations, self.rewards, self.terminals, self.truncations, [])
-        if self.capture_replay:
-            self._capture_replay_step()
-        self.actions[:] = actions
-        binding.vec_step(self.c_envs)
-        self.tick += 1
+        if not self._resample_pending:
+            if self.capture_replay:
+                self._capture_replay_step()
+            self.actions[:] = actions
+            binding.vec_step(self.c_envs)
+            self.tick += 1
         info = []
         # vec_log is the training aggregate; it resets env->log, which eval reads
         # per episode, so it must not run in eval mode.
-        if not self.eval_mode and self.tick % self.report_interval == 0:
-            log = binding.vec_log(self.c_envs, self.num_agents)
+        if not self.eval_mode and not self._resample_pending and self.tick % self.report_interval == 0:
+            log = binding.vec_log(self.c_envs, LOG_MIN_AGENT_EPISODES)
             if log:
                 info.append(log)
-                # print(log)
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
+            if not self.eval_mode and not self._resample_pending:
+                # Training resample is a truncation: expose the pre-resample state for the value bootstrap first.
+                self._resample_pending = True
+                self.truncations[:] = 1
+                self.masks[:] = 0
+                return (self.observations, self.rewards, self.terminals, self.truncations, info)
+            self._resample_pending = False
             self.tick = 0
             will_resample = 1
             if will_resample:
@@ -706,18 +789,24 @@ class Drive(pufferlib.PufferEnv):
                 binding.vec_reset(self.c_envs)
                 if self.capture_replay:
                     self._initialize_replay_captures()
-                # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
-                self.truncations[:] = 1
+                # Eval reads the map switch as a truncation on the post-reset step; training already emitted it.
+                self.truncations[:] = self.eval_mode
+                if not self.eval_mode:
+                    self.rewards[:] = 0
+                    self.terminals[:] = 0
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
-    def get_global_agent_state(self):
+    def get_global_agent_state(self, include_static=False):
         """Get current global state of all active agents.
+
+        include_static: also return the co-sim partner slots after the active agents
+        (num_active_agents + cosim_partner_slots * num_envs rows).
 
         Returns:
             dict with keys 'x', 'y', 'z', 'heading', 'id', 'length', 'width' containing numpy arrays
             of shape (num_active_agents,)
         """
-        num_agents = self.num_agents
+        num_agents = self.num_agents + (self.cosim_partner_slots * self.num_envs if include_static else 0)
 
         states = {
             "x": np.zeros(num_agents, dtype=np.float32),
@@ -738,9 +827,101 @@ class Drive(pufferlib.PufferEnv):
             states["id"],
             states["length"],
             states["width"],
+            int(bool(include_static)),
         )
 
         return states
+
+    def set_agent_states(self, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long, seconds_stopped=None):
+        """Co-sim: overwrite the sim state of agents at global indices `idx`
+        (e.g. CARLA background) with world-frame pose/velocity. The C side
+        subtracts world_mean, recaches heading trig and recomputes speed.
+        `yaw_rate` (rad/s) and `accel_long` (m/s^2) must come from the external
+        sim's own physics (e.g. CARLA's get_angular_velocity()/get_acceleration(),
+        nuPlan's EgoState.dynamic_car_state) -- not finite-differenced here, since
+        this agent's previous state may already have been overwritten this tick by
+        env.step()'s own dynamics before this call runs.
+        `seconds_stopped` (seconds each agent's speed has been below
+        binding.AGENT_STOPPED_SPEED_THRESHOLD) is optional: pass it when the
+        external sim owns the agent's kinematics every tick, so stopped-time is
+        injected as state instead of derived from the dummy in-sim rollout;
+        leave it None to keep c_step's own per-tick accumulation."""
+        binding.vec_set_agent_states(
+            self.c_envs,
+            np.ascontiguousarray(idx, dtype=np.int32),
+            np.ascontiguousarray(x, dtype=np.float32),
+            np.ascontiguousarray(y, dtype=np.float32),
+            np.ascontiguousarray(z, dtype=np.float32),
+            np.ascontiguousarray(heading, dtype=np.float32),
+            np.ascontiguousarray(vx, dtype=np.float32),
+            np.ascontiguousarray(vy, dtype=np.float32),
+            np.ascontiguousarray(yaw_rate, dtype=np.float32),
+            np.ascontiguousarray(accel_long, dtype=np.float32),
+            None if seconds_stopped is None else np.ascontiguousarray(seconds_stopped, dtype=np.float32),
+        )
+
+    # ── Co-simulation external-state setters ─────────────────────────────────────
+    def set_agent_sizes(self, idx, length, width):
+        """overwrite the bounding-box length/width (meters) of agents at
+        global indices `idx`, so the ego observes/collides against a CARLA
+        actor's true size instead of the gigaflow-spawned default."""
+        binding.vec_set_agent_sizes(
+            self.c_envs,
+            np.ascontiguousarray(idx, dtype=np.int32),
+            np.ascontiguousarray(length, dtype=np.float32),
+            np.ascontiguousarray(width, dtype=np.float32),
+        )
+
+    def recompute_observations(self):
+        """recompute observations from current state without stepping
+        dynamics or advancing the timestep (call after set_agent_states)."""
+        binding.vec_recompute_observations(self.c_envs)
+        return self.observations
+
+    def set_traffic_light_states(self, states):
+        """override each traffic-light element's state at the current
+        timestep (states length == num_traffic_elements)."""
+        binding.vec_set_traffic_light_states(self.c_envs, np.ascontiguousarray(states, dtype=np.int32))
+
+    def set_stop_signs(self, lines, headings):
+        """replace every stop-sign element with the external sim's own (co-sim):
+        lines (K, 6) world-frame endpoints [x1, y1, z1, x2, y2, z2], headings (K,)
+        travel direction across each line. The map's stop signs are retired in
+        place, so light element indices stay valid; returns the new element
+        count (the length set_traffic_light_states expects from now on)."""
+        lines = np.ascontiguousarray(np.asarray(lines, dtype=np.float32).reshape(-1, 6))
+        headings = np.ascontiguousarray(np.asarray(headings, dtype=np.float32).reshape(-1))
+        return int(binding.vec_set_stop_signs(self.c_envs, lines, headings))
+
+    def set_agent_goals(self, agent_idx, gx, gy, gz, gdir_x=None, gdir_y=None):
+        """set an agent's goal waypoints (e.g. the ego's route) in world
+        coords (C subtracts world_mean). Each waypoint is snapped to its
+        nearest route-aligned drivable lane (find_goal_lane) so the GPS
+        lane-distance observation columns stay live when the map carries a
+        lane graph; waypoints off the drivable network keep lane -1
+        (columns zero-filled). gdir_x/gdir_y: per-waypoint local route travel
+        direction (need not be normalized) used to reject crossing-road lanes
+        at junctions; omit (or pass zeros) to snap by distance alone."""
+        gx = np.ascontiguousarray(gx, dtype=np.float32)
+        if gdir_x is None or gdir_y is None:
+            gdir_x = np.zeros_like(gx)
+            gdir_y = np.zeros_like(gx)
+        binding.vec_set_agent_goals(
+            self.c_envs,
+            int(agent_idx),
+            gx,
+            np.ascontiguousarray(gy, dtype=np.float32),
+            np.ascontiguousarray(gz, dtype=np.float32),
+            np.ascontiguousarray(gdir_x, dtype=np.float32),
+            np.ascontiguousarray(gdir_y, dtype=np.float32),
+        )
+
+    def get_agent_goal_progress(self, agent_idx):
+        """Co-sim: (current_goal_idx, goal_count) of one agent. current_goal_idx == goal_count
+        means every goal of the current window has been consumed."""
+        return binding.vec_get_agent_goal_progress(self.c_envs, int(agent_idx))
+
+    # ───────────────────────────────────────
 
     def get_ground_truth_trajectories(self):
         """Get ground truth trajectories for all active agents.

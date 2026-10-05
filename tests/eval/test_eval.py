@@ -538,6 +538,7 @@ def _training_args(tmp_path, benchmark_config_path, evaluation_enabled):
             "use_map_cache": True,
             "scenario_length": TRAIN_HORIZON,
             "resample_frequency": TRAIN_HORIZON,
+            "stagger_first_episode": False,  # the default 20-step stagger horizon exceeds TRAIN_HORIZON
         }
     )
     _set_small_observation_config(args)

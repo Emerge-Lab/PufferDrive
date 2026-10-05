@@ -97,7 +97,7 @@ python -m pufferlib.pufferl eval puffer_drive carla \
     wandb=True
 
 python -m pufferlib.pufferl eval puffer_drive nuplan_single \
-    env.map_dir=/home/shared/data/nuPlan/PufferDrive \
+    eval.map_dir=/home/shared/data/nuplan/PufferDrive \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True

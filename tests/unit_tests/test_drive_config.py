@@ -14,6 +14,8 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pufferlib.config_schema import validate_puffer_drive_config
+from pufferlib.ocean.drive import binding
+from pufferlib.ocean.drive.drive import Drive
 from pufferlib.pufferl import load_config, pufferlib
 
 VERBOSITY = 0
@@ -53,6 +55,37 @@ class TestDriveConfig(unittest.TestCase):
         args["env"]["obs_boundary_stride"] = 0
         with self.assertRaisesRegex(pufferlib.APIUsageError, "obs_boundary_stride"):
             validate_puffer_drive_config(args, "test")
+
+    def test_speed_limit_randomization_validation(self):
+        with self.assertRaisesRegex(ValueError, "speed_limit_random_prob"):
+            Drive(speed_limit_random_prob=1.5)
+        with self.assertRaisesRegex(ValueError, "speed_limit_random_delta_mps"):
+            Drive(speed_limit_random_delta_mps=-1.0)
+        with self.assertRaisesRegex(ValueError, "min <= max"):
+            Drive(speed_limit_random_min_mps=20.0, speed_limit_random_max_mps=10.0)
+
+    def test_overspeed_tolerance_validation(self):
+        with self.assertRaisesRegex(ValueError, "overspeed_tolerance_mps"):
+            Drive(overspeed_tolerance_mps=-0.5)
+        with self.assertRaisesRegex(ValueError, "overspeed_tolerance_mps"):
+            Drive(overspeed_tolerance_mps=float("nan"))
+
+    def test_conditioning_speed_scale_validation(self):
+        with self.assertRaisesRegex(ValueError, "conditioning_speed_scale"):
+            Drive(conditioning_speed_scale=0.9)
+
+    @patch("sys.argv", ["pufferl.py", "env.obs_lane_speed_limit=true"])
+    def test_lane_speed_limit_cli_override(self):
+        args = load_config("puffer_drive")
+        self.assertTrue(args["env"]["obs_lane_speed_limit"])
+
+    def test_lane_speed_limit_obs_widens_lane_rows(self):
+        plain = Drive(config_only=True)
+        with_limit = Drive(config_only=True, obs_lane_speed_limit=True)
+        self.assertEqual(with_limit.lane_features, plain.lane_features + binding.LANE_SPEED_LIMIT_FEATURES)
+        self.assertEqual(
+            with_limit.num_obs - plain.num_obs, plain.obs_slots_lane_kept * binding.LANE_SPEED_LIMIT_FEATURES
+        )
 
     @patch("sys.argv", ["pufferl.py", "train.learning_rate=0.5"])
     def test_cli_override(self):

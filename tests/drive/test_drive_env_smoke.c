@@ -46,6 +46,72 @@ static int test_nuplan_replay_load_step_log(void) {
     return run_case("nuplan-replay", drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1);
 }
 
+static int test_nuplan_replay_create_only_controlled(void) {
+    srand(7);
+    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 4, 0);
+    env.init_mode = INIT_MODE_CREATE_ONLY_CONTROLLED;
+    env.control_mode = CONTROL_MODE_VEHICLES;
+    allocate(&env);
+    c_reset(&env);
+    EXPECT_EQ_INT(env.active_agent_count, 4);
+    EXPECT_EQ_INT(env.static_agent_count, 0);
+    EXPECT_EQ_INT(env.num_agents, env.active_agent_count + env.static_agent_count);
+    int valid_agent_count = 0;
+    for (int i = 0; i < env.num_total_agents; i++) {
+        valid_agent_count += env.agents[i].sim_valid == 1;
+    }
+    EXPECT_EQ_INT(valid_agent_count, env.num_agents);
+
+    int obs_size = compute_observation_size(&env);
+    for (int t = 0; t < 5; t++) {
+        drive_set_neutral_actions(&env);
+        c_step(&env);
+        EXPECT_TRUE(drive_all_finite(env.observations, env.active_agent_count * obs_size));
+    }
+    free_allocated(&env);
+    return 0;
+}
+
+static int test_short_early_reset_flags_and_logs(void) {
+    const float max_spawn_attempts = 30.0f;
+    srand(7);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
+    EXPECT_TRUE(env.active_agent_count >= 4);
+    env.termination_mode = 1;
+    env.inactive_agent_threshold = 0.4f;
+
+    int removed_target = env.active_agent_count / 2 + 1;
+    for (int i = 0; i < removed_target; i++) {
+        Agent *agent = &env.agents[env.active_agent_indices[i]];
+        invalidate_agent(agent);
+        agent->removed = 1;
+    }
+    drive_set_neutral_actions(&env);
+    c_step(&env);
+
+    EXPECT_TRUE(env.log.n > 0.0f);
+    EXPECT_NEAR(env.log.early_reset_short, env.log.n, 1e-5f);
+    EXPECT_EQ_INT(env.short_reset_print_count, 1);
+    EXPECT_EQ_INT(env.autoreset_pending, 1);
+
+    drive_set_neutral_actions(&env);
+    c_step(&env);
+    EXPECT_EQ_INT(env.autoreset_pending, 0);
+    EXPECT_EQ_INT(env.short_reset_print_count, 1);
+    for (int x = 0; x < env.active_agent_count; x++) {
+        Log *agent_log = &env.logs[x];
+        float rejects = agent_log->spawn_reject_collision + agent_log->spawn_reject_offroad
+            + agent_log->spawn_reject_stop_line + agent_log->spawn_reject_empty_cell;
+        EXPECT_TRUE(rejects <= max_spawn_attempts);
+        EXPECT_TRUE(agent_log->spawn_failed == 0.0f || agent_log->spawn_failed == 1.0f);
+        Agent *agent = &env.agents[env.active_agent_indices[x]];
+        EXPECT_EQ_INT(agent->removed, (int) agent_log->spawn_failed);
+        EXPECT_EQ_INT(agent->stopped, (int) agent_log->stopped_at_reset);
+    }
+    free_allocated(&env);
+    return 0;
+}
+
 static int test_truncation_and_episode_log(void) {
     srand(11);
     Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 8, 0);
@@ -59,10 +125,123 @@ static int test_truncation_and_episode_log(void) {
     }
 
     EXPECT_TRUE(env.log.n > 0.0f);
+    EXPECT_EQ_INT(env.timestep, 3);
+    EXPECT_EQ_INT(env.autoreset_pending, 1);
+    for (int i = 0; i < env.active_agent_count; i++) {
+        EXPECT_EQ_INT(env.truncations[i], 1);
+        EXPECT_EQ_INT(env.masks[i], 0);
+    }
+
+    drive_set_neutral_actions(&env);
+    c_step(&env);
+    EXPECT_EQ_INT(env.autoreset_pending, 0);
+    EXPECT_EQ_INT(env.timestep, env.init_step);
+    for (int i = 0; i < env.active_agent_count; i++) {
+        Agent *agent = &env.agents[env.active_agent_indices[i]];
+        int expected_mask = !(agent->stopped || agent->removed || agent->is_blind_partner || agent->is_phantom_braker);
+        EXPECT_EQ_INT(env.truncations[i], 0);
+        EXPECT_EQ_INT(env.terminals[i], 0);
+        EXPECT_TRUE(env.rewards[i] == 0.0f);
+        EXPECT_EQ_INT(env.masks[i], expected_mask);
+    }
+
+    free_allocated(&env);
+    return 0;
+}
+
+static int test_stagger_first_episode(void) {
+    const int scenario_length = 40;
+    const int min_horizon = 5;
+    const int num_seeds = 6;
+    int first_episode_ends[6];
+    srand(5);
+    for (int seed_idx = 0; seed_idx < num_seeds; seed_idx++) {
+        Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 8, 0);
+        env.scenario_length = scenario_length;
+        env.init_step_min_horizon = min_horizon;
+        env.stagger_first_episode = 1;
+        env.init_seed = (uint64_t) seed_idx;
+        allocate(&env);
+        c_reset(&env);
+        EXPECT_EQ_INT(env.first_reset_pending, 0);
+        EXPECT_TRUE(env.episode_end_timestep >= min_horizon);
+        EXPECT_TRUE(env.episode_end_timestep <= scenario_length);
+        first_episode_ends[seed_idx] = env.episode_end_timestep;
+        free_allocated(&env);
+    }
+    int distinct_end_count = 0;
+    for (int seed_idx = 1; seed_idx < num_seeds; seed_idx++) {
+        distinct_end_count += first_episode_ends[seed_idx] != first_episode_ends[0];
+    }
+    EXPECT_TRUE(distinct_end_count > 0);
+
+    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 8, 0);
+    env.scenario_length = scenario_length;
+    env.init_step_min_horizon = min_horizon;
+    env.stagger_first_episode = 1;
+    env.init_seed = 3;
+    allocate(&env);
+    c_reset(&env);
+    EXPECT_EQ_INT(env.episode_end_timestep, first_episode_ends[3]);
+    int first_episode_end = env.episode_end_timestep;
+    int step_count = 0;
+    while (!env.autoreset_pending && step_count <= scenario_length) {
+        drive_set_neutral_actions(&env);
+        c_step(&env);
+        step_count++;
+    }
+    EXPECT_EQ_INT(env.autoreset_pending, 1);
+    EXPECT_EQ_INT(step_count, first_episode_end);
+    EXPECT_EQ_INT(env.timestep, first_episode_end);
     for (int i = 0; i < env.active_agent_count; i++) {
         EXPECT_EQ_INT(env.truncations[i], 1);
     }
 
+    drive_set_neutral_actions(&env);
+    c_step(&env);
+    EXPECT_EQ_INT(env.autoreset_pending, 0);
+    EXPECT_EQ_INT(env.timestep, env.init_step);
+    EXPECT_EQ_INT(env.episode_end_timestep, scenario_length);
+    for (int t = 0; t < scenario_length; t++) {
+        drive_set_neutral_actions(&env);
+        c_step(&env);
+    }
+    EXPECT_EQ_INT(env.autoreset_pending, 1);
+    EXPECT_EQ_INT(env.timestep, scenario_length);
+    free_allocated(&env);
+
+    Drive eval_env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 8, 0);
+    eval_env.scenario_length = scenario_length;
+    eval_env.init_step_min_horizon = min_horizon;
+    eval_env.stagger_first_episode = 1;
+    eval_env.eval_mode = 1;
+    allocate(&eval_env);
+    c_reset(&eval_env);
+    EXPECT_EQ_INT(eval_env.first_reset_pending, 0);
+    EXPECT_EQ_INT(eval_env.episode_end_timestep, scenario_length);
+    free_allocated(&eval_env);
+    return 0;
+}
+
+static int test_eval_spawn_keeps_edge_clearance(void) {
+    const char *town04_map = DRIVE_TEST_REPO_ROOT "/pufferlib/resources/drive/binaries/carla/opendrive__Town04.bin";
+    const int reset_count = 8;
+    const int agent_count = 50;
+    Drive env = drive_test_env_config(town04_map, SIMULATION_MODE_GIGAFLOW, agent_count, 0);
+    env.eval_mode = 1;
+    allocate(&env);
+    c_reset(&env);
+    EXPECT_EQ_INT(env.active_agent_count, agent_count);
+
+    for (int reset_idx = 0; reset_idx < reset_count; reset_idx++) {
+        for (int i = 0; i < env.active_agent_count; i++) {
+            Agent *agent = &env.agents[env.active_agent_indices[i]];
+            EXPECT_EQ_INT(agent->removed, 0);
+            EXPECT_FALSE(check_spawn_offroad(&env, agent, EVAL_SPAWN_EDGE_CLEARANCE_M));
+        }
+        env.timestep = env.scenario_length;
+        c_reset(&env);
+    }
     free_allocated(&env);
     return 0;
 }
@@ -72,6 +251,10 @@ int main(void) {
     RUN_TEST(test_carla_gigaflow_load_step_log);
     RUN_TEST(test_nuplan_gigaflow_load_step_log);
     RUN_TEST(test_nuplan_replay_load_step_log);
+    RUN_TEST(test_nuplan_replay_create_only_controlled);
     RUN_TEST(test_truncation_and_episode_log);
+    RUN_TEST(test_short_early_reset_flags_and_logs);
+    RUN_TEST(test_stagger_first_episode);
+    RUN_TEST(test_eval_spawn_keeps_edge_clearance);
     return test_summary(failures);
 }

@@ -39,6 +39,7 @@ from torch.distributed.elastic.multiprocessing.errors import record
 import pufferlib
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
+from pufferlib.ocean.evaluation_utils import cosim_evaluator as drive_cosim_eval
 import pufferlib.sweep
 import pufferlib.utils
 import pufferlib.vector
@@ -322,6 +323,10 @@ class PuffeRL:
         self.obs_stats_feature_idx = torch.as_tensor(
             np.flatnonzero(vecenv.driver_env.obs_stats_feature_mask), device=config["device"]
         )
+        # Workers already exist; registration belongs to this rank's CUDA context.
+        if use_cuda and hasattr(vecenv, "pin_observations"):
+            with torch.cuda.device(device):
+                vecenv.pin_observations()
         self.epoch = 0
         self.global_step = 0
         self.agent_steps = 0
@@ -331,6 +336,7 @@ class PuffeRL:
         self.utilization = Utilization()
         self.profile = Profile()
         self.stats = defaultdict(list)
+        self.env_metric_sums = {}
         self.last_stats = defaultdict(list)
         self.losses = {}
         self.best_score = -float("inf")
@@ -459,19 +465,15 @@ class PuffeRL:
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob.float()
-                # Truncation bootstrap hack for auto-reset envs.
-                # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
-                # the value at index `l` is post-reset. We use `values[..., l-1]` as a heuristic
-                # proxy for the pre-reset terminal value (bootstrap term is not clipped).
-                if l > 0 and config["use_value_bootstrapping"]:
+                # Truncated envs expose the pre-reset state here, so V(o) is the bootstrap value (unclipped).
+                if config["use_value_bootstrapping"]:
                     trunc_mask = (t > 0) & (d == 0)
-                    r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
+                    r = r + trunc_mask.to(r.dtype) * config["gamma"] * value.flatten().float()
                 self.rewards[batch_rows, l] = r
                 self.terminals[batch_rows, l] = done_mask.bool()
                 self.values[batch_rows, l] = value.flatten().float()
                 self.masks[batch_rows, l] = m
 
-                # Note: We are not yet handling masks in this version
                 self.ep_lengths[env_id] += 1
                 if l + 1 >= config["bptt_horizon"]:
                     num_full = env_id.stop - env_id.start
@@ -482,13 +484,10 @@ class PuffeRL:
 
             profile("eval_misc", epoch)
             for i in info:
+                # every completed episode counts once: weight each env log by its episode count
+                weight = float(i.get(pufferlib.utils.EPISODE_COUNT_KEY, 1.0)) if isinstance(i, dict) else 1.0
                 for k, v in pufferlib.unroll_nested_dict(i):
-                    if isinstance(v, np.ndarray):
-                        v = v.tolist()
-                    elif isinstance(v, (list, tuple)):
-                        self.stats[k].extend(v)
-                    else:
-                        self.stats[k].append(v)
+                    pufferlib.utils.accumulate_environment_metric(self.env_metric_sums, k, v, weight)
 
             profile("env", epoch)
 
@@ -506,7 +505,7 @@ class PuffeRL:
         self.ep_indices = torch.arange(self.total_agents, dtype=torch.int32)
         self.ep_lengths.zero_()
         profile.end()
-        return pufferlib.utils.reduce_environment_metrics(self.stats)
+        return pufferlib.utils.finalize_environment_metrics(self.collect_environment_metric_sums())
 
     @record
     def train(self):
@@ -539,6 +538,7 @@ class PuffeRL:
             logs = self.mean_and_log()
             self.print_dashboard()
             self.stats = defaultdict(list)
+            self.env_metric_sums = {}
             self.last_log_time = time.time()
             self.last_log_step = self.global_step
             profile.clear()
@@ -635,12 +635,13 @@ class PuffeRL:
         )
 
     def _clip_gradients(self, losses):
+        # train() converts these logging-only scalars after the optimizer updates.
         max_grad_norm = self.config["max_grad_norm"]
         if self.separate_grad_clip:
-            losses["actor_grad_norm"] = torch.nn.utils.clip_grad_norm_(self.actor_params, max_grad_norm).item()
-            losses["critic_grad_norm"] = torch.nn.utils.clip_grad_norm_(self.critic_params, max_grad_norm).item()
+            losses["actor_grad_norm"] = torch.nn.utils.clip_grad_norm_(self.actor_params, max_grad_norm).detach()
+            losses["critic_grad_norm"] = torch.nn.utils.clip_grad_norm_(self.critic_params, max_grad_norm).detach()
         else:
-            losses["grad_norm"] = torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_grad_norm).item()
+            losses["grad_norm"] = torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_grad_norm).detach()
 
     def _compute_advantages(self, ratio, rho_clip, c_clip):
         config = self.config
@@ -794,17 +795,12 @@ class PuffeRL:
 
         self.optimizer.zero_grad()
         total_minibatches = 0
-        pending_minibatches = 0
-
-        # Disabled for now: dropping the partial final minibatch means zero optimizer
-        # steps (silently) whenever fewer than minibatch_size transitions survive the
-        # advantage filter, which permanently freezes a plateaued policy.
-        # full_minibatch_transitions = (keep_idx.numel() // self.minibatch_size) * self.minibatch_size
-        full_minibatch_transitions = keep_idx.numel()
+        retained_transition_count = keep_idx.numel()
+        optimizer_batch_size = self.minibatch_size * self.accumulate_minibatches
 
         for _ in range(config["update_epochs"]):
-            permutation = keep_idx[torch.randperm(keep_idx.numel(), device=keep_idx.device)]
-            for start in range(0, full_minibatch_transitions, self.minibatch_size):
+            permutation = keep_idx[torch.randperm(retained_transition_count, device=keep_idx.device)]
+            for start in range(0, retained_transition_count, self.minibatch_size):
                 profile("train_copy", epoch)
                 mb_idx = permutation[start : start + self.minibatch_size]
                 if config["cpu_offload"]:
@@ -832,20 +828,20 @@ class PuffeRL:
                     losses[key] += value
 
                 profile("learn", epoch)
+                accumulation_start = (start // optimizer_batch_size) * optimizer_batch_size
+                accumulation_end = min(accumulation_start + optimizer_batch_size, retained_transition_count)
+                # Mean losses contribute in proportion to their samples, including a partial final group.
+                if self.accumulate_minibatches > 1:
+                    loss = loss * (mb_idx.numel() / (accumulation_end - accumulation_start))
                 loss.backward()
                 total_minibatches += 1
-                pending_minibatches += 1
 
-                if pending_minibatches >= self.accumulate_minibatches:
-                    self._clip_gradients(losses)
-                    self.optimizer.step()
-                    self.optimizer.zero_grad()
-                    pending_minibatches = 0
-
-        if pending_minibatches > 0:
-            self._clip_gradients(losses)
-            self.optimizer.step()
-            self.optimizer.zero_grad()
+                # Flush at the end of each PPO epoch so updates never span two permutations.
+                if start + self.minibatch_size < accumulation_end:
+                    continue
+                self._clip_gradients(losses)
+                self.optimizer.step()
+                self.optimizer.zero_grad()
 
         if total_minibatches > 0:
             for key in ("policy_loss", "value_loss", "entropy", "ent_coef", "old_approx_kl", "approx_kl", "clipfrac"):
@@ -858,9 +854,12 @@ class PuffeRL:
             float("nan") if var_y == 0 else (1 - (y_true - y_pred).var(unbiased=False) / var_y).item()
         )
 
+    def collect_environment_metric_sums(self):
+        return {**pufferlib.utils.environment_metric_sums(self.stats), **self.env_metric_sums}
+
     def mean_and_log(self):
         config = self.config
-        env_metric_sums = pufferlib.utils.environment_metric_sums(self.stats)
+        env_metric_sums = self.collect_environment_metric_sums()
         losses = {k: float(v) for k, v in self.losses.items()}
         if torch.distributed.is_initialized():
             world_size = torch.distributed.get_world_size()
@@ -1478,6 +1477,11 @@ def derive_rank_seeds(vec_seed, train_seed, world_size, global_rank):
     return torch_seed, env_seed
 
 
+def _latest_checkpoint_path(run_dir):
+    model_files = glob.glob(os.path.join(run_dir, "models", "model_*.pt"))
+    return max(model_files, key=os.path.getctime) if model_files else None
+
+
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
 
@@ -1634,6 +1638,17 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     if is_rank0:
         _save_experiment_config(args, path)
 
+    # Debug hook: force an initial checkpoint (epoch 0, before any training
+    # step) and submit the co-sim benchmarks against it (fire-and-forget --
+    # see run_cosim_debug_benchmarks), so the SLURM wiring can be verified
+    # without stalling training on a real CARLA run. Each benchmark's
+    # own orchestrator job logs its result to wandb once it's ready, whenever
+    # that is -- independent of this process's lifetime.
+    if training_evaluation_scheduled and args["train"]["cosim_debug_evals"] and is_rank0:
+        initial_checkpoint = pufferl.save_checkpoint()
+        if initial_checkpoint is not None:
+            run_cosim_debug_benchmarks(env_name, args, initial_checkpoint, "start")
+
     # Sweep needs data for early stopped runs, so send data when steps > 100M
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
     all_logs = []
@@ -1722,6 +1737,16 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             run_dir=path,
         )
 
+    # Debug hook: co-sim benchmarks against the final checkpoint (train()'s
+    # PPO loop always save_checkpoint()s once done_training, so this exists).
+    # Fire-and-forget, same as the start-of-training hook -- each benchmark's
+    # orchestrator job logs to wandb once it finishes, whenever that is, so
+    # this process doesn't need to wait around for it.
+    if training_evaluation_scheduled and args["train"]["cosim_debug_evals"] and is_rank0:
+        final_checkpoint = _latest_checkpoint_path(path)
+        if final_checkpoint is not None:
+            run_cosim_debug_benchmarks(env_name, args, final_checkpoint, "end")
+
     logs = pufferl.mean_and_log()
     if logs is not None:
         all_logs.append(logs)
@@ -1789,6 +1814,21 @@ def eval(
     benchmark_results = {}
     evaluation_policy_cache = {"policy": policy}
     for benchmark in benchmarks:
+        if benchmark.get("simulation_mode") in drive_cosim_eval.COSIM_SIMULATION_MODES:
+            if failure_replay_csv is not None:
+                raise pufferlib.APIUsageError(
+                    f"eval.failure_replay_csv is not supported for cosim benchmark {benchmark['name']}"
+                )
+            output_directory_name = benchmark["name"]
+            if output_name is not None:
+                output_directory_name = f"{output_directory_name}_{output_name}"
+            cosim_output_dir = os.path.join(eval_output_dir, output_directory_name, eval_output_subdir)
+            os.makedirs(cosim_output_dir)
+            benchmark_results[benchmark["name"]] = drive_cosim_eval.run_cosim_benchmark(
+                benchmark, base_args, cosim_output_dir
+            )
+            continue
+
         run_args = drive_benchmark.build_benchmark_args(
             base_args,
             benchmark,
@@ -2463,6 +2503,8 @@ def render_training_replays(env_name, args, policy, epoch, global_step, run_dir)
     # Fixed-length episodes: eval-mode summaries flush on the resample boundary.
     env_config["termination_mode"] = False
     env_config["compute_eval_metrics"] = True
+    # Without it eval mode spawns max_agents_per_env eval-sized cars per map, not the training distribution.
+    env_config["eval_training_render"] = True
     env_config["num_agents"] = env_config["max_agents_per_env"]
     run_args["eval"]["action_selection"] = pufferlib.pytorch.ACTION_SELECT_SAMPLE
     capture_observations = run_args["eval"]["capture_observations"]
@@ -2533,6 +2575,44 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
         if hasattr(policy, "train"):
             policy.train(policy_was_training)
         restore_rng_state({"rng_state": rng_state})
+
+
+# Hardcoded for now -- wired to only the start and end of training (see
+# train()), not the periodic eval cadence. Debug hook: promote to an
+# eval.cosim_benchmarks config once the wiring itself has been exercised
+# end to end.
+COSIM_DEBUG_BENCHMARKS = ("carla_cosim",)
+
+
+def run_cosim_debug_benchmarks(env_name, args, checkpoint_path, label):
+    """Fire-and-forget smoke-test hook: submit the co-sim benchmarks in
+    COSIM_DEBUG_BENCHMARKS against `checkpoint_path` and return immediately.
+    Each benchmark gets its own orchestrator SLURM job (see
+    cosim_evaluator.submit_cosim_benchmark_async) that submits the real
+    CARLA work, waits for it, and logs the result to wandb itself --
+    so results reach wandb whenever they're ready, independent of whether
+    this training process is still running. Failures are non-fatal (each
+    co-sim run depends on external infra -- a CARLA server -- that
+    training itself doesn't own)."""
+    eval_config = args["eval"]
+    try:
+        _, benchmarks = drive_benchmark.load_benchmark_config(
+            eval_config["benchmark_config"], list(COSIM_DEBUG_BENCHMARKS)
+        )
+    except pufferlib.APIUsageError as exc:
+        print(f"[cosim_eval] skipping {label}-of-training cosim debug eval: {exc}")
+        return
+
+    cosim_args = copy.deepcopy(args)
+    cosim_args["load_model_path"] = checkpoint_path
+    run_dir = os.path.dirname(os.path.dirname(checkpoint_path))
+    for benchmark in benchmarks:
+        output_dir = os.path.join(run_dir, "eval", "cosim", label, benchmark["name"])
+        try:
+            drive_cosim_eval.submit_cosim_benchmark_async(benchmark, cosim_args, output_dir)
+        except Exception:
+            print(f"\n[cosim_eval] {label}-of-training {benchmark['name']} submission failed; continuing training:")
+            traceback.print_exc()
 
 
 def _render_eval_failures(

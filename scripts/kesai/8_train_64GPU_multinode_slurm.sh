@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task 144
 #SBATCH --mem=1007G
 #SBATCH --time 3-00:00
-#SBATCH --output /home/bjaeger/cosim_Puffer/experiments/logs/log_%a_%A.out
-#SBATCH --error /home/bjaeger/cosim_Puffer/experiments/logs/log_%a_%A.err
+#SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.out
+#SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.err
 #SBATCH --partition dev
 
 # Set up PyTorch Distributed Rendezvous parameters from Slurm variables
@@ -25,7 +25,7 @@ export SEED=1000
 export RUN_NAME=k_scaled_0034_${SEED}
 echo ${RUN_NAME}
 
-export DATA_DIR=/home/bjaeger/cosim_Puffer/experiments/${RUN_NAME}
+export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
 echo ${DATA_DIR}
 
 # Name the training run writes its final model under, so the eval steps below can
@@ -43,7 +43,7 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
 source .venv/bin/activate
-bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/cosim_Puffer || exit 1
+bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 # Execute torchrun across all nodes using srun
 srun torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -58,7 +58,7 @@ srun torchrun \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=/home/bjaeger/cosim_Puffer/pufferlib/resources/drive/binaries/carla_128_affine \
+    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine \
     env.num_maps=128 \
     env.goal_speed_randomization=false \
     env.goal_reach_requires_speed=true \
@@ -89,7 +89,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
 .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 40000 \
     --num-nodes 8 \
-    env.map_dir=/home/bjaeger/cosim_Puffer/pufferlib/resources/drive/binaries/carla \
+    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     vec.num_envs=64 \
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
@@ -98,6 +98,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     eval.max_goal_spacing=30 \
     env.max_speed_mps=13.33 \
     env.disable_red_light_infractions=1 \
+    env.disable_stop_sign_infractions=1 \
     env.traffic_light_junction_phases=0 \
     env.eval_standstill_jerk_deadband_mps3=1.5 \
     eval.render_filter=all_infractions \
@@ -107,7 +108,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     wandb=True
 
 python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
-    env.map_dir=/home/shared/data/nuPlan/PufferDrive \
+    eval.map_dir=/home/shared/data/nuplan/PufferDrive \
     vec.num_envs=64 \
     eval.num_agents=300 \
     eval.reward_comfort=0.0 \
@@ -115,6 +116,7 @@ python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
     env.eval_perceived_size_margin_m=0.15 \
     env.max_speed_mps=13.33 \
     eval.disable_red_light_infractions=1 \
+    eval.disable_stop_sign_infractions=1 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \

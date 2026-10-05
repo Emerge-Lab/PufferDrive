@@ -13,13 +13,13 @@ static Drive create_test_env_with_cache_modes(int use_map_cache, int use_neighbo
 }
 
 static size_t compute_neighbor_cache_bytes(GridMap *grid_map) {
-    if (grid_map->neighbor_cache_entities == NULL) {
+    if (grid_map->neighbor_cache_pool_idx == NULL) {
         return 0;
     }
     int grid_cell_count = grid_map->grid_cols * grid_map->grid_rows;
-    size_t bytes = grid_cell_count * sizeof(GridMapEntity *) + (grid_cell_count + 1) * sizeof(int);
+    size_t bytes = grid_cell_count * sizeof(uint16_t *) + (grid_cell_count + 1) * sizeof(int);
     for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
-        bytes += grid_map->neighbor_cache_count[grid_index] * sizeof(GridMapEntity);
+        bytes += grid_map->neighbor_cache_count[grid_index] * sizeof(uint16_t);
     }
     return bytes;
 }
@@ -107,13 +107,13 @@ static int test_cache_mode_matrix_has_expected_map_and_neighbor_allocations(void
                 EXPECT_TRUE(first_neighbor_cache_bytes > 0);
                 EXPECT_TRUE(first_neighbor_cache_bytes == second_neighbor_cache_bytes);
                 size_t unique_neighbor_cache_bytes = first_neighbor_cache_bytes;
-                if (first.grid_map->neighbor_cache_entities != second.grid_map->neighbor_cache_entities) {
+                if (first.grid_map->neighbor_cache_pool_idx != second.grid_map->neighbor_cache_pool_idx) {
                     unique_neighbor_cache_bytes += second_neighbor_cache_bytes;
                 }
                 EXPECT_TRUE(unique_neighbor_cache_bytes == first_neighbor_cache_bytes * (use_map_cache ? 1 : 2));
             } else {
-                EXPECT_TRUE(first.grid_map->neighbor_cache_entities == NULL);
-                EXPECT_TRUE(second.grid_map->neighbor_cache_entities == NULL);
+                EXPECT_TRUE(first.grid_map->neighbor_cache_pool_idx == NULL);
+                EXPECT_TRUE(second.grid_map->neighbor_cache_pool_idx == NULL);
                 EXPECT_TRUE(first.obs_neighbor_scratch != NULL);
                 EXPECT_TRUE(second.obs_neighbor_scratch != NULL);
                 EXPECT_TRUE(first.obs_neighbor_scratch != second.obs_neighbor_scratch);
@@ -149,7 +149,7 @@ static int test_mixed_neighbor_modes_share_map_and_populate_neighbor_cache(void)
         EXPECT_TRUE(first.shared_map == second.shared_map);
         EXPECT_TRUE(first.grid_map == second.grid_map);
         EXPECT_EQ_INT(first.shared_map->ref_count, 2);
-        EXPECT_TRUE(first.grid_map->neighbor_cache_entities != NULL);
+        EXPECT_TRUE(first.grid_map->neighbor_cache_pool_idx != NULL);
         EXPECT_TRUE(first.grid_map->neighbor_cache_count != NULL);
         EXPECT_TRUE(compute_neighbor_cache_bytes(first.grid_map) > 0);
         Drive *env_without_neighbor_cache = first_env_uses_neighbor_cache ? &second : &first;
@@ -233,6 +233,12 @@ static int test_forked_child_reuses_preloaded_map_cache_entry(void) {
     EXPECT_TRUE(preloaded != NULL);
     EXPECT_EQ_INT(preloaded->ref_count, 1);
     EXPECT_EQ_INT(preloaded->owner_pid, parent_pid);
+    for (int road_idx = 0; road_idx < preloaded->num_road_elements; road_idx++) {
+        RoadMapElement *road = &preloaded->road_elements[road_idx];
+        if (is_road_grid_candidate(road->type) && road->segment_size >= 2) {
+            EXPECT_TRUE(road->observation_segments != NULL);
+        }
+    }
 
     int fds[2];
     EXPECT_EQ_INT(pipe(fds), 0);
@@ -283,8 +289,66 @@ static int test_forked_child_reuses_preloaded_map_cache_entry(void) {
     return 0;
 }
 
+static int test_road_observation_cache_follows_map_ownership(void) {
+    for (int use_map_cache = 0; use_map_cache <= 1; use_map_cache++) {
+        drive_map_cache_clear();
+        Drive first = create_test_env_with_cache_modes(use_map_cache, 1, 8);
+        Drive second = create_test_env_with_cache_modes(use_map_cache, 1, 8);
+        int cached_road_count = 0;
+        for (int road_idx = 0; road_idx < first.num_road_elements; road_idx++) {
+            RoadMapElement *road = &first.road_elements[road_idx];
+            if (!is_road_grid_candidate(road->type) || road->segment_size < 2) {
+                continue;
+            }
+            EXPECT_TRUE(road->observation_segments != NULL);
+            EXPECT_EQ_INT(
+                road->observation_segments == second.road_elements[road_idx].observation_segments,
+                use_map_cache);
+            cached_road_count++;
+        }
+        EXPECT_TRUE(cached_road_count > 0);
+        free_allocated(&first);
+        drive_set_neutral_actions(&second);
+        c_step(&second);
+        free_allocated(&second);
+        EXPECT_EQ_INT(drive_map_cache_live_count(), 0);
+    }
+    drive_map_cache_clear();
+    return 0;
+}
+
+static int test_road_observation_cache_handles_widths_and_zero_length_segments(void) {
+    float x[] = {0.0f, 6.0f, 6.0f};
+    float y[] = {0.0f, 8.0f, 8.0f};
+    float z[] = {1.0f, 3.0f, 3.0f};
+    float widths[] = {2.0f, 4.0f, 6.0f};
+    RoadMapElement roads[] = {
+        {.type = LANE_SURFACE_STREET, .segment_size = 3, .x = x, .y = y, .z = z, .widths = widths},
+        {.type = ROAD_EDGE_BOUNDARY, .segment_size = 3, .x = x, .y = y, .z = z},
+        {.type = LANE_SURFACE_STREET, .segment_size = 1, .x = x, .y = y, .z = z, .widths = widths},
+    };
+    Drive env = {.road_elements = roads, .num_road_elements = 3};
+    cache_road_observation_geometry(&env);
+    const RoadObservationSegment expected_lane[] = {
+        {3.0f, 4.0f, 2.0f, 5.0f, 0.6f, 0.8f, 3.0f},
+        {6.0f, 8.0f, 3.0f, 0.0f, 0.0f, 0.0f, 5.0f},
+    };
+    RoadObservationSegment expected_boundary[2];
+    memcpy(expected_boundary, expected_lane, sizeof(expected_boundary));
+    expected_boundary[0].width_m = 0.0f;
+    expected_boundary[1].width_m = 0.0f;
+    EXPECT_EQ_INT(memcmp(roads[0].observation_segments, expected_lane, sizeof(expected_lane)), 0);
+    EXPECT_EQ_INT(memcmp(roads[1].observation_segments, expected_boundary, sizeof(expected_boundary)), 0);
+    EXPECT_TRUE(roads[2].observation_segments == NULL);
+    free(roads[0].observation_segments);
+    free(roads[1].observation_segments);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
+    RUN_TEST(test_road_observation_cache_follows_map_ownership);
+    RUN_TEST(test_road_observation_cache_handles_widths_and_zero_length_segments);
     RUN_TEST(test_all_cache_modes_produce_identical_step_outputs);
     RUN_TEST(test_cache_mode_matrix_has_expected_map_and_neighbor_allocations);
     RUN_TEST(test_mixed_neighbor_modes_share_map_and_populate_neighbor_cache);
