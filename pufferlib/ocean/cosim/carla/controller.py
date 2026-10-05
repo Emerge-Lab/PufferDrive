@@ -1,9 +1,11 @@
-"""Kinematic target -> carla.VehicleControl tracking controller.
+"""Kinematic target -> (steer, throttle, brake) tracking controller.
 
 The policy's jerk action is integrated by the shadow PufferDrive env into a
 target (speed, yaw) one policy-dt ahead; this controller makes CARLA's physics
 chase that target. CARLA (not the shadow env) moves the ego, so all leaderboard
-collision/infraction machinery sees a normally-driven vehicle.
+collision/infraction machinery sees a normally-driven vehicle. The simulator
+side wraps the returned values in carla.VehicleControl; this module never
+imports carla so it also runs in the PufferDrive venv behind lb1/policy_server.py.
 
 Longitudinal: PI on speed error -> throttle/brake.
 Lateral: desired yaw rate over the policy horizon -> inverse kinematic bicycle
@@ -15,41 +17,54 @@ disambiguates "bad policy" from "bad controller" when scores are low.
 
 import math
 
-import carla
 import numpy as np
 
 from pufferlib.ocean.cosim.carla_bridge import wrap_deg_180
 
+WHEEL_ROW_COLUMNS = 4  # max_steer_deg, position x/y/z (cm, CARLA's physics control units)
+WHEEL_POSITION_CM_PER_M = 100.0
+DEFAULT_WHEELBASE_M = 2.85  # Lincoln MKZ-ish fallbacks for implausible physics controls
+DEFAULT_MAX_STEER_DEG = 70.0
+WHEELBASE_RANGE_M = (1.5, 5.0)
+MAX_STEER_RANGE_DEG = (10.0, 90.0)
+
+
+def wheel_rows(vehicle):
+    """[[max_steer_deg, x_cm, y_cm, z_cm], ...] of a live CARLA vehicle's wheels (read-only physics control)."""
+    return [[w.max_steer_angle, w.position.x, w.position.y, w.position.z] for w in vehicle.get_physics_control().wheels]
+
+
+def vehicle_geometry_from_wheels(rows):
+    """(wheelbase_m, max_steer_rad) from wheel_rows; defaults for anything implausible."""
+    rows = np.asarray(rows, dtype=np.float64).reshape(-1, WHEEL_ROW_COLUMNS)
+    if len(rows) == 0:
+        return DEFAULT_WHEELBASE_M, math.radians(DEFAULT_MAX_STEER_DEG)
+    max_steer_deg = float(rows[:, 0].max())
+    steering, fixed = rows[rows[:, 0] > 0.0], rows[rows[:, 0] <= 0.0]
+    wheelbase = DEFAULT_WHEELBASE_M
+    if len(steering) and len(fixed):
+        axle_offset_cm = steering[:, 1:].mean(axis=0) - fixed[:, 1:].mean(axis=0)
+        wheelbase = float(np.linalg.norm(axle_offset_cm)) / WHEEL_POSITION_CM_PER_M
+    if not (WHEELBASE_RANGE_M[0] <= wheelbase <= WHEELBASE_RANGE_M[1]):
+        wheelbase = DEFAULT_WHEELBASE_M
+    if not (MAX_STEER_RANGE_DEG[0] <= max_steer_deg <= MAX_STEER_RANGE_DEG[1]):
+        max_steer_deg = DEFAULT_MAX_STEER_DEG
+    return wheelbase, math.radians(max_steer_deg)
+
 
 def read_vehicle_geometry(vehicle):
-    """(wheelbase_m, max_steer_rad) from the vehicle's physics parameters
-    (read-only). Falls back to Lincoln MKZ-ish defaults on any surprise."""
+    """(wheelbase_m, max_steer_rad) of a live CARLA vehicle; defaults on any surprise."""
     try:
-        phys = vehicle.get_physics_control()
-        wheels = phys.wheels
-        max_steer_deg = max(w.max_steer_angle for w in wheels)
-        steering = [w for w in wheels if w.max_steer_angle > 0.0]
-        fixed = [w for w in wheels if w.max_steer_angle <= 0.0]
-        if steering and fixed:
-            front = np.mean([[w.position.x, w.position.y, w.position.z] for w in steering], axis=0)
-            rear = np.mean([[w.position.x, w.position.y, w.position.z] for w in fixed], axis=0)
-            wheelbase = float(np.linalg.norm(front - rear)) / 100.0  # positions are in cm
-        else:
-            wheelbase = 2.85
-        if not (1.5 <= wheelbase <= 5.0):
-            wheelbase = 2.85
-        if not (10.0 <= max_steer_deg <= 90.0):
-            max_steer_deg = 70.0
-        return wheelbase, math.radians(max_steer_deg)
+        return vehicle_geometry_from_wheels(wheel_rows(vehicle))
     except Exception:
-        return 2.85, math.radians(70.0)
+        return DEFAULT_WHEELBASE_M, math.radians(DEFAULT_MAX_STEER_DEG)
 
 
 class TrackingController:
     def __init__(
         self,
-        wheelbase_m=2.85,
-        max_steer_rad=math.radians(70.0),
+        wheelbase_m=DEFAULT_WHEELBASE_M,
+        max_steer_rad=math.radians(DEFAULT_MAX_STEER_DEG),
         horizon_s=0.1,
         kp_speed=0.7,
         ki_speed=0.15,
@@ -77,8 +92,8 @@ class TrackingController:
         self._yaw_errors = []
 
     def step(self, current_speed, current_yaw_deg, target_speed, target_yaw_deg, tick_dt):
-        """One control tick. current_* from CARLA ground truth, target_* from the
-        shadow env's integrated policy action (held between policy steps)."""
+        """One control tick -> (steer, throttle, brake). current_* from CARLA ground truth, target_* from
+        the shadow env's integrated policy action (held between policy steps)."""
         # --- longitudinal ---
         err = target_speed - current_speed
         self._speed_errors.append(err)
@@ -103,7 +118,7 @@ class TrackingController:
         steer_angle = math.atan2(self.wheelbase * desired_yaw_rate, max(current_speed, 1.0))
         steer = float(np.clip(steer_angle / self.max_steer, -1.0, 1.0))
 
-        return carla.VehicleControl(steer=steer, throttle=throttle, brake=brake)
+        return steer, throttle, brake
 
     def stats(self):
         """Per-route tracking fidelity: mean/max absolute speed error (m/s) and

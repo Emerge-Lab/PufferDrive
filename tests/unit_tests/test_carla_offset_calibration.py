@@ -65,7 +65,7 @@ class _Map:
 def test_calibration_recovers_translation_and_height():
     transform = cb.CarlaTransform("Town01", offset=cb.town_offset(str(TOWN_BIN)))
     offset, z_offset, residual_before, residual_after = cb.calibrate_town_offset(
-        _Map(transform), transform, str(TOWN_BIN)
+        cb.driving_waypoint_samples(_Map(transform)), transform, str(TOWN_BIN)
     )
     assert residual_before > 0.2
     assert residual_after < 0.02

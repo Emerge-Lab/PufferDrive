@@ -414,13 +414,13 @@ def main():
     world, tm, ego, bg, lights = build_carla(client, town, route_wps, args.num_background, 0.1)
     cmap = world.get_map()
     transform = cb.CarlaTransform(town, offset=cb.town_offset(town_bin))
-    offset, z_offset, _, _ = cb.calibrate_town_offset(cmap, transform, town_bin)
+    offset, z_offset, _, _ = cb.calibrate_town_offset(cb.driving_waypoint_samples(cmap), transform, town_bin)
     transform = cb.CarlaTransform(town, offset=offset, z_offset=z_offset)
     _bin_lanes = cb._bin_lane_points(town_bin)  # bin lane points (== global frame) for diagnostics
     dense_route = densify_route(route_wps)  # fine-sampled route for lane-centered goal placement
     route_goals = build_route_goals(dense_route, transform, cmap)  # fixed 20-m lane-centered goal sequence
     goal_window = RouteGoalWindow(env, route_goals)
-    light_map, num_traffic = cb.map_lights_to_bin(lights, transform, town_bin)
+    light_map, num_traffic = cb.map_lights_to_bin(cb.light_geometry_from_carla(lights), transform, town_bin)
     print(
         f"[cosim] carla: ego + {len(bg)} background + {len(lights)} lights; "
         f"offset={transform.tx:.1f},{transform.ty:.1f} z={transform.tz:+.2f}"

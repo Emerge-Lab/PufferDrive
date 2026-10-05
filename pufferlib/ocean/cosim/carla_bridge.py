@@ -93,17 +93,33 @@ OFFSET_CALIBRATION_MATCH_MAX_M = 2.0  # waypoint-to-bin-lane residuals beyond th
 OFFSET_CALIBRATION_MAX_Z_OFFSET_M = 5.0  # exported bins sit 0-1.7 m below CARLA's ground; more means a frame mix-up
 
 
-def calibrate_town_offset(carla_map, transform, town_bin):
+DRIVING_WAYPOINT_COLUMNS = 5  # x, y, z, right_x, right_y in the CARLA frame
+
+
+def driving_waypoint_samples(carla_map):
+    """(N, 5) [x, y, z, right_x, right_y] of CARLA's non-junction driving waypoints, calibrate_town_offset's input."""
+    rows = []
+    for wp in carla_map.generate_waypoints(OFFSET_CALIBRATION_SPACING_M):
+        if wp.is_junction or str(wp.lane_type) != "Driving":
+            continue
+        loc, right = wp.transform.location, wp.transform.get_right_vector()
+        rows.append((loc.x, loc.y, loc.z, right.x, right.y))
+    return np.array(rows, dtype=np.float64).reshape(-1, DRIVING_WAYPOINT_COLUMNS)
+
+
+def calibrate_town_offset(driving_waypoints, transform, town_bin):
     """(tx, ty) refined so the bin's lane polylines coincide with CARLA's lane centres.
 
-    The exported bins sit a constant fraction of a metre off the CARLA frame (measured 2026-09-23 with
-    the stored offsets: Town01 0.27 m, Town02 0.6 m), and the ego plus every streamed actor inherited it,
-    driving 0.44 m right of CARLA's lane centre on Town02 and clipping curbs the shadow env could not see.
-    Least squares of the translation over the lane-normal residuals of CARLA's driving waypoints against
-    the nearest bin lane segment, two passes (re-matched after the first shift), mismatches beyond
-    OFFSET_CALIBRATION_MATCH_MAX_M dropped. The bins also sit a constant per-town height below CARLA's
-    ground (Town03 0.77 m, Town04 1.24 m, Town05 1.64 m, Town06 0), so the same matches give the z offset as
-    the median of bin lane z minus waypoint z. Returns (offset, z_offset_m, residual_before_m, residual_after_m)."""
+    driving_waypoints: (N, 5) CARLA-frame [x, y, z, right_x, right_y] samples of the driving lanes
+    (driving_waypoint_samples). The exported bins sit a constant fraction of a metre off the CARLA frame
+    (measured 2026-09-23 with the stored offsets: Town01 0.27 m, Town02 0.6 m), and the ego plus every
+    streamed actor inherited it, driving 0.44 m right of CARLA's lane centre on Town02 and clipping curbs
+    the shadow env could not see. Least squares of the translation over the lane-normal residuals of the
+    waypoints against the nearest bin lane segment, two passes (re-matched after the first shift),
+    mismatches beyond OFFSET_CALIBRATION_MATCH_MAX_M dropped. The bins also sit a constant per-town height
+    below CARLA's ground (Town03 0.77 m, Town04 1.24 m, Town05 1.64 m, Town06 0), so the same matches give
+    the z offset as the median of bin lane z minus waypoint z.
+    Returns (offset, z_offset_m, residual_before_m, residual_after_m)."""
     data = _mbin.read_bin(Path(town_bin))
     seg_start, seg_end, seg_z_start, seg_z_end = [], [], [], []
     for road in data["roads"]:
@@ -121,18 +137,11 @@ def calibrate_town_offset(carla_map, transform, town_bin):
     seg_z_end = np.concatenate(seg_z_end)
     seg_dir = seg_end - seg_start
     seg_len_sq = np.maximum((seg_dir**2).sum(1), 1e-9)
-    points, normals, waypoint_z = [], [], []
-    for wp in carla_map.generate_waypoints(OFFSET_CALIBRATION_SPACING_M):
-        if wp.is_junction or str(wp.lane_type) != "Driving":
-            continue
-        loc, right = wp.transform.location, wp.transform.get_right_vector()
-        points.append(transform.loc_to_bin(loc.x, loc.y))
-        normals.append((right.x, -right.y))  # y flips into the bin frame
-        waypoint_z.append(loc.z)
-    points = np.array(points, dtype=np.float64).reshape(-1, 2)
-    normals = np.array(normals, dtype=np.float64).reshape(-1, 2)
+    samples = np.asarray(driving_waypoints, dtype=np.float64).reshape(-1, DRIVING_WAYPOINT_COLUMNS)
+    points = np.array([transform.loc_to_bin(x, y) for x, y in samples[:, :2]], dtype=np.float64).reshape(-1, 2)
+    normals = np.column_stack([samples[:, 3], -samples[:, 4]])  # y flips into the bin frame
     normals /= np.maximum(np.hypot(normals[:, 0], normals[:, 1]), 1e-9)[:, None]
-    waypoint_z = np.array(waypoint_z, dtype=np.float64)
+    waypoint_z = samples[:, 2]
 
     def normal_residuals(shift):
         residuals = np.empty(len(points))
@@ -204,24 +213,41 @@ class CarlaTransform:
     def vel_to_bin(self, vx, vy):
         return vx, -vy
 
+    def state_to_bin(self, x, y, z, yaw_deg, vx, vy, angular_velocity_z_deg_s, accel_x, accel_y, box_z, box_extent_z):
+        """(x, y, z, heading, vx, vy, yaw_rate, accel_long) in the bin frame from a CARLA-frame actor state.
+        Angular velocity (deg/s) and acceleration (m/s^2, world frame) must come from CARLA's own physics, not
+        finite-differenced from a previous PufferDrive state: env.step() may have already overwritten this
+        actor's previous state with a throwaway dummy-action rollout. box_z/box_extent_z: bounding-box pivot
+        offset and half height (vehicles pivot at the ground, walkers at the capsule centre); bin z = ground."""
+        bx, by = self.loc_to_bin(x, y)
+        heading = self.yaw_to_bin(yaw_deg)
+        yaw_rate = -math.radians(
+            angular_velocity_z_deg_s
+        )  # mirrored y flips rotation sense, like yaw_to_bin's negation
+        accel_long = accel_x * math.cos(heading) + (-accel_y) * math.sin(heading)  # mirror y, like vel_to_bin
+        ground_z = z + box_z - box_extent_z
+        return (bx, by, self.z_to_bin(ground_z), heading, vx, -vy, yaw_rate, accel_long)
+
     def actor_state_to_bin(self, actor):
-        """Return (x, y, z, heading, vx, vy, yaw_rate, accel_long) in the bin frame for a CARLA actor.
-        yaw_rate/accel_long come from CARLA's own physics (get_angular_velocity/get_acceleration), not
-        finite-differenced from a previous PufferDrive state: env.step() may have already overwritten
-        this actor's previous state with a throwaway dummy-action rollout by the time PufferDrive would
-        otherwise read "previous" state itself."""
+        """state_to_bin of a live CARLA actor."""
         tf = actor.get_transform()
         v = actor.get_velocity()
-        av = actor.get_angular_velocity()  # deg/s, world frame (CARLA's rotation convention)
-        acc = actor.get_acceleration()  # m/s^2, world frame
-        bx, by = self.loc_to_bin(tf.location.x, tf.location.y)
-        heading = self.yaw_to_bin(tf.rotation.yaw)
-        yaw_rate = -math.radians(av.z)  # mirrored y flips rotation sense, like yaw_to_bin's negation
-        accel_x, accel_y = acc.x, -acc.y  # mirror y, like vel_to_bin
-        accel_long = accel_x * math.cos(heading) + accel_y * math.sin(heading)
-        box = actor.bounding_box  # pivot differs per asset (vehicles: ground, walkers: capsule centre); bin z = ground
-        ground_z = tf.location.z + box.location.z - box.extent.z
-        return (bx, by, self.z_to_bin(ground_z), heading, v.x, -v.y, yaw_rate, accel_long)
+        av = actor.get_angular_velocity()
+        acc = actor.get_acceleration()
+        box = actor.bounding_box
+        return self.state_to_bin(
+            tf.location.x,
+            tf.location.y,
+            tf.location.z,
+            tf.rotation.yaw,
+            v.x,
+            v.y,
+            av.z,
+            acc.x,
+            acc.y,
+            box.location.z,
+            box.extent.z,
+        )
 
     # --- bin frame -> CARLA (to teleport the ego back into CARLA) ---
     def bin_to_loc(self, bx, by):
@@ -234,23 +260,22 @@ class CarlaTransform:
         return -math.degrees(heading_rad)
 
 
-# CARLA traffic-light state -> PufferDrive enum (datatypes.h:61-67)
+# CARLA traffic-light state name -> PufferDrive enum (datatypes.h:61-67)
 #   UNKNOWN=0 RED=1 YELLOW=2 GREEN=3 OFF=4
 TRAFFIC_LIGHT_STATE_OFF = 4
+LIGHT_STATE_BY_NAME = {"Red": 1, "Yellow": 2, "Green": 3, "Off": 4, "Unknown": 0}
+
+
+def light_state_from_name(state_name) -> int:
+    """carla.TrafficLightState.<name> (as sent over a co-sim protocol) -> PufferDrive enum."""
+    return LIGHT_STATE_BY_NAME.get(state_name, 0)
 
 
 def carla_light_to_puffer(state) -> int:
-    import carla
-
-    return {
-        carla.TrafficLightState.Red: 1,
-        carla.TrafficLightState.Yellow: 2,
-        carla.TrafficLightState.Green: 3,
-        carla.TrafficLightState.Off: 4,
-        carla.TrafficLightState.Unknown: 0,
-    }.get(state, 0)
+    return light_state_from_name(state.name)
 
 
+LIGHT_PROBE_STEPS_M = (0.0, 3.0, 6.0, 10.0, 15.0)  # walk-back (all) / forward (all but 0) probes of map_lights_to_bin
 LIGHT_LANE_MATCH_MAX_DIST_M = 12.0  # measured Town01 controlled-lane stub distance (see below)
 LIGHT_LANE_FORWARD_MATCH_MAX_DIST_M = (
     3.0  # forward fallback lands ON the connector; a lane width away is the neighbour's
@@ -288,7 +313,7 @@ def _cluster_by_proximity(points, keys, radius_m):
     return clusters
 
 
-def _drop_junction_outliers(mapping, lights, transform, stop_centers):
+def _drop_junction_outliers(mapping, light_geometry, transform, stop_centers):
     """(light_idx, element_idx) pairs to remove from `mapping`: elements whose
     assigned light sits far outside where its junction cluster-mates' lights
     actually are -- see map_lights_to_bin's docstring."""
@@ -309,8 +334,8 @@ def _drop_junction_outliers(mapping, lights, transform, stop_centers):
             continue
         light_pos = {}
         for j in elements:
-            loc = lights[element_light[j]].get_location()
-            light_pos[j] = np.array(transform.loc_to_bin(loc.x, loc.y))
+            light = light_geometry[element_light[j]]
+            light_pos[j] = np.array(transform.loc_to_bin(light["x"], light["y"]))
         for j in elements:
             others = np.array([light_pos[j2] for j2 in elements if j2 != j])
             centroid = others.mean(axis=0)
@@ -324,8 +349,62 @@ def _drop_junction_outliers(mapping, lights, transform, stop_centers):
     return to_drop
 
 
-def map_lights_to_bin(lights, transform, town_bin):
-    """mapping[i] = list of bin traffic-element indices controlled by lights[i].
+def light_geometry_from_carla(lights):
+    """Plain-data geometry of live CARLA traffic lights for map_lights_to_bin (CARLA frame).
+
+    One dict per light: id, x/y of the light actor, trigger_x/trigger_y of its trigger volume and one
+    entry per stop waypoint (get_stop_waypoints, CARLA >= 0.9.11) with x, y, yaw_deg, lane_width,
+    `backward` = [x, y] of the first waypoint LIGHT_PROBE_STEPS_M behind it (None where the lane ends)
+    and `forward` = [x, y, yaw_deg] of the first waypoint each non-zero step ahead of it."""
+    geometry = []
+    for light in lights:
+        location = light.get_location()
+        trigger = light.get_transform().transform(light.trigger_volume.location)
+        stop_waypoints = []
+        for wp in light.get_stop_waypoints():
+            backward, forward = [], []
+            for step_m in LIGHT_PROBE_STEPS_M:
+                probes = [wp] if step_m == 0.0 else wp.previous(step_m)
+                backward.append(
+                    None if not probes else [probes[0].transform.location.x, probes[0].transform.location.y]
+                )
+            for step_m in LIGHT_PROBE_STEPS_M[1:]:
+                probes = wp.next(step_m) or []
+                forward.append(
+                    None
+                    if not probes
+                    else [
+                        probes[0].transform.location.x,
+                        probes[0].transform.location.y,
+                        probes[0].transform.rotation.yaw,
+                    ]
+                )
+            stop_waypoints.append(
+                {
+                    "x": wp.transform.location.x,
+                    "y": wp.transform.location.y,
+                    "yaw_deg": wp.transform.rotation.yaw,
+                    "lane_width": wp.lane_width,
+                    "backward": backward,
+                    "forward": forward,
+                }
+            )
+        geometry.append(
+            {
+                "id": light.id,
+                "x": location.x,
+                "y": location.y,
+                "trigger_x": trigger.x,
+                "trigger_y": trigger.y,
+                "stop_waypoints": stop_waypoints,
+            }
+        )
+    return geometry
+
+
+def map_lights_to_bin(light_geometry, transform, town_bin):
+    """mapping[i] = list of bin traffic-element indices controlled by light_geometry[i]
+    (light_geometry_from_carla, or the same dicts built by a co-sim client without get_stop_waypoints).
 
     Semantic matching: each of the light's STOP WAYPOINTS is snapped to its bin
     LANE (nearest drivable-lane segment -- stop lines lie ON lane segments, so
@@ -406,26 +485,26 @@ def map_lights_to_bin(lights, transform, town_bin):
                 return controlling
         return []
 
-    probe_steps_m = (0.0, 3.0, 6.0, 10.0, 15.0)
     mapping = []
-    for lt in lights:
+    for light in light_geometry:
         element_indices = []
-        for wp in lt.get_stop_waypoints():
+        for stop_waypoint in light["stop_waypoints"]:
             if not len(seg_lane):
                 continue
             controlling = []
-            for step_m in probe_steps_m:
-                probes = [wp] if step_m == 0.0 else wp.previous(step_m)
-                for probe in probes[:1]:
-                    bx, by = transform.loc_to_bin(probe.transform.location.x, probe.transform.location.y)
-                    controlling = controlling_elements_near(bx, by, LIGHT_LANE_MATCH_MAX_DIST_M)
+            for probe in stop_waypoint["backward"]:
+                if probe is None:
+                    continue
+                bx, by = transform.loc_to_bin(probe[0], probe[1])
+                controlling = controlling_elements_near(bx, by, LIGHT_LANE_MATCH_MAX_DIST_M)
                 if controlling:
                     break
-            for step_m in probe_steps_m[1:] if not controlling else ():  # fallback: forward into the junction
-                for probe in (wp.next(step_m) or [])[:1]:
-                    bx, by = transform.loc_to_bin(probe.transform.location.x, probe.transform.location.y)
-                    heading = transform.yaw_to_bin(probe.transform.rotation.yaw)
-                    controlling = controlling_elements_near(bx, by, LIGHT_LANE_FORWARD_MATCH_MAX_DIST_M, heading)
+            for probe in stop_waypoint["forward"] if not controlling else ():  # fallback: forward into the junction
+                if probe is None:
+                    continue
+                bx, by = transform.loc_to_bin(probe[0], probe[1])
+                heading = transform.yaw_to_bin(probe[2])
+                controlling = controlling_elements_near(bx, by, LIGHT_LANE_FORWARD_MATCH_MAX_DIST_M, heading)
                 if controlling:
                     break
             element_indices.extend(controlling)
@@ -437,22 +516,19 @@ def map_lights_to_bin(lights, transform, town_bin):
             for t in data["traffic"]
         ]
     ).reshape(-1, 2)
-    for light_idx, element_idx in _drop_junction_outliers(mapping, lights, transform, stop_centers):
+    for light_idx, element_idx in _drop_junction_outliers(mapping, light_geometry, transform, stop_centers):
         mapping[light_idx].remove(element_idx)
 
     return mapping, len(data["traffic"])
 
 
-def stop_signs_from_carla(world, carla_map, transform):
-    """(lines (K, 6), headings (K,)) in the bin frame, one per CARLA `traffic.stop` actor: the trigger
-    volume's centre projected onto its driving lane, spanning the trigger's width across that lane, with
-    the lane's travel direction as heading and the lane waypoint's height (a few trigger volumes sit up
-    to 1.5 m above or below their road). Feed to Drive.set_stop_signs so the shadow env runs on the
-    volumes the leaderboard scores against instead of the bin's exported stop lines (which sit up to
-    9 m away on a few Town03/05 approaches and miss four signs)."""
+def stop_sign_geometry_from_carla(world, carla_map):
+    """Plain-data geometry of every CARLA `traffic.stop` actor for stop_sign_lines (CARLA frame): id, the
+    trigger volume's centre/extent/yaw_deg and `lane` = [x, y, z, yaw_deg] of the driving-lane waypoint
+    under the centre. Signs whose centre projects onto no driving lane are left out."""
     import carla
 
-    lines, headings = [], []
+    geometry = []
     for actor in world.get_actors().filter("traffic.stop"):
         actor_transform = actor.get_transform()
         trigger = actor.trigger_volume
@@ -461,14 +537,44 @@ def stop_signs_from_carla(world, carla_map, transform):
         if waypoint is None:
             continue
         forward = waypoint.transform.get_forward_vector()
-        lane_yaw = math.atan2(forward.y, forward.x)
-        box_yaw = math.radians(actor_transform.rotation.yaw)
+        lane_location = waypoint.transform.location
+        geometry.append(
+            {
+                "id": actor.id,
+                "center": [center.x, center.y, center.z],
+                "extent": [trigger.extent.x, trigger.extent.y, trigger.extent.z],
+                "yaw_deg": actor_transform.rotation.yaw,
+                "lane": [
+                    lane_location.x,
+                    lane_location.y,
+                    lane_location.z,
+                    math.degrees(math.atan2(forward.y, forward.x)),
+                ],
+            }
+        )
+    return geometry
+
+
+def stop_sign_lines(stop_sign_geometry, transform):
+    """(lines (K, 6), headings (K,)) in the bin frame, one per stop sign of stop_sign_geometry_from_carla: the
+    trigger volume's centre projected onto its driving lane, spanning the trigger's width across that lane,
+    with the lane's travel direction as heading and the lane waypoint's height (a few trigger volumes sit up
+    to 1.5 m above or below their road). Feed to Drive.set_stop_signs so the shadow env runs on the volumes
+    the leaderboard scores against instead of the bin's exported stop lines (which sit up to 9 m away on a
+    few Town03/05 approaches and miss four signs)."""
+    lines, headings = [], []
+    for sign in stop_sign_geometry:
+        center_x, center_y, _ = sign["center"]
+        extent_x, extent_y, _ = sign["extent"]
+        _, _, lane_z, lane_yaw_deg = sign["lane"]
+        lane_yaw = math.radians(lane_yaw_deg)
+        box_yaw = math.radians(sign["yaw_deg"])
         box_x_along_lane = abs(math.cos(box_yaw - lane_yaw)) >= math.cos(math.pi / 4.0)
-        half_width = trigger.extent.y if box_x_along_lane else trigger.extent.x
+        half_width = extent_y if box_x_along_lane else extent_x
         across_x, across_y = -math.sin(lane_yaw), math.cos(lane_yaw)
-        left = transform.loc_to_bin(center.x - half_width * across_x, center.y - half_width * across_y)
-        right = transform.loc_to_bin(center.x + half_width * across_x, center.y + half_width * across_y)
-        line_z = transform.z_to_bin(waypoint.transform.location.z)
+        left = transform.loc_to_bin(center_x - half_width * across_x, center_y - half_width * across_y)
+        right = transform.loc_to_bin(center_x + half_width * across_x, center_y + half_width * across_y)
+        line_z = transform.z_to_bin(lane_z)
         lines.append([left[0], left[1], line_z, right[0], right[1], line_z])
-        headings.append(transform.yaw_to_bin(math.degrees(lane_yaw)))
+        headings.append(transform.yaw_to_bin(lane_yaw_deg))
     return np.array(lines, np.float32).reshape(-1, 6), np.array(headings, np.float32)
