@@ -33,7 +33,7 @@ class Drive(pufferlib.PufferEnv):
         reward_reverse=0.005,
         reward_stop_line=1.0,
         reward_timestep=0.000025,
-        reward_overspeed=0.005,
+        reward_overspeed=0.05,
         overspeed_tolerance_mps=0.0,
         reward_ade=0.0,
         min_goal_spacing=20.0,
