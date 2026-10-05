@@ -25,6 +25,7 @@ import os
 import numpy as np
 import pytest
 
+from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -150,6 +151,53 @@ def test_spread_rejected_when_min_horizon_at_or_past_episode_length(min_horizon)
     handing an empty/out-of-bounds range to the sampler."""
     with pytest.raises(ValueError, match="init_step_min_horizon"):
         _make_spread_env(init_step_min_horizon=min_horizon)
+
+
+def test_spread_sizes_each_multi_agent_scene_at_its_own_start(capfd):
+    """With control_vehicles the number of controlled vehicles depends on the start step, so shared() must size
+    each scene's rows at the step that scene starts from; otherwise rows are left without an agent."""
+    env = _make_spread_env(
+        num_agents=128,
+        max_agents_per_env=128,
+        control_mode="control_vehicles",
+        sdc_controller="policy",
+        non_sdc_controller="policy",
+        non_vehicle_controller="replay",
+        goal_source="gt",
+        learner_agents="sdc",
+        log_sdc_only=True,
+    )
+    try:
+        states = env.get_state()
+        rows_per_scene = np.diff(env.agent_offsets)
+        assert [state["active_agent_count"] for state in states] == rows_per_scene.tolist()
+        expected_learner_rows = np.zeros(env.num_agents, dtype=bool)
+        expected_learner_rows[env.agent_offsets[:-1]] = True
+        np.testing.assert_array_equal(env.learner_masks, expected_learner_rows)
+    finally:
+        env.close()
+    assert "Mismatch in active agent count" not in capfd.readouterr().out
+
+
+def test_scene_given_more_rows_than_agents_is_rejected():
+    """A replay scene whose buffer slice has more rows than controlled agents would leave rows no agent owns."""
+    env = _make_spread_env(init_step_spread=False)
+    rows = env.agent_offsets[1] - env.agent_offsets[0]
+    try:
+        with pytest.raises(ValueError, match="controls 1 agents but was given 3 rows"):
+            binding.env_init(
+                np.zeros((rows + 2, env.num_obs), dtype=np.float32),
+                np.zeros((rows + 2, 1), dtype=np.float32),
+                np.zeros(rows + 2, dtype=np.float32),
+                np.zeros(rows + 2, dtype=bool),
+                np.zeros(rows + 2, dtype=bool),
+                np.ones(rows + 2, dtype=bool),
+                0,
+                learner_masks=np.ones(rows + 2, dtype=bool),
+                **env._env_init_kwargs(env.map_files[0], rows + 2, env.init_step),
+            )
+    finally:
+        env.close()
 
 
 if __name__ == "__main__":

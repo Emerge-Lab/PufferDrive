@@ -41,7 +41,7 @@ def _make_replay_env():
 
 
 def _resource_root(env):
-    return env._env_init_kwargs(env.map_files[0], 1)["resource_root"]
+    return env._env_init_kwargs(env.map_files[0], 1, env.init_step)["resource_root"]
 
 
 def test_resource_root_is_absolute_and_cwd_independent(tmp_path, monkeypatch):

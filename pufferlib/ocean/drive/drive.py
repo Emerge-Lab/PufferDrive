@@ -588,6 +588,7 @@ class Drive(pufferlib.PufferEnv):
         self.current_num_eval_scenarios = self._next_eval_batch_size()
 
         # Iterate through all maps to count total agents that can be initialized for each map
+        scene_init_steps = self._scene_init_steps(num_agents)
         agent_offsets, map_ids, num_envs = binding.shared(
             map_files=self.map_files,
             num_agents=num_agents,
@@ -601,6 +602,7 @@ class Drive(pufferlib.PufferEnv):
             non_vehicle_controller=self.non_vehicle_controller,
             simulation_mode=self.simulation_mode,
             init_step=self.init_step,
+            init_steps=scene_init_steps,
             seed=self.random_seed,
             min_agents_per_env=self.min_agents_per_env,
             max_agents_per_env=self.max_agents_per_env,
@@ -633,7 +635,9 @@ class Drive(pufferlib.PufferEnv):
                 self.masks[cur:nxt],
                 env_seed,
                 learner_masks=self.learner_masks[cur:nxt],
-                **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
+                **self._env_init_kwargs(
+                    self.map_files[map_ids[i]], nxt - cur, self._scene_init_step(scene_init_steps, i)
+                ),
             )
             env_ids.append(env_id)
 
@@ -641,7 +645,7 @@ class Drive(pufferlib.PufferEnv):
         self.learner_masks[agent_offsets[-1] :] = False
         self.log_agent_count = self._logged_agent_count()
 
-    def _env_init_kwargs(self, map_file, max_agents):
+    def _env_init_kwargs(self, map_file, max_agents, init_step):
         # render_mode_flag: 0 = live viewer (RENDER_WINDOW), 1 = headless batch
         # recorder (RENDER_HEADLESS). The C side only distinguishes these two;
         # Python's render_mode = "rgb_array" / "human" / None map to the viewer
@@ -708,7 +712,7 @@ class Drive(pufferlib.PufferEnv):
             "map_file": map_file,
             "max_agents": max_agents,
             "max_agents_per_env": self.max_agents_per_env,
-            "init_step": self._sample_init_step(),
+            "init_step": init_step,
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,
             "sdc_controller": self.sdc_controller,
@@ -766,6 +770,18 @@ class Drive(pufferlib.PufferEnv):
         if not self.log_sdc_only:
             return self.num_agents
         return max(1, sum(int(state["sdc_active"]) for state in binding.vec_get(self.c_envs)))
+
+    def _scene_init_steps(self, num_agents):
+        """With init_step_spread, one start step per packing slot so shared() sizes each scene's rows at the
+        step it will start from; None when every scene starts at init_step."""
+        if not self.init_step_spread:
+            return None
+        return [self._sample_init_step() for _ in range(num_agents)]
+
+    def _scene_init_step(self, scene_init_steps, scene_idx):
+        if scene_init_steps is None:
+            return self._sample_init_step()
+        return scene_init_steps[scene_idx]
 
     def _sample_init_step(self):
         # randomizer for the initialization of the C environment
@@ -850,6 +866,7 @@ class Drive(pufferlib.PufferEnv):
                 remaining_map_indices = (
                     self.eval_map_indices[pair_start:] if self.eval_map_indices is not None else None
                 )
+                scene_init_steps = self._scene_init_steps(self.num_agents)
                 agent_offsets, map_ids, num_envs = binding.shared(
                     num_agents=self.num_agents,
                     num_maps=self.num_maps,
@@ -862,6 +879,7 @@ class Drive(pufferlib.PufferEnv):
                     non_vehicle_controller=self.non_vehicle_controller,
                     simulation_mode=self.simulation_mode,
                     init_step=self.init_step,
+                    init_steps=scene_init_steps,
                     map_files=self.map_files,
                     seed=self.random_seed,
                     min_agents_per_env=self.min_agents_per_env,
@@ -893,7 +911,9 @@ class Drive(pufferlib.PufferEnv):
                         self.masks[cur:nxt],
                         env_seed,
                         learner_masks=self.learner_masks[cur:nxt],
-                        **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
+                        **self._env_init_kwargs(
+                            self.map_files[map_ids[i]], nxt - cur, self._scene_init_step(scene_init_steps, i)
+                        ),
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
