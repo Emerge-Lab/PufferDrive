@@ -43,7 +43,8 @@ static PyObject *map_cache_release_py(PyObject *self __attribute__((unused)), Py
 
 // Seeds are 63-bit non-negative so they survive int64 round-trips (numpy, pandas, CSV).
 static int unpack_seed(PyObject *kwargs, uint64_t *seed_out) {
-    // An unpack() failure above is still pending; keep it rather than relabel it as a seed error
+    // Unpacks kwargs dict can silently set a Python exception. Further processing it would overwrite the error masking it.
+    // We check here whether this has occured and if so return which reports the original error.
     if (PyErr_Occurred()) {
         return -1;
     }
