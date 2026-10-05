@@ -690,3 +690,33 @@ Compare against `fix20b_commit` at equal steps:
 - `collision_rate`, `reward_components/overspeed`, red-light violations;
 - `lattice/oncoming_starts`, `lattice/oncoming_collisions`;
 - `reward_components/speed_bonus`.
+
+### 13b. A bigger speed bonus (6e-3, 2026-10-05)
+
+Why: the 4.5e-3 run barely moved.
+- At 7.5B its `avg_speed_per_agent` is 1.96 m/s, against 1.87 for `fix20b_commit` (+5 %).
+- Its `reward_components/speed_bonus` is 0.003 per episode.
+- Without a bonus the lattice keeps sitting at 5 m/s. Renders of fix20b, first 500 steps: the 5 m/s cell holds 60 % / 55 % of the target-speed probability at 2.6B / 9.6B, and 7.5 m/s holds 1.1 % / 2.4 %. Moving time above 5.5 m/s is 0.5 % / 1.4 %. spline_baseline at 25.6B: 74 % of cars exceed 10 m/s.
+- The fix20b learning rate is cosine-annealed to 0 at 20B (53 % of the start at 9.6B, 10 % at 16B), so the slow drift cannot run much longer.
+
+Weight: the landscape table in section 13 is exactly linear in the weight. Fitted per target speed V (per step, crashes, off-road and goals excluded), with V = value at w = 0 + slope per 1e-3:
+
+| V (m/s) | 5 | 7.5 | 10 | 12.5 | 15 | 20 |
+|---|---|---|---|---|---|---|
+| at w = 0 (1e-4) | 1.30 | 0.25 | -0.72 | -2.07 | -2.19 | -2.55 |
+| per 1e-3 of w (1e-4) | 0.00 | 0.36 | 0.60 | 0.75 | 0.80 | 0.83 |
+| w = 6e-3 (1e-4) | 1.31 | 2.43 | **2.88** | 2.43 | 2.63 | 2.41 |
+
+- Without a bonus, faster targets score lower than 5 m/s per step, so longer training has no per-step reason to leave 5 m/s.
+- **6e-3 is the largest weight that keeps 10 m/s the best target.** 15 m/s is 9 % lower, which leaves room for crash risk; from 7e-3 the curve is flat from 10 to 20 m/s.
+- It gives 2.3x the 4.5e-3 run's margin over 5 m/s at 10 m/s and 1.9x at 7.5 m/s.
+- **Side effects, scaled from section 13:**
+  - about +0.11 / +0.23 per episode at a 7.5 / 10 m/s cruise;
+  - a +2.5 m/s speed-up repays its plan-change cost in 5.1 / 3.2 / 2.1 / 1.5 s;
+  - overspeed (weight ~ U(0, 1) per car) is outweighed only for cars with weight < 1.8e-3, which is under 0.2 %;
+  - passing a 5 m/s car to drive at 10 m/s now pays 6e-4 per step, against an oncoming penalty of at most 2.5e-4. Watch overtakes.
+
+Run: `spline_werling_fix20b_commit_speed6e-3_from5` (prefix `s20bspeed6`, 20B steps, nice 0), main 19253780 / continuation 19253782.
+- Its job script equals the 4.5e-3 run's except `env.reward_speed_bonus=6e-3`, the run name and the save dir.
+- The live tree held uncommitted edits to `drive.h` and `lattice.h` from another session at launch, so the code was swapped to the 4.5e-3 run's snapshot after the dry run. `pufferlib/` is byte-identical to it and to commit `1adc041f`.
+- Compare against the 4.5e-3 run and `fix20b_commit` at equal steps, on the same list as above.
