@@ -2019,6 +2019,14 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_stop_line = (float) unpack(kwargs, "reward_stop_line");
     env->reward_timestep = (float) unpack(kwargs, "reward_timestep");
     env->reward_overspeed = (float) unpack(kwargs, "reward_overspeed");
+    env->reward_overspeed_scale = (float) unpack(kwargs, "reward_overspeed_scale");
+    if (!(env->reward_overspeed_scale >= 0.0f) || !isfinite(env->reward_overspeed_scale)) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "reward_overspeed_scale must be a finite number >= 0. Got: %g",
+            env->reward_overspeed_scale);
+        return -1;
+    }
     env->reward_ade = (float) unpack(kwargs, "reward_ade");
     env->reward_trajectory_consistency = (float) unpack(kwargs, "reward_trajectory_consistency");
     env->reward_route_progress = (float) unpack(kwargs, "reward_route_progress");

@@ -66,6 +66,7 @@ static inline Drive drive_test_env_config(
     env.reward_stop_line = 1.0f;
     env.reward_timestep = 0.000025f;
     env.reward_overspeed = 0.05f;
+    env.reward_overspeed_scale = 1.0f;
     env.reward_ade = 0.0f;
     env.reward_wait_full_speed_mps = LATTICE_WAIT_FULL_SPEED_MPS;
     env.collision_behavior = INFRACTION_BEHAVIOR_IGNORE;

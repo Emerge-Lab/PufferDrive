@@ -333,6 +333,7 @@ class DriveEnvConfig:
     reward_reverse: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_timestep: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_overspeed: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    reward_overspeed_scale: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     reward_ade: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_trajectory_consistency: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_route_progress: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)

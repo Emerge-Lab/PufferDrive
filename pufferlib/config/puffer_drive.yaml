@@ -187,6 +187,8 @@ env:
   reward_reverse: 0.005
   reward_timestep: 2.5e-05
   reward_overspeed: 0.05
+  # Multiplies the overspeed coefficient (sampled under reward_randomization, else reward_overspeed) and its conditioning bounds; 0 turns the penalty off
+  reward_overspeed_scale: 1.0
   reward_ade: 0.0
   # Penalizes disagreement between consecutive predicted spline curves over their
   # overlap; only used when trajectory_training: true. Placeholder, tune empirically.

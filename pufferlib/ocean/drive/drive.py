@@ -34,6 +34,7 @@ class Drive(pufferlib.PufferEnv):
         reward_stop_line=1.0,
         reward_timestep=0.000025,
         reward_overspeed=0.05,
+        reward_overspeed_scale=1.0,
         reward_ade=0.0,
         reward_trajectory_consistency=0.0,
         reward_route_progress=0.0,
@@ -175,6 +176,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_stop_line = reward_stop_line
         self.reward_timestep = reward_timestep
         self.reward_overspeed = reward_overspeed
+        self.reward_overspeed_scale = float(reward_overspeed_scale)
         self.reward_ade = reward_ade
         self.reward_trajectory_consistency = reward_trajectory_consistency
         self.reward_route_progress = reward_route_progress
@@ -546,6 +548,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_stop_line": self.reward_stop_line,
             "reward_timestep": self.reward_timestep,
             "reward_overspeed": self.reward_overspeed,
+            "reward_overspeed_scale": self.reward_overspeed_scale,
             "reward_ade": self.reward_ade,
             "reward_trajectory_consistency": self.reward_trajectory_consistency,
             "reward_route_progress": self.reward_route_progress,

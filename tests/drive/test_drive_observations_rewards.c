@@ -249,6 +249,60 @@ static int test_reward_speed_bonus(void) {
     return 0;
 }
 
+static int test_reward_overspeed_scale(void) {
+    const float scales[] = {1.0f, 0.5f, 0.0f};
+    float sampled[3][NUM_REWARD_COEFS];
+    float conditioning[3][NUM_REWARD_COEFS];
+    for (int scale_idx = 0; scale_idx < 3; scale_idx++) {
+        Drive env = {0};
+        Agent agent = {0};
+        env.reward_randomization = 1;
+        env.reward_conditioning = 1;
+        env.reward_velocity_scale = 1.0f;
+        env.reward_overspeed_scale = scales[scale_idx];
+        rng_seed(&env.rng_state, 11);
+        generate_reward_coefs(&env, &agent);
+        memcpy(sampled[scale_idx], agent.reward_coefs, sizeof(sampled[scale_idx]));
+        EXPECT_EQ_INT(write_reward_target_obs(&env, &agent, conditioning[scale_idx], 0), NUM_REWARD_COEFS);
+    }
+    // the same draw is scaled, so every other coefficient and its observation stay identical
+    EXPECT_TRUE(sampled[0][REWARD_COEF_OVERSPEED] > 0.0f && sampled[0][REWARD_COEF_OVERSPEED] < 1.0f);
+    EXPECT_NEAR(sampled[1][REWARD_COEF_OVERSPEED], 0.5f * sampled[0][REWARD_COEF_OVERSPEED], 1e-7f);
+    EXPECT_NEAR(sampled[2][REWARD_COEF_OVERSPEED], 0.0f, 0.0f);
+    EXPECT_NEAR(conditioning[1][REWARD_COEF_OVERSPEED], conditioning[0][REWARD_COEF_OVERSPEED], 1e-6f);
+    EXPECT_NEAR(conditioning[2][REWARD_COEF_OVERSPEED], -1.0f, 0.0f);
+    for (int coef_idx = 0; coef_idx < NUM_REWARD_COEFS; coef_idx++) {
+        if (coef_idx == REWARD_COEF_OVERSPEED) {
+            continue;
+        }
+        EXPECT_NEAR(sampled[2][coef_idx], sampled[0][coef_idx], 0.0f);
+        EXPECT_NEAR(conditioning[2][coef_idx], conditioning[0][coef_idx], 0.0f);
+    }
+
+    Drive pinned_env = {0};
+    Agent pinned_agent = {0};
+    pinned_env.reward_velocity_scale = 1.0f;
+    pinned_env.reward_overspeed = 0.05f;
+    pinned_env.reward_overspeed_scale = 0.5f;
+    generate_reward_coefs(&pinned_env, &pinned_agent);
+    EXPECT_NEAR(pinned_agent.reward_coefs[REWARD_COEF_OVERSPEED], 0.025f, 1e-9f);
+
+    Drive env;
+    Agent agent;
+    Log log;
+    int active[1];
+    float reward[1] = {0};
+    for (int scale_idx = 0; scale_idx < 3; scale_idx++) {
+        init_reward_env(&env, &agent, &log, active, reward);
+        reward[0] = 0.0f;
+        agent.reward_coefs[REWARD_COEF_OVERSPEED] = sampled[scale_idx][REWARD_COEF_OVERSPEED];
+        agent.metrics_array[SPEED_LIMIT_IDX] = 1.0f;
+        compute_rewards(&env, 0);
+        EXPECT_NEAR(log.reward_overspeed, -sampled[scale_idx][REWARD_COEF_OVERSPEED], 1e-9f);
+    }
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_observation_size_formula);
@@ -257,5 +311,6 @@ int main(void) {
     RUN_TEST(test_reward_goal_speed_gating);
     RUN_TEST(test_reward_lane_align_wrong_way);
     RUN_TEST(test_reward_speed_bonus);
+    RUN_TEST(test_reward_overspeed_scale);
     return test_summary(failures);
 }

@@ -141,6 +141,16 @@ def test_speed_bonus_config():
         _validate(args)
 
 
+def test_overspeed_scale_config():
+    args = _lattice_args()
+    assert args["env"]["reward_overspeed_scale"] == 1.0
+    args["env"]["reward_overspeed_scale"] = 0.0
+    assert _validate(args)["env"]["reward_overspeed_scale"] == 0.0
+    args["env"]["reward_overspeed_scale"] = -0.5
+    with pytest.raises(pufferlib.APIUsageError, match="reward_overspeed_scale"):
+        _validate(args)
+
+
 def test_wait_guard_uses_bootstrapped_horizon():
     args = _lattice_args()
     assert args["train"]["use_value_bootstrapping"] is True

@@ -290,6 +290,7 @@ struct Drive {
     float reward_stop_line;
     float reward_timestep;
     float reward_overspeed;
+    float reward_overspeed_scale; // scales the overspeed coefficient and its conditioning bounds; 0 disables it
     float reward_ade;
     float reward_trajectory_consistency;
     float reward_route_progress; // per meter of lane-route distance gained toward the current goal (lattice only)
@@ -2507,6 +2508,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
                 : sample_uniform(&env->rng_state, bounds[c].min_val, bounds[c].max_val);
         }
         agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f * env->reward_velocity_scale;
+        agent->reward_coefs[REWARD_COEF_OVERSPEED] *= env->reward_overspeed_scale;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = 2.5e-5f;
         agent->reward_coefs[REWARD_COEF_THROTTLE] = sample_mixed_uniform(&env->rng_state, 1.25f);
         agent->reward_coefs[REWARD_COEF_STEER] = sample_mixed_uniform(&env->rng_state, 1.25f);
@@ -2524,7 +2526,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_STOP_LINE] = env->reward_stop_line;
         agent->reward_coefs[REWARD_COEF_CENTER_BIAS] = env->reward_center_bias;
         agent->reward_coefs[REWARD_COEF_VEL_ALIGN] = env->reward_vel_align;
-        agent->reward_coefs[REWARD_COEF_OVERSPEED] = env->reward_overspeed;
+        agent->reward_coefs[REWARD_COEF_OVERSPEED] = env->reward_overspeed * env->reward_overspeed_scale;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = env->reward_timestep;
         agent->reward_coefs[REWARD_COEF_REVERSE] = env->reward_reverse;
         agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
@@ -4313,7 +4315,9 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
     if (env->reward_conditioning) {
         const RewardBound *reward_bounds = env->reward_log_sampling ? REWARD_BOUNDS_LOG : REWARD_BOUNDS;
         for (int coef_idx = 0; coef_idx < NUM_REWARD_COEFS; coef_idx++) {
-            float bound_scale = coef_idx == REWARD_COEF_VELOCITY ? env->reward_velocity_scale : 1.0f;
+            float bound_scale = coef_idx == REWARD_COEF_VELOCITY ? env->reward_velocity_scale
+                : coef_idx == REWARD_COEF_OVERSPEED              ? env->reward_overspeed_scale
+                                                                 : 1.0f;
             float lo = bound_scale * reward_bounds[coef_idx].min_val;
             float hi = bound_scale * reward_bounds[coef_idx].max_val;
             float coef = ego->reward_coefs[coef_idx];
