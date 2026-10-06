@@ -720,3 +720,76 @@ Run: `spline_werling_fix20b_commit_speed6e-3_from5` (prefix `s20bspeed6`, 20B st
 - Its job script equals the 4.5e-3 run's except `env.reward_speed_bonus=6e-3`, the run name and the save dir.
 - The live tree held uncommitted edits to `drive.h` and `lattice.h` from another session at launch, so the code was swapped to the 4.5e-3 run's snapshot after the dry run. `pufferlib/` is byte-identical to it and to commit `1adc041f`.
 - Compare against the 4.5e-3 run and `fix20b_commit` at equal steps, on the same list as above.
+
+## 14. Three runs on the slow cruise (2026-10-06)
+
+Why: fix20b reaches the baseline's goals per car at 15.5B, but in half the goals per minute (0.19 vs 0.37). It has
+cruised at about 2.1 m/s since 10B, while the baseline reached 3.1 m/s at the same step and 4.9 m/s by 29B.
+- The flat velocity reward is identical in both, so the only push to speed up is goals.
+- A speed-up decision pays the consistency cost of a plan change at once (1.5-5.1e-3).
+- Its goal gain is about +0.8e-4 per step only while the faster speed is held. The 4.5e-3 run gained 9 % goals per
+  minute for 24 % more speed.
+- Speed plans last about 2 decisions (48 % of decisions issue a new one), and 7.5 m/s gets about 2 % of the choice.
+- The learning rate reaches 0 at 20B; at 15.5B approx_kl is 0.0016 against the baseline's 0.019.
+
+Code, commit `7682fc21`: `env.reward_overspeed_scale` (default 1) multiplies the overspeed coefficient and its
+conditioning bounds.
+- With `reward_randomization` on, the weight is drawn from U(0, 1) per car and `env.reward_overspeed` is ignored, so
+  the penalty could not be switched off before.
+- At 0 the conditioning feature reads -1. The draw still happens, so the other coefficients keep the same random
+  stream.
+- In a Python rollout at scales 1 and 0, only that observation column differed.
+
+Runs: prefix `s20bhp`, 20B steps, nice 1000, fix20b settings plus `env.lattice_overtake_commit=true`, from
+`7682fc21`, which includes the `c_step` speed-ups of `c463fbd0`.
+- Resolved configs (251 keys) differ from `fix20b_commit` only as listed below.
+- The frozen `pufferlib/` matches the commit.
+
+| run | change | main / continuation |
+|---|---|---|
+| `spline_werling_fix20b_commit_nooverspeed` | `env.reward_overspeed_scale=0` | 19292645 / 19292647 |
+| `spline_werling_fix20b_commit_lr5e-4_ep3` | `train.learning_rate=5e-4 train.update_epochs=3` (the pre-fix20b values) | 19292652 / 19292653 |
+| `spline_werling_fix20b_commit_speed1.5e-2_from5` | `env.reward_speed_bonus=1.5e-2 env.reward_speed_bonus_from_mps=5.0` | 19292657 / 19292659 |
+
+The fourth requested run, consistency 0, was already queued: `spline_werling_fix20b_commit_noconsist`
+19160135 / 19160136, from `9bace7a3`.
+
+Notes:
+- **No overspeed:** the penalty binds only above lane limit + 2 m/s: 13.2 m/s on Town01/02, 13.2-19.9 m/s on Town07,
+  19.9-24.4 m/s on Town10HD, and never below the 20 m/s menu top on Town03-06. So it cannot explain a 5 m/s cruise.
+  This run shows what happens when nothing caps speed.
+- **lr 5e-4 with 3 epochs:**
+  - The section 11 review estimated a peak approx_kl of 0.05-0.06 for 5e-4 with 2 epochs. With 3 epochs at about
+    80 % kept it runs about 1.5x more optimizer steps per epoch.
+  - Watch approx_kl, clipfrac and NaN.
+  - It combines the two queued single-knob runs `lr5e-4` and `ep3`.
+- **Speed bonus 1.5e-2:** the smallest weight at which every faster cruise target up to 20 m/s scores at least as high
+  per step as every slower one, in the section 13 landscape (goals and collisions excluded).
+
+  | speed-up | pays from weight |
+  |---|---|
+  | 5 → 7.5 m/s | 2.9e-3 |
+  | 7.5 → 10 m/s | 4.1e-3 |
+  | 10 → 12.5 m/s | 9.0e-3 |
+  | 12.5 → 15 m/s | 2.3e-3 |
+  | 15 → 20 m/s | 1.49e-2 |
+
+  At 1.5e-2 (per step, 1e-4): 5: 1.32, 7.5: 5.71, 10: 8.28, 12.5: 9.17, 15: 9.85, 20: 9.85.
+
+  Scaled from section 13b:
+  - about +0.28 / +0.58 per episode at a 7.5 / 10 m/s cruise (fix20b's goals give about 2.3);
+  - a +2.5 m/s speed-up repays its plan-change cost in 2.0 / 1.3 / 0.8 / 0.6 s for 2.4 / 3.6 / 4.8 / 6.0 s plans;
+  - the bonus outweighs the overspeed penalty only for cars whose weight is below 3e-3 at 15 m/s and 4.5e-3 at
+    20 m/s, under 0.5 % of cars.
+
+  Watch:
+  - collisions and red lights;
+  - goals forfeited at the final waypoint;
+  - overtakes: passing a 5 m/s car to drive at 10 m/s now pays 1.5e-3 per step, against the oncoming penalty of at
+    most 2.5e-4.
+- **Compare** at equal steps against `fix20b_commit` and the 4.5e-3 / 6e-3 speed runs:
+  - goals per minute (goals / episode length);
+  - `avg_speed_per_agent`, `avg_distance_per_infraction`;
+  - collisions and off-road;
+  - `reward_components/trajectory_consistency`, `lattice/lon_new_rate`;
+  - `losses/approx_kl`.
