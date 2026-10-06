@@ -11,7 +11,9 @@ train.minibatch_size: 256000
 train.max_minibatch_size: 64000
 train.compile: true
 
-train.total_timesteps: 10_000_000_000
+# 100B steps is several days of wall clock: relaunching with the same run_name and
+# save_dir resumes from trainer_state.pt, so resubmit when the SLURM time limit hits.
+train.total_timesteps: 100_000_000_000
 train.checkpoint_interval: 500
 train.evaluation_interval_epochs: 100
 train.evaluation_benchmarks: nuplan_single
