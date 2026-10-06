@@ -272,6 +272,8 @@ policy:
   critic_head_layer_norm: false
   # Run the actor/critic heads in float32 under bf16 autocast (backbone stays bf16)
   fp32_heads: true
+  # Fused Triton kernels for the per-slot encoders and their max-pool (same bf16 math, fewer activation bytes)
+  fused_slot_encoder: false
   # Dual or shared actor-critic backbone
   shared_network: false
   action_type: discrete

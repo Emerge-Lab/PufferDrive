@@ -68,6 +68,7 @@ srun torchrun \
     env.preload_map_cache=True \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
+    policy.fused_slot_encoder=true \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True

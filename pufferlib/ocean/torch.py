@@ -7,6 +7,7 @@ import torch.nn.functional as F
 import pufferlib
 import pufferlib.models
 from pufferlib.ocean.drive import binding
+from pufferlib.ocean.fused_slot_encoder import fused_encode_and_pool, fused_encoder_active, validate_fused_encoder
 
 from pufferlib.models import Default as Policy  # noqa: F401
 from pufferlib.models import Convolutional as Conv  # noqa: F401
@@ -23,6 +24,8 @@ class DriveBackbone(nn.Module):
       - Split Actor/Critic (configurable)
     """
 
+    fused_slot_encoder = False  # class default: tests build instances without __init__
+
     def _create_encoder(self, in_features, out_size):
         layers = [pufferlib.pytorch.layer_init(nn.Linear(in_features, out_size))]
         if self.encoder_layer_norm:
@@ -34,6 +37,9 @@ class DriveBackbone(nn.Module):
     def _encode_and_pool(self, objects, valid_counts, encoder):
         if not self.mask_padded_features:
             return encoder(objects).max(dim=1).values
+
+        if self.fused_slot_encoder and fused_encoder_active(objects):
+            return fused_encode_and_pool(objects, valid_counts, encoder)
 
         # Dense encode + masked fill keeps shapes static for torch.compile; padded rows are rare.
         valid_mask = torch.arange(objects.shape[1], device=objects.device) < valid_counts.unsqueeze(1)
@@ -59,6 +65,7 @@ class DriveBackbone(nn.Module):
         backbone_activation,
         backbone_layer_norm,
         mask_padded_features,
+        fused_slot_encoder,
     ):
         super().__init__()
         self.encoder_act_cls = ACTIVATIONS[encoder_activation]
@@ -114,6 +121,14 @@ class DriveBackbone(nn.Module):
         if self.context_dim > 0:
             self.context_encoder = self._create_encoder(self.context_dim, context_input_size)
             encoders_out += context_input_size
+
+        self.fused_slot_encoder = fused_slot_encoder
+        if fused_slot_encoder and not mask_padded_features:
+            raise ValueError("fused_slot_encoder requires mask_padded_features=true")
+        slot_encoder_names = ("lane_encoder", "boundary_encoder", "partner_encoder", "traffic_control_encoder")
+        for encoder_name in slot_encoder_names:
+            if fused_slot_encoder and hasattr(self, encoder_name):
+                validate_fused_encoder(getattr(self, encoder_name))
 
         # 2. Main Backbone MLP
         backbone_act_cls = ACTIVATIONS[backbone_activation]
@@ -321,6 +336,7 @@ class Drive(nn.Module):
         actor_head_layer_norm: bool = False,
         critic_head_layer_norm: bool = False,
         fp32_heads: bool = False,
+        fused_slot_encoder: bool = False,
     ):
         super().__init__()
 
@@ -378,6 +394,7 @@ class Drive(nn.Module):
             "backbone_activation": backbone_activation,
             "backbone_layer_norm": backbone_layer_norm,
             "mask_padded_features": mask_padded_features,
+            "fused_slot_encoder": fused_slot_encoder,
         }
 
         # Instantiate backbones

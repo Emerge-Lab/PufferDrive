@@ -386,6 +386,7 @@ class DrivePolicyConfig:
     critic_num_layers: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     critic_head_layer_norm: bool = MISSING
     fp32_heads: bool = MISSING
+    fused_slot_encoder: bool = False
     shared_network: bool = MISSING
     action_type: ActionType = MISSING
 
