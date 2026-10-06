@@ -141,7 +141,7 @@ static int test_set_agent_states_teleport_resets_prev_pose(void) {
     int idx[1] = {0};
     float x[1] = {10.0f}, y[1] = {20.0f}, z[1] = {0.0f}, h[1] = {0.5f};
     float vx[1] = {1.0f}, vy[1] = {0.0f}, yr[1] = {0.0f}, al[1] = {0.0f};
-    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, NULL), 0);
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, NULL, NULL), 0);
 
     EXPECT_NEAR(agent.prev_x, agent.sim_x, 1e-6f);
     EXPECT_NEAR(agent.prev_y, agent.sim_y, 1e-6f);
@@ -163,16 +163,48 @@ static int test_set_agent_states_seconds_stopped_injects_or_preserves(void) {
     float x[1] = {1.0f}, y[1] = {2.0f}, z[1] = {0.0f}, h[1] = {0.0f};
     float vx[1] = {0.0f}, vy[1] = {0.0f}, yr[1] = {0.0f}, al[1] = {0.0f};
 
-    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, NULL), 0);
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, NULL, NULL), 0);
     EXPECT_NEAR(agent.seconds_stopped, 12.5f, 1e-6f);
 
     float seconds_stopped[1] = {3.0f};
-    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, seconds_stopped), 0);
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, seconds_stopped, NULL), 0);
     EXPECT_NEAR(agent.seconds_stopped, 3.0f, 1e-6f);
 
     float negative_seconds_stopped[1] = {-1.0f};
-    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, negative_seconds_stopped), -1);
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, negative_seconds_stopped, NULL), -1);
     EXPECT_NEAR(agent.seconds_stopped, 3.0f, 1e-6f);
+    return 0;
+}
+
+static int test_set_agent_states_steering_is_state_below_1mps(void) {
+    // A co-sim that tracks steering as state can hand it over exactly: the angle is kept and the
+    // lateral acceleration follows from it as in c_step (v^2 tan(steering) / wheelbase). Without it,
+    // steering is derived from yaw_rate with the speed floored at 1 m/s, so a stopped car that still
+    // holds its wheels turned reads 0 -- the case the steering input exists for.
+    Drive env = {0};
+    Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
+    env.agents = &agent;
+    env.num_total_agents = 1;
+
+    int idx[1] = {0};
+    float x[1] = {1.0f}, y[1] = {2.0f}, z[1] = {0.0f}, h[1] = {0.0f};
+    float vy[1] = {0.0f}, yr[1] = {0.0f}, al[1] = {0.0f};
+
+    float stopped[1] = {0.0f}, steering[1] = {0.14f};
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, stopped, vy, yr, al, NULL, steering), 0);
+    EXPECT_NEAR(agent.steering_angle, 0.14f, 1e-6f);
+    EXPECT_NEAR(agent.accel_lat, 0.0f, 1e-6f);
+
+    float crawling[1] = {0.5f};
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, crawling, vy, yr, al, NULL, steering), 0);
+    EXPECT_NEAR(agent.steering_angle, 0.14f, 1e-6f);
+    EXPECT_NEAR(agent.accel_lat, 0.25f * tanf(0.14f) / agent.wheelbase, 1e-6f);
+
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, stopped, vy, yr, al, NULL, NULL), 0);
+    EXPECT_NEAR(agent.steering_angle, 0.0f, 1e-6f);
+
+    float not_finite[1] = {NAN};
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, stopped, vy, yr, al, NULL, not_finite), -1);
     return 0;
 }
 
@@ -337,6 +369,7 @@ int main(void) {
     RUN_TEST(test_set_stop_signs_rejects_bad_input_untouched);
     RUN_TEST(test_set_agent_states_teleport_resets_prev_pose);
     RUN_TEST(test_set_agent_states_seconds_stopped_injects_or_preserves);
+    RUN_TEST(test_set_agent_states_steering_is_state_below_1mps);
     RUN_TEST(test_set_agent_goals_sets_positions_lane_and_count);
     RUN_TEST(test_set_agent_goals_rejects_more_than_max_goals);
     RUN_TEST(test_set_agent_goals_rejects_out_of_range_agent_idx);

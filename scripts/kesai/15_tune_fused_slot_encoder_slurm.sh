@@ -24,9 +24,19 @@ source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 
 RESULT_FILE=/home/bjaeger/PufferDrive/experiments/logs/tune_fused_${SLURM_JOB_ID}_result.txt
-python scripts/tune_fused_slot_encoder.py --batch 131072 --shapes all 2>&1 | tee ${RESULT_FILE}.full
+CONFIG_JSON=/home/bjaeger/PufferDrive/experiments/logs/tune_fused_${SLURM_JOB_ID}_config.json
+python scripts/tune_fused_slot_encoder.py --batch 131072 --shapes all --write-config ${CONFIG_JSON} 2>&1 | tee ${RESULT_FILE}.full
 # The pasteable block is the tail of the full log.
 sed -n '/=== fused_slot_encoder tuning result/,/=== end of tuning result ===/p' ${RESULT_FILE}.full > ${RESULT_FILE}
+
+# Real policy update + rollout step on this GPU: compiled reference vs fused kernels with the config just tuned.
+echo "=== step timing (paste this block back too) ===" | tee -a ${RESULT_FILE}
+python scripts/profile_policy_step.py --rows 131072 2>&1 | grep "^RESULT" | tee -a ${RESULT_FILE}
+python scripts/profile_policy_step.py --rows 131072 --fused --kernel-config ${CONFIG_JSON} 2>&1 | grep "^RESULT" | tee -a ${RESULT_FILE}
+awk '/^RESULT fused=0/ {for (i=1;i<=NF;i++) if ($i ~ /^update_ms=/) {split($i,a,"="); base=a[2]}}
+     /^RESULT fused=1/ {for (i=1;i<=NF;i++) if ($i ~ /^update_ms=/) {split($i,a,"="); fused=a[2]}}
+     END {if (base && fused) printf "update speedup fused vs reference: %.2fx\n", base / fused}' ${RESULT_FILE} | tee -a ${RESULT_FILE}
+echo "=== end of step timing ===" | tee -a ${RESULT_FILE}
 
 echo
 echo "Result block (also in ${RESULT_FILE}):"

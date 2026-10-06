@@ -29,8 +29,9 @@ class KernelConfig:
 
 # Timed on an RTX 5090 (GB202, compute capability 12.0); the RTX PRO 6000 Blackwell is the same chip.
 GB202_CONFIG = KernelConfig(8, 4, 32, 4, 2, 64, 64, 8, 2, 32, 4)
-# Untimed placeholders: replace with the KernelConfig printed by scripts/tune_fused_slot_encoder.py on that GPU.
-H100_CONFIG = GB202_CONFIG
+# Timed on an H100 80GB HBM3 at 131072 rows (scripts/tune_fused_slot_encoder.py): 106 -> 79 ms over all encoders.
+H100_CONFIG = KernelConfig(8, 4, 64, 4, 2, 32, 64, 4, 3, 32, 4)
+# Untimed placeholder: replace with the KernelConfig printed by scripts/tune_fused_slot_encoder.py on that GPU.
 B200_CONFIG = GB202_CONFIG
 B300_CONFIG = B200_CONFIG  # Blackwell Ultra shares the B200 SM design
 CONFIGS_BY_CAPABILITY = {(12, 0): GB202_CONFIG, (9, 0): H100_CONFIG, (10, 0): B200_CONFIG, (10, 3): B300_CONFIG}

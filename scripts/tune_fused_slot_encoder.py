@@ -7,7 +7,9 @@ Paste the printed KernelConfig into CONFIGS_BY_CAPABILITY in pufferlib/ocean/fus
 """
 
 import argparse
+import dataclasses
 import itertools
+import json
 import time
 
 import torch
@@ -167,6 +169,7 @@ def main():
     parser.add_argument("--shapes", default="all", help="comma-separated encoder names or 'all'")
     parser.add_argument("--batch", type=int, default=131072, help="transitions per minibatch")
     parser.add_argument("--quick", action="store_true", help="tiny grids, for checking that the script runs")
+    parser.add_argument("--write-config", help="write the recommended KernelConfig as JSON to this path")
     args = parser.parse_args()
     names = list(ENCODER_SHAPES) if args.shapes == "all" else args.shapes.split(",")
     grids = {"fwd": FWD_GRID, "bwd": BWD_GRID, "pool": POOL_GRID}
@@ -200,6 +203,9 @@ def main():
     print(f"all parts, all shapes: GB202_CONFIG {baseline_combined:.3f} ms -> recommended {combined_total:.3f} ms")
     print(f"RECOMMENDED for capability {capability}: {recommended}")
     print("=== end of tuning result ===")
+    if args.write_config:
+        with open(args.write_config, "w") as handle:
+            json.dump(dataclasses.asdict(recommended), handle)
 
 
 if __name__ == "__main__":

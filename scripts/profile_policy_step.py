@@ -11,6 +11,7 @@ The calibrate range runs a matmul of known size so the tensor-op metric is conve
 import argparse
 import copy
 import csv
+import json
 import os
 import sys
 
@@ -25,6 +26,8 @@ ROLLOUT_FLOP_PER_TRANSITION = 37654113.0
 CALIBRATE_N = 8192
 CALIBRATE_FLOPS = 2.0 * CALIBRATE_N**3
 PEAK_BF16_TFLOPS = 209.5
+# dense bf16 tensor peak with fp32 accumulation, by compute capability
+PEAK_BF16_TFLOPS_BY_CAPABILITY = {(12, 0): 209.5, (9, 0): 989.0, (10, 0): 2250.0, (10, 3): 2250.0}
 ROLLOUT_ROWS = 16384
 ENV_AGENTS = 512
 ROLLOUT_STEPS = 40
@@ -64,6 +67,22 @@ def build_policy_and_obs(rows, fused):
     obs = torch.as_tensor(np.concatenate(obs_rows)).cuda()
     repeats = -(-max(rows, ROLLOUT_ROWS) // obs.shape[0])
     return policy, obs.repeat(repeats, 1)
+
+
+def fse_config_name():
+    import pufferlib.ocean.fused_slot_encoder as fse
+
+    if fse.CONFIG_OVERRIDE is not None:
+        return "override"
+    return "table"
+
+
+def apply_kernel_config(path):
+    import pufferlib.ocean.fused_slot_encoder as fse
+
+    with open(path) as handle:
+        fse.CONFIG_OVERRIDE = fse.KernelConfig(**json.load(handle))
+    print(f"kernel config override: {fse.CONFIG_OVERRIDE}")
 
 
 def run_phases(rows, fused):
@@ -109,6 +128,14 @@ def run_phases(rows, fused):
         torch.cuda.synchronize()
         wall_ms[name] = start.elapsed_time(end)
     print(f"unprofiled wall time: update {wall_ms['update']:.2f} ms, rollout {wall_ms['rollout']:.2f} ms")
+    peak = PEAK_BF16_TFLOPS_BY_CAPABILITY.get(torch.cuda.get_device_capability(0))
+    update_rate = rows * TRAIN_FLOP_PER_TRANSITION / (wall_ms["update"] * 1e-3) / 1e12
+    rollout_rate = ROLLOUT_ROWS * ROLLOUT_FLOP_PER_TRANSITION / (wall_ms["rollout"] * 1e-3) / 1e12
+    mfu = f" update_mfu={100 * update_rate / peak:.1f}% rollout_mfu={100 * rollout_rate / peak:.1f}%" if peak else ""
+    print(
+        f"RESULT fused={int(fused)} rows={rows} update_ms={wall_ms['update']:.2f} rollout_ms={wall_ms['rollout']:.2f}"
+        f" update_tflops={update_rate:.1f} rollout_tflops={rollout_rate:.1f}{mfu} config={fse_config_name()}"
+    )
     a = torch.randn(CALIBRATE_N, CALIBRATE_N, device="cuda", dtype=torch.bfloat16)
     b = torch.randn_like(a)
     a @ b
@@ -199,11 +226,14 @@ def main():
     parser.add_argument("--rows", type=int, default=65536, help="update minibatch rows")
     parser.add_argument("--fused", action="store_true", help="enable policy.fused_slot_encoder")
     parser.add_argument("--parse", help="ncu raw-page CSV to summarize instead of running")
+    parser.add_argument("--kernel-config", help="JSON KernelConfig (from tune_fused_slot_encoder.py --write-config)")
     args = parser.parse_args()
     if args.parse:
         parse(args.parse, args.rows)
-    else:
-        run_phases(args.rows, args.fused)
+        return
+    if args.kernel_config:
+        apply_kernel_config(args.kernel_config)
+    run_phases(args.rows, args.fused)
 
 
 if __name__ == "__main__":
