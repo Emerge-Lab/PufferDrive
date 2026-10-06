@@ -232,6 +232,7 @@ struct Drive {
     float reward_ade;
     float reward_expert_similarity;
     int expert_similarity_only;
+    int expert_tracking_teleport;
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
@@ -521,32 +522,43 @@ static inline float compute_log_yaw_rate(Agent *agent, int timestep, float dt) {
     return 0.0f;
 }
 
-static inline float log_signed_speed(Agent *agent, int timestep) {
-    return agent->log_velocity_x[timestep] * cosf(agent->log_heading[timestep])
-        + agent->log_velocity_y[timestep] * sinf(agent->log_heading[timestep]);
+// Signed speed along the logged heading from logged positions; the logged velocity field is not
+// consistent with the positions the dynamics integrate against.
+static float log_position_speed(Agent *agent, int step, float dt) {
+    int prev_step = step - 1;
+    int next_step = step + 1;
+    int has_prev = prev_step >= 0 && agent->log_valid[prev_step];
+    int has_next = next_step < agent->trajectory_size && agent->log_valid[next_step];
+    int from_step = has_prev ? prev_step : step;
+    int to_step = has_next ? next_step : step;
+    if (from_step == to_step) {
+        return agent->log_velocity_x[step] * cosf(agent->log_heading[step])
+            + agent->log_velocity_y[step] * sinf(agent->log_heading[step]);
+    }
+    float dx = agent->log_trajectory_x[to_step] - agent->log_trajectory_x[from_step];
+    float dy = agent->log_trajectory_y[to_step] - agent->log_trajectory_y[from_step];
+    float span_seconds = (to_step - from_step) * dt;
+    return (dx * cosf(agent->log_heading[step]) + dy * sinf(agent->log_heading[step])) / span_seconds;
 }
 
-// Seeds the jerk-model state (accelerations, steering) from the log so a sub-episode starts mid-manoeuvre
-static void init_dynamics_state_from_log(Drive *env, Agent *agent) {
-    int step = env->init_step;
-    if (step >= agent->trajectory_size) {
-        step = agent->trajectory_size - 1;
-    }
-    if (step < 0 || !agent->log_valid[step]) {
+// Seeds the jerk-model state (accelerations, steering) from the log so the ego continues mid-manoeuvre
+static void seed_dynamics_state_from_log(Drive *env, Agent *agent, int step) {
+    if (step < 0 || step >= agent->trajectory_size || !agent->log_valid[step]) {
         return;
     }
     int prev_step = step - 1;
     int next_step = step + 1;
     int has_prev = prev_step >= 0 && agent->log_valid[prev_step];
     int has_next = next_step < agent->trajectory_size && agent->log_valid[next_step];
-    float speed_now = log_signed_speed(agent, step);
+    float speed_now = log_position_speed(agent, step, env->dt);
     float accel_long = 0.0f;
     if (has_prev && has_next) {
-        accel_long = (log_signed_speed(agent, next_step) - log_signed_speed(agent, prev_step)) / (2.0f * env->dt);
+        accel_long = (log_position_speed(agent, next_step, env->dt) - log_position_speed(agent, prev_step, env->dt))
+            / (2.0f * env->dt);
     } else if (has_next) {
-        accel_long = (log_signed_speed(agent, next_step) - speed_now) / env->dt;
+        accel_long = (log_position_speed(agent, next_step, env->dt) - speed_now) / env->dt;
     } else if (has_prev) {
-        accel_long = (speed_now - log_signed_speed(agent, prev_step)) / env->dt;
+        accel_long = (speed_now - log_position_speed(agent, prev_step, env->dt)) / env->dt;
     }
     float yaw_rate = compute_log_yaw_rate(agent, step, env->dt);
     float speed_eff = fmaxf(fabsf(speed_now), 1.0f);
@@ -554,6 +566,30 @@ static void init_dynamics_state_from_log(Drive *env, Agent *agent) {
     agent->accel_lat = clip(speed_now * yaw_rate, ACCEL_LAT_LIMIT[0], ACCEL_LAT_LIMIT[1]);
     agent->steering_angle
         = clip(atanf(yaw_rate / speed_eff * agent->wheelbase), -STEERING_ANGLE_LIMIT_RAD, STEERING_ANGLE_LIMIT_RAD);
+}
+
+static int clamped_init_step(Drive *env, Agent *agent) {
+    return env->init_step < agent->trajectory_size ? env->init_step : agent->trajectory_size - 1;
+}
+
+// Places the agent on its logged pose and velocity at step; dynamics state follows from the log too
+static void snap_agent_to_log(Drive *env, Agent *agent, int step) {
+    if (step < 0 || step >= agent->trajectory_size || !agent->log_valid[step]) {
+        return;
+    }
+    agent->sim_x = agent->log_trajectory_x[step];
+    agent->sim_y = agent->log_trajectory_y[step];
+    agent->sim_z = agent->log_trajectory_z[step];
+    agent->sim_heading = agent->log_heading[step];
+    agent->cos_heading = cosf(agent->sim_heading);
+    agent->sin_heading = sinf(agent->sim_heading);
+    float speed = log_position_speed(agent, step, env->dt);
+    agent->sim_vx = speed * agent->cos_heading;
+    agent->sim_vy = speed * agent->sin_heading;
+    agent->yaw_rate = compute_log_yaw_rate(agent, step, env->dt);
+    update_agent_speed(agent);
+    copy_pose_to_prev(agent);
+    seed_dynamics_state_from_log(env, agent, step);
 }
 
 static inline void project_vector_to_local(
@@ -2744,7 +2780,7 @@ static void set_start_position(Drive *env) {
         reset_agent_state(agent);
         generate_reward_coefs(env, agent);
         if (env->simulation_mode == SIMULATION_MODE_REPLAY && is_active) {
-            init_dynamics_state_from_log(env, agent);
+            seed_dynamics_state_from_log(env, agent, clamped_init_step(env, agent));
         }
     }
 }
@@ -4649,7 +4685,7 @@ void c_reset(Drive *env) {
         // Common resets
         reset_agent_metrics(env, agent_idx);
         reset_agent_state(agent);
-        init_dynamics_state_from_log(env, agent);
+        seed_dynamics_state_from_log(env, agent, clamped_init_step(env, agent));
         sample_erratic_flags(env, agent);
         flag_static_expert(env, agent);
         generate_reward_coefs(env, agent);
@@ -4734,6 +4770,9 @@ void c_step(Drive *env) {
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
             move_expert(env, agent_idx);
         } else if (agent->controller == CONTROLLER_EXPERT_TRACKING) {
+            if (env->expert_tracking_teleport) {
+                snap_agent_to_log(env, agent, env->timestep - 1);
+            }
             select_expert_tracking_action(env, i, agent_idx);
             move_dynamics(env, i, agent_idx);
         }

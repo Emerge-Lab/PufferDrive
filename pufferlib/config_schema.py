@@ -311,6 +311,7 @@ class DriveEnvConfig:
     reward_ade: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_expert_similarity: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     expert_similarity_only: bool = MISSING
+    expert_tracking_teleport: bool = MISSING
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)

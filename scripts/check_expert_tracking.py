@@ -33,11 +33,14 @@ def parse_args():
     parser.add_argument("--sdc-controller", default="expert_tracking", choices=["expert_tracking", "policy"])
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--error-threshold-m", type=float, default=0.5)
+    parser.add_argument("--worst", type=int, default=10, help="how many worst sub-episodes to list")
+    parser.add_argument("--no-teleport", action="store_true", help="closed-loop tracking: let error accumulate")
     return parser.parse_args()
 
 
-def make_env(args, seed):
+def make_env(args, seed, starting_map):
     return Drive(
+        starting_map=starting_map,
         num_agents=args.num_envs,
         min_agents_per_env=1,
         max_agents_per_env=1,
@@ -46,6 +49,7 @@ def make_env(args, seed):
         simulation_mode="replay",
         control_mode="control_sdc_only",
         sdc_controller=args.sdc_controller,
+        expert_tracking_teleport=not args.no_teleport,
         non_sdc_controller="replay",
         non_vehicle_controller="replay",
         goal_source="gt",
@@ -68,8 +72,11 @@ def make_env(args, seed):
     )
 
 
+AGENT_F32_SPEED_IDX = 6
+
+
 def run_round(env, horizon):
-    """Returns per-env running-ADE curves [num_envs, horizon + 1], labels [horizon, num_envs], masks [horizon, num_envs]."""
+    """Returns running-ADE curves [num_envs, horizon + 1], labels, masks, ego speeds [num_envs, horizon + 1], map names."""
     env.reset()
     placeholder = np.zeros_like(env.actions)
     labels = np.empty((horizon, env.num_agents), dtype=np.int64)
@@ -81,13 +88,17 @@ def run_round(env, horizon):
     env._capture_replay_step()
 
     running_ade = np.empty((env.num_agents, horizon + 1), dtype=np.float64)
+    speeds = np.empty((env.num_agents, horizon + 1), dtype=np.float64)
+    map_names = []
     for env_idx, capture in enumerate(env._replay_captures):
         frames = capture["frames"]["metrics_f32"]
         assert len(frames) == horizon + 1, f"expected {horizon + 1} frames, got {len(frames)}"
         ego_rows = capture["frames"]["agent_i32"][0][:, 7]
         ego_row = int(np.flatnonzero(ego_rows == 0)[0])
         running_ade[env_idx] = [frame[ego_row, binding.AVG_DISPLACEMENT_ERROR_IDX] for frame in frames]
-    return running_ade, labels, masks
+        speeds[env_idx] = [frame[ego_row, AGENT_F32_SPEED_IDX] for frame in capture["frames"]["agent_f32"]]
+        map_names.append(capture["metadata"]["map_name"])
+    return running_ade, labels, masks, speeds, map_names
 
 
 def per_step_errors(running_ade):
@@ -100,26 +111,34 @@ def per_step_errors(running_ade):
 def main():
     args = parse_args()
     curves = []
+    speed_curves = []
+    map_names = []
     label_counter = Counter()
     invalid_labels = 0
     total_labels = 0
     for round_idx in range(args.rounds):
-        env = make_env(args, args.seed + round_idx)
+        env = make_env(args, args.seed + round_idx, (round_idx * args.num_envs) % args.num_maps)
         try:
-            running_ade, labels, masks = run_round(env, args.horizon)
+            running_ade, labels, masks, speeds, round_maps = run_round(env, args.horizon)
         finally:
             env.close()
         curves.append(per_step_errors(running_ade))
+        speed_curves.append(speeds[:, 1:])
+        map_names.extend(round_maps)
         label_counter.update(labels[masks].tolist())
         invalid_labels += int((~masks).sum())
         total_labels += masks.size
 
     errors = np.concatenate(curves, axis=0)
+    speeds = np.concatenate(speed_curves, axis=0)
     ade = errors.mean(axis=1)
     fde = errors[:, -1]
     peak = errors.max(axis=1)
 
-    print(f"sub-episodes: {errors.shape[0]}  horizon: {args.horizon} steps at dt={args.dt}  sdc={args.sdc_controller}")
+    mode = "closed-loop" if args.no_teleport else "teleport (open-loop labels)"
+    print(
+        f"sub-episodes: {errors.shape[0]}  horizon: {args.horizon} steps at dt={args.dt}  sdc={args.sdc_controller}  {mode}"
+    )
     print("per-step position error (m):")
     print("  step   mean    p50    p95    max")
     for step in range(args.horizon):
@@ -135,6 +154,21 @@ def main():
         )
     over = float((peak > args.error_threshold_m).mean())
     print(f"  sub-episodes with peak error > {args.error_threshold_m} m: {100 * over:.1f}%")
+    print("per-step error by ego speed (m):")
+    speed_edges = [0.0, 0.5, 3.0, 8.0, 15.0, np.inf]
+    for low, high in zip(speed_edges[:-1], speed_edges[1:]):
+        in_bucket = (speeds >= low) & (speeds < high)
+        if not in_bucket.any():
+            continue
+        bucket = errors[in_bucket]
+        print(
+            f"  [{low:4.1f}, {high:4.1f}) m/s: n={bucket.size:6d} mean={bucket.mean():.3f} "
+            f"p95={np.percentile(bucket, 95):.3f} max={bucket.max():.3f}"
+        )
+    worst = np.argsort(-peak)[: args.worst]
+    print(f"worst {len(worst)} sub-episodes (peak error, ADE, mean ego speed, map):")
+    for idx in worst:
+        print(f"  {peak[idx]:6.3f} {ade[idx]:6.3f} {speeds[idx].mean():5.1f} m/s  {map_names[idx]}")
     print(f"labels: {total_labels - invalid_labels} valid, {invalid_labels} masked")
     num_lat = len(binding.JERK_LAT)
     print("label histogram (long jerk x lat jerk):")

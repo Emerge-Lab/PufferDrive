@@ -144,15 +144,36 @@ Check how well the jerk model fits your logs before trusting the anchor:
 
 ```bash
 python scripts/check_expert_tracking.py --map-dir <replay .bin dir> --num-maps <n> --rounds 8
+python scripts/check_expert_tracking.py --map-dir <replay .bin dir> --num-maps <n> --no-teleport
 python scripts/check_expert_tracking.py --map-dir <replay .bin dir> --num-maps <n> --sdc-controller policy
 ```
 
-The first prints the per-step tracking error over many random sub-episode
-starts, the ADE/FDE distribution, and the label histogram; the second is the
-zero-jerk baseline that shows the headroom. On the bundled nuPlan log, 22-step
-sub-episodes at 10 Hz give a tracker ADE of 4 mm (p95 12 mm) and FDE of 5 mm,
-with no sub-episode peaking above 3.2 cm, against 1.9 m ADE and 4.7 m FDE for
-zero jerk. Before the state seeding the reset transient peaked at 15 cm (p95)
-around step 7. A log set where the tracker's peak error regularly exceeds the
-`--error-threshold-m` default of 0.5 m means the jerk bins or limits cannot
-express that driving and the labels should not be trusted there.
+By default the tracker runs open-loop (`env.expert_tracking_teleport=true`):
+before every action the ego snaps back onto the logged pose, the velocity is
+taken from a central difference of logged positions, and the jerk state is
+re-seeded, so each label is the best action from the true logged state and the
+per-step error measures only what the model cannot express. `--no-teleport`
+lets error accumulate closed-loop; the `policy` controller holds zero jerk and
+shows the headroom.
+
+Logged velocities in the nuPlan bins sit about 0.16 m/s above the speed the
+logged positions imply, so every seeding helper derives speed and acceleration
+from positions. Seeding from the velocity field made the tracker brake on
+nearly half of all steps to cancel that bias.
+
+Measured on a 303-log spread of the nuPlan mini train split (10 Hz, random
+start steps, 512 sub-episodes of 22 steps):
+
+| mode | ADE p50 / p95 | FDE p95 | peak p95 / max | peak over 0.5 m |
+|---|---|---|---|---|
+| teleport (labels) | 0.3 cm / 2.7 cm | 3.5 cm | 4.7 cm / 12 cm | 0% |
+| teleport, 60 steps | 0.3 cm / 2.5 cm | 3.3 cm | 6.7 cm / 12 cm | 0% |
+| closed-loop | 1.4 cm / 12 cm | 15 cm | 22 cm / 4.4 m | 2.3% |
+| zero jerk | 2.7 m / 3.7 m | 11 m | 11 m / 12 m | – |
+
+Labels under teleport are 19% maximum braking, 24% zero jerk, 25% accelerating,
+with both lateral bins well populated. Closed-loop failures are the model's
+envelope, not the search: low-speed turns whose implied steering exceeds the
+0.55 rad limit (0.15% of moving steps, 5 of 303 logs) and accelerations above
+the +2.5 m/s^2 cap (0.9% of steps, spread over 93 logs). Reversing never exceeds
+the model's cap in that subset.

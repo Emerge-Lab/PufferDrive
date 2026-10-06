@@ -36,6 +36,7 @@ class Drive(pufferlib.PufferEnv):
         reward_ade=0.0,
         reward_expert_similarity=0.0,
         expert_similarity_only=False,
+        expert_tracking_teleport=True,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
         num_goals=3,
@@ -155,6 +156,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_ade = reward_ade
         self.reward_expert_similarity = reward_expert_similarity
         self.expert_similarity_only = bool(expert_similarity_only)
+        self.expert_tracking_teleport = bool(expert_tracking_teleport)
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
@@ -456,6 +458,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_ade": self.reward_ade,
             "reward_expert_similarity": self.reward_expert_similarity,
             "expert_similarity_only": int(self.expert_similarity_only),
+            "expert_tracking_teleport": int(self.expert_tracking_teleport),
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,

@@ -104,6 +104,9 @@ env:
   # expert_tracking drives the SDC with the discrete action that best reproduces the next logged pose
   # (replay mode, discrete actions); the chosen action is written back into the actions buffer as a BC label.
   sdc_controller: policy
+  # expert_tracking: snap the SDC back onto the log before each action so labels come from the true logged
+  # state (open-loop BC). false lets tracking error accumulate closed-loop.
+  expert_tracking_teleport: true
   # Controller used by non-SDC vehicles.
   # options: "static", "policy", "replay", "idm"
   non_sdc_controller: policy
