@@ -18,8 +18,10 @@ env.jerk_rear_axle_slip: true
 env.max_agents_per_env: 1
 env.num_agents: 128
 env.init_step: 0
-env.episode_max_steps: 22
-env.init_step_jitter_steps: 9
+# Replay logs are 10 Hz: dt must match; the paper's 6.6 s sub-episodes and 2.7 s start offsets are 66 and 27 steps.
+env.dt: 0.1
+env.episode_max_steps: 66
+env.init_step_jitter_steps: 27
 env.static_expert_min_motion_m: 1.0
 
 env.reward_expert_similarity: 0.01

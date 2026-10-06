@@ -50,7 +50,7 @@ puffer train puffer_drive \
     env.non_sdc_controller=replay env.non_vehicle_controller=replay \
     env.goal_source=gt env.map_dir=<dir of replay .bin logs> env.num_maps=<count> \
     env.max_agents_per_env=1 env.num_agents=128 \
-    env.episode_max_steps=22 env.init_step_jitter_steps=9 env.static_expert_min_motion_m=1.0 \
+    env.dt=0.1 env.episode_max_steps=66 env.init_step_jitter_steps=27 env.static_expert_min_motion_m=1.0 \
     env.reward_expert_similarity=0.01 env.reward_conditioning=true env.reward_randomization=false \
     train.kl_ref_coef=0.02 train.learning_rate=1e-4
 ```

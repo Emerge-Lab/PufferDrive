@@ -29,10 +29,12 @@ env.max_agents_per_env: 1
 # One ego per env; replay logs load heavier than CARLA towns, keep this modest.
 env.num_agents: 128
 env.init_step: 0
+# Replay logs are 10 Hz: dt must match; the paper's 6.6 s sub-episodes and 2.7 s start offsets are 66 and 27 steps.
+env.dt: 0.1
 
 # Short sub-episodes with a random start offset inside each log (steps at the sim dt).
-env.episode_max_steps: 22
-env.init_step_jitter_steps: 9
+env.episode_max_steps: 66
+env.init_step_jitter_steps: 27
 env.static_expert_min_motion_m: 1.0
 
 # Rewards: all self-play terms stay on, fixed conditioning vector, plus the
