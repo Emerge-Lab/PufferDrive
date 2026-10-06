@@ -452,6 +452,15 @@ static float clip(float value, float min, float max) {
     return value < min ? min : (value > max ? max : value);
 }
 
+// fmaxf / fminf results (NaN ignored, glibc maxss / minss tie order) without the libm call
+static inline float fmaxf_inline(float a, float b) {
+    return a > b || b != b ? a : b;
+}
+
+static inline float fminf_inline(float a, float b) {
+    return a < b || b != b ? a : b;
+}
+
 static float normalize_heading(float heading) {
     heading = fmodf(heading, 2.0f * M_PI);
     if (heading > M_PI) {
