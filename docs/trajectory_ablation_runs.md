@@ -793,3 +793,19 @@ Notes:
   - collisions and off-road;
   - `reward_components/trajectory_consistency`, `lattice/lon_new_rate`;
   - `losses/approx_kl`.
+
+Cancelled 2026-10-06 12:25 EDT at the user's request:
+- **Continuations waiting for a GPU** (their main jobs had ended):
+  - `fix20b_commit` 19160083: main hit the time limit at 9.9B;
+  - `fix20b_commit_nofilter` 19160087: main hit the time limit at 9.3B;
+  - `fix20b_commit_lr5e-4` 19160095: main died on a node failure at 3.3B.
+- **Never started:** `fix20b_commit_ep3` 19160124 / 125 and `fix20b_commit_ent5e-3` 19160127 / 128.
+- **Running, stopped with their continuations:**
+  - `fix20b_commit_filter3e-3` 19160089 / 090, last checkpoint epoch 1750;
+  - `fix20b_commit_speed6e-3_from5` 19253780 / 782, last checkpoint epoch 1500.
+
+Still going:
+- fix20b (19142027);
+- the 4.5e-3 speed run (19172095);
+- `noconsist` 19160135 / 136;
+- the three s20bhp runs.
