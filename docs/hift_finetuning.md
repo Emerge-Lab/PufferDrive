@@ -172,8 +172,39 @@ start steps, 512 sub-episodes of 22 steps):
 | zero jerk | 2.7 m / 3.7 m | 11 m | 11 m / 12 m | – |
 
 Labels under teleport are 19% maximum braking, 24% zero jerk, 25% accelerating,
-with both lateral bins well populated. Closed-loop failures are the model's
-envelope, not the search: low-speed turns whose implied steering exceeds the
-0.55 rad limit (0.15% of moving steps, 5 of 303 logs) and accelerations above
-the +2.5 m/s^2 cap (0.9% of steps, spread over 93 logs). Reversing never exceeds
-the model's cap in that subset.
+with both lateral bins well populated.
+
+### Rear-axle geometry (`env.jerk_rear_axle_slip`)
+
+A kinematic bicycle has one point with no lateral velocity, the rear axle;
+every other point on the body moves sideways at yaw rate times its distance
+ahead of that axle. The classic model already places the box centre with that
+slip (`REAR_AXLE_RATIO`), but the jerk model integrated the arc at the box
+centre itself. Regressing the logged centre's lateral velocity on yaw rate over
+7,688 turning steps gives a lever arm of 1.61 m (R^2 0.98, 0.31 of the vehicle
+length), which is `REAR_AXLE_RATIO` times the sim's wheelbase. With the flag
+on, the jerk model moves the centre by that offset after each arc update. The
+action space, bounds and observation layout are unchanged, but the dynamics
+are, so keep the flag identical across pretraining, fine-tuning, the BC anchor
+and evaluation. It defaults off so existing checkpoints and goldens stand.
+
+Widening the steering bound to 0.65 rad and the acceleration cap to +3.5 m/s^2
+instead changes nothing (closed-loop failures stay at 2.3%); even 0.80 rad and
++5.0 m/s^2 only reach 2.0%. The human kinematics in the subset already sit
+inside the bounds at the 99.9th percentile (steering 0.59 rad, acceleration
+2.4 m/s^2, braking 3.0 m/s^2, lateral acceleration 2.6 m/s^2); the only bin
+humans exceed often is positive jerk, capped at +4 m/s^3 against a human p99 of
+7.8 m/s^3.
+
+Same subset, 512 sub-episodes of 22 steps, with the flag on:
+
+| mode | ADE p50 / p95 | FDE p95 | peak p95 / max | peak over 0.5 m |
+|---|---|---|---|---|
+| teleport (labels) | 0.3 cm / 0.7 cm | 0.8 cm | 2.0 cm / 12 cm | 0% |
+| closed-loop | 1.3 cm / 5.1 cm | 3.5 cm | 12.6 cm / 4.4 m | 2.0% |
+
+The low-speed turn tail is gone (0.5 to 3 m/s bucket: p95 4 cm, max 0.59 m).
+What remains in the closed-loop tail are single-sample position glitches in a
+few logs (acceleration spikes of 20 m/s^2 at 10 m/s with no yaw); a sub-episode
+that starts on one seeds its velocity from the corrupted finite difference and
+drifts. Tracking those same logs from their first step stays within 10 cm.

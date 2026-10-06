@@ -253,6 +253,7 @@ class DriveEnvConfig:
     action_type: ActionType = MISSING
     dynamics_model: DynamicsModel = MISSING
     reset_accel_on_stop: bool = MISSING
+    jerk_rear_axle_slip: bool = MISSING
     dt: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     base_max_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     spawn_initial_speed: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)

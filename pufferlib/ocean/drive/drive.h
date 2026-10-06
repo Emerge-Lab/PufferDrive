@@ -198,6 +198,7 @@ struct Drive {
     float base_max_speed_mps;
     float spawn_initial_speed;
     int dynamics_model;
+    int jerk_rear_axle_slip;
     int reset_accel_on_stop;
     int init_mode;
     int control_mode;
@@ -4532,6 +4533,12 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->sim_heading = normalize_heading(agent->sim_heading + theta);
         agent->cos_heading = cosf(agent->sim_heading);
         agent->sin_heading = sinf(agent->sim_heading);
+        if (env->jerk_rear_axle_slip) {
+            // The arc above moved the rear axle; the box centre rides REAR_AXLE_RATIO * wheelbase ahead of it
+            float rear_axle_m = REAR_AXLE_RATIO * agent->wheelbase;
+            agent->sim_x += rear_axle_m * (agent->cos_heading - heading_x);
+            agent->sim_y += rear_axle_m * (agent->sin_heading - heading_y);
+        }
         agent->sim_vx = v_new * cosf(agent->sim_heading);
         agent->sim_vy = v_new * sinf(agent->sim_heading);
         const float yaw_rate = v_new * signed_curvature;

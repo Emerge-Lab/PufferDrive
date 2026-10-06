@@ -50,6 +50,10 @@ env:
   dynamics_model: jerk
   # Jerk dynamics: Zero both accelerations when velocity crosses zero
   reset_accel_on_stop: false
+  # Jerk dynamics: move the box centre with the rear-axle bicycle geometry (REAR_AXLE_RATIO), as the classic
+  # model does, instead of treating the centre as the no-slip point. Changes the dynamics; keep it identical
+  # across pretraining, fine-tuning and evaluation.
+  jerk_rear_axle_slip: false
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap

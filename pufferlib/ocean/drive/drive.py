@@ -63,6 +63,7 @@ class Drive(pufferlib.PufferEnv):
         action_type="discrete",
         dynamics_model="classic",
         reset_accel_on_stop=False,
+        jerk_rear_axle_slip=False,
         simulation_mode="gigaflow",
         termination_mode=False,
         inactive_agent_threshold=0.4,
@@ -198,6 +199,7 @@ class Drive(pufferlib.PufferEnv):
             "jerk": binding.DYNAMICS_MODEL_JERK,
         }[dynamics_model]
         self.reset_accel_on_stop = reset_accel_on_stop
+        self.jerk_rear_axle_slip = bool(jerk_rear_axle_slip)
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
         self.max_scenarios_per_batch = max_scenarios_per_batch
@@ -442,6 +444,7 @@ class Drive(pufferlib.PufferEnv):
             "action_type": self._action_type_flag,
             "dynamics_model": self.dynamics_model_flag,
             "reset_accel_on_stop": self.reset_accel_on_stop,
+            "jerk_rear_axle_slip": int(self.jerk_rear_axle_slip),
             "reward_goal": self.reward_goal,
             "reward_collision": self.reward_collision,
             "reward_offroad": self.reward_offroad,

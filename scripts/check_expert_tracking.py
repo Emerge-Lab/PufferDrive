@@ -35,6 +35,7 @@ def parse_args():
     parser.add_argument("--error-threshold-m", type=float, default=0.5)
     parser.add_argument("--worst", type=int, default=10, help="how many worst sub-episodes to list")
     parser.add_argument("--no-teleport", action="store_true", help="closed-loop tracking: let error accumulate")
+    parser.add_argument("--rear-axle-slip", action="store_true", help="enable env.jerk_rear_axle_slip")
     return parser.parse_args()
 
 
@@ -50,6 +51,7 @@ def make_env(args, seed, starting_map):
         control_mode="control_sdc_only",
         sdc_controller=args.sdc_controller,
         expert_tracking_teleport=not args.no_teleport,
+        jerk_rear_axle_slip=args.rear_axle_slip,
         non_sdc_controller="replay",
         non_vehicle_controller="replay",
         goal_source="gt",
@@ -136,6 +138,7 @@ def main():
     peak = errors.max(axis=1)
 
     mode = "closed-loop" if args.no_teleport else "teleport (open-loop labels)"
+    mode += "  rear-axle slip" if args.rear_axle_slip else "  centre no-slip"
     print(
         f"sub-episodes: {errors.shape[0]}  horizon: {args.horizon} steps at dt={args.dt}  sdc={args.sdc_controller}  {mode}"
     )

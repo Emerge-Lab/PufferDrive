@@ -263,8 +263,47 @@ static int test_expert_tracking_teleport_bounds_per_step_error(void) {
     return 0;
 }
 
+static int test_jerk_rear_axle_slip_offsets_box_center(void) {
+    srand(5);
+    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1, 0);
+    env.dynamics_model = DYNAMICS_MODEL_JERK;
+    env.dt = 0.1f;
+    allocate(&env);
+    env.timestep = -1;
+    c_reset(&env);
+    int ego_idx = env.active_agent_indices[0];
+    Agent *ego = &env.agents[ego_idx];
+    ((int *) env.actions)[0] = 7; // zero jerk: hold the current steering and speed
+    ego->sim_vx = 5.0f * ego->cos_heading;
+    ego->sim_vy = 5.0f * ego->sin_heading;
+    ego->steering_angle = 0.3f;
+    ego->accel_lat = 25.0f * tanf(0.3f) / ego->wheelbase;
+    update_agent_speed(ego);
+    Agent start = *ego;
+
+    env.jerk_rear_axle_slip = 0;
+    move_dynamics(&env, 0, ego_idx);
+    Agent centre_result = *ego;
+    *ego = start;
+    env.jerk_rear_axle_slip = 1;
+    move_dynamics(&env, 0, ego_idx);
+    Agent slip_result = *ego;
+
+    EXPECT_NEAR(slip_result.sim_heading, centre_result.sim_heading, 1e-6f);
+    EXPECT_TRUE(fabsf(normalize_heading(slip_result.sim_heading - start.sim_heading)) > 1e-3f);
+    float rear_axle_m = REAR_AXLE_RATIO * start.wheelbase;
+    float expected_dx = rear_axle_m * (slip_result.cos_heading - start.cos_heading);
+    float expected_dy = rear_axle_m * (slip_result.sin_heading - start.sin_heading);
+    EXPECT_NEAR(slip_result.sim_x - centre_result.sim_x, expected_dx, 1e-4f);
+    EXPECT_NEAR(slip_result.sim_y - centre_result.sim_y, expected_dy, 1e-4f);
+    EXPECT_TRUE(fabsf(expected_dx) + fabsf(expected_dy) > 1e-3f);
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
+    RUN_TEST(test_jerk_rear_axle_slip_offsets_box_center);
     RUN_TEST(test_reset_seeds_dynamics_state_from_log);
     RUN_TEST(test_expert_tracking_teleport_bounds_per_step_error);
     RUN_TEST(test_expert_similarity_reward_is_quadratic);
