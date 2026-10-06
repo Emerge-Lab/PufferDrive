@@ -40,6 +40,7 @@ source .venv/bin/activate
 # torch is a build requirement; install a CUDA 12.8 wheel first (Blackwell needs sm_120) and
 # build the package against it instead of an isolated PyPI torch.
 uv pip install "torch>=2.7" --index-url https://download.pytorch.org/whl/cu128 > /dev/null
+uv pip install "numpy<2.0" setuptools wheel > /dev/null
 uv pip install -e . --no-build-isolation > /dev/null
 
 echo "== build extension for this node's GPUs"
