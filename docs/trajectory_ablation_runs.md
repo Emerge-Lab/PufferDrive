@@ -809,3 +809,13 @@ Still going:
 - the 4.5e-3 speed run (19172095);
 - `noconsist` 19160135 / 136;
 - the three s20bhp runs.
+
+Resubmitted 2026-10-06 at nice 0 (was 1000) on the user's request, for queue priority (about +1000 points). Same
+scripts and frozen code, continuation cancelled before main:
+
+| run | old main / continuation | new main / continuation |
+|---|---|---|
+| noconsist | 19160135 / 19160136 | 19293478 / 19293480 |
+| nooverspeed | 19292645 / 19292647 | 19293482 / 19293483 |
+| lr5e-4_ep3 | 19292652 / 19292653 | 19293484 / 19293485 |
+| speed1.5e-2 | 19292657 / 19292659 | 19293486 / 19293487 |
