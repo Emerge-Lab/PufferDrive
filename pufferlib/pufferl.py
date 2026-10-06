@@ -1442,6 +1442,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         KEYS_OF_INTEREST = {
             "action_type",
             "dynamics_model",
+            "jerk_rear_axle_slip",
             "goal_source",
             "goal_regen_mode",
             "num_goals",

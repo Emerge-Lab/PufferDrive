@@ -20,6 +20,7 @@ env.goal_source: gt
 env.init_mode: create_all_valid
 env.action_type: discrete
 env.dynamics_model: jerk
+env.jerk_rear_axle_slip: true
 # Replay logs are stored at 10 Hz; the tracker targets the next logged pose, so dt must match.
 env.dt: 0.1
 env.max_agents_per_env: 1

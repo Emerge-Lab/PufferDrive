@@ -80,7 +80,7 @@ the PPO update; they differ only in the columns below (Table A3 of the paper).
 
 | Arm | Config | Environment | Rewards | Warm start | KL anchor | What it isolates |
 |---|---|---|---|---|---|---|
-| Self-play | evaluate the pretrained checkpoint | – | – | – | – | the baseline |
+| Self-play | `selfplay_pretrain.yaml`, then evaluate | self-play | RL | none | none | the baseline (rear-axle slip on) |
 | SHIFT | `shift.yaml` | log replay | RL + similarity | self-play | `0.02`, `D_KL(pi \|\| pi_pre)` | the method |
 | Extra self-play, matched data | `selfplay_extended.yaml` + `train.total_timesteps` of SHIFT | self-play | RL | self-play | none | more RL on the same budget |
 | Extra self-play, matched cycles | `selfplay_extended.yaml` + SHIFT epochs x steps per epoch | self-play | RL | self-play | none | more RL for the same cycle count |
@@ -208,3 +208,16 @@ What remains in the closed-loop tail are single-sample position glitches in a
 few logs (acceleration spikes of 20 m/s^2 at 10 m/s with no yaw); a sub-episode
 that starts on one seeds its velocity from the corrupted finite difference and
 drifts. Tracking those same logs from their first step stays within 10 cm.
+
+Under teleport, a label is masked out of the BC set when the logged state at
+either the snapped step or the target step cannot be represented inside the
+model envelope (acceleration, lateral acceleration or steering had to be
+clipped). The five-point stencil makes a single glitched sample mask the five
+labels around it. On the subset this drops 0.9% of labels, the glitch
+neighbourhoods plus the rare human steps beyond the bounds.
+
+The experiment matrix runs with the flag on everywhere, including a retrained
+self-play base (`selfplay_pretrain.yaml`, launcher arm `selfplay_pretrain`).
+`jerk_rear_axle_slip` is merged from a checkpoint's `config.yaml` on
+`load_model_path`, like `dynamics_model`, so fine-tuning inherits the base's
+dynamics; standalone `puffer eval` takes it from the CLI or the base config.

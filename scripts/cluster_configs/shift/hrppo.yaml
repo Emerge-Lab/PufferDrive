@@ -7,6 +7,8 @@
 # The policy block must match hrppo_anchor_bc.yaml so the anchor's weights load.
 
 policy.action_type: discrete
+# Dynamics must match the BC anchor (rear-axle slip on).
+env.jerk_rear_axle_slip: true
 env.num_agents: 3200
 vec.num_envs: 40
 train.minibatch_size: 256000

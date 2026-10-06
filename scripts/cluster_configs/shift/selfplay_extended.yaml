@@ -10,6 +10,8 @@
 # The launcher (scripts/launch_shift_experiments.sh) fills both in.
 
 policy.action_type: discrete
+# Dynamics must match the retrained self-play base (rear-axle slip on).
+env.jerk_rear_axle_slip: true
 env.num_agents: 3200
 vec.num_envs: 40
 train.minibatch_size: 256000

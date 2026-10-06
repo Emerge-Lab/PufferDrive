@@ -1,0 +1,21 @@
+# Self-play base for the SHIFT matrix: the multi-agent nightly recipe
+# (pufferlib/config/puffer_drive.yaml defaults, full scale) with the rear-axle
+# slip geometry on, so every arm that warm-starts from or is evaluated against
+# this checkpoint shares its dynamics. Launch: scripts/launch_shift_experiments.sh selfplay_pretrain
+
+policy.action_type: discrete
+env.jerk_rear_axle_slip: true
+env.num_agents: 3200
+vec.num_envs: 40
+train.minibatch_size: 256000
+train.max_minibatch_size: 64000
+train.compile: true
+
+train.total_timesteps: 10_000_000_000
+train.checkpoint_interval: 500
+train.evaluation_interval_epochs: 100
+train.evaluation_benchmarks: nuplan_single
+
+wandb: True
+wandb_project: shift-experiments
+wandb_group: selfplay_pretrain

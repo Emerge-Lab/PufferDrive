@@ -23,6 +23,8 @@ env.non_sdc_controller: replay
 env.non_vehicle_controller: replay
 env.goal_source: gt
 env.init_mode: create_all_valid
+# Dynamics must match the retrained self-play base (rear-axle slip on).
+env.jerk_rear_axle_slip: true
 env.max_agents_per_env: 1
 # One ego per env; replay logs load heavier than CARLA towns, keep this modest.
 env.num_agents: 128

@@ -301,8 +301,52 @@ static int test_jerk_rear_axle_slip_offsets_box_center(void) {
     return 0;
 }
 
+static int test_seeding_flags_log_glitches(void) {
+    Drive env = {0};
+    env.dt = 0.1f;
+    Agent agent = {0};
+    enum { STEPS = 12 };
+    float log_x[STEPS];
+    float log_y[STEPS];
+    float log_heading[STEPS];
+    float log_vx[STEPS];
+    float log_vy[STEPS];
+    int log_valid[STEPS];
+    for (int t = 0; t < STEPS; t++) {
+        log_x[t] = 10.0f * t * env.dt; // steady 10 m/s along +x
+        log_y[t] = 0.0f;
+        log_heading[t] = 0.0f;
+        log_vx[t] = 10.0f;
+        log_vy[t] = 0.0f;
+        log_valid[t] = 1;
+    }
+    log_x[6] += 0.3f; // one-sample position glitch
+    agent.log_trajectory_x = log_x;
+    agent.log_trajectory_y = log_y;
+    agent.log_heading = log_heading;
+    agent.log_velocity_x = log_vx;
+    agent.log_velocity_y = log_vy;
+    agent.log_valid = log_valid;
+    agent.trajectory_size = STEPS;
+    agent.wheelbase = 3.0f;
+
+    seed_dynamics_state_from_log(&env, &agent, 2);
+    EXPECT_NEAR(agent.accel_long, 0.0f, 1e-4f);
+    EXPECT_EQ_INT(log_state_within_envelope(&env, &agent, 2), 1);
+    // The five-point stencil around the glitched sample 6 corrupts steps 4, 6 and 8
+    EXPECT_EQ_INT(log_state_within_envelope(&env, &agent, 4), 0);
+    EXPECT_EQ_INT(log_state_within_envelope(&env, &agent, 5), 1);
+    EXPECT_EQ_INT(log_state_within_envelope(&env, &agent, 6), 0);
+    EXPECT_EQ_INT(log_state_within_envelope(&env, &agent, 8), 0);
+    EXPECT_EQ_INT(log_state_within_envelope(&env, &agent, 10), 1);
+    seed_dynamics_state_from_log(&env, &agent, 6);
+    EXPECT_NEAR(agent.accel_long, ACCEL_LONG_LIMIT[0], 1e-4f);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
+    RUN_TEST(test_seeding_flags_log_glitches);
     RUN_TEST(test_jerk_rear_axle_slip_offsets_box_center);
     RUN_TEST(test_reset_seeds_dynamics_state_from_log);
     RUN_TEST(test_expert_tracking_teleport_bounds_per_step_error);

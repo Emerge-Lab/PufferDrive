@@ -542,31 +542,49 @@ static float log_position_speed(Agent *agent, int step, float dt) {
     return (dx * cosf(agent->log_heading[step]) + dy * sinf(agent->log_heading[step])) / span_seconds;
 }
 
-// Seeds the jerk-model state (accelerations, steering) from the log so the ego continues mid-manoeuvre
-static void seed_dynamics_state_from_log(Drive *env, Agent *agent, int step) {
-    if (step < 0 || step >= agent->trajectory_size || !agent->log_valid[step]) {
-        return;
-    }
+// Raw jerk-model state implied by the log at step: accelerations and steering before any clipping
+static void log_dynamics_state(Drive *env, Agent *agent, int step, float *accel_long, float *accel_lat, float *steering) {
     int prev_step = step - 1;
     int next_step = step + 1;
     int has_prev = prev_step >= 0 && agent->log_valid[prev_step];
     int has_next = next_step < agent->trajectory_size && agent->log_valid[next_step];
     float speed_now = log_position_speed(agent, step, env->dt);
-    float accel_long = 0.0f;
+    *accel_long = 0.0f;
     if (has_prev && has_next) {
-        accel_long = (log_position_speed(agent, next_step, env->dt) - log_position_speed(agent, prev_step, env->dt))
+        *accel_long = (log_position_speed(agent, next_step, env->dt) - log_position_speed(agent, prev_step, env->dt))
             / (2.0f * env->dt);
     } else if (has_next) {
-        accel_long = (log_position_speed(agent, next_step, env->dt) - speed_now) / env->dt;
+        *accel_long = (log_position_speed(agent, next_step, env->dt) - speed_now) / env->dt;
     } else if (has_prev) {
-        accel_long = (speed_now - log_position_speed(agent, prev_step, env->dt)) / env->dt;
+        *accel_long = (speed_now - log_position_speed(agent, prev_step, env->dt)) / env->dt;
     }
     float yaw_rate = compute_log_yaw_rate(agent, step, env->dt);
     float speed_eff = fmaxf(fabsf(speed_now), 1.0f);
+    *accel_lat = speed_now * yaw_rate;
+    *steering = atanf(yaw_rate / speed_eff * agent->wheelbase);
+}
+
+// 0 when the logged state at step cannot be represented inside the model envelope (glitch or unreachable manoeuvre)
+static int log_state_within_envelope(Drive *env, Agent *agent, int step) {
+    if (step < 0 || step >= agent->trajectory_size || !agent->log_valid[step]) {
+        return 1;
+    }
+    float accel_long, accel_lat, steering;
+    log_dynamics_state(env, agent, step, &accel_long, &accel_lat, &steering);
+    return accel_long >= ACCEL_LONG_LIMIT[0] && accel_long <= ACCEL_LONG_LIMIT[1] && accel_lat >= ACCEL_LAT_LIMIT[0]
+        && accel_lat <= ACCEL_LAT_LIMIT[1] && fabsf(steering) <= STEERING_ANGLE_LIMIT_RAD;
+}
+
+// Seeds the jerk-model state (accelerations, steering) from the log so the ego continues mid-manoeuvre
+static void seed_dynamics_state_from_log(Drive *env, Agent *agent, int step) {
+    if (step < 0 || step >= agent->trajectory_size || !agent->log_valid[step]) {
+        return;
+    }
+    float accel_long, accel_lat, steering;
+    log_dynamics_state(env, agent, step, &accel_long, &accel_lat, &steering);
     agent->accel_long = clip(accel_long, ACCEL_LONG_LIMIT[0], ACCEL_LONG_LIMIT[1]);
-    agent->accel_lat = clip(speed_now * yaw_rate, ACCEL_LAT_LIMIT[0], ACCEL_LAT_LIMIT[1]);
-    agent->steering_angle
-        = clip(atanf(yaw_rate / speed_eff * agent->wheelbase), -STEERING_ANGLE_LIMIT_RAD, STEERING_ANGLE_LIMIT_RAD);
+    agent->accel_lat = clip(accel_lat, ACCEL_LAT_LIMIT[0], ACCEL_LAT_LIMIT[1]);
+    agent->steering_angle = clip(steering, -STEERING_ANGLE_LIMIT_RAD, STEERING_ANGLE_LIMIT_RAD);
 }
 
 static int clamped_init_step(Drive *env, Agent *agent) {
@@ -4779,6 +4797,9 @@ void c_step(Drive *env) {
         } else if (agent->controller == CONTROLLER_EXPERT_TRACKING) {
             if (env->expert_tracking_teleport) {
                 snap_agent_to_log(env, agent, env->timestep - 1);
+                int label_usable = log_state_within_envelope(env, agent, env->timestep - 1)
+                    && log_state_within_envelope(env, agent, env->timestep);
+                env->masks[i] = env->masks[i] && label_usable;
             }
             select_expert_tracking_action(env, i, agent_idx);
             move_dynamics(env, i, agent_idx);

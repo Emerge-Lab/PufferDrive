@@ -6,6 +6,7 @@
 #   ./scripts/launch_shift_experiments.sh <arm>
 #
 # Arms and what they need in the environment:
+#   selfplay_pretrain        (nothing)                     the self-play base, rear-axle slip on
 #   shift                    BASE_CKPT REPLAY_DIR NUM_MAPS
 #   selfplay_matched_data    BASE_CKPT                      (same total_timesteps as shift)
 #   selfplay_matched_cycles  BASE_CKPT                      (same epoch count as shift)
@@ -26,7 +27,7 @@
 #   REPLAY_DIR=/scratch/$USER/data/nuplan_train NUM_MAPS=2000 ./scripts/launch_shift_experiments.sh shift
 set -euo pipefail
 
-ARM="${1:?usage: $0 <shift|selfplay_matched_data|selfplay_matched_cycles|bc_only|bc_rl|hrppo_anchor|hrppo>}"
+ARM="${1:?usage: $0 <selfplay_pretrain|shift|selfplay_matched_data|selfplay_matched_cycles|bc_only|bc_rl|hrppo_anchor|hrppo>}"
 CONFIG_DIR="scripts/cluster_configs/shift"
 COMPUTE_CONFIG="${COMPUTE_CONFIG:-scripts/cluster_configs/nyu_greene.yaml}"
 ACCOUNT="${ACCOUNT:-torch_pr_924_tandon_advanced}"
@@ -50,6 +51,9 @@ require() {
 MAIN="-m pufferlib.pufferl train puffer_drive"
 ARM_ARGS=()
 case "$ARM" in
+    selfplay_pretrain)
+        PROGRAM_CONFIG="$CONFIG_DIR/selfplay_pretrain.yaml"
+        ;;
     shift)
         require BASE_CKPT; require REPLAY_DIR; require NUM_MAPS
         PROGRAM_CONFIG="$CONFIG_DIR/shift.yaml"
