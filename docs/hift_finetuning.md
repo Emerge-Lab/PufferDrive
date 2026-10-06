@@ -217,7 +217,11 @@ labels around it. On the subset this drops 0.9% of labels, the glitch
 neighbourhoods plus the rare human steps beyond the bounds.
 
 The experiment matrix runs with the flag on everywhere, including a retrained
-self-play base (`selfplay_pretrain.yaml`, launcher arm `selfplay_pretrain`).
+self-play base (`selfplay_pretrain.yaml`). On a standalone multi-GPU node run
+`scripts/launch_shift_pretrain_node.sh` (torchrun DDP, config sized per rank
+for four GPUs, 100B steps global, rerun with the same `RUN_NAME` to resume);
+on the cluster use `scripts/launch_shift_experiments.sh selfplay_pretrain`
+with `vec.num_envs=40 train.minibatch_size=256000` to recover the single-GPU scale.
 `jerk_rear_axle_slip` is merged from a checkpoint's `config.yaml` on
 `load_model_path`, like `dynamics_model`, so fine-tuning inherits the base's
 dynamics; standalone `puffer eval` takes it from the CLI or the base config.

@@ -1,13 +1,19 @@
 # Self-play base for the SHIFT matrix: the multi-agent nightly recipe
-# (pufferlib/config/puffer_drive.yaml defaults, full scale) with the rear-axle
-# slip geometry on, so every arm that warm-starts from or is evaluated against
-# this checkpoint shares its dynamics. Launch: scripts/launch_shift_experiments.sh selfplay_pretrain
+# (pufferlib/config/puffer_drive.yaml defaults) with the rear-axle slip geometry
+# on, so every arm that warm-starts from or is evaluated against this checkpoint
+# shares its dynamics.
+#
+# Sized PER DDP RANK for a 4-GPU node (scripts/launch_shift_pretrain_node.sh):
+# each rank runs 10 envs x 3200 agents and a 64k minibatch; four ranks together
+# reproduce the nightly's 40 envs and 256k effective minibatch (DDP averages
+# gradients across ranks). For a single GPU use vec.num_envs=40 and
+# train.minibatch_size=256000 (scripts/launch_shift_experiments.sh selfplay_pretrain).
 
 policy.action_type: discrete
 env.jerk_rear_axle_slip: true
 env.num_agents: 3200
-vec.num_envs: 40
-train.minibatch_size: 256000
+vec.num_envs: 10
+train.minibatch_size: 64000
 train.max_minibatch_size: 64000
 train.compile: true
 
