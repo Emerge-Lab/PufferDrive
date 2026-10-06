@@ -521,6 +521,41 @@ static inline float compute_log_yaw_rate(Agent *agent, int timestep, float dt) {
     return 0.0f;
 }
 
+static inline float log_signed_speed(Agent *agent, int timestep) {
+    return agent->log_velocity_x[timestep] * cosf(agent->log_heading[timestep])
+        + agent->log_velocity_y[timestep] * sinf(agent->log_heading[timestep]);
+}
+
+// Seeds the jerk-model state (accelerations, steering) from the log so a sub-episode starts mid-manoeuvre
+static void init_dynamics_state_from_log(Drive *env, Agent *agent) {
+    int step = env->init_step;
+    if (step >= agent->trajectory_size) {
+        step = agent->trajectory_size - 1;
+    }
+    if (step < 0 || !agent->log_valid[step]) {
+        return;
+    }
+    int prev_step = step - 1;
+    int next_step = step + 1;
+    int has_prev = prev_step >= 0 && agent->log_valid[prev_step];
+    int has_next = next_step < agent->trajectory_size && agent->log_valid[next_step];
+    float speed_now = log_signed_speed(agent, step);
+    float accel_long = 0.0f;
+    if (has_prev && has_next) {
+        accel_long = (log_signed_speed(agent, next_step) - log_signed_speed(agent, prev_step)) / (2.0f * env->dt);
+    } else if (has_next) {
+        accel_long = (log_signed_speed(agent, next_step) - speed_now) / env->dt;
+    } else if (has_prev) {
+        accel_long = (speed_now - log_signed_speed(agent, prev_step)) / env->dt;
+    }
+    float yaw_rate = compute_log_yaw_rate(agent, step, env->dt);
+    float speed_eff = fmaxf(fabsf(speed_now), 1.0f);
+    agent->accel_long = clip(accel_long, ACCEL_LONG_LIMIT[0], ACCEL_LONG_LIMIT[1]);
+    agent->accel_lat = clip(speed_now * yaw_rate, ACCEL_LAT_LIMIT[0], ACCEL_LAT_LIMIT[1]);
+    agent->steering_angle
+        = clip(atanf(yaw_rate / speed_eff * agent->wheelbase), -STEERING_ANGLE_LIMIT_RAD, STEERING_ANGLE_LIMIT_RAD);
+}
+
 static inline void project_vector_to_local(
     float world_vec_x,
     float world_vec_y,
@@ -2708,6 +2743,9 @@ static void set_start_position(Drive *env) {
         reset_agent_metrics(env, i);
         reset_agent_state(agent);
         generate_reward_coefs(env, agent);
+        if (env->simulation_mode == SIMULATION_MODE_REPLAY && is_active) {
+            init_dynamics_state_from_log(env, agent);
+        }
     }
 }
 
@@ -4427,7 +4465,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float delta_steer = clip(steering_angle - agent->steering_angle, -0.6f * env->dt, 0.6f * env->dt);
 
         // Apply steering position limit (±0.55 rad)
-        float new_steering_angle = clip(agent->steering_angle + delta_steer, -0.55f, 0.55f);
+        float new_steering_angle
+            = clip(agent->steering_angle + delta_steer, -STEERING_ANGLE_LIMIT_RAD, STEERING_ANGLE_LIMIT_RAD);
 
         // Recalculate curvature from limited steering
         signed_curvature = tanf(new_steering_angle) / agent->wheelbase;
@@ -4610,6 +4649,7 @@ void c_reset(Drive *env) {
         // Common resets
         reset_agent_metrics(env, agent_idx);
         reset_agent_state(agent);
+        init_dynamics_state_from_log(env, agent);
         sample_erratic_flags(env, agent);
         flag_static_expert(env, agent);
         generate_reward_coefs(env, agent);

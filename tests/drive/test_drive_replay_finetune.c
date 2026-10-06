@@ -201,8 +201,45 @@ static int test_expert_tracking_follows_log(void) {
     return 0;
 }
 
+static int test_reset_seeds_dynamics_state_from_log(void) {
+    srand(5);
+    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1, 0);
+    env.dynamics_model = DYNAMICS_MODEL_JERK;
+    env.dt = 0.1f;
+    allocate(&env);
+    Agent *ego = &env.agents[env.active_agent_indices[0]];
+
+    // Pick a logged step where the ego is clearly accelerating or braking
+    int step = -1;
+    for (int t = 1; t + 1 < ego->trajectory_size; t++) {
+        if (!ego->log_valid[t - 1] || !ego->log_valid[t] || !ego->log_valid[t + 1]) {
+            continue;
+        }
+        float speed_change = log_signed_speed(ego, t + 1) - log_signed_speed(ego, t - 1);
+        if (fabsf(speed_change) > 0.1f) {
+            step = t;
+            break;
+        }
+    }
+    EXPECT_TRUE(step > 0);
+
+    env.init_step = step;
+    env.init_step_base = step;
+    env.timestep = -1;
+    c_reset(&env);
+    float expected_accel_long = (log_signed_speed(ego, step + 1) - log_signed_speed(ego, step - 1)) / (2.0f * env.dt);
+    expected_accel_long = clip(expected_accel_long, ACCEL_LONG_LIMIT[0], ACCEL_LONG_LIMIT[1]);
+    EXPECT_NEAR(ego->accel_long, expected_accel_long, 1e-5f);
+    EXPECT_TRUE(fabsf(ego->accel_long) > 0.1f);
+    EXPECT_NEAR(ego->accel_lat, log_signed_speed(ego, step) * compute_log_yaw_rate(ego, step, env.dt), 1e-4f);
+    EXPECT_TRUE(fabsf(ego->steering_angle) <= STEERING_ANGLE_LIMIT_RAD);
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
+    RUN_TEST(test_reset_seeds_dynamics_state_from_log);
     RUN_TEST(test_expert_similarity_reward_is_quadratic);
     RUN_TEST(test_expert_similarity_only_drops_rl_terms);
     RUN_TEST(test_expert_tracking_follows_log);

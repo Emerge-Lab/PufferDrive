@@ -124,6 +124,7 @@
 
 #define MAX_BACKWARD_SPEED -2.0f
 #define STEERING_LIMIT 0.667f
+#define STEERING_ANGLE_LIMIT_RAD 0.55f // jerk model: steering position bound
 static const float REAR_AXLE_RATIO = 0.5f;
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
 static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};

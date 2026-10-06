@@ -127,3 +127,32 @@ pipeline has two steps.
 
 The one place the sim departs from the paper's sparse reward is the collision
 penalty, which always adds a speed-scaled term on top of the coefficient.
+
+### Action space and the stateful jerk model
+
+The paper uses a discrete delta-local (Δx, Δy, Δψ) action space; this port
+keeps the jerk bicycle model so every arm shares one sim and evaluator. That
+model is stateful: longitudinal and lateral acceleration and the steering angle
+carry over between steps. Replay-mode resets now seed that state from the log
+at the start step (central-difference speed for longitudinal acceleration,
+speed times logged yaw rate for lateral acceleration, the implied curvature for
+steering), so a sub-episode starts mid-manoeuvre instead of from rest. The same
+seeding applies to the policy-driven ego in the SHIFT arms, whose observation
+includes those three quantities.
+
+Check how well the jerk model fits your logs before trusting the anchor:
+
+```bash
+python scripts/check_expert_tracking.py --map-dir <replay .bin dir> --num-maps <n> --rounds 8
+python scripts/check_expert_tracking.py --map-dir <replay .bin dir> --num-maps <n> --sdc-controller policy
+```
+
+The first prints the per-step tracking error over many random sub-episode
+starts, the ADE/FDE distribution, and the label histogram; the second is the
+zero-jerk baseline that shows the headroom. On the bundled nuPlan log, 22-step
+sub-episodes at 10 Hz give a tracker ADE of 4 mm (p95 12 mm) and FDE of 5 mm,
+with no sub-episode peaking above 3.2 cm, against 1.9 m ADE and 4.7 m FDE for
+zero jerk. Before the state seeding the reset transient peaked at 15 cm (p95)
+around step 7. A log set where the tracker's peak error regularly exceeds the
+`--error-threshold-m` default of 0.5 m means the jerk bins or limits cannot
+express that driving and the labels should not be trusted there.
