@@ -896,6 +896,14 @@ class Drive(pufferlib.PufferEnv):
         headings = np.ascontiguousarray(np.asarray(headings, dtype=np.float32).reshape(-1))
         return int(binding.vec_set_stop_signs(self.c_envs, lines, headings))
 
+    def set_traffic_light_lines(self, indices, lines):
+        """move traffic-light elements' stop lines onto the external sim's own
+        (co-sim): indices (K,) element indices, lines (K, 6) world-frame
+        endpoints [x1, y1, z1, x2, y2, z2]."""
+        indices = np.ascontiguousarray(np.asarray(indices, dtype=np.int32).reshape(-1))
+        lines = np.ascontiguousarray(np.asarray(lines, dtype=np.float32).reshape(-1, 6))
+        binding.vec_set_traffic_light_lines(self.c_envs, indices, lines)
+
     def set_agent_goals(self, agent_idx, gx, gy, gz, gdir_x=None, gdir_y=None):
         """set an agent's goal waypoints (e.g. the ego's route) in world
         coords (C subtracts world_mean). Each waypoint is snapped to its

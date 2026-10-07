@@ -283,6 +283,7 @@ LIGHT_LANE_FORWARD_MATCH_MAX_DIST_M = (
 LIGHT_LANE_ALIGN_COS_MIN = (
     0.5  # forward fallback: the lane must run along the waypoint's heading (no crossing connectors)
 )
+LIGHT_STOP_LINE_TOLERANCE_M = 1.0  # exported bin lines within this of CARLA's stop waypoint stay (median 0.5 m)
 JUNCTION_CLUSTER_M = 60.0  # stop lines this close are treated as one junction (outlier repair, see below)
 # An assigned light farther from its junction cluster-mates' lights than this
 # multiple of the cluster-mates' own spread is a wrong-junction match.
@@ -520,6 +521,46 @@ def map_lights_to_bin(light_geometry, transform, town_bin):
         mapping[light_idx].remove(element_idx)
 
     return mapping, len(data["traffic"])
+
+
+def light_stop_line_overrides(light_geometry, mapping, transform, town_bin):
+    """(element indices (K,), lines (K, 6)) for the bin light elements whose exported stop line sits more than
+    LIGHT_STOP_LINE_TOLERANCE_M along the lane from CARLA's stop waypoints, the line RunningRedLightTest
+    scores against (Town04: four approaches whose bin line is 8 m past the waypoint, so an ego stopping at
+    it has already run the light). Each line is the bin's own translated along the element's travel
+    direction onto its most upstream waypoint (a line spanning several lanes then precedes every lane's
+    CARLA line); a light's waypoints go to the nearest of its elements."""
+    import data_utils.mirror_map_bin as mbin
+
+    bin_traffic = mbin.read_bin(Path(town_bin))["traffic"]
+    along_offsets_by_element = {}
+    for light, elements in zip(light_geometry, mapping):
+        if not elements:
+            continue
+        mids = {
+            j: (
+                0.5 * (bin_traffic[j]["stop_line"][0] + bin_traffic[j]["stop_line"][3]),
+                0.5 * (bin_traffic[j]["stop_line"][1] + bin_traffic[j]["stop_line"][4]),
+            )
+            for j in elements
+        }
+        for waypoint in light["stop_waypoints"]:
+            wx, wy = transform.loc_to_bin(waypoint["x"], waypoint["y"])
+            j = min(elements, key=lambda e: math.hypot(mids[e][0] - wx, mids[e][1] - wy))
+            heading = bin_traffic[j]["heading"]
+            along = (wx - mids[j][0]) * math.cos(heading) + (wy - mids[j][1]) * math.sin(heading)
+            along_offsets_by_element.setdefault(j, []).append(along)
+    indices, lines = [], []
+    for j in sorted(along_offsets_by_element):
+        shift_m = min(along_offsets_by_element[j])
+        if abs(shift_m) <= LIGHT_STOP_LINE_TOLERANCE_M:
+            continue
+        heading = bin_traffic[j]["heading"]
+        dx, dy = shift_m * math.cos(heading), shift_m * math.sin(heading)
+        x1, y1, z1, x2, y2, z2 = bin_traffic[j]["stop_line"]
+        indices.append(j)
+        lines.append([x1 + dx, y1 + dy, z1, x2 + dx, y2 + dy, z2])
+    return np.array(indices, np.int32), np.array(lines, np.float32).reshape(-1, 6)
 
 
 def stop_sign_geometry_from_carla(world, carla_map):

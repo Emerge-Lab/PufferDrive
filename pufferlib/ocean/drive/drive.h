@@ -1954,14 +1954,17 @@ static bool update_stop_sign_state(Drive *env, int agent_idx) {
         agent->stop_sign_target_idx = -1;
         agent->stop_sign_stop_completed = 0;
     }
-    if (agent->stop_sign_target_idx < 0) {
+    // an uncompleted target keeps competing: a curved approach latches the neighbour lane's sign first
+    if (agent->stop_sign_target_idx < 0 || !agent->stop_sign_stop_completed) {
         int standstill_idx = find_stop_sign_standstill(env, agent);
         if (standstill_idx >= 0) {
             agent->stop_sign_standstill_idx = standstill_idx;
         }
-        agent->stop_sign_target_idx = find_stop_sign_target(env, agent);
-        agent->stop_sign_stop_completed
-            = agent->stop_sign_target_idx >= 0 && agent->stop_sign_target_idx == agent->stop_sign_standstill_idx;
+        int target_idx = find_stop_sign_target(env, agent);
+        if (target_idx >= 0 && target_idx != agent->stop_sign_target_idx) {
+            agent->stop_sign_target_idx = target_idx;
+            agent->stop_sign_stop_completed = target_idx == agent->stop_sign_standstill_idx;
+        }
         if (agent->stop_sign_target_idx < 0) {
             return false;
         }
@@ -4190,6 +4193,41 @@ int c_set_stop_signs(Drive *env, int count, const float *lines, const float *hea
         env->agents[i].stop_sign_stop_completed = 0;
         env->agents[i].stop_sign_last_failed_idx = -1;
         env->agents[i].stop_sign_standstill_idx = -1;
+    }
+    return 0;
+}
+
+// Co-sim: move traffic-light stop lines onto the external sim's own (the lines its red-light judge scores against),
+// indices = element index per line, lines = count x [x1, y1, z1, x2, y2, z2] in world coordinates.
+int c_set_traffic_light_lines(Drive *env, int count, const int *indices, const float *lines) {
+    if (count < 0 || (count > 0 && (indices == NULL || lines == NULL))) {
+        return -1;
+    }
+    for (int k = 0; k < count; k++) {
+        int idx = indices[k];
+        if (idx < 0 || idx >= env->num_traffic_elements
+            || env->traffic_elements[idx].type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
+            return -1;
+        }
+        for (int v = 0; v < 6; v++) {
+            if (!isfinite(lines[k * 6 + v])) {
+                return -1;
+            }
+        }
+        float line_dx = lines[k * 6 + 3] - lines[k * 6];
+        float line_dy = lines[k * 6 + 4] - lines[k * 6 + 1];
+        if (line_dx * line_dx + line_dy * line_dy <= 0.0f) {
+            return -1;
+        }
+    }
+    for (int k = 0; k < count; k++) {
+        TrafficControlElement *tc = &env->traffic_elements[indices[k]];
+        tc->stop_line[0] = lines[k * 6] - env->world_mean_x;
+        tc->stop_line[1] = lines[k * 6 + 1] - env->world_mean_y;
+        tc->stop_line[2] = lines[k * 6 + 2];
+        tc->stop_line[3] = lines[k * 6 + 3] - env->world_mean_x;
+        tc->stop_line[4] = lines[k * 6 + 4] - env->world_mean_y;
+        tc->stop_line[5] = lines[k * 6 + 5];
     }
     return 0;
 }

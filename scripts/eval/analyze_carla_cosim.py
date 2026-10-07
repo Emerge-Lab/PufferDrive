@@ -1,9 +1,10 @@
 """Failure analysis + visualizations for CARLA leaderboard runs of the PufferDrive co-sim agent
 (pufferlib/ocean/cosim/carla/leaderboard_agent.py run with COSIM_WORLD_LOG and COSIM_TELEMETRY set).
 Same report shape as analyze_nuplan_cosim.py: score table worst first, failure-category counts,
-per-route diagnosis, six-frame top-down strip + speed plot + chase-cam / top-down video.
+per-route diagnosis, six-frame top-down strip + speed plot + chase-cam video. The matplotlib top-down mp4
+is opt-in (--video): it costs about a minute per 1000 logged steps, the obs replay pages cover the same ground.
 
-usage: python scripts/eval/analyze_carla_cosim.py <run_dir> [<run_dir> ...] <report_dir> [--max-inline N] [--no-video]
+usage: python scripts/eval/analyze_carla_cosim.py <run_dir> [<run_dir> ...] <report_dir> [--max-inline N] [--video]
        [--obs-html-dir D]
 
 <run_dir> holds result.json (leaderboard_evaluator --checkpoint), world_log/*.npz, telemetry/*.csv and
@@ -367,7 +368,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("paths", nargs="+", help="run dirs followed by the report dir")
     parser.add_argument("--max-inline", type=int, default=12)
-    parser.add_argument("--no-video", action="store_true")
+    parser.add_argument("--video", action="store_true", help="also render the matplotlib top-down mp4 per route (slow)")
     parser.add_argument("--obs-html-dir", help="the run's obs replay gallery dir, linked per route")
     args = parser.parse_args()
     run_dirs, report_dir = args.paths[:-1], Path(args.paths[-1])
@@ -377,7 +378,7 @@ def main():
     rows = []
     for run_dir in run_dirs:
         for record, log_path, chase_mp4, tag in collect_routes(run_dir):
-            rows.append(render_route(record, RouteLog(log_path), chase_mp4, report_dir, tag, not args.no_video))
+            rows.append(render_route(record, RouteLog(log_path), chase_mp4, report_dir, tag, args.video))
             print(f"{tag}: {rows[-1]['categories']} | {rows[-1]['diagnosis']}")
     df = pd.DataFrame(rows).sort_values("driving_score")
     df.to_csv(report_dir / "routes.csv", index=False)
