@@ -86,6 +86,7 @@ the PPO update; they differ only in the columns below (Table A3 of the paper).
 | Extra self-play, matched cycles | `selfplay_extended.yaml` + SHIFT epochs x steps per epoch | self-play | RL | self-play | none | more RL for the same cycle count |
 | BC only | `bc_only.yaml` | log replay | similarity only (`expert_similarity_only`) | none | none | imitation without safety terms |
 | BC+RL | `bc_rl.yaml` | log replay | RL + similarity | none | none | the value of self-play pretraining |
+| BC+RL fine-tune | `bc_rl_finetune.yaml` | log replay | RL + similarity | self-play | none | the value of the KL anchor (not in the paper) |
 | HR-PPO | `hrppo_anchor_bc.yaml` then `hrppo.yaml` | self-play | sparse: goal, collision, off-road | none | `0.075`, `D_KL(pi_bc \|\| pi)` | the IL-anchored self-play pipeline |
 
 Evaluate every arm on the same replay benchmark, which reports ADE and FDE next
