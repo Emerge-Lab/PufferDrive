@@ -120,6 +120,13 @@ pipeline has two steps.
    saves `models/model_puffer_drive_bc.pt` next to a `config.yaml`. Every
    infraction behaviour must be `ignore` so a brush with the log's collision
    margin does not freeze the tracked ego, and `dt` must match the log spacing.
+   One-hot argmin labels are a knife-edge target on the jerk bins (several bins
+   often land within millimetres of each other), and held-out action accuracy
+   stalls in the mid-30s regardless of data. `bc.label_smoothing_temperature`
+   (default 0, one-hot) instead trains against softmax(-(error - best) /
+   temperature) over the tracker's per-action horizon errors (m^2), so
+   indistinguishable actions share probability mass. `puffer bc` prints the
+   median argmin-to-runner-up error gap to size the temperature.
 2. **Self-play.** `hrppo.yaml`: sparse rewards, no reward conditioning, from
    scratch, `train.kl_ref_model_path` pointing at the anchor and
    `train.kl_ref_direction=reference_to_policy`. The policy block must match the

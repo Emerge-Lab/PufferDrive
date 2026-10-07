@@ -313,6 +313,9 @@ bc:
   # Stop when the held-out loss has not improved for this many epochs
   patience: 10
   val_fraction: 0.05
+  # Soft labels from the expert tracker's per-action horizon errors (m^2): targets are
+  # softmax(-(error - best) / temperature). 0 keeps one-hot argmin labels.
+  label_smoothing_temperature: 0.0
 sweep:
   method: Protein
   metric: score

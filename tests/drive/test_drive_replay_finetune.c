@@ -189,6 +189,10 @@ static int test_expert_tracking_follows_log(void) {
         c_step(&env);
         int chosen_action = ((int *) env.actions)[0];
         EXPECT_TRUE(chosen_action >= 0 && chosen_action < num_actions);
+        for (int action = 0; action < num_actions; action++) {
+            EXPECT_FINITE(env.expert_tracking_errors[action]);
+            EXPECT_TRUE(env.expert_tracking_errors[chosen_action] <= env.expert_tracking_errors[action]);
+        }
         if (step < env.scenario_length) {
             EXPECT_EQ_INT(env.masks[0], 1);
             EXPECT_TRUE(compute_displacement_error(ego, env.timestep) < 0.5f);

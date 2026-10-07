@@ -19,7 +19,7 @@ import torch
 
 import pufferlib
 import pufferlib.pytorch as P
-from pufferlib.bc import bc, collect_expert_dataset
+from pufferlib.bc import bc, collect_expert_dataset, soft_targets
 from pufferlib.config_schema import normalize_puffer_drive_config, validate_puffer_drive_config
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
@@ -104,12 +104,25 @@ def test_expert_tracking_rejects_stop_behaviors():
 def test_collect_expert_dataset_shapes():
     env = _tracking_env()
     try:
-        observations, expert_actions = collect_expert_dataset(env, 20)
+        observations, expert_actions, candidate_errors = collect_expert_dataset(env, 20)
     finally:
         env.close()
     assert observations.shape == (40, env.single_observation_space.shape[0])
     assert expert_actions.shape == (40,)
     assert observations.dtype == np.float32
+    assert candidate_errors.shape == (40, len(binding.JERK_LONG) * len(binding.JERK_LAT))
+    assert np.array_equal(candidate_errors.argmin(axis=1), expert_actions)
+
+
+def test_soft_targets_sharpen_to_argmin_as_temperature_vanishes():
+    errors = np.array([[0.0, 0.01, 0.5], [0.2, 0.0, 0.0]], dtype=np.float32)
+    targets = soft_targets(errors, 0.01)
+    assert np.allclose(targets.sum(axis=1), 1.0)
+    assert targets[0].argmax() == 0 and targets[0, 1] > targets[0, 2]
+    assert np.isclose(targets[1, 1], targets[1, 2])
+    sharp = soft_targets(errors, 1e-6)
+    assert np.isclose(sharp[0, 0], 1.0)
+    assert np.allclose(sharp[1, 1:], 0.5, atol=1e-6)
 
 
 def _bc_args(tmp_path):
@@ -141,7 +154,9 @@ def _bc_args(tmp_path):
         action_type="discrete",
     )
     args["train"].update(device="cpu", seed=0, data_dir=str(tmp_path))
-    args["bc"].update(num_steps=150, batch_size=64, max_epochs=3, patience=2, val_fraction=0.1)
+    args["bc"].update(
+        num_steps=150, batch_size=64, max_epochs=3, patience=2, val_fraction=0.1, label_smoothing_temperature=0.01
+    )
     args["wandb"] = False
     args["neptune"] = False
     return args

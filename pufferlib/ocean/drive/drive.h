@@ -216,6 +216,8 @@ struct Drive {
     int eval_mode;
     int cosim_partner_slots;  // gigaflow co-sim: static slots owned by the external sim, never spawned or stepped
     int cosim_eval_semantics; // co-sim: eval-only observation semantics without eval-mode scenario batching
+    float *expert_tracking_errors;    // [active agent][action] horizon pose error of each candidate at the last step
+    int expert_tracking_action_count;
     int eval_training_render;
     int compute_eval_metrics;
     // Rewards
@@ -3204,6 +3206,14 @@ void init(Drive *env) {
     }
     set_start_position(env);
     env->logs = (Log *) calloc(env->active_agent_count, sizeof(Log));
+    env->expert_tracking_action_count = env->dynamics_model == DYNAMICS_MODEL_JERK
+        ? NUM_JERK_LONG_ACTIONS * NUM_JERK_LAT_ACTIONS
+        : NUM_ACCELERATION_ACTIONS * NUM_STEERING_ACTIONS;
+    env->expert_tracking_errors = NULL;
+    if (env->sdc_controller == CONTROLLER_EXPERT_TRACKING) {
+        env->expert_tracking_errors
+            = (float *) calloc(env->active_agent_count * env->expert_tracking_action_count, sizeof(float));
+    }
 
     if (env->goal_source == GOAL_SOURCE_GT) {
         for (int i = 0; i < env->active_agent_count; i++) {
@@ -3252,6 +3262,7 @@ void init(Drive *env) {
 void c_close(Drive *env) {
     free(env->active_agent_indices);
     free(env->logs);
+    free(env->expert_tracking_errors);
     free(env->obs_neighbor_scratch);
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
@@ -4861,22 +4872,25 @@ static void select_expert_tracking_action(Drive *env, int active_idx, int agent_
     int *actions = (int *) env->actions;
     int target_step = env->timestep;
     int is_jerk = env->dynamics_model == DYNAMICS_MODEL_JERK;
-    int num_actions = is_jerk ? NUM_JERK_LONG_ACTIONS * NUM_JERK_LAT_ACTIONS
-                              : NUM_ACCELERATION_ACTIONS * NUM_STEERING_ACTIONS;
+    int num_actions = env->expert_tracking_action_count;
     int neutral_action = is_jerk ? (NUM_JERK_LONG_ACTIONS / 2) * NUM_JERK_LAT_ACTIONS + NUM_JERK_LAT_ACTIONS / 2
                                  : (NUM_ACCELERATION_ACTIONS / 2) * NUM_STEERING_ACTIONS + NUM_STEERING_ACTIONS / 2;
+    float *candidate_errors = env->expert_tracking_errors + active_idx * num_actions;
     if (target_step >= agent->trajectory_size || !agent->log_valid[target_step]) {
+        memset(candidate_errors, 0, num_actions * sizeof(float));
         actions[active_idx] = neutral_action;
         env->masks[active_idx] = 0;
         return;
     }
     int best_action = neutral_action;
     float best_error = expert_tracking_error(env, active_idx, agent_idx, neutral_action, neutral_action, target_step);
+    candidate_errors[neutral_action] = best_error;
     for (int candidate_action = 0; candidate_action < num_actions; candidate_action++) {
         if (candidate_action == neutral_action) {
             continue;
         }
         float error = expert_tracking_error(env, active_idx, agent_idx, candidate_action, neutral_action, target_step);
+        candidate_errors[candidate_action] = error;
         if (error < best_error) {
             best_error = error;
             best_action = candidate_action;

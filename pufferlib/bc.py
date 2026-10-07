@@ -27,11 +27,14 @@ from pufferlib.ocean.drive.drive import Drive
 
 
 def collect_expert_dataset(env, num_steps):
-    """Steps the env with placeholder actions and returns (observations, expert_actions) for valid samples."""
+    """Steps the env with placeholder actions and returns (observations, expert_actions, candidate_errors)
+    for valid samples; candidate_errors holds the tracker's horizon error of every discrete action."""
     num_agents = env.num_agents
     obs_dim = env.single_observation_space.shape[0]
+    action_count = env.get_expert_tracking_errors().shape[1]
     observations = np.empty((num_steps, num_agents, obs_dim), dtype=np.float32)
     expert_actions = np.empty((num_steps, num_agents), dtype=np.int64)
+    candidate_errors = np.empty((num_steps, num_agents, action_count), dtype=np.float32)
     valid = np.empty((num_steps, num_agents), dtype=bool)
     placeholder_actions = np.zeros_like(env.actions)
 
@@ -40,14 +43,30 @@ def collect_expert_dataset(env, num_steps):
         observations[step] = env.observations
         env.step(placeholder_actions)
         expert_actions[step] = env.actions.reshape(num_agents)
+        candidate_errors[step] = env.get_expert_tracking_errors()
         valid[step] = env.masks.reshape(num_agents) != 0
 
     keep = valid.reshape(-1)
-    return observations.reshape(-1, obs_dim)[keep], expert_actions.reshape(-1)[keep]
+    return (
+        observations.reshape(-1, obs_dim)[keep],
+        expert_actions.reshape(-1)[keep],
+        candidate_errors.reshape(-1, action_count)[keep],
+    )
 
 
-def fit_actor(policy, observations, expert_actions, bc_config, device):
-    """Cross-entropy fit with early stopping on a held-out split; returns the best state dict and metrics."""
+def soft_targets(candidate_errors, temperature):
+    """Softmax over -(error - best error) / temperature: actions whose horizon outcomes are indistinguishable
+    share the probability mass instead of a single argmin receiving it all."""
+    gaps = candidate_errors - candidate_errors.min(axis=1, keepdims=True)
+    logits = -gaps / temperature
+    logits -= logits.max(axis=1, keepdims=True)
+    weights = np.exp(logits)
+    return (weights / weights.sum(axis=1, keepdims=True)).astype(np.float32)
+
+
+def fit_actor(policy, observations, expert_actions, bc_config, device, targets=None):
+    """Cross-entropy fit (soft targets when given) with early stopping on a held-out split; returns the best
+    state dict and metrics. Accuracy is always measured against the argmin action."""
     num_samples = observations.shape[0]
     num_val = int(num_samples * bc_config["val_fraction"])
     if num_val < 1 or num_samples - num_val < bc_config["batch_size"]:
@@ -59,8 +78,15 @@ def fit_actor(policy, observations, expert_actions, bc_config, device):
     val_idx, train_idx = permutation[:num_val], permutation[num_val:]
     observations = torch.from_numpy(observations)
     expert_actions = torch.from_numpy(expert_actions)
+    targets = None if targets is None else torch.from_numpy(targets)
     val_obs = observations[val_idx].to(device)
     val_actions = expert_actions[val_idx].to(device)
+    val_targets = None if targets is None else targets[val_idx].to(device)
+
+    def loss_fn(logits, hard_actions, soft):
+        if soft is None:
+            return F.cross_entropy(logits, hard_actions)
+        return -(soft * F.log_softmax(logits, dim=-1)).sum(-1).mean()
 
     optimizer = torch.optim.Adam(policy.parameters(), lr=bc_config["learning_rate"])
     batch_size = bc_config["batch_size"]
@@ -75,7 +101,8 @@ def fit_actor(policy, observations, expert_actions, bc_config, device):
         for start in range(0, train_idx.numel(), batch_size):
             batch = train_idx[start : start + batch_size]
             logits, _ = policy(observations[batch].to(device))
-            loss = F.cross_entropy(logits, expert_actions[batch].to(device))
+            batch_targets = None if targets is None else targets[batch].to(device)
+            loss = loss_fn(logits, expert_actions[batch].to(device), batch_targets)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -85,7 +112,7 @@ def fit_actor(policy, observations, expert_actions, bc_config, device):
         policy.eval()
         with torch.no_grad():
             val_logits, _ = policy(val_obs)
-            val_loss = F.cross_entropy(val_logits, val_actions).item()
+            val_loss = loss_fn(val_logits, val_actions, val_targets).item()
             val_accuracy = (val_logits.argmax(-1) == val_actions).float().mean().item()
         history.append(
             {
@@ -135,7 +162,15 @@ def bc(env_name, args=None):
 
     env = Drive(**args["env"], seed=args["vec"]["seed"])
     collect_start = time.time()
-    observations, expert_actions = collect_expert_dataset(env, bc_config["num_steps"])
+    observations, expert_actions, candidate_errors = collect_expert_dataset(env, bc_config["num_steps"])
+    sorted_errors = np.sort(candidate_errors, axis=1)
+    runner_up_gap = sorted_errors[:, 1] - sorted_errors[:, 0]
+    print(
+        f"bc: argmin-to-runner-up error gap (m^2 over the tracking horizon): median {np.median(runner_up_gap):.4g}, "
+        f"p10 {np.percentile(runner_up_gap, 10):.4g}, p90 {np.percentile(runner_up_gap, 90):.4g}"
+    )
+    temperature = bc_config["label_smoothing_temperature"]
+    targets = soft_targets(candidate_errors, temperature) if temperature > 0 else None
     print(
         f"bc: collected {observations.shape[0]} samples from {bc_config['num_steps']} steps x {env.num_agents} envs "
         f"in {time.time() - collect_start:.1f}s"
@@ -146,7 +181,8 @@ def bc(env_name, args=None):
     policy = policy_cls(env, **args["policy"]).to(device)
     env.close()
 
-    best_state, metrics = fit_actor(policy, observations, expert_actions, bc_config, device)
+    best_state, metrics = fit_actor(policy, observations, expert_actions, bc_config, device, targets=targets)
+    metrics["label_smoothing_temperature"] = temperature
 
     data_dir = args["train"]["data_dir"]
     models_dir = os.path.join(data_dir, "models")

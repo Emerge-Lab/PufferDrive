@@ -986,6 +986,45 @@ static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+
+static PyObject *vec_get_expert_tracking_errors(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_expert_tracking_errors requires 2 arguments");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    PyObject *errors_arr = PyTuple_GetItem(args, 1);
+    if (!PyArray_Check(errors_arr)) {
+        PyErr_SetString(PyExc_TypeError, "errors must be a NumPy array");
+        return NULL;
+    }
+    float *errors_out = (float *) PyArray_DATA((PyArrayObject *) errors_arr);
+    int total = (int) PyArray_SIZE((PyArrayObject *) errors_arr);
+    int offset = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *drive = (Drive *) vec->envs[i];
+        if (drive->expert_tracking_errors == NULL) {
+            PyErr_SetString(PyExc_ValueError, "expert tracking errors are only recorded when sdc_controller is expert_tracking");
+            return NULL;
+        }
+        int count = drive->active_agent_count * drive->expert_tracking_action_count;
+        if (offset + count > total) {
+            PyErr_SetString(PyExc_ValueError, "errors array is too small for the vectorized env");
+            return NULL;
+        }
+        memcpy(errors_out + offset, drive->expert_tracking_errors, count * sizeof(float));
+        offset += count;
+    }
+    if (offset != total) {
+        PyErr_Format(PyExc_ValueError, "errors array holds %d values but the envs provide %d", total, offset);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 11) {
         PyErr_SetString(PyExc_TypeError, "vec_set_agent_states requires 11 arguments");
@@ -1469,6 +1508,7 @@ static PyMethodDef methods[]
        {"vec_set_traffic_light_states", vec_set_traffic_light_states, METH_VARARGS, "Co-sim: set light states"},
        {"vec_set_agent_goals", vec_set_agent_goals, METH_VARARGS, "Co-sim: set an agent's goal waypoints"},
        {"vec_get_agent_goal_progress", vec_get_agent_goal_progress, METH_VARARGS, "Co-sim: (current_goal_idx, goal_count)"},
+       {"vec_get_expert_tracking_errors", vec_get_expert_tracking_errors, METH_VARARGS, "Expert tracking: per-candidate horizon errors"},
        {"get_ground_truth_trajectories", get_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories"},
        {"vec_get_global_ground_truth_trajectories",
         vec_get_global_ground_truth_trajectories,

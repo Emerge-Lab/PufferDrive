@@ -445,6 +445,7 @@ class BCConfig:
     max_epochs: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     patience: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     val_fraction: float = _constrained_field(PROBABILITY_CONSTRAINT)
+    label_smoothing_temperature: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
 
 
 @dataclass

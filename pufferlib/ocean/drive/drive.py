@@ -683,6 +683,17 @@ class Drive(pufferlib.PufferEnv):
                 self.truncations[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
+    def get_expert_tracking_errors(self):
+        """Per active agent, the expert tracker's horizon pose error (m^2 summed over the horizon) for every
+        discrete action at the last step; rows of masked steps are zero."""
+        if self.dynamics_model_flag == binding.DYNAMICS_MODEL_JERK:
+            action_count = len(binding.JERK_LONG) * len(binding.JERK_LAT)
+        else:
+            action_count = len(binding.ACCELERATION_VALUES) * len(binding.STEERING_VALUES)
+        errors = np.empty((self.num_agents, action_count), dtype=np.float32)
+        binding.vec_get_expert_tracking_errors(self.c_envs, errors)
+        return errors
+
     def get_global_agent_state(self, include_static=False):
         """Get current global state of all active agents.
 
