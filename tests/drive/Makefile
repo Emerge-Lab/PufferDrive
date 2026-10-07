@@ -17,7 +17,8 @@ UNIT_SRCS := \
 	test_drive_dynamics.c \
 	test_drive_map_cache.c \
 	test_drive_idm.c \
-	test_drive_replay_finetune.c
+	test_drive_replay_finetune.c \
+	test_drive_cosim_setters.c
 SMOKE_SRCS := test_drive_env_smoke.c
 PERF_SRCS := test_perf.c
 

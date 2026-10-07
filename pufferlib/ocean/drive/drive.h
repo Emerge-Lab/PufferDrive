@@ -214,6 +214,8 @@ struct Drive {
     float inactive_agent_threshold;
     int terminate_on_goal;
     int eval_mode;
+    int cosim_partner_slots;  // gigaflow co-sim: static slots owned by the external sim, never spawned or stepped
+    int cosim_eval_semantics; // co-sim: eval-only observation semantics without eval-mode scenario batching
     int eval_training_render;
     int compute_eval_metrics;
     // Rewards
@@ -2709,6 +2711,11 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->yaw_rate = 0.0f;
     update_agent_speed(agent);
 
+    if (env->goal_source == GOAL_SOURCE_EXTERNAL) {
+        agent->goal_count = 0;
+        agent->current_goal_idx = 0;
+        return true;
+    }
     if (env->goal_source == GOAL_SOURCE_MAP) {
         if (!generate_new_goals_from_map(env, agent)) {
             printf("[GIGAFLOW WARNING] -> Failed to generate map goals for agent %d\n", agent_idx);
@@ -2881,9 +2888,10 @@ void set_active_agents(Drive *env) {
     // In GIGAFLOW mode, spawn agents dynamically on the map
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         int num_agents_to_create = env->num_controllable_agents;
+        int partner_slots = env->cosim_partner_slots;
 
         // Initialize agents for GIGAFLOW mode
-        env->agents = (Agent *) calloc(num_agents_to_create, sizeof(Agent));
+        env->agents = (Agent *) calloc(num_agents_to_create + partner_slots, sizeof(Agent));
         int *active_agent_indices = (int *) malloc(num_agents_to_create * sizeof(int));
 
         int successfully_created = 0;
@@ -2898,10 +2906,25 @@ void set_active_agents(Drive *env) {
             }
         }
 
-        env->num_total_agents = num_agents_to_create;
+        env->num_total_agents = num_agents_to_create + partner_slots;
         env->active_agent_indices = (int *) malloc(successfully_created * sizeof(int));
-        env->static_agent_indices = NULL;
+        env->static_agent_indices = partner_slots > 0 ? (int *) malloc(partner_slots * sizeof(int)) : NULL;
         env->expert_static_agent_indices = NULL;
+        for (int k = 0; k < partner_slots; k++) {
+            int partner_idx = num_agents_to_create + k;
+            Agent *partner = &env->agents[partner_idx];
+            partner->id = partner_idx;
+            partner->type = VEHICLE;
+            partner->controller = CONTROLLER_STATIC;
+            partner->sim_length = COSIM_PARTNER_DEFAULT_LENGTH_M;
+            partner->sim_width = COSIM_PARTNER_DEFAULT_WIDTH_M;
+            partner->sim_height = COSIM_PARTNER_DEFAULT_HEIGHT_M;
+            partner->wheelbase = 0.6f * partner->sim_length;
+            update_agent_radius(partner);
+            invalidate_agent(partner);
+            env->static_agent_indices[k] = partner_idx;
+        }
+        env->static_agent_count = partner_slots;
 
         for (int i = 0; i < successfully_created; i++) {
             env->active_agent_indices[i] = active_agent_indices[i];
@@ -2911,7 +2934,7 @@ void set_active_agents(Drive *env) {
         free(active_agent_indices);
 
         env->active_agent_count = successfully_created;
-        env->num_agents = successfully_created;
+        env->num_agents = successfully_created + partner_slots;
 
         return;
     }
@@ -3281,6 +3304,7 @@ int get_track_id_or_placeholder(Drive *env, int agent_idx) {
 
 void c_get_global_agent_state(
     Drive *env,
+    int include_static,
     float *x_out,
     float *y_out,
     float *z_out,
@@ -3288,8 +3312,10 @@ void c_get_global_agent_state(
     int *id_out,
     float *length_out,
     float *width_out) {
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
+    int count = include_static ? env->num_agents : env->active_agent_count;
+    for (int i = 0; i < count; i++) {
+        int agent_idx = (i < env->active_agent_count) ? env->active_agent_indices[i]
+                                                      : env->static_agent_indices[i - env->active_agent_count];
         Agent *agent = &env->agents[agent_idx];
 
         // For WOSAC, we need the original world coordinates, so we add the world means back
@@ -3391,36 +3417,14 @@ static void subsample_road_observation_rows(
 // Core Simulation Functions
 // ========================================
 
-static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
-    Agent *agent = &env->agents[agent_idx];
-    Log *agent_log = &env->logs[log_idx];
-
-    reset_agent_metrics(env, agent_idx);
-
-    if (agent->sim_x == INVALID_POSITION) {
-        return; // invalid agent position
-    }
-    if (get_grid_index(env, agent->sim_x, agent->sim_y) == -1) {
-        // Current agent is offgrid, treat as offroad
-        agent->metrics_array[OFFROAD_IDX] = 1.0f;
-        apply_infraction_behavior(agent, env->offroad_behavior);
-        return;
-    }
-
-    // Compute log-replay metrics
-    if (env->simulation_mode == SIMULATION_MODE_REPLAY) {
-        // Compute displacement error
-        float displacement_error = compute_displacement_error(agent, env->timestep);
-        if (displacement_error > 0.0f) { // Only count valid displacements
-            agent->cumulative_displacement += displacement_error;
-            agent->displacement_sample_count++;
-
-            // Compute running average
-            agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX]
-                = agent->cumulative_displacement / agent->displacement_sample_count;
-        }
-    }
-
+// Nearest-drivable-lane search and road-edge offroad check for the agent's current pose; pure geometry
+static void find_lane_and_offroad(
+    Drive *env,
+    Agent *agent,
+    bool *is_offroad_out,
+    int *lane_idx_out,
+    float *signed_lane_distance_out,
+    float *lane_heading_out) {
     bool is_offroad = false;
 
     // Track best candidate by combined distance/heading score
@@ -3580,6 +3584,47 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         }
     }
 
+    *is_offroad_out = is_offroad;
+    *lane_idx_out = lane_idx;
+    *signed_lane_distance_out = signed_lane_distance;
+    *lane_heading_out = lane_heading;
+}
+
+static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    Log *agent_log = &env->logs[log_idx];
+
+    reset_agent_metrics(env, agent_idx);
+
+    if (agent->sim_x == INVALID_POSITION) {
+        return; // invalid agent position
+    }
+    if (get_grid_index(env, agent->sim_x, agent->sim_y) == -1) {
+        // Current agent is offgrid, treat as offroad
+        agent->metrics_array[OFFROAD_IDX] = 1.0f;
+        apply_infraction_behavior(agent, env->offroad_behavior);
+        return;
+    }
+
+    // Compute log-replay metrics
+    if (env->simulation_mode == SIMULATION_MODE_REPLAY) {
+        // Compute displacement error
+        float displacement_error = compute_displacement_error(agent, env->timestep);
+        if (displacement_error > 0.0f) { // Only count valid displacements
+            agent->cumulative_displacement += displacement_error;
+            agent->displacement_sample_count++;
+
+            // Compute running average
+            agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX]
+                = agent->cumulative_displacement / agent->displacement_sample_count;
+        }
+    }
+
+    bool is_offroad;
+    int lane_idx;
+    float signed_lane_distance, lane_heading;
+    find_lane_and_offroad(env, agent, &is_offroad, &lane_idx, &signed_lane_distance, &lane_heading);
+
     // Update lane alignment metric (running average)
     if (lane_idx != -1) {
         agent->previous_lane_idx = agent->current_lane_idx;
@@ -3711,6 +3756,208 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     if (distance_to_goal_gt < GT_GOAL_RADIUS_M && goal_gt_z_dist < Z_BUFFER) {
         agent_log->reached_goal_gt = 1.0f;
     }
+}
+
+
+// Co-sim: refresh current_lane_idx and the lane metrics for an externally placed pose; none of
+// compute_metrics' other side effects (infractions, goals, logs) run here
+static void refresh_lane_association(Drive *env, Agent *agent) {
+    bool off_lane = env->grid_map == NULL || agent->sim_x == INVALID_POSITION
+        || get_grid_index(env, agent->sim_x, agent->sim_y) == -1;
+    bool is_offroad = false;
+    int lane_idx = -1;
+    float signed_lane_distance = 0.0f, lane_heading = 0.0f;
+    if (!off_lane) {
+        find_lane_and_offroad(env, agent, &is_offroad, &lane_idx, &signed_lane_distance, &lane_heading);
+    }
+    if (off_lane || is_offroad || lane_idx == -1) {
+        agent->previous_lane_idx = -1;
+        agent->current_lane_idx = -1;
+        agent->metrics_array[LANE_DIST_IDX] = LANE_DISTANCE_NORMALIZATION;
+        agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;
+        return;
+    }
+    agent->previous_lane_idx = agent->current_lane_idx;
+    agent->current_lane_idx = lane_idx;
+    agent->metrics_array[LANE_DIST_IDX] = signed_lane_distance;
+    agent->metrics_array[LANE_ANGLE_IDX] = cosf(compute_heading_diff(agent->sim_heading, lane_heading));
+}
+
+// Nearest drivable lane co-directional with the route at a goal; -1 when none within GOAL_LANE_SNAP_MAX_DIST_M
+static int find_goal_lane(Drive *env, float goal_x, float goal_y, float route_dir_x, float route_dir_y) {
+    if (env->grid_map == NULL || get_grid_index(env, goal_x, goal_y) == -1) {
+        return -1;
+    }
+    float route_norm = sqrtf(route_dir_x * route_dir_x + route_dir_y * route_dir_y);
+    int use_alignment_gate = route_norm > 1e-6f;
+    if (use_alignment_gate) {
+        route_dir_x /= route_norm;
+        route_dir_y /= route_norm;
+    }
+    GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
+    int list_size = get_neighbors_entities(env, goal_x, goal_y, entity_list, ROAD_QUERY_ENTITY_COUNT, ROAD_OFFSETS, 25);
+    int best_lane_idx = -1;
+    float best_dist_sq = GOAL_LANE_SNAP_MAX_DIST_M * GOAL_LANE_SNAP_MAX_DIST_M;
+    for (int i = 0; i < list_size; i++) {
+        if (entity_list[i].entity_idx == -1) {
+            continue;
+        }
+        RoadMapElement *element = &env->road_elements[entity_list[i].entity_idx];
+        int geometry_idx = entity_list[i].geometry_idx;
+        if (!is_drivable_road_lane(element->type) || geometry_idx + 1 >= element->segment_size) {
+            continue;
+        }
+        float seg_start_x = element->x[geometry_idx];
+        float seg_start_y = element->y[geometry_idx];
+        float seg_dx = element->x[geometry_idx + 1] - seg_start_x;
+        float seg_dy = element->y[geometry_idx + 1] - seg_start_y;
+        float seg_length_sq = seg_dx * seg_dx + seg_dy * seg_dy;
+        if (use_alignment_gate && seg_length_sq > 1e-6f) {
+            float seg_length = sqrtf(seg_length_sq);
+            float cross = (route_dir_x * seg_dy - route_dir_y * seg_dx) / seg_length;
+            float dot = (route_dir_x * seg_dx + route_dir_y * seg_dy) / seg_length;
+            if (fabsf(cross) > GOAL_LANE_ALIGN_SIN_LIMIT || dot < GOAL_LANE_ALIGN_COS_MIN) {
+                continue;
+            }
+        }
+        float to_goal_x = goal_x - seg_start_x;
+        float to_goal_y = goal_y - seg_start_y;
+        float t = (seg_length_sq > 1e-6f) ? (to_goal_x * seg_dx + to_goal_y * seg_dy) / seg_length_sq : 0.0f;
+        t = clip(t, 0.0f, 1.0f);
+        float dx = to_goal_x - t * seg_dx;
+        float dy = to_goal_y - t * seg_dy;
+        float dist_sq = dx * dx + dy * dy;
+        if (dist_sq < best_dist_sq) {
+            best_dist_sq = dist_sq;
+            best_lane_idx = entity_list[i].entity_idx;
+        }
+    }
+    return best_lane_idx;
+}
+
+// Co-sim setters return 0 on success, -1 on invalid external input (the binding raises)
+int c_set_agent_states(
+    Drive *env,
+    int count,
+    const int *idx,
+    const float *x,
+    const float *y,
+    const float *z,
+    const float *heading,
+    const float *vx,
+    const float *vy,
+    const float *yaw_rate,
+    const float *accel_long,
+    const float *seconds_stopped) {
+    for (int k = 0; k < count; k++) {
+        int agent_idx = idx[k];
+        if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
+            return -1;
+        }
+        if (!isfinite(x[k]) || !isfinite(y[k]) || !isfinite(heading[k]) || !isfinite(vx[k]) || !isfinite(vy[k])) {
+            return -1;
+        }
+        if (seconds_stopped && !(seconds_stopped[k] >= 0.0f)) {
+            return -1;
+        }
+        Agent *agent = &env->agents[agent_idx];
+        agent->sim_x = x[k] - env->world_mean_x;
+        agent->sim_y = y[k] - env->world_mean_y;
+        agent->sim_z = z[k];
+        agent->sim_heading = heading[k];
+        agent->cos_heading = cosf(agent->sim_heading);
+        agent->sin_heading = sinf(agent->sim_heading);
+        copy_pose_to_prev(agent); // a teleport must not sweep the gap through offroad/goal checks
+        agent->sim_vx = vx[k];
+        agent->sim_vy = vy[k];
+        update_agent_speed(agent);
+        agent->sim_valid = 1;
+        agent->removed = 0;
+        agent->stopped = 0;
+        agent->yaw_rate = yaw_rate[k];
+        float speed_for_steering = fmaxf(fabsf(agent->sim_speed_signed), 1.0f);
+        float steering = atanf(agent->yaw_rate * agent->wheelbase / speed_for_steering);
+        agent->steering_angle = clip(steering, -STEERING_ANGLE_LIMIT_RAD, STEERING_ANGLE_LIMIT_RAD);
+        agent->accel_long = accel_long[k];
+        agent->accel_lat = agent->sim_speed_signed * agent->yaw_rate;
+        refresh_lane_association(env, agent);
+        if (seconds_stopped) {
+            agent->seconds_stopped = seconds_stopped[k];
+        }
+    }
+    return 0;
+}
+
+int c_set_agent_sizes(Drive *env, int count, const int *idx, const float *length, const float *width) {
+    for (int k = 0; k < count; k++) {
+        int agent_idx = idx[k];
+        if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
+            return -1;
+        }
+        if (!(length[k] > 0.0f) || !(width[k] > 0.0f)) {
+            return -1;
+        }
+        Agent *agent = &env->agents[agent_idx];
+        agent->sim_length = length[k];
+        agent->sim_width = width[k];
+        update_agent_radius(agent);
+        agent->wheelbase = 0.6f * agent->sim_length;
+    }
+    return 0;
+}
+
+int c_set_traffic_light_states(Drive *env, const int *states) {
+    int ts = env->timestep;
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *traffic = &env->traffic_elements[i];
+        if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || traffic->states == NULL) {
+            continue;
+        }
+        if (ts < 0 || ts >= traffic->state_size) {
+            return -1;
+        }
+        if (states[i] < TRAFFIC_CONTROL_STATE_UNKNOWN || states[i] > TRAFFIC_CONTROL_STATE_OFF) {
+            return -1;
+        }
+        traffic->states[ts] = states[i];
+    }
+    return 0;
+}
+
+void c_get_agent_goal_progress(Drive *env, int agent_idx, int *current_goal_idx_out, int *goal_count_out) {
+    Agent *agent = &env->agents[agent_idx];
+    *current_goal_idx_out = agent->current_goal_idx;
+    *goal_count_out = agent->goal_count;
+}
+
+int c_set_agent_goals(
+    Drive *env,
+    int agent_idx,
+    int num_wp,
+    const float *gx,
+    const float *gy,
+    const float *gz,
+    const float *gdir_x,
+    const float *gdir_y) {
+    if (agent_idx < 0 || agent_idx >= env->num_total_agents || num_wp < 1 || num_wp > MAX_GOALS) {
+        return -1;
+    }
+    Agent *agent = &env->agents[agent_idx];
+    for (int w = 0; w < num_wp; w++) {
+        if (!isfinite(gx[w]) || !isfinite(gy[w])) {
+            return -1;
+        }
+        agent->list_goal_x[w] = gx[w] - env->world_mean_x;
+        agent->list_goal_y[w] = gy[w] - env->world_mean_y;
+        agent->list_goal_z[w] = gz[w];
+        agent->list_goal_lane[w] = find_goal_lane(env, agent->list_goal_x[w], agent->list_goal_y[w], gdir_x[w], gdir_y[w]);
+    }
+    agent->goal_count = num_wp;
+    agent->current_goal_idx = 0;
+    agent->current_goal_x = agent->list_goal_x[0];
+    agent->current_goal_y = agent->list_goal_y[0];
+    agent->current_goal_z = agent->list_goal_z[0];
+    return 0;
 }
 
 static void compute_rewards(Drive *env, int i) {
@@ -3893,7 +4140,9 @@ static void compute_rewards(Drive *env, int i) {
 
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     float perceived_margin
-        = (env->eval_mode && !env->eval_training_render) ? 2.0f * env->eval_perceived_size_margin_m : 0.0f;
+        = ((env->eval_mode && !env->eval_training_render) || env->cosim_eval_semantics)
+        ? 2.0f * env->eval_perceived_size_margin_m
+        : 0.0f;
     obs[obs_idx++] = ego->sim_speed_signed / env->obs_norm_speed_mps;
     obs[obs_idx++] = (ego->sim_width + perceived_margin) / env->obs_norm_veh_width_m;
     obs[obs_idx++] = (ego->sim_length + perceived_margin) / env->obs_norm_veh_length_m;
@@ -4889,10 +5138,9 @@ void c_step(Drive *env) {
         if (agent->metrics_array[REACHED_GOAL_IDX] == 0.0f) {
             continue;
         }
-        if (env->goal_source == GOAL_SOURCE_GT) {
-            // Replay mode: leave current_goal_idx saturated so the
-            // reached-goal condition won't fire again. Re-generating
-            // route-based goals on WOMD maps fails (removed=1).
+        if (env->goal_source == GOAL_SOURCE_GT || env->goal_source == GOAL_SOURCE_EXTERNAL) {
+            // Replay/co-sim: leave current_goal_idx saturated so the reached-goal condition won't fire
+            // again; the next window comes from the log layout (GT) or c_set_agent_goals (external).
             continue;
         }
         // Rolling slides the window forward by one goal; finite advances the alias to the next goal in the set.

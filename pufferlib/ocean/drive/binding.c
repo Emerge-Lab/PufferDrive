@@ -2059,6 +2059,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_log_sampling = (bool) unpack(kwargs, "reward_log_sampling");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
+    env->cosim_partner_slots = (int) unpack(kwargs, "cosim_partner_slots");
+    env->cosim_eval_semantics = (int) unpack(kwargs, "cosim_eval_semantics");
     env->obs_norm_speed_mps = (float) unpack(kwargs, "obs_norm_speed_mps");
     env->eval_training_render = (int) unpack(kwargs, "eval_training_render");
     env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");

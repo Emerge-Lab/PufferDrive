@@ -161,6 +161,7 @@ class GoalSource(Enum):
     route = 0
     map = 1
     gt = 2
+    external = 3
 
 
 class PackageName(Enum):
@@ -633,6 +634,8 @@ def _validate_cross_field_constraints(config, context):
         )
     if train["kl_ref_coef"] > 0 and config["rnn_name"] is not None:
         _raise_config_error(context, "train.kl_ref_coef", "is not supported with a recurrent policy")
+    if env["goal_source"] == "external" and env["simulation_mode"] != "gigaflow":
+        _raise_config_error(context, "env.goal_source", "'external' is only supported in gigaflow mode (co-sim)")
     if env["goal_source"] == "gt" and env["simulation_mode"] != "replay":
         _raise_config_error(context, "env.goal_source", "'gt' is only supported in replay mode")
     if env["terminate_on_goal"] and (env["simulation_mode"] != "replay" or env["control_mode"] != "control_sdc_only"):

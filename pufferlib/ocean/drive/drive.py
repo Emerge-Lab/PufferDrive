@@ -64,6 +64,8 @@ class Drive(pufferlib.PufferEnv):
         dynamics_model="classic",
         reset_accel_on_stop=False,
         jerk_rear_axle_slip=False,
+        cosim_partner_slots=0,
+        cosim_eval_semantics=False,
         simulation_mode="gigaflow",
         termination_mode=False,
         inactive_agent_threshold=0.4,
@@ -170,6 +172,7 @@ class Drive(pufferlib.PufferEnv):
             "route": binding.GOAL_SOURCE_ROUTE,
             "map": binding.GOAL_SOURCE_MAP,
             "gt": binding.GOAL_SOURCE_GT,
+            "external": binding.GOAL_SOURCE_EXTERNAL,
         }[goal_source]
         self.obs_goal_lane_distance = int(bool(obs_goal_lane_distance))
         infraction_behavior_values = {
@@ -215,6 +218,15 @@ class Drive(pufferlib.PufferEnv):
         self.terminate_on_goal = terminate_on_goal
         self.rng = np.random.default_rng(seed)
         self.min_agents_per_env = min_agents_per_env
+        # Co-sim: static agent slots per env owned by the external simulator (never spawned or stepped).
+        self.cosim_partner_slots = int(cosim_partner_slots)
+        if self.cosim_partner_slots < 0:
+            raise ValueError(f"cosim_partner_slots must be >= 0. Got: {cosim_partner_slots}")
+        if self.cosim_partner_slots > 0 and simulation_mode != "gigaflow":
+            raise ValueError("cosim_partner_slots is only supported in gigaflow simulation_mode")
+        self.cosim_eval_semantics = int(bool(cosim_eval_semantics))
+        if goal_source == "external" and simulation_mode != "gigaflow":
+            raise ValueError("goal_source 'external' is only supported in gigaflow simulation_mode (co-sim)")
         self.max_agents_per_env = max_agents_per_env
 
         self.ego_features = binding.EGO_FEATURES
@@ -445,6 +457,8 @@ class Drive(pufferlib.PufferEnv):
             "dynamics_model": self.dynamics_model_flag,
             "reset_accel_on_stop": self.reset_accel_on_stop,
             "jerk_rear_axle_slip": int(self.jerk_rear_axle_slip),
+            "cosim_partner_slots": self.cosim_partner_slots,
+            "cosim_eval_semantics": self.cosim_eval_semantics,
             "reward_goal": self.reward_goal,
             "reward_collision": self.reward_collision,
             "reward_offroad": self.reward_offroad,
@@ -669,14 +683,17 @@ class Drive(pufferlib.PufferEnv):
                 self.truncations[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
-    def get_global_agent_state(self):
+    def get_global_agent_state(self, include_static=False):
         """Get current global state of all active agents.
+
+        include_static: also return the co-sim partner slots after the active agents
+        (num_active_agents + cosim_partner_slots * num_envs rows).
 
         Returns:
             dict with keys 'x', 'y', 'z', 'heading', 'id', 'length', 'width' containing numpy arrays
             of shape (num_active_agents,)
         """
-        num_agents = self.num_agents
+        num_agents = self.num_agents + (self.cosim_partner_slots * self.num_envs if include_static else 0)
 
         states = {
             "x": np.zeros(num_agents, dtype=np.float32),
@@ -697,6 +714,7 @@ class Drive(pufferlib.PufferEnv):
             states["id"],
             states["length"],
             states["width"],
+            int(bool(include_static)),
         )
 
         return states
@@ -916,6 +934,87 @@ class Drive(pufferlib.PufferEnv):
             return
         binding.vec_close(self.c_envs)
         self.c_envs = None
+
+    def set_agent_states(self, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long, seconds_stopped=None):
+        """Co-sim: overwrite the sim state of agents at global indices `idx`
+        (e.g. CARLA background) with world-frame pose/velocity. The C side
+        subtracts world_mean, recaches heading trig and recomputes speed.
+        `yaw_rate` (rad/s) and `accel_long` (m/s^2) must come from the external
+        sim's own physics (e.g. CARLA's get_angular_velocity()/get_acceleration(),
+        nuPlan's EgoState.dynamic_car_state) -- not finite-differenced here, since
+        this agent's previous state may already have been overwritten this tick by
+        env.step()'s own dynamics before this call runs.
+        `seconds_stopped` (seconds each agent's speed has been below
+        binding.AGENT_STOPPED_SPEED_THRESHOLD) is optional: pass it when the
+        external sim owns the agent's kinematics every tick, so stopped-time is
+        injected as state instead of derived from the dummy in-sim rollout;
+        leave it None to keep c_step's own per-tick accumulation."""
+        binding.vec_set_agent_states(
+            self.c_envs,
+            np.ascontiguousarray(idx, dtype=np.int32),
+            np.ascontiguousarray(x, dtype=np.float32),
+            np.ascontiguousarray(y, dtype=np.float32),
+            np.ascontiguousarray(z, dtype=np.float32),
+            np.ascontiguousarray(heading, dtype=np.float32),
+            np.ascontiguousarray(vx, dtype=np.float32),
+            np.ascontiguousarray(vy, dtype=np.float32),
+            np.ascontiguousarray(yaw_rate, dtype=np.float32),
+            np.ascontiguousarray(accel_long, dtype=np.float32),
+            None if seconds_stopped is None else np.ascontiguousarray(seconds_stopped, dtype=np.float32),
+        )
+
+    # ── Co-simulation external-state setters ─────────────────────────────────────
+    def set_agent_sizes(self, idx, length, width):
+        """overwrite the bounding-box length/width (meters) of agents at
+        global indices `idx`, so the ego observes/collides against a CARLA
+        actor's true size instead of the gigaflow-spawned default."""
+        binding.vec_set_agent_sizes(
+            self.c_envs,
+            np.ascontiguousarray(idx, dtype=np.int32),
+            np.ascontiguousarray(length, dtype=np.float32),
+            np.ascontiguousarray(width, dtype=np.float32),
+        )
+
+    def recompute_observations(self):
+        """recompute observations from current state without stepping
+        dynamics or advancing the timestep (call after set_agent_states)."""
+        binding.vec_recompute_observations(self.c_envs)
+        return self.observations
+
+    def set_traffic_light_states(self, states):
+        """override each traffic-light element's state at the current
+        timestep (states length == num_traffic_elements)."""
+        binding.vec_set_traffic_light_states(self.c_envs, np.ascontiguousarray(states, dtype=np.int32))
+
+    def set_agent_goals(self, agent_idx, gx, gy, gz, gdir_x=None, gdir_y=None):
+        """set an agent's goal waypoints (e.g. the ego's route) in world
+        coords (C subtracts world_mean). Each waypoint is snapped to its
+        nearest route-aligned drivable lane (find_goal_lane) so the GPS
+        lane-distance observation columns stay live when the map carries a
+        lane graph; waypoints off the drivable network keep lane -1
+        (columns zero-filled). gdir_x/gdir_y: per-waypoint local route travel
+        direction (need not be normalized) used to reject crossing-road lanes
+        at junctions; omit (or pass zeros) to snap by distance alone."""
+        gx = np.ascontiguousarray(gx, dtype=np.float32)
+        if gdir_x is None or gdir_y is None:
+            gdir_x = np.zeros_like(gx)
+            gdir_y = np.zeros_like(gx)
+        binding.vec_set_agent_goals(
+            self.c_envs,
+            int(agent_idx),
+            gx,
+            np.ascontiguousarray(gy, dtype=np.float32),
+            np.ascontiguousarray(gz, dtype=np.float32),
+            np.ascontiguousarray(gdir_x, dtype=np.float32),
+            np.ascontiguousarray(gdir_y, dtype=np.float32),
+        )
+
+    def get_agent_goal_progress(self, agent_idx):
+        """Co-sim: (current_goal_idx, goal_count) of one agent. current_goal_idx == goal_count
+        means every goal of the current window has been consumed."""
+        return binding.vec_get_agent_goal_progress(self.c_envs, int(agent_idx))
+
+    # ───────────────────────────────────────
 
     def get_state(self):
         try:

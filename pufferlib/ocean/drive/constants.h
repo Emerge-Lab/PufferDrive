@@ -109,6 +109,7 @@
 #define GOAL_SOURCE_ROUTE 0 // seed from the agent's own forward route
 #define GOAL_SOURCE_MAP 1   // seed from a uniformly sampled map lane
 #define GOAL_SOURCE_GT 2    // seed directly from the logged ground-truth trajectory
+#define GOAL_SOURCE_EXTERNAL 3 // co-sim: goal windows pushed by the external sim (c_set_agent_goals)
 
 // Dynamics model
 #define DYNAMICS_MODEL_CLASSIC 0
@@ -156,6 +157,12 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define LANE_SWITCH_THRESHOLD 0.05f // Hysteresis: new lane must be 5% better to switch
 #define LANE_ALIGN_COS_THRESHOLD 0.5f
 #define MAX_CHECKED_LANES 32
+#define GOAL_LANE_SNAP_MAX_DIST_M 6.0f  // external goals farther than this from any lane get no lane idx
+#define GOAL_LANE_ALIGN_SIN_LIMIT 0.7071f // sin(45 deg): reject lanes diverging more than 45 deg from the route
+#define GOAL_LANE_ALIGN_COS_MIN 0.0f      // reject oncoming lanes
+#define COSIM_PARTNER_DEFAULT_LENGTH_M 4.5f // co-sim partner slot box until the external sim sets sizes
+#define COSIM_PARTNER_DEFAULT_WIDTH_M 2.0f
+#define COSIM_PARTNER_DEFAULT_HEIGHT_M 1.5f
 #define LANE_WIDTH 3.7f
 #define LANE_MARGIN 0.2f
 

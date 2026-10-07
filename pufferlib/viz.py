@@ -1659,6 +1659,21 @@ def render_interactive_replay_zlib(replay_path, filename):
     _render_interactive_replay_payload(compressed_payload, filename)
 
 
+def read_replay_zlib(replay_path):
+    """-> (header dict, chunk name -> ndarray view) of a saved .replay.zlib."""
+    with open(replay_path, "rb") as replay_file:
+        raw = zlib.decompress(replay_file.read())
+    header_len = struct.unpack("<I", raw[:4])[0]
+    header = json.loads(raw[4 : 4 + header_len])
+    data_start = 4 + header_len + ((-(4 + header_len)) % 4)
+    chunks = {}
+    for name, meta in header["chunks"].items():
+        start = data_start + meta["offset"]
+        count = meta["nbytes"] // np.dtype(meta["dtype"]).itemsize
+        chunks[name] = np.frombuffer(raw, dtype=meta["dtype"], count=count, offset=start).reshape(meta["shape"])
+    return header, chunks
+
+
 def build_gallery_index(folder_path=".", file_metrics=None):
     """Build an index.html navigator for per-episode replay HTMLs in folder_path.
 
