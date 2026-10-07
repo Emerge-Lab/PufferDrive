@@ -14,6 +14,8 @@ import pufferlib.pytorch
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="fused slot encoder needs CUDA + Triton")
 
 ENCODER_SHAPES = [(35, 10, 256), (30, 6, 256), (20, 11, 256), (4, 14, 128)]
+# None = the table config of this GPU; the second config exercises 64-row tiles with 8 warps
+KERNEL_CONFIGS = {"table": None, "wide": (64, 64, 8, 2, 128, 64, 8, 2, 64, 4)}
 BATCH = 1024
 BF16_ULP_AT_FOUR = 2.0**-6
 
@@ -76,8 +78,18 @@ def relative_error(a, b):
     return ((a - b).norm() / b.norm().clamp_min(1e-12)).item()
 
 
+@pytest.fixture(params=list(KERNEL_CONFIGS), ids=list(KERNEL_CONFIGS))
+def kernel_config(request):
+    import pufferlib.ocean.fused_slot_encoder as fse
+
+    fields = KERNEL_CONFIGS[request.param]
+    fse.CONFIG_OVERRIDE = fse.KernelConfig(*fields) if fields else None
+    yield request.param
+    fse.CONFIG_OVERRIDE = None
+
+
 @pytest.mark.parametrize("slots,features,width", ENCODER_SHAPES)
-def test_fused_matches_autocast_reference(slots, features, width):
+def test_fused_matches_autocast_reference(slots, features, width, kernel_config):
     torch.manual_seed(0)
     encoder = make_encoder(features, width)
     objects, counts, grad_pooled = make_inputs(slots, features, width, seed=slots)

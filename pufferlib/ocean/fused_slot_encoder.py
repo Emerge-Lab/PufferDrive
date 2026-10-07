@@ -2,7 +2,8 @@
 
 Reproduces the bf16-autocast numerics of DriveBackbone._encode_and_pool (bf16 matmul inputs and outputs, fp32
 accumulation, fp32 LayerNorm, gradient shared evenly between tied maxima) without materializing the 256-wide
-per-slot activations between ops.
+per-slot activations between ops. The forward walks the slots one at a time for a block of batch rows, so the
+max-pool is an elementwise running max with no padded slots.
 """
 
 from dataclasses import dataclass
@@ -15,7 +16,6 @@ import triton.language as tl
 @dataclass(frozen=True)
 class KernelConfig:
     fwd_block_batch: int
-    fwd_block_slots: int
     fwd_block_k: int
     fwd_num_warps: int
     fwd_num_stages: int
@@ -28,9 +28,10 @@ class KernelConfig:
 
 
 # Timed on an RTX 5090 (GB202, compute capability 12.0); the RTX PRO 6000 Blackwell is the same chip.
-GB202_CONFIG = KernelConfig(8, 4, 32, 4, 2, 64, 64, 8, 2, 32, 4)
-# Timed on an H100 80GB HBM3 at 131072 rows (scripts/tune_fused_slot_encoder.py): 106 -> 79 ms over all encoders.
-H100_CONFIG = KernelConfig(8, 4, 64, 4, 2, 32, 64, 4, 3, 32, 4)
+GB202_CONFIG = KernelConfig(32, 32, 4, 2, 64, 64, 8, 2, 32, 4)
+# Backward timed on an H100 80GB HBM3 at 131072 rows; forward carried over from the slot-chunk kernel, retune with
+# scripts/kesai/15_tune_fused_slot_encoder_slurm.sh.
+H100_CONFIG = KernelConfig(32, 64, 4, 2, 32, 64, 4, 3, 32, 4)
 # Untimed placeholder: replace with the KernelConfig printed by scripts/tune_fused_slot_encoder.py on that GPU.
 B200_CONFIG = GB202_CONFIG
 B300_CONFIG = B200_CONFIG  # Blackwell Ultra shares the B200 SM design
@@ -55,47 +56,64 @@ def _bf16_round(x):
 
 
 @triton.jit
-def _encode_slot_chunk(
+def _pre_norm_chunk(x_bf16, k_offs, w1_ptr, b1_ptr, F_PAD: tl.constexpr):
+    f_offs = tl.arange(0, F_PAD)
+    w1t_chunk = tl.load(w1_ptr + k_offs[None, :] * F_PAD + f_offs[:, None])
+    b1_chunk = tl.load(b1_ptr + k_offs)
+    return _bf16_round(tl.dot(x_bf16, w1t_chunk) + b1_chunk[None, :])
+
+
+@triton.jit
+def _row_stats_full(x_bf16, w1_ptr, b1_ptr, D: tl.constexpr, F_PAD: tl.constexpr):
+    pre_norm = _pre_norm_chunk(x_bf16, tl.arange(0, D), w1_ptr, b1_ptr, F_PAD)
+    mean = tl.sum(pre_norm, axis=1) / D
+    centered = pre_norm - mean[:, None]
+    rstd = tl.rsqrt(tl.sum(centered * centered, axis=1) / D + LAYER_NORM_EPS)
+    return mean, rstd
+
+
+@triton.jit
+def _normed_relu_chunk(x_bf16, mean, rstd, k_offs, w1_ptr, b1_ptr, gamma_ptr, beta_ptr, F_PAD: tl.constexpr):
+    gamma_chunk = tl.load(gamma_ptr + k_offs)
+    beta_chunk = tl.load(beta_ptr + k_offs)
+    pre_norm_chunk = _pre_norm_chunk(x_bf16, k_offs, w1_ptr, b1_ptr, F_PAD)
+    normed_chunk = (pre_norm_chunk - mean[:, None]) * rstd[:, None] * gamma_chunk[None, :] + beta_chunk[None, :]
+    return tl.maximum(normed_chunk, 0.0).to(tl.bfloat16)
+
+
+@triton.jit
+def _encode_columns(
     x_bf16,
+    mean,
+    rstd,
     row_mask,
     flat_rows,
+    n_offs,
     w1_ptr,
     b1_ptr,
     gamma_ptr,
     beta_ptr,
     w2t_ptr,
-    b2,
+    b2_ptr,
     normed_relu_ptr,
     D: tl.constexpr,
     F_PAD: tl.constexpr,
     BLOCK_K: tl.constexpr,
-    STORE_ACTS: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    STORE_NORMED: tl.constexpr,
 ):
-    # full-row stats first, then columns recomputed per chunk: register tensors cannot be sliced
-    d_offs = tl.arange(0, D)
-    f_offs = tl.arange(0, F_PAD)
-    w1t = tl.load(w1_ptr + d_offs[None, :] * F_PAD + f_offs[:, None])
-    b1 = tl.load(b1_ptr + d_offs)
-    pre_norm = _bf16_round(tl.dot(x_bf16, w1t) + b1[None, :])
-    mean = tl.sum(pre_norm, axis=1) / D
-    centered = pre_norm - mean[:, None]
-    rstd = tl.rsqrt(tl.sum(centered * centered, axis=1) / D + LAYER_NORM_EPS)
-    encoded = tl.zeros((x_bf16.shape[0], D), tl.float32)
+    # columns recomputed per K chunk: register tensors cannot be sliced
+    encoded = tl.zeros((x_bf16.shape[0], BLOCK_N), tl.float32)
     for k0 in range(0, D, BLOCK_K):
         k_offs = k0 + tl.arange(0, BLOCK_K)
-        w1t_chunk = tl.load(w1_ptr + k_offs[None, :] * F_PAD + f_offs[:, None])
-        b1_chunk = tl.load(b1_ptr + k_offs)
-        gamma_chunk = tl.load(gamma_ptr + k_offs)
-        beta_chunk = tl.load(beta_ptr + k_offs)
-        pre_norm_chunk = _bf16_round(tl.dot(x_bf16, w1t_chunk) + b1_chunk[None, :])
-        normed_chunk = (pre_norm_chunk - mean[:, None]) * rstd[:, None] * gamma_chunk[None, :] + beta_chunk[None, :]
-        normed_relu_chunk = tl.maximum(normed_chunk, 0.0).to(tl.bfloat16)
-        if STORE_ACTS:
+        normed_relu_chunk = _normed_relu_chunk(x_bf16, mean, rstd, k_offs, w1_ptr, b1_ptr, gamma_ptr, beta_ptr, F_PAD)
+        if STORE_NORMED:
             tl.store(
                 normed_relu_ptr + flat_rows[:, None] * D + k_offs[None, :], normed_relu_chunk, mask=row_mask[:, None]
             )
-        w2t_chunk = tl.load(w2t_ptr + k_offs[:, None] * D + d_offs[None, :])
+        w2t_chunk = tl.load(w2t_ptr + k_offs[:, None] * D + n_offs[None, :])
         encoded = tl.dot(normed_relu_chunk, w2t_chunk, encoded)
+    b2 = tl.load(b2_ptr + n_offs)
     return _bf16_round(encoded + b2[None, :])
 
 
@@ -120,64 +138,59 @@ def fused_slot_encoder_fwd_kernel(
     stride_xs,
     stride_xf,
     BLOCK_B: tl.constexpr,
-    BLOCK_S: tl.constexpr,
     D: tl.constexpr,
     F_PAD: tl.constexpr,
     BLOCK_K: tl.constexpr,
     STORE_ACTS: tl.constexpr,
 ):
-    ROWS: tl.constexpr = BLOCK_B * BLOCK_S
     pid = tl.program_id(0)
     batch_offs = pid * BLOCK_B + tl.arange(0, BLOCK_B)
     batch_mask = batch_offs < B
     counts = tl.load(counts_ptr + batch_offs, mask=batch_mask, other=0)
     d_offs = tl.arange(0, D)
     f_offs = tl.arange(0, F_PAD)
-    b2 = tl.load(b2_ptr + d_offs)
-    row_offs = tl.arange(0, ROWS)
-    row_slot = row_offs % BLOCK_S
-    row_batch = pid * BLOCK_B + row_offs // BLOCK_S
-    row_counts = tl.load(counts_ptr + row_batch, mask=row_batch < B, other=0)
     running_max = tl.full((BLOCK_B, D), float("-inf"), tl.float32)
     tie_count = tl.zeros((BLOCK_B, D), tl.int32)
-    for slot0 in range(0, S, BLOCK_S):
-        slots = slot0 + row_slot
-        row_mask = (row_batch < B) & (slots < S)
+    for slot in range(S):
         x = tl.load(
-            x_ptr + row_batch[:, None] * stride_xb + slots[:, None] * stride_xs + f_offs[None, :] * stride_xf,
-            mask=row_mask[:, None] & (f_offs[None, :] < F),
+            x_ptr + batch_offs[:, None] * stride_xb + slot * stride_xs + f_offs[None, :] * stride_xf,
+            mask=batch_mask[:, None] & (f_offs[None, :] < F),
             other=0.0,
         )
-        flat_rows = row_batch * S + slots
-        encoded = _encode_slot_chunk(
-            x.to(tl.bfloat16),
-            row_mask,
+        x_bf16 = x.to(tl.bfloat16)
+        flat_rows = batch_offs * S + slot
+        mean, rstd = _row_stats_full(x_bf16, w1_ptr, b1_ptr, D, F_PAD)
+        encoded = _encode_columns(
+            x_bf16,
+            mean,
+            rstd,
+            batch_mask,
             flat_rows,
+            d_offs,
             w1_ptr,
             b1_ptr,
             gamma_ptr,
             beta_ptr,
             w2t_ptr,
-            b2,
+            b2_ptr,
             normed_relu_ptr,
             D,
             F_PAD,
             BLOCK_K,
+            D,
             STORE_ACTS,
         )
         if STORE_ACTS:
             tl.store(
-                encoded_ptr + flat_rows[:, None] * D + d_offs[None, :], encoded.to(tl.bfloat16), mask=row_mask[:, None]
+                encoded_ptr + flat_rows[:, None] * D + d_offs[None, :],
+                encoded.to(tl.bfloat16),
+                mask=batch_mask[:, None],
             )
-        valid = row_mask & (slots < row_counts)
-        masked = tl.reshape(tl.where(valid[:, None], encoded, float("-inf")), (BLOCK_B, BLOCK_S, D))
-        valid3 = tl.reshape(valid, (BLOCK_B, BLOCK_S))
-        chunk_max = tl.max(masked, axis=1)
-        chunk_ties = tl.sum(((masked == chunk_max[:, None, :]) & valid3[:, :, None]).to(tl.int32), axis=1)
-        greater = chunk_max > running_max
-        equal = chunk_max == running_max
-        tie_count = tl.where(greater, chunk_ties, tl.where(equal, tie_count + chunk_ties, tie_count))
-        running_max = tl.where(greater, chunk_max, running_max)
+        valid = (batch_mask & (slot < counts))[:, None]
+        greater = valid & (encoded > running_max)
+        equal = valid & (encoded == running_max)
+        tie_count = tl.where(greater, 1, tl.where(equal, tie_count + 1, tie_count))
+        running_max = tl.where(greater, encoded, running_max)
     pooled = tl.where((counts > 0)[:, None], running_max, 0.0)
     out_offs = batch_offs[:, None] * D + d_offs[None, :]
     tl.store(pooled_ptr + out_offs, pooled.to(tl.bfloat16), mask=batch_mask[:, None])
@@ -225,6 +238,87 @@ def fused_slot_pool_bwd_kernel(
 
 
 @triton.jit
+def _grad_normed_relu_columns(
+    grad_encoded_ptr,
+    rows,
+    row_mask,
+    n_offs,
+    w2_ptr,
+    D: tl.constexpr,
+    BLOCK_R: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
+    grad_normed_relu = tl.zeros((BLOCK_R, BLOCK_N), tl.float32)
+    for k0 in range(0, D, BLOCK_K):
+        k_offs = k0 + tl.arange(0, BLOCK_K)
+        grad_chunk = tl.load(grad_encoded_ptr + rows[:, None] * D + k_offs[None, :], mask=row_mask[:, None], other=0.0)
+        w2_chunk = tl.load(w2_ptr + k_offs[:, None] * D + n_offs[None, :])
+        grad_normed_relu = tl.dot(grad_chunk, w2_chunk, grad_normed_relu)
+    return _bf16_round(grad_normed_relu)
+
+
+@triton.jit
+def _layer_norm_grad_columns(
+    x_bf16, mean, rstd, grad_normed_relu, n_offs, w1_ptr, b1_ptr, gamma_ptr, beta_ptr, F_PAD: tl.constexpr
+):
+    gamma_chunk = tl.load(gamma_ptr + n_offs)
+    beta_chunk = tl.load(beta_ptr + n_offs)
+    pre_norm = _pre_norm_chunk(x_bf16, n_offs, w1_ptr, b1_ptr, F_PAD)
+    normalized = (pre_norm - mean[:, None]) * rstd[:, None]
+    normed = normalized * gamma_chunk[None, :] + beta_chunk[None, :]
+    grad_normed = tl.where(normed > 0.0, grad_normed_relu, 0.0)
+    return normalized, grad_normed, grad_normed * gamma_chunk[None, :]
+
+
+@triton.jit
+def _backward_rows_full(
+    x_bf16,
+    rows,
+    row_mask,
+    grad_encoded_ptr,
+    w1t,
+    b1,
+    gamma,
+    beta,
+    w2_ptr,
+    grad_pre_norm_ptr,
+    grad_gamma,
+    grad_beta,
+    grad_b1,
+    D: tl.constexpr,
+    BLOCK_R: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    d_offs = tl.arange(0, D)
+    grad_normed_relu = _grad_normed_relu_columns(
+        grad_encoded_ptr, rows, row_mask, d_offs, w2_ptr, D, BLOCK_R, BLOCK_K, D
+    )
+    pre_norm = _bf16_round(tl.dot(x_bf16, w1t) + b1[None, :])
+    mean = tl.sum(pre_norm, axis=1) / D
+    centered = pre_norm - mean[:, None]
+    rstd = tl.rsqrt(tl.sum(centered * centered, axis=1) / D + LAYER_NORM_EPS)
+    normalized = centered * rstd[:, None]
+    normed = normalized * gamma[None, :] + beta[None, :]
+    grad_normed = tl.where(normed > 0.0, grad_normed_relu, 0.0)
+    grad_scaled = grad_normed * gamma[None, :]
+    mean_grad = tl.sum(grad_scaled, axis=1) / D
+    mean_grad_normalized = tl.sum(grad_scaled * normalized, axis=1) / D
+    grad_pre_norm = _bf16_round(
+        rstd[:, None] * (grad_scaled - mean_grad[:, None] - normalized * mean_grad_normalized[:, None])
+    )
+    tl.store(
+        grad_pre_norm_ptr + rows[:, None] * D + d_offs[None, :],
+        grad_pre_norm.to(tl.bfloat16),
+        mask=row_mask[:, None],
+    )
+    grad_gamma += tl.sum(grad_normed * normalized, axis=0)
+    grad_beta += tl.sum(grad_normed, axis=0)
+    grad_b1 += tl.sum(grad_pre_norm, axis=0)
+    return grad_gamma, grad_beta, grad_b1
+
+
+@triton.jit
 def fused_slot_encoder_bwd_kernel(
     x_ptr,
     grad_encoded_ptr,
@@ -264,41 +358,29 @@ def fused_slot_encoder_bwd_kernel(
         row_mask = rows < B * S
         batch = rows // S
         slots = rows % S
-        grad_normed_relu = tl.zeros((BLOCK_R, D), tl.float32)
-        for k0 in range(0, D, BLOCK_K):
-            k_offs = k0 + tl.arange(0, BLOCK_K)
-            grad_chunk = tl.load(
-                grad_encoded_ptr + rows[:, None] * D + k_offs[None, :], mask=row_mask[:, None], other=0.0
-            )
-            w2_chunk = tl.load(w2_ptr + k_offs[:, None] * D + d_offs[None, :])
-            grad_normed_relu = tl.dot(grad_chunk, w2_chunk, grad_normed_relu)
-        grad_normed_relu = _bf16_round(grad_normed_relu)
         x = tl.load(
             x_ptr + batch[:, None] * stride_xb + slots[:, None] * stride_xs + f_offs[None, :] * stride_xf,
             mask=row_mask[:, None] & (f_offs[None, :] < F),
             other=0.0,
         )
-        pre_norm = _bf16_round(tl.dot(x.to(tl.bfloat16), w1t) + b1[None, :])
-        mean = tl.sum(pre_norm, axis=1) / D
-        centered = pre_norm - mean[:, None]
-        rstd = tl.rsqrt(tl.sum(centered * centered, axis=1) / D + LAYER_NORM_EPS)
-        normalized = centered * rstd[:, None]
-        normed = normalized * gamma[None, :] + beta[None, :]
-        grad_normed = tl.where(normed > 0.0, grad_normed_relu, 0.0)
-        grad_scaled = grad_normed * gamma[None, :]
-        mean_grad = tl.sum(grad_scaled, axis=1) / D
-        mean_grad_normalized = tl.sum(grad_scaled * normalized, axis=1) / D
-        grad_pre_norm = _bf16_round(
-            rstd[:, None] * (grad_scaled - mean_grad[:, None] - normalized * mean_grad_normalized[:, None])
+        grad_gamma, grad_beta, grad_b1 = _backward_rows_full(
+            x.to(tl.bfloat16),
+            rows,
+            row_mask,
+            grad_encoded_ptr,
+            w1t,
+            b1,
+            gamma,
+            beta,
+            w2_ptr,
+            grad_pre_norm_ptr,
+            grad_gamma,
+            grad_beta,
+            grad_b1,
+            D,
+            BLOCK_R,
+            BLOCK_K,
         )
-        tl.store(
-            grad_pre_norm_ptr + rows[:, None] * D + d_offs[None, :],
-            grad_pre_norm.to(tl.bfloat16),
-            mask=row_mask[:, None],
-        )
-        grad_gamma += tl.sum(grad_normed * normalized, axis=0)
-        grad_beta += tl.sum(grad_normed, axis=0)
-        grad_b1 += tl.sum(grad_pre_norm, axis=0)
     tl.store(grad_gamma_partial_ptr + pid * D + d_offs, grad_gamma)
     tl.store(grad_beta_partial_ptr + pid * D + d_offs, grad_beta)
     tl.store(grad_b1_partial_ptr + pid * D + d_offs, grad_b1)
@@ -306,10 +388,6 @@ def fused_slot_encoder_bwd_kernel(
 
 def _feature_pad(in_features):
     return max(MIN_FEATURE_PAD, triton.next_power_of_2(in_features))
-
-
-def _slot_block(num_slots, block_slots):
-    return min(block_slots, triton.next_power_of_2(num_slots))
 
 
 def pad_weight(w1_bf16, feature_pad):
@@ -360,7 +438,6 @@ def fused_slot_encoder_fwd(
         x.stride(1),
         x.stride(2),
         BLOCK_B=config.fwd_block_batch,
-        BLOCK_S=_slot_block(S, config.fwd_block_slots),
         D=D,
         F_PAD=feature_pad,
         BLOCK_K=config.fwd_block_k,

@@ -26,17 +26,11 @@ TIMING_ITERS = 15
 WARMUP_ITERS = 3
 POOLED_TOLERANCE = 2.0**-6
 GRAD_TOLERANCE = 1e-3
-FWD_GRID = {
-    "block_batch": (4, 8, 16),
-    "block_slots": (4, 8),
-    "block_k": (32, 64),
-    "num_warps": (4, 8),
-    "num_stages": (1, 2, 3),
-}
-BWD_GRID = {"block_rows": (32, 64, 128), "block_k": (32, 64), "num_warps": (4, 8), "num_stages": (1, 2, 3)}
+FWD_GRID = {"block_batch": (16, 32, 64), "block_k": (32, 64), "num_warps": (4, 8), "num_stages": (2, 3)}
+BWD_GRID = {"block_rows": (32, 64, 128), "block_k": (32, 64), "num_warps": (4, 8), "num_stages": (2, 3)}
 POOL_GRID = {"block_rows": (16, 32, 64), "num_warps": (4, 8)}
-QUICK_FWD_GRID = {"block_batch": (8,), "block_slots": (4,), "block_k": (32, 64), "num_warps": (4,), "num_stages": (2,)}
-QUICK_BWD_GRID = {"block_rows": (64,), "block_k": (64,), "num_warps": (8,), "num_stages": (1, 2)}
+QUICK_FWD_GRID = {"block_batch": (32,), "block_k": (32, 64), "num_warps": (4,), "num_stages": (2,)}
+QUICK_BWD_GRID = {"block_rows": (64,), "block_k": (64,), "num_warps": (8,), "num_stages": (2,)}
 QUICK_POOL_GRID = {"block_rows": (32,), "num_warps": (4,)}
 LAUNCH_ERRORS = (triton.runtime.errors.OutOfResources, triton.compiler.errors.CompilationError, RuntimeError)
 PARTS = ("fwd", "bwd", "pool")
