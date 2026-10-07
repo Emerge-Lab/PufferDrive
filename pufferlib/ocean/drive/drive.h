@@ -4744,7 +4744,21 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
     return obs_idx;
 }
 
-static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
+typedef struct {
+    float x;
+    float y;
+    float z;
+    int agent_idx;
+} PartnerScanEntry;
+
+static int write_partner_obs(
+    Drive *env,
+    Agent *ego,
+    int ego_agent_idx,
+    const PartnerScanEntry *partner_scan,
+    float *obs,
+    int obs_idx,
+    int *partner_count) {
     // Partner blindness: zero partner obs for the configured duration once triggered
     if (ego->partner_blindness_counter > 0) {
         ego->partner_blindness_counter--;
@@ -4767,36 +4781,27 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
     } AgentDistance;
     AgentDistance nearby_agents[env->num_agents];
     int nearby_count = 0;
+    float range_sq = env->obs_range_partner_m * env->obs_range_partner_m;
     for (int j = 0; j < env->num_agents; j++) {
-        int index = -1;
-        if (j < env->active_agent_count) {
-            index = env->active_agent_indices[j];
-        } else if (j < env->num_agents) {
-            index = env->static_agent_indices[j - env->active_agent_count];
-        }
-        if (index == env->active_agent_indices[agent_idx]) {
-            continue; // Skip self, but don't increment obs_idx
-        }
-        Agent *other = &env->agents[index];
-        float dx = other->sim_x - ego->sim_x;
-        float dy = other->sim_y - ego->sim_y;
-        float dz = other->sim_z - ego->sim_z;
+        float dx = partner_scan[j].x - ego->sim_x;
+        float dy = partner_scan[j].y - ego->sim_y;
+        float dz = partner_scan[j].z - ego->sim_z;
         float dist_sq = dx * dx + dy * dy + dz * dz;
-        if (dist_sq > env->obs_range_partner_m * env->obs_range_partner_m) {
-            continue;
-        }
-        nearby_agents[nearby_count].index = index;
+        nearby_agents[nearby_count].index = partner_scan[j].agent_idx;
         nearby_agents[nearby_count].dist_sq = dist_sq;
         nearby_agents[nearby_count].dz = dz;
-        nearby_count++;
+        // branchless append: self and out-of-range candidates are overwritten by the next one
+        nearby_count += (partner_scan[j].agent_idx != ego_agent_idx) & !(dist_sq > range_sq);
     }
 
     int partners_written = 0;
     int partners_to_write = (nearby_count < env->obs_slots_partners_n) ? nearby_count : env->obs_slots_partners_n;
     for (int k = 0; k < partners_to_write; k++) {
         int nearest_idx = k;
+        float nearest_dist_sq = nearby_agents[k].dist_sq;
         for (int j = k + 1; j < nearby_count; j++) {
-            if (nearby_agents[j].dist_sq < nearby_agents[nearest_idx].dist_sq) {
+            if (nearby_agents[j].dist_sq < nearest_dist_sq) {
+                nearest_dist_sq = nearby_agents[j].dist_sq;
                 nearest_idx = j;
             }
         }
@@ -5051,8 +5056,10 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
         = (visible_count < env->obs_slots_traffic_controls_n) ? visible_count : env->obs_slots_traffic_controls_n;
     for (int k = 0; k < controls_to_observe; k++) {
         int nearest_idx = k;
+        float nearest_dist_sq = visible_controls[k].dist_sq;
         for (int j = k + 1; j < visible_count; j++) {
-            if (visible_controls[j].dist_sq < visible_controls[nearest_idx].dist_sq) {
+            if (visible_controls[j].dist_sq < nearest_dist_sq) {
+                nearest_dist_sq = visible_controls[j].dist_sq;
                 nearest_idx = j;
             }
         }
@@ -5098,6 +5105,13 @@ static void compute_observations(Drive *env) {
     int obs_per_agent = compute_observation_size(env);
     memset(env->observations, 0, obs_per_agent * env->active_agent_count * sizeof(float));
     float (*obs_matrix)[obs_per_agent] = (float (*)[obs_per_agent]) env->observations;
+    PartnerScanEntry partner_scan[env->num_agents];
+    for (int j = 0; j < env->num_agents; j++) {
+        int index = (j < env->active_agent_count) ? env->active_agent_indices[j]
+                                                  : env->static_agent_indices[j - env->active_agent_count];
+        Agent *agent = &env->agents[index];
+        partner_scan[j] = (PartnerScanEntry) {agent->sim_x, agent->sim_y, agent->sim_z, index};
+    }
     for (int i = 0; i < env->active_agent_count; i++) {
         float *obs = &obs_matrix[i][0];
         int agent_idx = env->active_agent_indices[i];
@@ -5110,7 +5124,7 @@ static void compute_observations(Drive *env) {
 
         obs_idx = write_ego_obs(env, ego, obs, obs_idx);
         obs_idx = write_reward_target_obs(env, ego, obs, obs_idx);
-        obs_idx = write_partner_obs(env, ego, i, obs, obs_idx, &partner_count);
+        obs_idx = write_partner_obs(env, ego, agent_idx, partner_scan, obs, obs_idx, &partner_count);
         obs_idx = write_road_obs(env, ego, obs, obs_idx, &lane_count, &boundary_count);
         obs_idx = write_traffic_control_obs(env, ego, obs, obs_idx, &traffic_control_count);
         obs[obs_idx++] = (float) lane_count;

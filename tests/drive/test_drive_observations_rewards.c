@@ -276,19 +276,23 @@ static int test_partner_obs_relative_velocity(void) {
     update_agent_speed(&agents[0]);
     update_agent_speed(&agents[1]);
     env.agents = agents;
+    PartnerScanEntry partner_scan[2] = {
+        {agents[0].sim_x, agents[0].sim_y, agents[0].sim_z, 0},
+        {agents[1].sim_x, agents[1].sim_y, agents[1].sim_z, 1},
+    };
     float obs[2 * (PARTNER_FEATURES + PARTNER_RELATIVE_VELOCITY_FEATURES)];
     int partner_count = 0;
 
     env.obs_partner_relative_velocity = 0;
     memset(obs, 0, sizeof(obs));
-    int end_idx = write_partner_obs(&env, &agents[0], 0, obs, 0, &partner_count);
+    int end_idx = write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
     EXPECT_EQ_INT(partner_count, 1);
     EXPECT_EQ_INT(end_idx, 2 * PARTNER_FEATURES);
     EXPECT_NEAR(obs[7], 0.5f, 1e-5f);
 
     env.obs_partner_relative_velocity = 1;
     memset(obs, 0, sizeof(obs));
-    end_idx = write_partner_obs(&env, &agents[0], 0, obs, 0, &partner_count);
+    end_idx = write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
     EXPECT_EQ_INT(end_idx, 2 * (PARTNER_FEATURES + PARTNER_RELATIVE_VELOCITY_FEATURES));
     EXPECT_NEAR(obs[7], 0.5f, 1e-5f);
     EXPECT_NEAR(obs[PARTNER_FEATURES], -1.0f, 1e-5f);

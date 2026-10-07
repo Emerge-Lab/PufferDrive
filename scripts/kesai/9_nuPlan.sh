@@ -56,8 +56,8 @@ export PEDESTRIAN_MIN_SIZE_M=0.8
 # reads as 2.7 x 5.6 m). Unset = planner yaml / arch.py defaults (40 / 0.2).
 export OBS_SLOTS_PARTNERS_N=40
 export EVAL_PERCEIVED_SIZE_MARGIN_M=0.2
-# overspeed conditioning alpha (unset = arch.py 0.005, the cheapest 5% of the U(0, 0.1) training range; 0.05 keeps the ego at the limit)
-export REWARD_OVERSPEED=0.05
+# overspeed conditioning alpha (unset = arch.py 0.1 = max of the U(0, 0.1) training range; 0.05 kept the ego at the limit, 0.005 let it speed)
+export REWARD_OVERSPEED=0.1
 ABLATION_TAG=""
 [ "$SLIDING_GOAL_WINDOW" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_slide"
 [ "$STARTUP_ACCEL_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
