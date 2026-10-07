@@ -41,6 +41,7 @@
 #             policy's observation (training never spawns below 0.8 m); unset/0 = off.
 #   OBS_SLOTS_PARTNERS_N  shadow-env partner obs slots (unset = planner yaml, 40).
 #   EVAL_PERCEIVED_SIZE_MARGIN_M  [m per side] ego box inflation in the policy's obs (unset = arch.py, 0.2).
+#   REWARD_OVERSPEED  overspeed conditioning alpha fed to the policy (unset = arch.py, 0.005).
 #   COSIM_OBS_HTML=all|failures|infractions|0   interactive observation replay (exact policy
 #             input/outputs per step, pufferlib.viz HTML) -> $GROUP/obs_html. all: every
 #             scenario. failures (default): only scenarios scoring below
@@ -88,6 +89,7 @@ EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
 [ -n "${PEDESTRIAN_MIN_SIZE_M:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.pedestrian_min_size_m=$PEDESTRIAN_MIN_SIZE_M")
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_slots_partners_n=$OBS_SLOTS_PARTNERS_N")
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_perceived_size_margin_m=$EVAL_PERCEIVED_SIZE_MARGIN_M")
+[ -n "${REWARD_OVERSPEED:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.reward_overspeed=$REWARD_OVERSPEED")
 [ -n "${WORKER:-}" ] && EXTRA_ARGS+=("worker=$WORKER")
 [ -n "${THREADS_PER_NODE:-}" ] && EXTRA_ARGS+=("worker.threads_per_node=$THREADS_PER_NODE")
 [ -n "${LIMIT_TOTAL_SCENARIOS:-}" ] && EXTRA_ARGS+=("scenario_filter.limit_total_scenarios=$LIMIT_TOTAL_SCENARIOS")

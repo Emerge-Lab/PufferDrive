@@ -14,7 +14,7 @@ set -u
 export PD=/home/bjaeger/PufferDrive
 export PY=$(conda info --base)/envs/carl_nuplan/bin/python
 # Overridable env: RUN_DIR (3_train_64GPU_multinode_slurm.sh submits this job with RUN_DIR=<its run dir>), CHALLENGES
-RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0041_1000}
+RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
 # the planner finds config.yaml next to final_model.pt (or one level above a models/*.pt)
 export CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || { echo "missing $CKPT"; exit 1; }
@@ -56,6 +56,8 @@ export PEDESTRIAN_MIN_SIZE_M=0.8
 # reads as 2.7 x 5.6 m). Unset = planner yaml / arch.py defaults (40 / 0.2).
 export OBS_SLOTS_PARTNERS_N=40
 export EVAL_PERCEIVED_SIZE_MARGIN_M=0.2
+# overspeed conditioning alpha (unset = arch.py 0.005, the cheapest 5% of the U(0, 0.1) training range; 0.05 keeps the ego at the limit)
+export REWARD_OVERSPEED=0.05
 ABLATION_TAG=""
 [ "$SLIDING_GOAL_WINDOW" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_slide"
 [ "$STARTUP_ACCEL_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
@@ -63,6 +65,7 @@ ABLATION_TAG=""
 [ "$PEDESTRIAN_MIN_SIZE_M" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_ped${PEDESTRIAN_MIN_SIZE_M}m"
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && ABLATION_TAG="${ABLATION_TAG}_slots${OBS_SLOTS_PARTNERS_N}"
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && ABLATION_TAG="${ABLATION_TAG}_margin${EVAL_PERCEIVED_SIZE_MARGIN_M}"
+[ -n "${REWARD_OVERSPEED:-}" ] && ABLATION_TAG="${ABLATION_TAG}_overspeed${REWARD_OVERSPEED}"
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}_${GOAL_SOURCE}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
