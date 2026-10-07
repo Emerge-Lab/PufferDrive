@@ -88,6 +88,13 @@ env:
   # PPO training epochs; 0 disables annealing so the spread stays constant. Requires
   # init_step_spread=true; ignored (and irrelevant) if it's false.
   init_step_spread_anneal_epochs: 0
+  # Replay, single map: scenes form groups of 1 main + failure_branch_count branches. The main's first
+  # learner collision per episode restarts branch k at k * failure_branch_offset_steps before the crash
+  # for failure_branch_replays episodes; branches idle (masked) otherwise, and crashes while they run are dropped.
+  failure_branching: false
+  failure_branch_count: 9
+  failure_branch_offset_steps: 5
+  failure_branch_replays: 3
   # options: "control_vehicles", "control_agents", "control_tracks_to_predict", "control_sdc_only"
   control_mode: control_sdc_only
   # Controller used by agent 0, the canonical SDC/target.

@@ -329,6 +329,29 @@ struct Drive {
     float phantom_braking_prob;
     float phantom_braking_trigger_prob;
     int phantom_braking_duration;
+    // Failure branching
+    int failure_branch_role; // FAILURE_BRANCH_ROLE_*
+    int failure_branch_count;
+    int failure_branch_offset_steps;
+    int failure_branch_replays;
+    // Main: snapshot slots [0, history_depth) are a ring indexed by timestep, the next branch_count slots the bank
+    int failure_history_depth;
+    Agent *failure_snapshot_agents; // [slot][num_total_agents]
+    Log *failure_snapshot_logs;     // [slot][active_agent_count]
+    Rng *failure_snapshot_rngs;
+    int *failure_snapshot_timesteps;
+    int failure_captured_this_episode;
+    int failure_bank_generation;
+    int failure_branches_running;
+    int failure_captured_count;
+    int failure_discarded_count;
+    // Branch
+    Drive *failure_main;
+    int failure_branch_idx; // 1-based: restarts failure_branch_idx * offset_steps before the crash
+    int failure_branch_generation;
+    int failure_branch_replays_left;
+    int failure_branch_running;
+    Log failure_branch_log; // finished branch episodes, kept out of the main log
     // Logging
     Log log;
     Log *logs;
@@ -2493,9 +2516,11 @@ static void add_log(Drive *env) {
     episode_log.static_car_count += env->static_agent_count;
 
     // Fold this episode into the cumulative log that vec_log averages and resets.
+    Log *cumulative_log
+        = (env->failure_branch_role == FAILURE_BRANCH_ROLE_BRANCH) ? &env->failure_branch_log : &env->log;
     int num_log_fields = sizeof(Log) / sizeof(float);
     for (int field_idx = 0; field_idx < num_log_fields; field_idx++) {
-        ((float *) &env->log)[field_idx] += ((float *) &episode_log)[field_idx];
+        ((float *) cumulative_log)[field_idx] += ((float *) &episode_log)[field_idx];
     }
     env->log_episode_seed = env->episode_seed;
 }
@@ -3419,6 +3444,28 @@ void c_close(Drive *env) {
     free(env->tracks_to_predict);
     free(env->map_name);
     free(env->ini_file);
+    free(env->failure_snapshot_agents);
+    free(env->failure_snapshot_logs);
+    free(env->failure_snapshot_rngs);
+    free(env->failure_snapshot_timesteps);
+}
+
+// Returns -1 on allocation failure; c_close frees whatever was allocated.
+int allocate_failure_snapshots(Drive *env, int history_depth, int branch_count) {
+    int slot_count = history_depth + branch_count;
+    env->failure_history_depth = history_depth;
+    env->failure_snapshot_agents = (Agent *) calloc((size_t) slot_count * env->num_total_agents, sizeof(Agent));
+    env->failure_snapshot_logs = (Log *) calloc((size_t) slot_count * env->active_agent_count, sizeof(Log));
+    env->failure_snapshot_rngs = (Rng *) calloc(slot_count, sizeof(Rng));
+    env->failure_snapshot_timesteps = (int *) malloc(slot_count * sizeof(int));
+    if (env->failure_snapshot_agents == NULL || env->failure_snapshot_logs == NULL || env->failure_snapshot_rngs == NULL
+        || env->failure_snapshot_timesteps == NULL) {
+        return -1;
+    }
+    for (int slot = 0; slot < slot_count; slot++) {
+        env->failure_snapshot_timesteps[slot] = FAILURE_SNAPSHOT_EMPTY_STEP;
+    }
+    return 0;
 }
 
 static int compute_observation_size(Drive *env) {
@@ -4493,6 +4540,156 @@ static void compute_observations(Drive *env) {
     }
 }
 
+static void update_agent_masks(Drive *env) {
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        Agent *a = &env->agents[agent_idx];
+        if (a->stopped || a->removed || a->is_blind_partner || a->is_phantom_braker) {
+            env->masks[i] = 0;
+        } else {
+            env->masks[i] = 1;
+        }
+    }
+}
+
+static void save_failure_snapshot(Drive *env, int slot) {
+    memcpy(
+        &env->failure_snapshot_agents[(size_t) slot * env->num_total_agents],
+        env->agents,
+        env->num_total_agents * sizeof(Agent));
+    memcpy(
+        &env->failure_snapshot_logs[(size_t) slot * env->active_agent_count],
+        env->logs,
+        env->active_agent_count * sizeof(Log));
+    env->failure_snapshot_rngs[slot] = env->rng_state;
+    env->failure_snapshot_timesteps[slot] = env->timestep;
+}
+
+static void copy_failure_snapshot(Drive *env, int from_slot, int to_slot) {
+    memcpy(
+        &env->failure_snapshot_agents[(size_t) to_slot * env->num_total_agents],
+        &env->failure_snapshot_agents[(size_t) from_slot * env->num_total_agents],
+        env->num_total_agents * sizeof(Agent));
+    memcpy(
+        &env->failure_snapshot_logs[(size_t) to_slot * env->active_agent_count],
+        &env->failure_snapshot_logs[(size_t) from_slot * env->active_agent_count],
+        env->active_agent_count * sizeof(Log));
+    env->failure_snapshot_rngs[to_slot] = env->failure_snapshot_rngs[from_slot];
+    env->failure_snapshot_timesteps[to_slot] = env->failure_snapshot_timesteps[from_slot];
+}
+
+// Pointers stay the branch's own: in replay they hold identical per-env copies of the same map's data.
+static void restore_agent_sim_state(Agent *agent, const Agent *snapshot) {
+    Agent restored = *snapshot;
+    restored.log_trajectory_x = agent->log_trajectory_x;
+    restored.log_trajectory_y = agent->log_trajectory_y;
+    restored.log_trajectory_z = agent->log_trajectory_z;
+    restored.log_heading = agent->log_heading;
+    restored.log_velocity_x = agent->log_velocity_x;
+    restored.log_velocity_y = agent->log_velocity_y;
+    restored.log_length = agent->log_length;
+    restored.log_width = agent->log_width;
+    restored.log_height = agent->log_height;
+    restored.log_valid = agent->log_valid;
+    restored.route = agent->route;
+    *agent = restored;
+}
+
+static void restore_failure_snapshot(Drive *env) {
+    const Drive *main_env = env->failure_main;
+    int bank_slot = main_env->failure_history_depth + env->failure_branch_idx - 1;
+    const Agent *snapshot_agents = &main_env->failure_snapshot_agents[(size_t) bank_slot * env->num_total_agents];
+    for (int i = 0; i < env->num_total_agents; i++) {
+        restore_agent_sim_state(&env->agents[i], &snapshot_agents[i]);
+    }
+    memcpy(
+        env->logs,
+        &main_env->failure_snapshot_logs[(size_t) bank_slot * env->active_agent_count],
+        env->active_agent_count * sizeof(Log));
+    env->rng_state = main_env->failure_snapshot_rngs[bank_slot];
+    env->timestep = main_env->failure_snapshot_timesteps[bank_slot];
+    compute_observations(env);
+    update_agent_masks(env);
+}
+
+// Banks the states branch k restarts from (k * offset steps before the crash) unless branches still run.
+static void capture_learner_failure(Drive *env) {
+    if (env->failure_captured_this_episode) {
+        return;
+    }
+    int learner_collided = 0;
+    for (int i = 0; i < env->active_agent_count; i++) {
+        Agent *agent = &env->agents[env->active_agent_indices[i]];
+        learner_collided |= env->learner_masks[i] && agent->metrics_array[COLLISION_IDX] > 0.0f;
+    }
+    if (!learner_collided) {
+        return;
+    }
+    env->failure_captured_this_episode = 1;
+    if (env->failure_branches_running > 0) {
+        env->failure_discarded_count++;
+        return;
+    }
+    for (int branch_idx = 1; branch_idx <= env->failure_branch_count; branch_idx++) {
+        int restore_step = env->timestep - branch_idx * env->failure_branch_offset_steps;
+        int bank_slot = env->failure_history_depth + branch_idx - 1;
+        if (restore_step < env->init_step) {
+            env->failure_snapshot_timesteps[bank_slot] = FAILURE_SNAPSHOT_EMPTY_STEP;
+            continue;
+        }
+        int history_slot = restore_step % env->failure_history_depth;
+        assert(env->failure_snapshot_timesteps[history_slot] == restore_step);
+        copy_failure_snapshot(env, history_slot, bank_slot);
+    }
+    env->failure_bank_generation++;
+    env->failure_captured_count++;
+}
+
+// A dormant branch's rows idle masked on stale observations until its main banks the next failure.
+static void sleep_failure_branch(Drive *env) {
+    if (env->failure_branch_running) {
+        env->failure_branch_running = 0;
+        env->failure_main->failure_branches_running--;
+    }
+    env->failure_branch_generation = env->failure_main->failure_bank_generation;
+    memset(env->masks, 0, env->active_agent_count * sizeof(unsigned char));
+}
+
+static void step_dormant_branch(Drive *env) {
+    Drive *main_env = env->failure_main;
+    int bank_slot = main_env->failure_history_depth + env->failure_branch_idx - 1;
+    int fresh_failure = env->failure_branch_generation != main_env->failure_bank_generation;
+    if (!fresh_failure || main_env->failure_snapshot_timesteps[bank_slot] == FAILURE_SNAPSHOT_EMPTY_STEP) {
+        sleep_failure_branch(env);
+        return;
+    }
+    env->failure_branch_generation = main_env->failure_bank_generation;
+    env->failure_branch_running = 1;
+    env->failure_branch_replays_left = env->failure_branch_replays;
+    main_env->failure_branches_running++;
+    restore_failure_snapshot(env);
+    // waking up starts a new episode on these rows
+    memset(env->truncations, 1, env->active_agent_count * sizeof(unsigned char));
+}
+
+static void end_failure_branch_episode(Drive *env) {
+    env->failure_branch_replays_left--;
+    if (env->failure_branch_replays_left > 0) {
+        restore_failure_snapshot(env);
+        return;
+    }
+    sleep_failure_branch(env);
+}
+
+static void reset_failure_branching(Drive *env) {
+    if (env->failure_branch_role == FAILURE_BRANCH_ROLE_MAIN) {
+        env->failure_captured_this_episode = 0;
+        save_failure_snapshot(env, env->timestep % env->failure_history_depth);
+    } else if (env->failure_branch_role == FAILURE_BRANCH_ROLE_BRANCH) {
+        sleep_failure_branch(env);
+    }
+}
+
 static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     copy_pose_to_prev(agent);
@@ -4758,6 +4955,7 @@ void c_reset(Drive *env) {
             compute_metrics(env, agent_idx, x);
         }
         compute_observations(env);
+        reset_failure_branching(env);
         return;
     }
 
@@ -4826,6 +5024,7 @@ void c_reset(Drive *env) {
         compute_metrics(env, agent_idx, x);
     }
     compute_observations(env);
+    reset_failure_branching(env);
 }
 
 void c_step(Drive *env) {
@@ -4840,17 +5039,12 @@ void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
-
-    // Update masks for stopped/removed agents
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        Agent *a = &env->agents[agent_idx];
-        if (a->stopped || a->removed || a->is_blind_partner || a->is_phantom_braker) {
-            env->masks[i] = 0;
-        } else {
-            env->masks[i] = 1;
-        }
+    if (env->failure_branch_role == FAILURE_BRANCH_ROLE_BRANCH && !env->failure_branch_running) {
+        step_dormant_branch(env);
+        return;
     }
+
+    update_agent_masks(env);
 
     env->timestep++;
 
@@ -4903,6 +5097,9 @@ void c_step(Drive *env) {
         compute_metrics(env, agent_idx, i);
         compute_rewards(env, i);
     }
+    if (env->failure_branch_role == FAILURE_BRANCH_ROLE_MAIN) {
+        capture_learner_failure(env);
+    }
 
     // Mark terminals for stopped or removed agents
     for (int i = 0; i < env->active_agent_count; i++) {
@@ -4950,6 +5147,10 @@ void c_step(Drive *env) {
             env->eval_episode_done = 1;
             return;
         }
+        if (env->failure_branch_role == FAILURE_BRANCH_ROLE_BRANCH) {
+            end_failure_branch_episode(env);
+            return;
+        }
         c_reset(env);
         return;
     }
@@ -4994,6 +5195,9 @@ void c_step(Drive *env) {
             invalidate_agent(agent);
             agent->removed = 1;
         }
+    }
+    if (env->failure_branch_role == FAILURE_BRANCH_ROLE_MAIN) {
+        save_failure_snapshot(env, env->timestep % env->failure_history_depth);
     }
 }
 

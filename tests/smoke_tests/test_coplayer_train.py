@@ -417,3 +417,64 @@ def test_rollout_longer_than_one_round_of_learner_rows(tmp_path):
         recorder.restore()
         vecenv.close()
         trainer.utilization.stop()
+
+
+@pytest.mark.parametrize("learner_recurrent", [False, True], ids=["ff", "rnn"])
+def test_ppo_against_frozen_coplayer_with_failure_branching(tmp_path, learner_recurrent):
+    """Single-map finetune where each worker packs 1 main + 3 branch scenes: dormant branch rows reach the
+    buffer masked, the main's SDC crashes get banked, and the learner still trains against the frozen co-player."""
+    map_dir = tmp_path / "maps"
+    map_dir.mkdir()
+    os.symlink(MAP_PATHS[0], map_dir / os.path.basename(MAP_PATHS[0]))
+    args = base_args(str(map_dir), 0, 2, 2)
+    args["env"]["num_maps"] = 1
+    coplayer_path, _ = write_coplayer_checkpoint(str(tmp_path / "coplayer_run"), args, False, False)
+    args["env"].update(
+        failure_branching=True, failure_branch_count=3, failure_branch_offset_steps=4, failure_branch_replays=2
+    )
+    torch.manual_seed(0)
+    vecenv = load_env("puffer_drive", args)
+    args["rnn_name"] = "Recurrent" if learner_recurrent else None
+    args["train"]["use_rnn"] = learner_recurrent
+    learner = load_policy(args, vecenv, "puffer_drive")
+    args["train"].update(
+        compile=False,
+        update_epochs=1,
+        bptt_horizon=HORIZON,
+        batch_size="auto",
+        minibatch_size=vecenv.num_agents * HORIZON,
+        max_minibatch_size=vecenv.num_agents * HORIZON,
+        total_timesteps=10_000_000,
+        checkpoint_interval=10_000_000,
+        data_dir=str(tmp_path / "learner_run"),
+        adv_filter_enabled=False,
+        render=False,
+        coplayer_policy_path=coplayer_path,
+    )
+    trainer = PuffeRL(
+        dict(**args["train"], env="puffer_drive", eval={}, run_name="branching"), vecenv, learner, NullLogger()
+    )
+    try:
+        coplayer_before = {k: v.clone() for k, v in trainer.coplayer.policy.state_dict().items()}
+        learner_before = {k: v.clone() for k, v in trainer.uncompiled_policy.state_dict().items()}
+        failures_captured = 0.0
+        masked_fractions = []
+        for _ in range(60):
+            trainer.evaluate()
+            failures_captured += sum(trainer.stats.get("failure_branch/failures_captured", []))
+            trainer.last_log_time = 0.0
+            trainer.train()
+            masked_fractions.append(trainer.losses["masked_fraction"])
+            if failures_captured > 0 and min(masked_fractions) < max(masked_fractions):
+                break
+        assert failures_captured > 0, "no SDC crash was banked for the branches"
+        assert max(masked_fractions) > 0.0, "dormant branch rows must reach the loss masked"
+        assert min(masked_fractions) < max(masked_fractions), "woken branches never unmasked their learner rows"
+        for key, value in trainer.coplayer.policy.state_dict().items():
+            assert torch.equal(value, coplayer_before[key]), f"co-player parameter {key} changed"
+        assert any(
+            not torch.equal(value, learner_before[key]) for key, value in trainer.uncompiled_policy.state_dict().items()
+        ), "learner did not train"
+    finally:
+        vecenv.close()
+        trainer.utilization.stop()

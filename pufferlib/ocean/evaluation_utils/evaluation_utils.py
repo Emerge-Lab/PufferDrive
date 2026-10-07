@@ -261,6 +261,7 @@ TRAINING_HARNESS_ENV_DEFAULTS = {
     "reward_coef_overrides_normalized": False,
     "learner_agents": "all",
     "log_sdc_only": False,
+    "failure_branching": False,
 }
 
 

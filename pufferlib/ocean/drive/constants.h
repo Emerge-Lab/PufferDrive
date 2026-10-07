@@ -95,6 +95,12 @@
 #define LEARNER_AGENTS_ALL 0
 #define LEARNER_AGENTS_SDC 1
 
+// Failure branching: a main scene's learner crashes restart its branch scenes shortly before the crash
+#define FAILURE_BRANCH_ROLE_NONE 0
+#define FAILURE_BRANCH_ROLE_MAIN 1
+#define FAILURE_BRANCH_ROLE_BRANCH 2
+#define FAILURE_SNAPSHOT_EMPTY_STEP -1
+
 // Episode generation
 #define SIMULATION_MODE_GIGAFLOW 0
 #define SIMULATION_MODE_REPLAY 1

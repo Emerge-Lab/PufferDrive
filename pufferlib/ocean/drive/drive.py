@@ -207,6 +207,10 @@ class Drive(pufferlib.PufferEnv):
         init_step_spread=False,
         init_step_min_horizon=20,
         init_step_spread_anneal_epochs=0,
+        failure_branching=False,
+        failure_branch_count=9,
+        failure_branch_offset_steps=5,
+        failure_branch_replays=3,
         eval_mode=0,
         num_eval_scenarios=16,
         max_scenarios_per_batch=None,
@@ -499,6 +503,16 @@ class Drive(pufferlib.PufferEnv):
                     f"init_step_spread_anneal_epochs must be >= 0 (0 disables annealing). Got: {self.init_step_spread_anneal_epochs}"
                 )
 
+        self.failure_branching = bool(failure_branching)
+        self.failure_branch_count = int(failure_branch_count)
+        self.failure_branch_offset_steps = int(failure_branch_offset_steps)
+        self.failure_branch_replays = int(failure_branch_replays)
+        self.failure_branch_group_count = 0
+        if self.failure_branching and num_maps != 1:
+            raise ValueError(f"failure_branching fine-tunes on a single map; set num_maps=1. Got: {num_maps}")
+        if self.failure_branching and self.init_step_spread:
+            raise ValueError("failure_branching needs every scene to start at init_step; disable init_step_spread")
+
         if self.control_mode_str == "control_vehicles":
             self.control_mode = binding.CONTROL_MODE_VEHICLES
         elif self.control_mode_str == "control_agents":
@@ -643,7 +657,24 @@ class Drive(pufferlib.PufferEnv):
 
         self.c_envs = binding.vectorize(*env_ids)
         self.learner_masks[agent_offsets[-1] :] = False
+        self._link_failure_branches()
         self.log_agent_count = self._logged_agent_count()
+
+    def _link_failure_branches(self):
+        self.failure_branch_roles = np.full(self.num_envs, binding.FAILURE_BRANCH_ROLE_NONE)
+        if not self.failure_branching:
+            return
+        try:
+            roles = binding.vec_link_failure_branches(
+                self.c_envs, self.failure_branch_count, self.failure_branch_offset_steps, self.failure_branch_replays
+            )
+        except Exception:
+            binding.vec_close(self.c_envs)
+            raise
+        self.failure_branch_roles = np.array(roles)
+        self.failure_branch_group_count = int(
+            np.count_nonzero(self.failure_branch_roles == binding.FAILURE_BRANCH_ROLE_MAIN)
+        )
 
     def _env_init_kwargs(self, map_file, max_agents, init_step):
         # render_mode_flag: 0 = live viewer (RENDER_WINDOW), 1 = headless batch
@@ -770,9 +801,14 @@ class Drive(pufferlib.PufferEnv):
 
     def _logged_agent_count(self):
         # vec_log waits for this many finished agent-episodes; with log_sdc_only only SDCs finish one.
-        if not self.log_sdc_only:
+        # Branch episodes go to vec_failure_branch_log, never to vec_log.
+        logged_scenes = self.failure_branch_roles != binding.FAILURE_BRANCH_ROLE_BRANCH
+        if self.log_sdc_only:
+            sdc_active = np.array([state["sdc_active"] for state in binding.vec_get(self.c_envs)], dtype=bool)
+            return max(1, int(np.count_nonzero(sdc_active & logged_scenes)))
+        if not self.failure_branching:
             return self.num_agents
-        return max(1, sum(int(state["sdc_active"]) for state in binding.vec_get(self.c_envs)))
+        return max(1, int(np.diff(self.agent_offsets)[logged_scenes].sum()))
 
     def _scene_init_steps(self, num_agents):
         """With init_step_spread, one start step per packing slot so shared() sizes each scene's rows at the
@@ -844,6 +880,8 @@ class Drive(pufferlib.PufferEnv):
         # per episode, so it must not run in eval mode.
         if not self.eval_mode and self.tick % self.report_interval == 0:
             log = binding.vec_log(self.c_envs, self.log_agent_count)
+            if log and self.failure_branching:
+                log["failure_branch"] = binding.vec_failure_branch_log(self.c_envs)
             if log:
                 info.append(log)
                 # print(log)
@@ -921,6 +959,7 @@ class Drive(pufferlib.PufferEnv):
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
                 self.learner_masks[agent_offsets[-1] :] = False
+                self._link_failure_branches()
                 self.log_agent_count = self._logged_agent_count()
 
                 binding.vec_reset(self.c_envs)

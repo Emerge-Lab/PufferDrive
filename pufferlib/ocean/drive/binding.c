@@ -30,6 +30,8 @@ static PyObject *reward_coef_names_py(PyObject *self, PyObject *args);
 static PyObject *reward_coef_to_normalized_py(PyObject *self, PyObject *args);
 static PyObject *reward_coef_from_normalized_py(PyObject *self, PyObject *args);
 static PyObject *vec_set_reward_coef_overrides_py(PyObject *self, PyObject *args);
+static PyObject *vec_link_failure_branches_py(PyObject *self, PyObject *args);
+static PyObject *vec_failure_branch_log_py(PyObject *self, PyObject *args);
 
 // clang-format off
 #define MY_METHODS \
@@ -38,7 +40,9 @@ static PyObject *vec_set_reward_coef_overrides_py(PyObject *self, PyObject *args
     {"reward_coef_names", reward_coef_names_py, METH_NOARGS, "Reward coef names in REWARD_COEF_* order."}, \
     {"reward_coef_to_normalized", reward_coef_to_normalized_py, METH_VARARGS, "Raw coef -> conditioning obs value."}, \
     {"reward_coef_from_normalized", reward_coef_from_normalized_py, METH_VARARGS, "Conditioning obs value -> raw coef."}, \
-    {"vec_set_reward_coef_overrides", vec_set_reward_coef_overrides_py, METH_VARARGS, "Replace per-agent coef overrides."}
+    {"vec_set_reward_coef_overrides", vec_set_reward_coef_overrides_py, METH_VARARGS, "Replace per-agent coef overrides."}, \
+    {"vec_link_failure_branches", vec_link_failure_branches_py, METH_VARARGS, "Group scenes into failure-branching mains and branches."}, \
+    {"vec_failure_branch_log", vec_failure_branch_log_py, METH_VARARGS, "Branch episode metrics and failure counts since the last call."}
 // clang-format on
 
 #include "../env_binding.h"
@@ -193,6 +197,200 @@ static PyObject *vec_set_reward_coef_overrides_py(PyObject *self, PyObject *args
     Py_RETURN_NONE;
 }
 
+// Consecutive groups of 1 main + branch_count branches over identical scenes; leftover scenes stay plain.
+static PyObject *vec_link_failure_branches_py(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 4) {
+        PyErr_SetString(
+            PyExc_TypeError,
+            "vec_link_failure_branches requires (vec_env, branch_count, offset_steps, replays)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    long branch_count = PyLong_AsLong(PyTuple_GetItem(args, 1));
+    long offset_steps = PyLong_AsLong(PyTuple_GetItem(args, 2));
+    long replays = PyLong_AsLong(PyTuple_GetItem(args, 3));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (branch_count < 1 || offset_steps < 1 || replays < 1) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "failure_branch_count, failure_branch_offset_steps and failure_branch_replays must be >= 1; got %ld, %ld, "
+            "%ld",
+            branch_count,
+            offset_steps,
+            replays);
+        return NULL;
+    }
+    Drive *first = vec->envs[0];
+    if (branch_count * offset_steps >= first->scenario_length - first->init_step) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "failure_branch_count * failure_branch_offset_steps (%ld) must be < scenario_length - init_step (%d)",
+            branch_count * offset_steps,
+            first->scenario_length - first->init_step);
+        return NULL;
+    }
+    int same_scene_count = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *env = vec->envs[i];
+        if (env->simulation_mode != SIMULATION_MODE_REPLAY || env->eval_mode) {
+            PyErr_SetString(PyExc_ValueError, "failure branching runs only in replay training (eval_mode=0)");
+            return NULL;
+        }
+        if (env->failure_branch_role != FAILURE_BRANCH_ROLE_NONE) {
+            PyErr_Format(PyExc_ValueError, "scene %d is already linked for failure branching", i);
+            return NULL;
+        }
+        int same_scene = strcmp(env->map_name, first->map_name) == 0 && env->init_step == first->init_step
+            && env->num_total_agents == first->num_total_agents && env->active_agent_count == first->active_agent_count;
+        if (same_scene && same_scene_count == i) {
+            same_scene_count++;
+        }
+    }
+    // shared() trims only the last packed scene to fit num_agents, so every other scene must match the first.
+    if (same_scene_count < vec->num_envs - 1) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "failure branching needs every scene of a worker on one map and init_step; scene %d differs from scene 0",
+            same_scene_count);
+        return NULL;
+    }
+    int group_size = (int) branch_count + 1;
+    int group_count = same_scene_count / group_size;
+    if (group_count == 0) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "failure branching needs %d identical scenes per worker (1 main + %ld branches); got %d",
+            group_size,
+            branch_count,
+            same_scene_count);
+        return NULL;
+    }
+    int history_depth = (int) (branch_count * offset_steps) + 1;
+    for (int group_idx = 0; group_idx < group_count; group_idx++) {
+        Drive *main_env = vec->envs[group_idx * group_size];
+        if (allocate_failure_snapshots(main_env, history_depth, (int) branch_count) != 0) {
+            return PyErr_NoMemory();
+        }
+        for (int member_idx = 0; member_idx < group_size; member_idx++) {
+            Drive *env = vec->envs[group_idx * group_size + member_idx];
+            env->failure_branch_role = (member_idx == 0) ? FAILURE_BRANCH_ROLE_MAIN : FAILURE_BRANCH_ROLE_BRANCH;
+            env->failure_branch_count = (int) branch_count;
+            env->failure_branch_offset_steps = (int) offset_steps;
+            env->failure_branch_replays = (int) replays;
+            if (member_idx == 0) {
+                continue;
+            }
+            env->failure_main = main_env;
+            env->failure_branch_idx = member_idx;
+            memset(env->masks, 0, env->active_agent_count * sizeof(unsigned char));
+        }
+    }
+    PyObject *roles = PyList_New(vec->num_envs);
+    if (roles == NULL) {
+        return NULL;
+    }
+    for (int i = 0; i < vec->num_envs; i++) {
+        PyObject *role = PyLong_FromLong(vec->envs[i]->failure_branch_role);
+        if (role == NULL) {
+            Py_DECREF(roles);
+            return NULL;
+        }
+        PyList_SET_ITEM(roles, i, role);
+    }
+    return roles;
+}
+
+static PyObject *vec_failure_branch_log_py(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 1) {
+        PyErr_SetString(PyExc_TypeError, "vec_failure_branch_log requires 1 argument");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int num_log_fields = sizeof(Log) / sizeof(float);
+    Log aggregate = {0};
+    int captured_count = 0;
+    int discarded_count = 0;
+    int branch_scene_count = 0;
+    int running_branch_count = 0;
+    int branch_count = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *env = vec->envs[i];
+        if (env->failure_branch_role == FAILURE_BRANCH_ROLE_MAIN) {
+            captured_count += env->failure_captured_count;
+            discarded_count += env->failure_discarded_count;
+            branch_count = env->failure_branch_count;
+            continue;
+        }
+        if (env->failure_branch_role != FAILURE_BRANCH_ROLE_BRANCH) {
+            continue;
+        }
+        branch_scene_count++;
+        running_branch_count += env->failure_branch_running;
+        for (int field_idx = 0; field_idx < num_log_fields; field_idx++) {
+            ((float *) &aggregate)[field_idx] += ((float *) &env->failure_branch_log)[field_idx];
+        }
+    }
+    PyObject *dict = PyDict_New();
+    if (dict == NULL) {
+        return NULL;
+    }
+    for (int branch_idx = 1; branch_idx <= branch_count; branch_idx++) {
+        float episode_count = 0.0f;
+        float collision_count = 0.0f;
+        int offset_steps = 0;
+        for (int i = 0; i < vec->num_envs; i++) {
+            Drive *env = vec->envs[i];
+            if (env->failure_branch_role != FAILURE_BRANCH_ROLE_BRANCH || env->failure_branch_idx != branch_idx) {
+                continue;
+            }
+            episode_count += env->failure_branch_log.n;
+            collision_count += env->failure_branch_log.collision_rate;
+            offset_steps = branch_idx * env->failure_branch_offset_steps;
+        }
+        if (episode_count == 0.0f) {
+            continue;
+        }
+        char key[64];
+        snprintf(key, sizeof(key), "collision_rate_offset_%d_steps", offset_steps);
+        if (assign_to_dict(dict, key, collision_count / episode_count) != 0) {
+            Py_DECREF(dict);
+            return NULL;
+        }
+    }
+    float n = aggregate.n;
+    if (n > 0.0f) {
+        for (int field_idx = 0; field_idx < num_log_fields; field_idx++) {
+            ((float *) &aggregate)[field_idx] /= n;
+        }
+        if (my_log(dict, vec->envs[0], &aggregate, n) != 0 || assign_to_dict(dict, "n", n) != 0) {
+            Py_DECREF(dict);
+            return NULL;
+        }
+    }
+    float running_fraction = branch_scene_count > 0 ? (float) running_branch_count / branch_scene_count : 0.0f;
+    if (assign_to_dict(dict, "failures_captured", (float) captured_count) != 0
+        || assign_to_dict(dict, "failures_discarded", (float) discarded_count) != 0
+        || assign_to_dict(dict, "running_fraction", running_fraction) != 0) {
+        Py_DECREF(dict);
+        return NULL;
+    }
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *env = vec->envs[i];
+        env->failure_branch_log = (Log) {0};
+        env->failure_captured_count = 0;
+        env->failure_discarded_count = 0;
+    }
+    return dict;
+}
+
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
     PyObject *obs = PyDict_GetItemString(kwargs, "observations");
     if (!PyObject_TypeCheck(obs, &PyArray_Type)) {
@@ -297,6 +495,22 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         return NULL;
     }
     Py_DECREF(v);
+
+    const char *branching_keys[] = {"failure_branch_role", "failure_branch_idx", "failure_branch_running", "timestep"};
+    long branching_values[]
+        = {env->failure_branch_role, env->failure_branch_idx, env->failure_branch_running, env->timestep};
+    int branching_key_count = sizeof(branching_values) / sizeof(branching_values[0]);
+    for (int key_idx = 0; key_idx < branching_key_count; key_idx++) {
+        v = PyLong_FromLong(branching_values[key_idx]);
+        if (!v) {
+            return NULL;
+        }
+        if (PyDict_SetItemString(dict, branching_keys[key_idx], v) < 0) {
+            Py_DECREF(v);
+            return NULL;
+        }
+        Py_DECREF(v);
+    }
 
     v = PyLong_FromLong(env->num_total_agents);
     if (!v) {

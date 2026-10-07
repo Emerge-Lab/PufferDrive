@@ -115,6 +115,10 @@ class DriveEnvConfig:
     init_step_spread: bool = MISSING
     init_step_min_horizon: int = MISSING
     init_step_spread_anneal_epochs: int = MISSING
+    failure_branching: bool = MISSING
+    failure_branch_count: int = MISSING
+    failure_branch_offset_steps: int = MISSING
+    failure_branch_replays: int = MISSING
     control_mode: ControlMode = MISSING
     sdc_controller: Controller = MISSING
     non_sdc_controller: Controller = MISSING
