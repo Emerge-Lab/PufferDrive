@@ -29,6 +29,8 @@ MINIBATCH=${MINIBATCH:-131072}
 echo "=== MFU result (paste this block back) ===" | tee ${RESULT_FILE}
 python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} 2>&1 | grep -v "^MFU_RESULT" | grep "reference\|capability" | tee -a ${RESULT_FILE}
 python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused 2>&1 | grep -v "^MFU_RESULT" | grep "fused" | tee -a ${RESULT_FILE}
+echo "--- rollout split (env = waiting for the simulation workers, the rest is the trainer process) ---" | tee -a ${RESULT_FILE}
+python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused --rollout-only --profile --warmup 1 --epochs 2 2>&1 | grep -A5 "section split" | tee -a ${RESULT_FILE}
 
 NCU=$(command -v ncu || ls /opt/nvidia/nsight-compute/*/ncu 2>/dev/null | tail -1)
 if [ -n "${NCU}" ]; then

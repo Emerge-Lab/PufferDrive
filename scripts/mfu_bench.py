@@ -5,7 +5,7 @@ steady-state epochs. Model FLOPs are counted analytically from the policy's line
 the compiled policy (a TorchDispatchMode around it makes dynamo skip the frame for the rest of the process).
 
 Usage:
-    python scripts/mfu_bench.py --num-envs 16 --minibatch 131072 [--fused] [-- train.seed=3 ...]
+    python scripts/mfu_bench.py --num-envs 16 --minibatch 131072 [--fused] [--profile] [-- train.seed=3 ...]
 """
 
 import argparse
@@ -26,6 +26,7 @@ from torch import nn
 
 ENV_NAME = "puffer_drive"
 RECOMPILE_EPOCH_FACTOR = 1.25
+PROFILE_SECTIONS = ("env", "eval_copy", "eval_forward", "eval_misc", "train_copy", "train_forward", "learn", "train_misc")
 SLOT_ENCODER_COUNTS = {
     "lane_encoder": "obs_slots_lane_kept",
     "boundary_encoder": "obs_slots_boundary_kept",
@@ -71,6 +72,10 @@ def main():
     parser.add_argument("--epochs", type=int, default=3, help="measured epochs")
     parser.add_argument("--fused", action="store_true", help="policy.fused_slot_encoder=true")
     parser.add_argument("--rollout-only", action="store_true", help="time only the rollout (data collection)")
+    parser.add_argument(
+        "--profile", action="store_true", help="print the trainer's section split (env wait, copy, forward, learn)"
+    )
+    parser.add_argument("--load-model", help="policy checkpoint (.pt) so the rollout shows trained behavior")
     parser.add_argument("overrides", nargs="*", help="extra hydra overrides, e.g. train.seed=3")
     args = parser.parse_args()
 
@@ -100,7 +105,11 @@ def main():
     policy = P.load_policy(config, vecenv, ENV_NAME)
     train_config = dict(**config["train"], env=ENV_NAME, eval=config.get("eval", {}), run_name=config["run_name"])
     pufferl = P.PuffeRL(train_config, vecenv, policy)
-    pufferl.profile.frequency = 10**9
+    pufferl.profile.frequency = 1 if args.profile else 10**9
+    if args.load_model:
+        state = torch.load(args.load_model, map_location=config["train"]["device"], weights_only=False)
+        state = state.get("policy_state_dict", state)
+        pufferl.uncompiled_policy.load_state_dict(P.clean_policy_state_dict(state))
 
     forward_flops, train_flops = model_flops_per_transition(pufferl.uncompiled_policy)
     counters = defaultdict(int)
@@ -136,6 +145,7 @@ def main():
             update_seconds, _ = update_or_skip()
             print(f"warmup epoch {epoch}: rollout {rollout_seconds:.2f} s, update {update_seconds:.2f} s", flush=True)
         frames = dict(torch._dynamo.utils.counters["frames"])
+        profile_baseline = {name: pufferl.profile.profiles[name]["elapsed"] for name in PROFILE_SECTIONS}
         epochs = []
         for epoch in range(args.epochs):
             counters.clear()
@@ -151,6 +161,12 @@ def main():
         pufferl.utilization.stop()
         vecenv.close()
 
+    if args.profile:
+        print("section split per epoch (trainer profiler, CUDA-synchronized at every boundary):")
+        for name in PROFILE_SECTIONS:
+            seconds = (pufferl.profile.profiles[name]["elapsed"] - profile_baseline[name]) / len(epochs)
+            if seconds > 0:
+                print(f"  {name:14s} {seconds:6.2f} s")
     if args.rollout_only:
         rollout = sum(e[0] for e in epochs) / len(epochs)
         print(
