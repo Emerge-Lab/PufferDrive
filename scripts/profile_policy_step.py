@@ -29,6 +29,8 @@ PEAK_BF16_TFLOPS = 209.5
 # dense bf16 tensor peak with fp32 accumulation, by compute capability
 PEAK_BF16_TFLOPS_BY_CAPABILITY = {(12, 0): 209.5, (9, 0): 989.0, (10, 0): 2250.0, (10, 3): 2250.0}
 ROLLOUT_ROWS = 16384
+WARMUP_STEPS = 4
+TIMED_STEPS = 5
 ENV_AGENTS = 512
 ROLLOUT_STEPS = 40
 TRAIN_OVERRIDES = [
@@ -116,18 +118,23 @@ def run_phases(rows, fused):
             logits, _ = compiled_eval(rollout_obs, {})
             sample_logits(logits.float(), env_continuous=True, policy=policy)
 
-    for _ in range(2):
+    for _ in range(WARMUP_STEPS):
         update_step()
         rollout_step()
     wall_ms = {}
     for name, step in (("update", update_step), ("rollout", rollout_step)):
-        start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
-        start.record()
-        step()
-        end.record()
-        torch.cuda.synchronize()
-        wall_ms[name] = start.elapsed_time(end)
-    print(f"unprofiled wall time: update {wall_ms['update']:.2f} ms, rollout {wall_ms['rollout']:.2f} ms")
+        samples = []
+        for _ in range(TIMED_STEPS):
+            start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+            start.record()
+            step()
+            end.record()
+            torch.cuda.synchronize()
+            samples.append(start.elapsed_time(end))
+        wall_ms[name] = sorted(samples)[len(samples) // 2]
+    print(
+        f"unprofiled wall time (median of {TIMED_STEPS}): update {wall_ms['update']:.2f} ms, rollout {wall_ms['rollout']:.2f} ms"
+    )
     peak = PEAK_BF16_TFLOPS_BY_CAPABILITY.get(torch.cuda.get_device_capability(0))
     update_rate = rows * TRAIN_FLOP_PER_TRANSITION / (wall_ms["update"] * 1e-3) / 1e12
     rollout_rate = ROLLOUT_ROWS * ROLLOUT_FLOP_PER_TRANSITION / (wall_ms["rollout"] * 1e-3) / 1e12
