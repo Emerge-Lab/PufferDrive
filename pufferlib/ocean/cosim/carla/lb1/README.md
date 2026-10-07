@@ -84,8 +84,10 @@ The evaluator reads `BENCHMARK=longest6` (background traffic on every spawn poin
   stop sign 1.0 under `BENCHMARK=longest6`, no min-speed or scenario-timeout infractions, blocked after
   180 s (`BLOCKED_THRESHOLD`), route timeout 0.8 s/m. `result.json` records carry nine infraction keys.
 - The ego is `vehicle.lincoln.mkz2017`; routes carry weather.
-- CARLA 0.9.10: no `World.cast_ray`, so the teleported ego rests on the lane waypoint's height and road
-  plane (the 0.9.15 agent additionally samples the road mesh); stop waypoints from the trigger volume.
+- CARLA 0.9.10: no `World.cast_ray`, so the ego's body chord rests on the lane's OpenDRIVE height profile
+  and a downward semantic lidar probes the road mesh's offset from it (Town02's mesh sits 0.22 m above its
+  OpenDRIVE; the egg's `Rotation.get_up_vector()` points down, so the pitch comes from the profile too);
+  stop waypoints from the trigger volume.
 - The `carla_*` telemetry columns come from `ground_truth.py` (straight-ahead probes in place of lane
   waypoints for the stop sign, no same-lane check for the red light), not from CaRL's criteria.
 

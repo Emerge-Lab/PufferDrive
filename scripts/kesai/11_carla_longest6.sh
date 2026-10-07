@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name eval_longest6
+#SBATCH --job-name eval_longest6_v2
 #SBATCH --ntasks 1
 #SBATCH --nodes 1
 #SBATCH --time 1-00:00
@@ -34,7 +34,7 @@ export PD=${PD:-/home/bjaeger/PufferDrive}
 export PY=${PY:-/home/bjaeger/miniconda3/envs/carl/bin/python}   # cp310: CARLA 0.9.15 ships no newer wheel
 export CARLA_ROOT=${CARLA_ROOT:-/home/bjaeger/CARLA_0.9.15}
 export CARL_WORK_DIR=${CARL_WORK_DIR:-/home/bjaeger/CaRL/CARLA}
-RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0041_1000}
+RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
 # the agent finds config.yaml next to final_model.pt (or one level above a models/*.pt)
 export CKPT=$RUN_DIR/final_model.pt
 SCENARIOS=${SCENARIOS:-1}
@@ -79,7 +79,7 @@ export COSIM_PEDESTRIAN_MIN_SIZE_M=${COSIM_PEDESTRIAN_MIN_SIZE_M:-0}
 export COSIM_OBS_HTML_MAX_STEPS=${COSIM_OBS_HTML_MAX_STEPS:-20000}
 export COSIM_OBS_HTML_RENDER=0  # routes save the compact replay only; render_carla_obs_html.py renders all pages into $OUT/obs_html
 
-TAG=longest6$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")
+TAG=longest6_v2$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 OUT=$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT/routes" "$OUT/aggregate"

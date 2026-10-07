@@ -27,9 +27,10 @@ policy_server.py from the inherited environment, see shadow_ego.py):
                                the shadow env (pd_*) or by the Leaderboard 1.0 criteria recomputed in
                                the server (carla_*, lb1/ground_truth.py)
 
-CARLA 0.9.10 differences handled here: no World.cast_ray (the teleported ego rests on the lane waypoint's
-height and road plane), no TrafficLight.get_stop_waypoints (stop waypoints come from the trigger volume,
-RunningRedLightTest's own recipe).
+CARLA 0.9.10 differences handled here: no World.cast_ray (the ego's body chord rests on the lane's OpenDRIVE
+height profile, lifted by the road mesh's offset from it as probed by a downward semantic lidar; the egg's
+Rotation.get_up_vector() points down, so the pitch comes from the profile too), no
+TrafficLight.get_stop_waypoints (stop waypoints come from the trigger volume, RunningRedLightTest's own recipe).
 """
 
 import math
@@ -70,6 +71,16 @@ MAX_JUNCTION_ADVANCE_STEPS = 400  # 200 m: a stop waypoint farther from its junc
 NO_LIGHT_ID = -1
 NO_PARKING_LANE = -1.0
 
+WHEEL_POSITION_CM_PER_M = 100.0
+ROAD_PROBE_MOUNT_Z_M = 0.5  # inside the hull, above any plausible penetration
+ROAD_PROBE_RANGE_M = 20.0
+ROAD_PROBE_POINTS_PER_SECOND = 2000
+ROAD_SURFACE_TAGS = (6, 7, 14, 15, 16, 22)  # CityObjectLabel RoadLines, Roads, Ground, Bridge, RailTrack, Terrain
+REST_ORIGIN_ABOVE_ROAD_M = 0.033  # mkz2017 origin height at rest on a flat road (measured, 0.9.10)
+MESH_LIFT_MARGIN_M = 0.05
+MESH_OFFSET_DEADBAND_M = 0.02
+MESH_OFFSET_MAX_STEP_M = 0.3
+
 
 def get_entry_point():
     return "PufferAgentLB1"
@@ -100,17 +111,22 @@ def plan_xyz(plan):
     return [[t.location.x, t.location.y, t.location.z] for t, _ in plan]
 
 
-def road_aligned_attitude(road_up, yaw_deg):
-    """(pitch_deg, roll_deg, unit forward) of a body heading yaw_deg that lies flat on the road plane with normal road_up."""
-    normal = np.array([road_up.x, road_up.y, road_up.z], dtype=np.float64)
-    yaw_rad = math.radians(yaw_deg)
-    forward = np.array([math.cos(yaw_rad), math.sin(yaw_rad), 0.0])
-    forward -= normal * float(forward @ normal)
-    forward /= np.linalg.norm(forward)
-    right = np.cross(normal, forward)  # CARLA is left-handed: right = up x forward
-    pitch_deg = math.degrees(math.asin(forward[2]))
-    roll_deg = math.degrees(math.asin(-right[2]))  # positive roll = right side down
-    return pitch_deg, roll_deg, forward
+def lane_z_at(wp, offset_m):
+    """Lane height offset_m along the lane from wp (negative = behind); None past the lane network."""
+    if offset_m == 0.0:
+        return wp.transform.location.z
+    found = wp.next(offset_m) if offset_m > 0.0 else wp.previous(-offset_m)
+    return found[0].transform.location.z if found else None
+
+
+def lane_chord_pose(wp, sample_offsets_m):
+    """(origin z, pitch_deg) of a rigid body chord resting on the lane's height profile around wp."""
+    sample_z = [lane_z_at(wp, s) for s in sample_offsets_m]
+    if any(z is None for z in sample_z):
+        return wp.transform.location.z, wrap_deg_180(wp.transform.rotation.pitch)
+    slope = (sample_z[-1] - sample_z[0]) / (sample_offsets_m[-1] - sample_offsets_m[0])
+    z = max(z_i - slope * s_i for z_i, s_i in zip(sample_z, sample_offsets_m))
+    return z, math.degrees(math.atan(slope))
 
 
 def driving_waypoint_samples(carla_map):
@@ -264,6 +280,44 @@ def write_mp4(out_path, frames, fps):
     writer.close()
 
 
+class RoadProbe:
+    """Semantic lidar firing straight down from inside the hull: 0.9.10's substitute for World.cast_ray."""
+
+    def __init__(self, world, vehicle, tick_dt):
+        blueprint = world.get_blueprint_library().find("sensor.lidar.ray_cast_semantic")
+        for name, value in (
+            ("channels", "1"),
+            ("range", str(ROAD_PROBE_RANGE_M)),
+            ("points_per_second", str(ROAD_PROBE_POINTS_PER_SECOND)),
+            ("rotation_frequency", str(1.0 / tick_dt)),
+            ("upper_fov", "-90"),
+            ("lower_fov", "-90"),
+        ):
+            blueprint.set_attribute(name, value)
+        mount = carla.Transform(carla.Location(x=0.0, y=0.0, z=ROAD_PROBE_MOUNT_Z_M))
+        self.sensor = world.spawn_actor(blueprint, mount, attach_to=vehicle)
+        self.sensor.listen(self._on_data)
+        self._frame = None
+        self._distance_m = None
+        self._consumed_frame = None
+
+    def _on_data(self, data):
+        distances = sorted(-d.point.z for d in data if d.object_tag in ROAD_SURFACE_TAGS)
+        if distances:
+            self._frame, self._distance_m = data.frame, distances[len(distances) // 2]
+
+    def fresh_distance_m(self):
+        """Median road distance along the body's down axis from the newest unread scan; None when nothing new."""
+        if self._frame is None or self._frame == self._consumed_frame:
+            return None
+        self._consumed_frame = self._frame
+        return self._distance_m
+
+    def destroy(self):
+        self.sensor.stop()
+        self.sensor.destroy()
+
+
 class PolicyServerLink:
     """policy_server.py as a child process in the PufferDrive venv, one request/reply per message."""
 
@@ -334,6 +388,12 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
         self.carla_view_writer = None
         self._collision_sensor = None
         self._collision_events = []
+        self.road_probe = None
+        self.body_chord_offsets_m = None
+        self.mesh_offset_m = 0.0
+        self._previous_body_z = None
+        self._previous_lane_center_z = None
+        self._previous_pitch_rad = 0.0
 
     def sensors(self):
         if not self.debug_carla_view_dir and not self.record_infractions_dir:
@@ -354,7 +414,7 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
         self.dense_global_plan_world_coord = global_plan_world_coord
 
     def _init_on_first_step(self):
-        """Deferred init (the ego and world only exist once the route runs); read-only with respect to CARLA."""
+        """Deferred init (the ego and world only exist once the route runs)."""
         self.vehicle = CarlaDataProvider.get_hero_actor()
         self.world = self.vehicle.get_world()
         self.cmap = self.world.get_map()
@@ -366,6 +426,12 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
             [w.max_steer_angle, w.position.x, w.position.y, w.position.z]
             for w in self.vehicle.get_physics_control().wheels
         ]
+        front_left, rear_left = wheels[0][1:], wheels[2][1:]
+        half_wheelbase_m = 0.5 * math.sqrt(sum((a - b) ** 2 for a, b in zip(front_left, rear_left))) / WHEEL_POSITION_CM_PER_M
+        body_rear_m, body_front_m = body.location.x - body.extent.x, body.location.x + body.extent.x
+        assert body_rear_m < -half_wheelbase_m < half_wheelbase_m < body_front_m
+        self.body_chord_offsets_m = (body_rear_m, -half_wheelbase_m, 0.0, half_wheelbase_m, body_front_m)
+        self.road_probe = RoadProbe(self.world, self.vehicle, self.tick_dt)
         route = {
             "town": town,
             "tick_dt": self.tick_dt,
@@ -456,26 +522,41 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
         }
 
     def _teleport_carla_ego(self, motion):
-        """Place the CARLA ego at the shadow env's post-step pose (shadow_ego.StepResult.motion), resting on the
-        lane waypoint's height and road plane (0.9.10 has no road-mesh raycast)."""
+        """Place the CARLA ego at the shadow env's post-step pose (shadow_ego.StepResult.motion): the body chord on
+        the lane's height profile, lifted by the probed road-mesh offset (0.9.10 has no road-mesh raycast)."""
         _, _, yaw0_deg, _, x, y, yaw_deg, speed, carla_z = motion
         yaw_delta_deg = wrap_deg_180(yaw_deg - yaw0_deg)
         wp = self.cmap.get_waypoint(carla.Location(x=x, y=y, z=carla_z))
-        z = wp.transform.location.z if wp is not None else carla_z
-        road_up = wp.transform.rotation.get_up_vector() if wp is not None else carla.Vector3D(x=0.0, y=0.0, z=1.0)
-        pitch_deg, roll_deg, forward = road_aligned_attitude(road_up, yaw_deg)
+        chord_z, pitch_deg = (carla_z, 0.0) if wp is None else lane_chord_pose(wp, self.body_chord_offsets_m)
+        self._update_mesh_offset()
+        z = chord_z + self.mesh_offset_m + REST_ORIGIN_ABOVE_ROAD_M + MESH_LIFT_MARGIN_M
+        pitch_rad, yaw_rad = math.radians(pitch_deg), math.radians(yaw_deg)
+        self._previous_body_z = z
+        self._previous_lane_center_z = carla_z if wp is None else wp.transform.location.z
+        self._previous_pitch_rad = pitch_rad
+        forward = (math.cos(yaw_rad) * math.cos(pitch_rad), math.sin(yaw_rad) * math.cos(pitch_rad), math.sin(pitch_rad))
         # Zero momentum before the teleport: CARLA's collision resolver reacts violently to a
         # physics body carrying velocity into a new pose (carla issue #8076).
         zero = carla.Vector3D(x=0.0, y=0.0, z=0.0)
         self.vehicle.set_target_velocity(zero)
         self.vehicle.set_target_angular_velocity(zero)
         self.vehicle.set_transform(
-            carla.Transform(carla.Location(x=x, y=y, z=z), carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=roll_deg))
+            carla.Transform(carla.Location(x=x, y=y, z=z), carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=0.0))
         )
-        self.vehicle.set_target_velocity(
-            carla.Vector3D(x=speed * float(forward[0]), y=speed * float(forward[1]), z=speed * float(forward[2]))
-        )
+        self.vehicle.set_target_velocity(carla.Vector3D(x=speed * forward[0], y=speed * forward[1], z=speed * forward[2]))
         self.vehicle.set_target_angular_velocity(carla.Vector3D(x=0.0, y=0.0, z=yaw_delta_deg / self.tick_dt))
+
+    def _update_mesh_offset(self):
+        """Road mesh height above the lane's height profile under the body, from the probe's newest scan at the previous pose."""
+        distance_m = self.road_probe.fresh_distance_m()
+        if distance_m is None or self._previous_body_z is None:
+            return
+        # the ray follows the pitched body's down axis; the mount offset is along that axis too
+        vertical_clearance_m = (distance_m - ROAD_PROBE_MOUNT_Z_M) * math.cos(self._previous_pitch_rad)
+        measured_m = self._previous_body_z - vertical_clearance_m - self._previous_lane_center_z
+        step_m = measured_m - self.mesh_offset_m
+        if abs(step_m) > MESH_OFFSET_DEADBAND_M:
+            self.mesh_offset_m += max(-MESH_OFFSET_MAX_STEP_M, min(MESH_OFFSET_MAX_STEP_M, step_m))
 
     def _maybe_save_infraction_clip(self, pd_flags, carla_flags):
         """One mp4 of the rolling chase-cam buffer per flagged ego infraction, at most once per
@@ -533,6 +614,9 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
         if self.carla_view_writer is not None:
             self.carla_view_writer.close()
             print(f"[puffer_agent_lb1] wrote CARLA chase-cam video for route {self.route_tag}", flush=True)
+        if self.road_probe is not None:
+            self.road_probe.destroy()
+            self.road_probe = None
         if self._collision_sensor is not None:
             self._collision_sensor.stop()
             self._collision_sensor.destroy()

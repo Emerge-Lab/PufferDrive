@@ -38,7 +38,7 @@ export GARAGE_PY=${GARAGE_PY:-/home/bjaeger/miniconda3/envs/garage/bin/python}  
 export SERVER_PY=${SERVER_PY:-/home/bjaeger/miniconda3/envs/carl/bin/python}     # any PufferDrive-capable python
 export CARLA_ROOT=${CARLA_ROOT:-/home/bjaeger/CARLA_0.9.10}
 export GARAGE_WORK_DIR=${GARAGE_WORK_DIR:-/home/bjaeger/carla_garage_1}
-RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0044_1000}
+RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
 # the agent finds config.yaml next to final_model.pt (or one level above a models/*.pt)
 export CKPT=$RUN_DIR/final_model.pt
 ROUTE_DIR=${ROUTE_DIR:-$GARAGE_WORK_DIR/leaderboard/data/longest6_split}
