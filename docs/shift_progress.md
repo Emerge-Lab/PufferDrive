@@ -134,8 +134,8 @@ Anchors train on `nuplan_mini_train` (3,637 logs); evaluation is closed loop on
 |---|---|---|---|---|---|
 | 30 min, one-hot | 18,985 | 33% | 62% | 34% | 0.9 m/s |
 | 3 h, one-hot | 114,157 | 38% | 59% | 38% | 0.9 m/s |
-| 3 h, soft labels, tau 2e-5 | 114,157 | 32% (argmin) | pending | pending | pending |
-| 3 h, soft labels, tau 1e-4 | 114,157 | 31% (argmin) | pending | pending | pending |
+| 3 h, soft labels, tau 2e-5 | 114,157 | 32% (argmin) | 58% | 38% | 0.9 m/s |
+| 3 h, soft labels, tau 1e-4 | 114,157 | 31% (argmin) | 56% | 39% | 0.9 m/s |
 
 The majority class is about 30%. Diagnosis:
 
@@ -146,8 +146,10 @@ The majority class is about 30%. Diagnosis:
   produce nearly identical motion, so the argmin label is noise relative to
   what the policy can observe, and more data barely helps.
 - **Soft labels** (`bc.label_smoothing_temperature`, default 0) train against a
-  softmax over the tracker's per-action errors. Argmin accuracy is expected to
-  drop under smoothing; the closed-loop numbers decide whether it helps.
+  softmax over the tracker's per-action errors. Closed loop they change almost
+  nothing: off-road drops from 59% to 56-58%, collisions and speed are flat.
+  The anchors' failure as drivers is compounding error from tiny-data BC, not
+  label noise alone.
 
 As drivers, the one-hot anchors crawl and drift off-road. That is typical of
 tiny-data behavior cloning, and in HR-PPO the anchor only needs to shape the
@@ -155,13 +157,15 @@ action distribution, not drive on its own.
 
 ## 4. Open items
 
-1. **Smoothed-anchor evaluations** are running on the node.
-2. **nuPlan co-simulation environment.** The devkit pins Python 3.9-era
-   packages: hydra 1.1 fails on Python 3.11 and OpenCV 4.5.1 has no wheels
-   past 3.9, while PufferDrive wants Python 3.11. Next attempt: a Python 3.10
-   env with `opencv-python-headless`, PufferDrive installed without
-   dependencies, in its own checkout. A shared checkout once overwrote the
-   training extension.
+1. **Replay `dt` versus the base's `dt`.** Replay steps one log frame per sim
+   step (`log_dt` is read from the bins but unused), so the replay arms run at
+   `dt=0.1` while the base trained at `dt=0.3`. The paper runs both stages at
+   0.3 s. Options: add a log stride to replay, fine-tune at 0.1, or retrain the
+   base at 0.1. Undecided; the remaining arms wait on it.
+2. **nuPlan co-simulation environment: working.** `scripts/setup_cosim_env.sh`
+   builds a Python 3.10 env (the devkit's pins rule out 3.11) with PufferDrive
+   installed without dependencies in its own checkout. On the node the planner,
+   devkit, CaRL and `run_simulation` import, and all 28 bridge tests pass.
 3. **nuPlan raw data.** Co-simulation needs the nuPlan DB logs and GPKG maps,
    not the bins. They exist on Greene (`/scratch/ev2237/data/nuplan`) and in
    `s3://pufferdrive-data/raw-files/nuplan`. Both local AWS credentials have
