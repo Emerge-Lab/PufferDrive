@@ -14,14 +14,14 @@
 # scenes converted to PufferDrive bins; AlpaSim renders, simulates the ego and replays the logged traffic.
 #
 # One-time setup: alpasim-training at ALPAGYM_ROOT (`uv sync --all-packages`), the AlpaSim fork at ALPASIM_ROOT, the
-# NuRec scenes and converted bins under NUREC_ROOT (alpasim-training README steps 3-4; all-usdzs/ must hold real files),
+# NuRec scenes and bins with 130 km/h lane limits under NUREC_ROOT (alpasim-training README steps 3-4; all-usdzs/ must hold real files),
 # and the AlpaSim base image archived to ALPASIM_IMAGE_TAR (REPO=$ALPASIM_ROOT OUT_DIR=<dir of ALPASIM_IMAGE_TAR> sbatch
 # --output=<log> --error=<log> $ALPAGYM_ROOT/scripts/build_alpasim_image.sbatch).
 #
 # Overridable env: RUN_DIR, CKPT (default RUN_DIR/final_model.pt, else the newest RUN_DIR/models/model_*.pt), PD,
 # ALPAGYM_ROOT, ALPASIM_ROOT, NUREC_ROOT, BINS, USDZ_DIR, ALPASIM_IMAGE_TAR, TOPOLOGY (8gpu_64rollouts = whole node;
 # 1gpu for a quick check), PARALLEL (scenes in flight: 32 on 8gpu, at most 4 on 1gpu), N_SCENES (0 = every scene that
-# passed the conversion checks), SCENE_LIST (file of scene ids), GOAL_MODE (gt | route), CAM_W/CAM_H (16:9 render size;
+# passed the conversion checks), SCENE_LIST (file of scene ids), GOAL_MODE (gt_time:<s> | gt | route), CAM_W/CAM_H (16:9 render size;
 # the teacher never sees the cameras), RENDER_VIDEO (1 = one mp4 per scene), SIM_TIMEOUT_S (per batch of PARALLEL scenes).
 set -u
 
@@ -29,9 +29,9 @@ export PD=${PD:-/home/bjaeger/PufferDrive}
 ALPAGYM_ROOT=${ALPAGYM_ROOT:-/home/bjaeger/alpasim-training}
 export ALPASIM_ROOT=${ALPASIM_ROOT:-/home/bjaeger/alpasim}
 NUREC_ROOT=${NUREC_ROOT:-/home/shared/data/nurec}
-BINS=${BINS:-$NUREC_ROOT/bins}
+BINS=${BINS:-$NUREC_ROOT/bins_130kmh}
 USDZ_DIR=${USDZ_DIR:-$NUREC_ROOT/all-usdzs}
-RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0043_1000}
+RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
 TOPOLOGY=${TOPOLOGY:-8gpu_64rollouts}
 case "$TOPOLOGY" in
     8gpu*) PARALLEL=${PARALLEL:-32} ;;
@@ -39,7 +39,7 @@ case "$TOPOLOGY" in
 esac
 N_SCENES=${N_SCENES:-0}
 SCENE_LIST=${SCENE_LIST:-}
-GOAL_MODE=${GOAL_MODE:-gt}
+GOAL_MODE=${GOAL_MODE:-gt_time:5}
 CAM_W=${CAM_W:-640}
 CAM_H=${CAM_H:-360}
 RENDER_VIDEO=${RENDER_VIDEO:-1}
@@ -106,7 +106,7 @@ EOF
 [ ${#SCENES[@]} -gt 0 ] || { echo "no scenes to evaluate"; exit 1; }
 
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
-OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE}_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE//:/}_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT"
 {
     echo "checkpoint $CKPT"; echo "scenes ${#SCENES[@]}"; echo "topology $TOPOLOGY parallel $PARALLEL goal_mode $GOAL_MODE"
@@ -147,7 +147,7 @@ fi
 
 # the teacher is an external driver, but the 8gpu topologies re-assert driver.skip=false and abort at startup
 OVERRIDES="wizard.baseport=$BASEPORT runtime.endpoints.driver.skip=true"
-[ "$RENDER_VIDEO" = "1" ] || OVERRIDES="$OVERRIDES eval.video.render_video=false"
+[ "$RENDER_VIDEO" = "1" ] && RENDER_VIDEO_FLAG=true || RENDER_VIDEO_FLAG=false
 echo "${#SCENES[@]} scenes, $TOPOLOGY with $PARALLEL in flight; full log: $OUT/evaluate.log"
 cd "$ALPAGYM_ROOT" || exit 1
 "$ALPAGYM_PY" -m alpagym_host.evaluate \
@@ -155,6 +155,7 @@ cd "$ALPAGYM_ROOT" || exit 1
     --teacher_checkpoint "$CKPT" \
     --teacher_bins_dir "$BINS" \
     --teacher_goal_mode "$GOAL_MODE" \
+    --render_video "$RENDER_VIDEO_FLAG" \
     --local_scene_dir "$USDZ_DIR" \
     --scene_ids "${SCENES[@]}" \
     --topology "$TOPOLOGY" \
