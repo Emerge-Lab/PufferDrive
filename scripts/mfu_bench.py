@@ -70,6 +70,7 @@ def main():
     parser.add_argument("--warmup", type=int, default=2, help="epochs before measuring (compile, recompiles)")
     parser.add_argument("--epochs", type=int, default=3, help="measured epochs")
     parser.add_argument("--fused", action="store_true", help="policy.fused_slot_encoder=true")
+    parser.add_argument("--rollout-only", action="store_true", help="time only the rollout (data collection)")
     parser.add_argument("overrides", nargs="*", help="extra hydra overrides, e.g. train.seed=3")
     args = parser.parse_args()
 
@@ -123,16 +124,23 @@ def main():
     )
 
     try:
+
+        def update_or_skip():
+            if args.rollout_only:
+                pufferl.epoch += 1  # keep the trainer's epoch bookkeeping moving without an update
+                return 0.0, None
+            return timed(pufferl.train)
+
         for epoch in range(args.warmup):
             rollout_seconds, _ = timed(pufferl.evaluate)
-            update_seconds, _ = timed(pufferl.train)
+            update_seconds, _ = update_or_skip()
             print(f"warmup epoch {epoch}: rollout {rollout_seconds:.2f} s, update {update_seconds:.2f} s", flush=True)
         frames = dict(torch._dynamo.utils.counters["frames"])
         epochs = []
         for epoch in range(args.epochs):
             counters.clear()
             rollout_seconds, _ = timed(pufferl.evaluate)
-            update_seconds, _ = timed(pufferl.train)
+            update_seconds, _ = update_or_skip()
             epochs.append((rollout_seconds, update_seconds, counters["samples"]))
             print(
                 f"epoch {epoch}: rollout {rollout_seconds:.2f} s, update {update_seconds:.2f} s, "
@@ -143,6 +151,12 @@ def main():
         pufferl.utilization.stop()
         vecenv.close()
 
+    if args.rollout_only:
+        rollout = sum(e[0] for e in epochs) / len(epochs)
+        print(
+            f"ROLLOUT_RESULT envs={args.num_envs} agents={vecenv.num_agents} rollout_s={rollout:.3f} agent_steps_per_s={agent_steps / rollout:.0f}"
+        )
+        return
     fastest_update = min(update for _, update, _ in epochs)
     steady = [e for e in epochs if e[1] < RECOMPILE_EPOCH_FACTOR * fastest_update]
     rollout = sum(e[0] for e in steady) / len(steady)
