@@ -23,13 +23,13 @@
 set -u
 
 # quick check: TOPOLOGY=1gpu N_SCENES=2; full run: TOPOLOGY=8gpu_64rollouts (whole node) N_SCENES=0 (the whole SCENE_LIST)
-TOPOLOGY=1gpu
-N_SCENES=2
+TOPOLOGY=8gpu_64rollouts
+N_SCENES=0
 RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
 CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || CKPT=$(ls "$RUN_DIR"/models/model_*.pt 2>/dev/null | sort | tail -n 1)
 GOAL_MODE=gt_time:5  # gt_time:<s> | gt | route
-RENDER_VIDEO=1       # one mp4 per scene
+RENDER_VIDEO=0       # one mp4 per scene; 1 also streams the teacher BEV and makes every policy step ~5x slower
 CAM_W=640            # 16:9 render size; the teacher never sees the cameras
 CAM_H=360
 SIM_TIMEOUT_S=3600   # per batch of PARALLEL scenes
