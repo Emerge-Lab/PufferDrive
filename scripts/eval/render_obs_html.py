@@ -7,7 +7,8 @@ usage: python scripts/eval/render_obs_html.py <group_dir> [--max-score 0.9] [--m
 
 Selection: aggregated score < --max-score OR any --metric < 1 OR explicitly listed --tokens.
 Pages are named s<score>_<flags>_<scenario_type>_<token>.html so the gallery lists the worst first
-(flags: COL at-fault collision, OFF drivable area, DIR driving direction, STALL no progress).
+(flags: COL at-fault collision, OFF drivable area, DIR driving direction, STALL no progress). Every violated
+metric links to the replay step of its first violation (collisions: the shadow env's own flag).
 --prune deletes the .replay.zlib of every scenario that was not selected.
 """
 
@@ -18,6 +19,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -50,14 +52,25 @@ COMFORT_METRICS = (
     "ego_yaw_acceleration",
     "ego_yaw_rate",
 )
-COMFORT_BOUNDS = {
-    "ego_lon_acceleration": "-4.05..2.40 m/s^2",
-    "ego_lon_jerk": "|j| <= 4.13 m/s^3",
-    "ego_jerk": "|j| <= 8.37 m/s^3",
-    "ego_lat_acceleration": "|a| <= 4.89 m/s^2",
-    "ego_yaw_acceleration": "|a| <= 1.93 rad/s^2",
-    "ego_yaw_rate": "|w| <= 0.95 rad/s",
+COMFORT_BOUNDS = {  # (lower, upper, label): nuPlan's within-bound thresholds
+    "ego_lon_acceleration": (-4.05, 2.40, "-4.05..2.40 m/s^2"),
+    "ego_lon_jerk": (-4.13, 4.13, "|j| <= 4.13 m/s^3"),
+    "ego_jerk": (-8.37, 8.37, "|j| <= 8.37 m/s^3"),
+    "ego_lat_acceleration": (-4.89, 4.89, "|a| <= 4.89 m/s^2"),
+    "ego_yaw_acceleration": (-1.93, 1.93, "|a| <= 1.93 rad/s^2"),
+    "ego_yaw_rate": (-0.95, 0.95, "|w| <= 0.95 rad/s"),
 }
+NUPLAN_STEP_SECONDS = 0.1
+DRIVING_DIRECTION_COMPLIANCE_THRESHOLD_M = 2.0
+TTC_LEAST_MIN_S = 0.95
+COLLISION_METRIC = "no_ego_at_fault_collisions"
+COLLISION_METRIC_IDX = viz.METRIC_LABELS.index("collision")
+VIOLATION_SERIES = (  # scored metric, parquet with its per-step series, (lower, upper) of a compliant value
+    ("drivable_area_compliance", "corners_in_drivable_area", 1.0, None),
+    ("driving_direction_compliance", "driving_direction_compliance", -DRIVING_DIRECTION_COMPLIANCE_THRESHOLD_M, None),
+    ("time_to_collision_within_bound", "time_to_collision_within_bound", TTC_LEAST_MIN_S, None),
+    ("speed_limit_compliance", "speed_limit_compliance", None, 0.0),
+)
 
 
 def scenario_rows(group_dir):
@@ -69,6 +82,48 @@ def scenario_rows(group_dir):
         for _, row in per_scenario.iterrows():
             rows[str(row["scenario"])] = row
     return rows
+
+
+def first_out_of_bounds(values, lower=None, upper=None):
+    """-> first index with value < lower or value > upper, None when every value is within bounds."""
+    values = np.asarray(values, dtype=np.float64)
+    outside = np.zeros(values.shape, dtype=bool)
+    if lower is not None:
+        outside |= values < lower
+    if upper is not None:
+        outside |= values > upper
+    hits = np.flatnonzero(outside)
+    return int(hits[0]) if hits.size else None
+
+
+def step_link(step):
+    return viz.replay_step_link(step, step * NUPLAN_STEP_SECONDS)
+
+
+def violation_steps(group_dir):
+    """token -> {scored metric: first violating step} from the per-step time series nuPlan writes per metric."""
+    series_files = [
+        (metric, Path(sim_dir) / "metrics" / f"{parquet_name}.parquet", lower, upper)
+        for sim_dir in glob.glob(f"{group_dir}/simulation/*/20*")
+        for metric, parquet_name, lower, upper in VIOLATION_SERIES
+    ]
+    out = {}
+    for metric, parquet_path, lower, upper in series_files:
+        if not parquet_path.exists():
+            continue
+        for _, r in pd.read_parquet(parquet_path).iterrows():
+            values = r["time_series_values"]
+            step = None if values is None else first_out_of_bounds(values, lower, upper)
+            if step is not None:
+                out.setdefault(str(r["scenario_name"]), {})[metric] = step
+    return out
+
+
+def replay_collision_step(replay_path):
+    """-> first replay step where the shadow env flagged an ego collision (at fault or not), None when never."""
+    _, chunks = viz.read_replay_zlib(replay_path, chunk_names=("metrics_f32",))
+    hits = np.flatnonzero(chunks["metrics_f32"][:, 0, COLLISION_METRIC_IDX] > 0)
+    return int(hits[0]) if hits.size else None
 
 
 def comfort_failures(group_dir):
@@ -83,15 +138,20 @@ def comfort_failures(group_dir):
             flag = [c for c in df.columns if c.endswith("within_bounds_stat_value")]
             if not flag:
                 continue
+            lower, upper, bound_label = COMFORT_BOUNDS[name]
             for _, r in df[~df[flag[0]].astype(bool)].iterrows():
+                step = first_out_of_bounds(r["time_series_values"], lower, upper)
+                step_html = "" if step is None else f" &middot; {step_link(step)}"
                 out.setdefault(str(r["scenario_name"]), []).append(
-                    f"{name} {float(r[f'min_{name}_stat_value']):.2f}..{float(r[f'max_{name}_stat_value']):.2f} (bound {COMFORT_BOUNDS[name]})"
+                    f"{name} {float(r[f'min_{name}_stat_value']):.2f}..{float(r[f'max_{name}_stat_value']):.2f} "
+                    f"(bound {bound_label}){step_html}"
                 )
     return out
 
 
-def score_panel(token, row, comfort):
-    """Fixed panel injected into the viewer: nuPlan score, every scored sub-metric, violated ones highlighted."""
+def score_panel(token, row, comfort, steps):
+    """Fixed panel injected into the viewer: nuPlan score, every scored sub-metric, violated ones highlighted
+    with the replay step of their first violation."""
     if row is None:
         return ""
     lines = []
@@ -99,9 +159,13 @@ def score_panel(token, row, comfort):
         value = float(row[metric])
         color = "#ff6b6b" if value < 1.0 else "#7ed491"
         mark = "&#10007;" if value < 1.0 else "&#10003;"
+        step_html = ""
+        if value < 1.0 and metric in steps:
+            source = ' <span style="color:#7f8ba0">(shadow env flag)</span>' if metric == COLLISION_METRIC else ""
+            step_html = f" &middot; {step_link(steps[metric])}{source}"
         lines.append(
             f'<div style="display:flex;justify-content:space-between;gap:16px"><span style="color:{color}">{mark} {label}</span>'
-            f'<span style="color:{color}">{value:.2f} <span style="color:#7f8ba0">({role})</span></span></div>'
+            f'<span style="color:{color}">{value:.2f} <span style="color:#7f8ba0">({role})</span>{step_html}</span></div>'
         )
     for detail in comfort:
         lines.append(f'<div style="color:#ff6b6b;padding-left:14px">&#8627; {detail}</div>')
@@ -164,19 +228,26 @@ def main():
         raise SystemExit(f"no obs_html/*.replay.zlib under {args.group_dir}")
     rows = scenario_rows(args.group_dir)
     comfort = comfort_failures(args.group_dir)
+    steps = violation_steps(args.group_dir)
     wanted = selected_tokens(rows, args.max_score, args.metric) | set(args.tokens)
     jobs = [
         (token, replays[token], obs_dir / page_name(token, rows.get(token)))
         for token in sorted(wanted)
         if token in replays
     ]
+
+    def render(job):
+        token, replay, html_path = job
+        row = rows.get(token)
+        token_steps = dict(steps.get(token, {}))
+        collision_failed = row is not None and float(row[COLLISION_METRIC]) < 1.0
+        collision_step = replay_collision_step(replay) if collision_failed else None
+        if collision_step is not None:
+            token_steps[COLLISION_METRIC] = collision_step
+        render_page(replay, html_path, score_panel(token, row, comfort.get(token, []), token_steps))
+
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
-        list(
-            pool.map(
-                lambda job: render_page(job[1], job[2], score_panel(job[0], rows.get(job[0]), comfort.get(job[0], []))),
-                jobs,
-            )
-        )
+        list(pool.map(render, jobs))
     file_metrics = {html.name: gallery_metrics(rows.get(token)) for token, _, html in jobs}
     pruned = 0
     if args.prune:

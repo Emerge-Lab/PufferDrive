@@ -79,6 +79,8 @@ METRIC_LABELS = [
 PAYLOAD_CHUNK_SIZE = 4 * 1024 * 1024
 OBS_QUANTIZE_FRAME_CHUNK = 64
 REPLAY_COMPRESSION_LEVEL = 1
+REPLAY_HEADER_PROBE_BYTES = 1 << 16
+REPLAY_INFLATE_MAX_ROUNDS = 1 << 12
 SIMULATOR_FIGSIZE = (20.0, 20.0)
 SIMULATOR_DPI = 100
 SIMULATOR_GOAL_RADIUS_METERS = 2.0
@@ -1838,15 +1840,49 @@ def render_interactive_replay_zlib(replay_path, filename):
     _render_interactive_replay_payload(compressed_payload, filename)
 
 
-def read_replay_zlib(replay_path):
-    """-> (header dict, chunk name -> ndarray view) of a saved .replay.zlib."""
+def replay_step_link(step, seconds=None):
+    """Link for a panel injected into an interactive replay page: clicking seeks the viewer to `step`."""
+    label = f"step {int(step)}" + ("" if seconds is None else f" ({seconds:.1f} s)")
+    return (
+        f'<a href="#" style="color:inherit;text-decoration:underline dotted" '
+        f'onclick="step={int(step)};play=false;updateBtn();draw(true);return false">{label}</a>'
+    )
+
+
+def _inflate_through(decompressor, raw, needed_bytes):
+    rounds = 0
+    while len(raw) < needed_bytes and decompressor.unconsumed_tail and rounds < REPLAY_INFLATE_MAX_ROUNDS:
+        raw += decompressor.decompress(decompressor.unconsumed_tail, needed_bytes - len(raw))
+        rounds += 1
+    if len(raw) < needed_bytes:
+        raise ValueError(f"truncated replay: {len(raw)} of {needed_bytes} bytes")
+    return raw
+
+
+def _inflate_replay_prefix(compressed, chunk_names):
+    """Inflate a .replay.zlib only through the last of chunk_names (a long route inflates to GBs)."""
+    decompressor = zlib.decompressobj()
+    raw = bytearray(decompressor.decompress(compressed, REPLAY_HEADER_PROBE_BYTES))
+    header_end = 4 + struct.unpack("<I", _inflate_through(decompressor, raw, 4)[:4])[0]
+    chunk_meta = json.loads(_inflate_through(decompressor, raw, header_end)[4:header_end])["chunks"]
+    data_start = header_end + ((-header_end) % 4)
+    chunk_end = data_start + max(chunk_meta[name]["offset"] + chunk_meta[name]["nbytes"] for name in chunk_names)
+    return _inflate_through(decompressor, raw, chunk_end)
+
+
+def read_replay_zlib(replay_path, chunk_names=None):
+    """-> (header dict, chunk name -> ndarray view) of a saved .replay.zlib; chunk_names limits the chunks
+    returned and the inflated prefix of the stream."""
     with open(replay_path, "rb") as replay_file:
-        raw = zlib.decompress(replay_file.read())
+        compressed = replay_file.read()
+    raw = zlib.decompress(compressed) if chunk_names is None else _inflate_replay_prefix(compressed, chunk_names)
     header_len = struct.unpack("<I", raw[:4])[0]
     header = json.loads(raw[4 : 4 + header_len])
     data_start = 4 + header_len + ((-(4 + header_len)) % 4)
     chunks = {}
     for name, meta in header["chunks"].items():
+        if chunk_names is not None and name not in chunk_names:
+            continue
         start = data_start + meta["offset"]
         chunks[name] = np.frombuffer(
             raw, dtype=meta["dtype"], count=meta["nbytes"] // np.dtype(meta["dtype"]).itemsize, offset=start

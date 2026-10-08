@@ -117,3 +117,13 @@ def test_logged_ego_boxes_in_bin_frame():
     assert np.allclose(boxes[:, 0], [0.0, 1.0, 2.0, 3.0])
     assert np.allclose(boxes[:, 1], 0.0)
     assert np.allclose(boxes[:, 2:], [0.25, 5.1, 2.3])
+
+
+def test_read_replay_zlib_chunk_subset(tmp_path):
+    path = tmp_path / "e.replay.zlib"
+    viz.save_interactive_replay_zlib({}, _replay(_ghost_values()), str(path))
+    header_full, chunks_full = viz.read_replay_zlib(path)
+    header_part, chunks_part = viz.read_replay_zlib(path, chunk_names=("ghost_f32",))
+    assert header_part == header_full
+    assert list(chunks_part) == ["ghost_f32"]
+    assert np.array_equal(chunks_part["ghost_f32"], chunks_full["ghost_f32"])
