@@ -95,6 +95,7 @@ EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
 [ -n "${EXTRA_HYDRA:-}" ] && EXTRA_ARGS+=($EXTRA_HYDRA)
 
 cd "$PD"
+export PYTHONPATH="$PD${PYTHONPATH:+:$PYTHONPATH}"
 declare -A STATUS
 # main_callback below omits metric_summary_callback (PDF histograms): it
 # crashes on a read-only numpy array from pyarrow-backed parquet columns in
