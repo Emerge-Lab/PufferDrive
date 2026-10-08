@@ -13,48 +13,42 @@
 # alpasim-training's teacher driver runs the policy in a shadow env of this checkout (PUFFERDRIVE_ROOT=$PD) on the
 # scenes converted to PufferDrive bins; AlpaSim renders, simulates the ego and replays the logged traffic.
 #
-# One-time setup: alpasim-training at ALPAGYM_ROOT (`uv sync --all-packages`), the AlpaSim fork at ALPASIM_ROOT, the
-# NuRec scenes as real files at USDZ_DIR (default: Damiano's copy; NUREC_ROOT/all-usdzs is a symlink farm), bins with 130 km/h
-# lane limits at BINS (alpasim-training
-# README step 4; default: Damiano's conversion), and the AlpaSim base image archived to ALPASIM_IMAGE_TAR (default: his too;
-# REPO=$ALPASIM_ROOT OUT_DIR=<dir of ALPASIM_IMAGE_TAR> sbatch
+# One-time setup: alpasim-training at ALPAGYM_ROOT (`uv sync --all-packages`), the AlpaSim fork at ALPASIM_ROOT, the NuRec
+# scenes as real files at USDZ_DIR, their bins with 130 km/h lane limits at BINS (alpasim-training README step 4) and the
+# AlpaSim base image archived in ALPASIM_IMAGE_DIR (REPO=$ALPASIM_ROOT OUT_DIR=$ALPASIM_IMAGE_DIR sbatch
 # --output=<log> --error=<log> $ALPAGYM_ROOT/scripts/build_alpasim_image.sbatch).
 #
-# Overridable env: RUN_DIR, CKPT (default RUN_DIR/final_model.pt, else the newest RUN_DIR/models/model_*.pt), PD,
-# ALPAGYM_ROOT, ALPASIM_ROOT, NUREC_ROOT, BINS, USDZ_DIR, ALPASIM_IMAGE_TAR, PARALLEL (scenes in flight: 32 on 8gpu, at most
-# 4 on 1gpu), SCENE_LIST (file of scene ids), GOAL_MODE (gt_time:<s> | gt | route), CAM_W/CAM_H (16:9 render size; the teacher
-# never sees the cameras), RENDER_VIDEO (1 = one mp4 per scene), SIM_TIMEOUT_S (per batch of PARALLEL scenes).
+# Settings are the plain assignments below. Only RUN_DIR is also read from the environment: 3_train and 7_eval chain this
+# eval after their own by exporting it.
 set -u
 
 # quick check: TOPOLOGY=1gpu N_SCENES=2; full run: TOPOLOGY=8gpu_64rollouts (whole node) N_SCENES=0 (every scene that passed the checks)
 TOPOLOGY=1gpu
 N_SCENES=2
-
-export PD=${PD:-/home/bjaeger/PufferDrive}
-ALPAGYM_ROOT=${ALPAGYM_ROOT:-/home/bjaeger/alpasim-training}
-export ALPASIM_ROOT=${ALPASIM_ROOT:-/home/bjaeger/alpasim}
-NUREC_ROOT=${NUREC_ROOT:-/home/shared/data/nurec}
-BINS=${BINS:-/home/ddacol/code/alpasim-training/data/distill/bins_130kmh}
-USDZ_DIR=${USDZ_DIR:-/home/ddacol/code/alpasim-training/data/distill/usdz}
-RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
+RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0046_1000}
+CKPT=$RUN_DIR/final_model.pt
+[ -f "$CKPT" ] || CKPT=$(ls "$RUN_DIR"/models/model_*.pt 2>/dev/null | sort | tail -n 1)
+SCENE_LIST=""        # file of scene ids; empty = every scene that passed the conversion checks
+GOAL_MODE=gt_time:5  # gt_time:<s> | gt | route
+RENDER_VIDEO=1       # one mp4 per scene
+CAM_W=640            # 16:9 render size; the teacher never sees the cameras
+CAM_H=360
+SIM_TIMEOUT_S=3600   # per batch of PARALLEL scenes
+export PD=/home/bjaeger/PufferDrive
+ALPAGYM_ROOT=/home/bjaeger/alpasim-training
+export ALPASIM_ROOT=/home/bjaeger/alpasim
+# Damiano's conversion; /home/shared/data/nurec/all-usdzs is a symlink farm that dangles inside the containers
+BINS=/home/ddacol/code/alpasim-training/data/distill/bins_130kmh
+USDZ_DIR=/home/ddacol/code/alpasim-training/data/distill/usdz
+ALPASIM_IMAGE_DIR=/home/ddacol/code/alpasim-training/data/images
 case "$TOPOLOGY" in
-    8gpu*) PARALLEL=${PARALLEL:-32} ;;
-    *) PARALLEL=${PARALLEL:-4} ;;
+    8gpu*) PARALLEL=32 ;;  # scenes in flight
+    *) PARALLEL=4 ;;
 esac
-SCENE_LIST=${SCENE_LIST:-}
-GOAL_MODE=${GOAL_MODE:-gt_time:5}
-CAM_W=${CAM_W:-640}
-CAM_H=${CAM_H:-360}
-RENDER_VIDEO=${RENDER_VIDEO:-1}
-SIM_TIMEOUT_S=${SIM_TIMEOUT_S:-3600}
 ALPAGYM_PY=$ALPAGYM_ROOT/.venv/bin/python
 # uv: the host syncs the AlpaSim checkout's venv before it starts the Wizard
 export PATH="$HOME/.local/bin:$PATH"
 
-if [ -z "${CKPT:-}" ]; then
-    CKPT=$RUN_DIR/final_model.pt
-    [ -f "$CKPT" ] || CKPT=$(ls "$RUN_DIR"/models/model_*.pt 2>/dev/null | sort | tail -n 1)
-fi
 [ -n "$CKPT" ] || { echo "no checkpoint in $RUN_DIR (final_model.pt or models/model_*.pt)"; exit 1; }
 for path in "$CKPT" "$ALPAGYM_PY" "$ALPASIM_ROOT/pyproject.toml" "$BINS/scene_manifest.jsonl" "$USDZ_DIR"; do
     [ -e "$path" ] || { echo "missing $path"; exit 1; }
@@ -74,7 +68,7 @@ case "$TOPOLOGY" in
 esac
 ALPASIM_VERSION=$(grep -m1 '^version' "$ALPASIM_ROOT/pyproject.toml" | sed -E 's/.*"(.*)".*/\1/')
 BASE_TAG=alpasim-base:$ALPASIM_VERSION
-ALPASIM_IMAGE_TAR=${ALPASIM_IMAGE_TAR:-/home/ddacol/code/alpasim-training/data/images/alpasim-base-$ALPASIM_VERSION.tar.zst}
+ALPASIM_IMAGE_TAR=$ALPASIM_IMAGE_DIR/alpasim-base-$ALPASIM_VERSION.tar.zst
 NRE_TAG=$(grep -m1 -oE 'nvcr.io/nvidia/nre/[^[:space:]"]+' "$ALPASIM_ROOT/src/wizard/configs/base_config.yaml")
 [ -n "$NRE_TAG" ] || { echo "no NRE renderer image in $ALPASIM_ROOT/src/wizard/configs/base_config.yaml"; exit 1; }
 echo "Evaluating checkpoint: $CKPT"
