@@ -196,5 +196,26 @@ class TestShadowEnvKwargs(unittest.TestCase):
         self.assertEqual(kwargs["num_goals"], 3)
 
 
+class TestShadowEnvFromShiftCheckpoints(unittest.TestCase):
+    def test_replay_finetune_config_builds_a_cosim_shadow_env(self):
+        """A SHIFT replay-arm checkpoint config must yield shadow-env kwargs Drive accepts, with the replay
+        training knobs neutralized so the co-sim runs it under the same semantics as a self-play checkpoint."""
+        import inspect
+
+        from pufferlib.ocean.cosim.arch import shadow_env_kwargs
+        from pufferlib.ocean.drive.drive import Drive
+
+        arm = yaml.safe_load((REPO_ROOT / "scripts" / "cluster_configs" / "shift" / "shift.yaml").read_text())
+        cfg = {"env": {k.split(".", 1)[1]: v for k, v in arm.items() if k.startswith("env.")}}
+        kwargs = shadow_env_kwargs(cfg, overrides={"num_agents": 1, "min_agents_per_env": 1, "cosim_partner_slots": 4})
+        unknown = set(kwargs) - set(inspect.signature(Drive.__init__).parameters)
+        self.assertEqual(unknown, set())
+        self.assertEqual(kwargs["simulation_mode"], "gigaflow")
+        self.assertEqual(kwargs["episode_max_steps"], 0)
+        self.assertEqual(kwargs["reward_expert_similarity"], 0.0)
+        self.assertFalse(kwargs["offroad_expert_linter"])
+        self.assertTrue(kwargs["jerk_rear_axle_slip"])
+
+
 if __name__ == "__main__":
     unittest.main()

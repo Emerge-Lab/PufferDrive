@@ -29,9 +29,7 @@ EGO_OBS_ACCEL_LONG_IDX = 4  # write_ego_obs column order: speed, width, length, 
 EGO_TRACKING_TOL_M = 0.05  # perfect_tracking_controller hands back our integrated pose up to log-timestamp jitter
 EGO_TRACKING_TOL_RAD = 0.005
 SCENARIO_LENGTH_MARGIN_STEPS = 2  # shadow env must never hit its own truncation while nuPlan still plans
-NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2 = 2.40  # ego_lon_acceleration_statistics.yaml max_lon_accel
 TRAJECTORY_TAIL_SPACING_S = 0.5  # constant-velocity tail past the integrated step; the controller only reads t+dt
-COMFORT_ACCEL_MARGIN = 0.96  # nuPlan Savitzky-Golay-smooths the reported accel and overshoots a hard cap by ~0.5%
 ROADBLOCK_GOAL_MARGIN_M = 5.0  # first roadblock goal sits at least this far beyond the goal radius ahead of the ego
 
 
@@ -310,12 +308,6 @@ class PufferDrivePlanner(AbstractPlanner):
                 "min_agents_per_env": 1,
                 "cosim_partner_slots": self._num_agents - 1,
                 "goal_source": "external",
-                # Training semantics: a window's final goal clears only below goal_speed (3 m/s)
-                "goal_reach_requires_speed": True,
-                # C_acc conditioning: cap the jerk model's positive accel at nuPlan's comfort bound instead of 2.5
-                "conditioning_accel_scale": COMFORT_ACCEL_MARGIN
-                * NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2
-                / binding.ACCEL_LONG_MAX,
                 # lockstep with nuPlan's planning iterations, not the training dt (mimolette: 0.3)
                 "dt": float(self._scenario.database_interval),
                 "scenario_length": int(self._scenario.get_number_of_iterations()) + SCENARIO_LENGTH_MARGIN_STEPS,

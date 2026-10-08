@@ -70,7 +70,25 @@ def checkpoint_config_path(checkpoint):
 COSIM_EVAL_OVERRIDES = {
     "cosim_eval_semantics": True,
     "eval_perceived_size_margin_m": 0.2,
-    "eval_standstill_jerk_deadband_mps3": 1.5,
+}
+
+# Replay fine-tuning checkpoints carry log-replay training knobs; the shadow env is a self-play env driven by the
+# external sim, so every checkpoint runs under the same co-sim semantics.
+COSIM_SIMULATION_OVERRIDES = {
+    "simulation_mode": "gigaflow",
+    "control_mode": "control_vehicles",
+    "sdc_controller": "policy",
+    "non_sdc_controller": "policy",
+    "non_vehicle_controller": "auto",
+    "init_step": 0,
+    "init_step_spread": False,
+    "init_step_jitter_steps": 0,
+    "episode_max_steps": 0,
+    "static_expert_min_motion_m": 0.0,
+    "offroad_expert_linter": False,
+    "reward_expert_similarity": 0.0,
+    "expert_similarity_only": False,
+    "expert_similarity_kernel_m": 0.0,
 }
 
 
@@ -78,11 +96,18 @@ def shadow_env_kwargs(cfg, defaults=None, overrides=None):
     """Drive kwargs for a co-sim shadow env.
 
     Precedence: `defaults` (no-checkpoint fallback arch) < checkpoint env
-    config (every Drive-accepted key) < CLEAN_EVAL_OVERRIDES < COSIM_EVAL_OVERRIDES < `overrides`
-    (the co-sim's structural keys)."""
+    config (every Drive-accepted key) < CLEAN_EVAL_OVERRIDES < COSIM_EVAL_OVERRIDES < COSIM_SIMULATION_OVERRIDES
+    < `overrides` (the co-sim's structural keys)."""
     accepted = set(inspect.signature(Drive.__init__).parameters)
     adopted = {k: v for k, v in ((cfg or {}).get("env") or {}).items() if k in accepted}
     for key in _INFRACTION_BEHAVIOR_KEYS:
         if key in adopted and isinstance(adopted[key], int):
             adopted[key] = _INFRACTION_BEHAVIOR_NAMES[adopted[key]]
-    return {**(defaults or {}), **adopted, **CLEAN_EVAL_OVERRIDES, **COSIM_EVAL_OVERRIDES, **(overrides or {})}
+    return {
+        **(defaults or {}),
+        **adopted,
+        **CLEAN_EVAL_OVERRIDES,
+        **COSIM_EVAL_OVERRIDES,
+        **COSIM_SIMULATION_OVERRIDES,
+        **(overrides or {}),
+    }
