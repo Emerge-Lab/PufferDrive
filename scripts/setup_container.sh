@@ -52,6 +52,15 @@ create_overlay() {
         exit 1
     fi
 
+    if [ ! -f "$OVERLAY_TEMPLATE" ]; then
+        echo "ERROR: overlay template not found at $OVERLAY_TEMPLATE"
+        echo "The default template path exists only on NYU Greene. Either:"
+        echo "  - export OVERLAY_TEMPLATE to your cluster's gzipped blank-ext3 template, or"
+        echo "  - create the overlay directly (singularity >= 3.8: 'singularity overlay create'):"
+        echo "      apptainer overlay create --size 15360 --create-dir /ext3 \"$OVERLAY_PATH\""
+        exit 1
+    fi
+
     echo "Copying and extracting overlay (this may take a few minutes)..."
     cp "$OVERLAY_TEMPLATE" "$CONTAINER_DIR/"
     TEMPLATE_NAME=$(basename "$OVERLAY_TEMPLATE")
