@@ -359,6 +359,48 @@ static int test_set_stop_signs_rejects_bad_input_untouched(void) {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// c_set_traffic_light_lines
+// ---------------------------------------------------------------------------
+
+static int test_set_traffic_light_lines_moves_lights_only_and_rejects_bad_input(void) {
+    // Only the addressed light elements move (world_mean subtracted like every setter input), their state
+    // schedule stays; a stop-sign index, an out-of-range index, a non-finite coordinate or a zero-length
+    // line fails the whole call (-1) with every line untouched.
+    int light_states[2] = {1, 1};
+    TrafficControlElement elements[2];
+    elements[0] = make_traffic_element(TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT, 2, light_states);
+    elements[1] = make_traffic_element(TRAFFIC_CONTROL_TYPE_STOP_SIGN, 0, NULL);
+    Drive env = {0};
+    env.traffic_elements = elements;
+    env.num_traffic_elements = 2;
+    env.world_mean_x = 100.0f;
+    env.world_mean_y = -50.0f;
+
+    int idx[1] = {0};
+    float line[6] = {110.0f, -52.0f, 0.5f, 110.0f, -48.0f, 0.5f};
+    EXPECT_EQ_INT(c_set_traffic_light_lines(&env, 1, idx, line), 0);
+    EXPECT_NEAR(elements[0].stop_line[0], 10.0f, 1e-6f);
+    EXPECT_NEAR(elements[0].stop_line[1], -2.0f, 1e-6f);
+    EXPECT_NEAR(elements[0].stop_line[2], 0.5f, 1e-6f);
+    EXPECT_NEAR(elements[0].stop_line[3], 10.0f, 1e-6f);
+    EXPECT_NEAR(elements[0].stop_line[4], 2.0f, 1e-6f);
+    EXPECT_EQ_INT(elements[0].states[0], 1);
+
+    int stop_sign_idx[1] = {1};
+    EXPECT_EQ_INT(c_set_traffic_light_lines(&env, 1, stop_sign_idx, line), -1);
+    EXPECT_NEAR(elements[1].stop_line[0], 0.0f, 1e-6f);
+    int bad_idx[1] = {7};
+    EXPECT_EQ_INT(c_set_traffic_light_lines(&env, 1, bad_idx, line), -1);
+    float degenerate[6] = {1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f};
+    EXPECT_EQ_INT(c_set_traffic_light_lines(&env, 1, idx, degenerate), -1);
+    float nan_line[6] = {0.0f, NAN, 0.0f, 0.0f, 4.0f, 0.0f};
+    EXPECT_EQ_INT(c_set_traffic_light_lines(&env, 1, idx, nan_line), -1);
+    EXPECT_NEAR(elements[0].stop_line[0], 10.0f, 1e-6f);
+    EXPECT_EQ_INT(c_set_traffic_light_lines(&env, 0, NULL, NULL), 0);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_set_agent_sizes_updates_dimensions_radius_and_wheelbase);
@@ -367,6 +409,7 @@ int main(void) {
     RUN_TEST(test_set_traffic_light_states_rejects_out_of_range_timestep_and_state);
     RUN_TEST(test_set_stop_signs_retires_map_signs_and_appends_external_ones);
     RUN_TEST(test_set_stop_signs_rejects_bad_input_untouched);
+    RUN_TEST(test_set_traffic_light_lines_moves_lights_only_and_rejects_bad_input);
     RUN_TEST(test_set_agent_states_teleport_resets_prev_pose);
     RUN_TEST(test_set_agent_states_seconds_stopped_injects_or_preserves);
     RUN_TEST(test_set_agent_states_steering_is_state_below_1mps);

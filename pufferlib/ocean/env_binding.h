@@ -1174,6 +1174,39 @@ static PyObject *vec_set_stop_signs(PyObject *self, PyObject *args) {
     return PyLong_FromLong(drive->num_traffic_elements);
 }
 
+static PyObject *vec_set_traffic_light_lines(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(
+            PyExc_TypeError, "vec_set_traffic_light_lines requires 3 arguments (vec_env, indices, lines)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    PyObject *indices_arr = PyTuple_GetItem(args, 1);
+    PyObject *lines_arr = PyTuple_GetItem(args, 2);
+    if (!PyArray_Check(indices_arr) || !PyArray_Check(lines_arr)) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_traffic_light_lines: indices and lines must be NumPy arrays");
+        return NULL;
+    }
+    int count = (int) PyArray_SIZE((PyArrayObject *) indices_arr);
+    if ((int) PyArray_SIZE((PyArrayObject *) lines_arr) != count * 6) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_traffic_light_lines: lines must hold 6 floats per index");
+        return NULL;
+    }
+    Drive *drive = (Drive *) vec->envs[0];
+    const int *indices = (const int *) PyArray_DATA((PyArrayObject *) indices_arr);
+    const float *lines = (const float *) PyArray_DATA((PyArrayObject *) lines_arr);
+    if (c_set_traffic_light_lines(drive, count, indices, lines) != 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "vec_set_traffic_light_lines: index is not a traffic light, non-finite value or zero-length line");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyObject *vec_get_agent_goal_progress(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 2) {
         PyErr_SetString(PyExc_TypeError, "vec_get_agent_goal_progress requires 2 arguments");
@@ -1521,6 +1554,10 @@ static PyMethodDef methods[]
         vec_set_stop_signs,
         METH_VARARGS,
         "Replace the stop signs with the external sim's own (co-sim)"},
+       {"vec_set_traffic_light_lines",
+        vec_set_traffic_light_lines,
+        METH_VARARGS,
+        "Move traffic-light stop lines onto the external sim's own (co-sim)"},
        {"vec_set_agent_goals", vec_set_agent_goals, METH_VARARGS, "Set an agent's goal waypoints (co-sim)"},
        {"vec_get_agent_goal_progress",
         vec_get_agent_goal_progress,
