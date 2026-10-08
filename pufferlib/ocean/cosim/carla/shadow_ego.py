@@ -375,7 +375,7 @@ class ShadowEgo:
             self.env.set_traffic_light_lines(light_line_indices, light_lines)
             self.stop_line_centers[light_line_indices] = moved_centers
             print(
-                f"[puffer_agent] light stop lines: {len(light_line_indices)} moved onto CARLA's stop waypoints "
+                f"[puffer_agent] light stop lines: {len(light_line_indices)} moved onto the leaderboard's red-light lines "
                 f"(max {max_shift_m:.1f} m)"
             )
         # the shadow env runs on CARLA's trigger volumes: the bin's exported stop lines sit up to 9 m off and miss a few

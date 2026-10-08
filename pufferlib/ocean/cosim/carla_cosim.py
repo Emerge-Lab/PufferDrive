@@ -420,7 +420,7 @@ def main():
     dense_route = densify_route(route_wps)  # fine-sampled route for lane-centered goal placement
     route_goals = build_route_goals(dense_route, transform, cmap)  # fixed 20-m lane-centered goal sequence
     goal_window = RouteGoalWindow(env, route_goals)
-    light_map, num_traffic = cb.map_lights_to_bin(cb.light_geometry_from_carla(lights), transform, town_bin)
+    light_map, num_traffic = cb.map_lights_to_bin(cb.light_geometry_from_carla(lights, cmap), transform, town_bin)
     print(
         f"[cosim] carla: ego + {len(bg)} background + {len(lights)} lights; "
         f"offset={transform.tx:.1f},{transform.ty:.1f} z={transform.tz:+.2f}"

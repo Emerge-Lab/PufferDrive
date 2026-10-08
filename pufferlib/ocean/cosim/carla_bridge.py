@@ -283,7 +283,11 @@ LIGHT_LANE_FORWARD_MATCH_MAX_DIST_M = (
 LIGHT_LANE_ALIGN_COS_MIN = (
     0.5  # forward fallback: the lane must run along the waypoint's heading (no crossing connectors)
 )
-LIGHT_STOP_LINE_TOLERANCE_M = 1.0  # exported bin lines within this of CARLA's stop waypoint stay (median 0.5 m)
+LIGHT_STOP_LINE_TOLERANCE_M = 1.0  # exported bin lines within this of the light's stop waypoint stay (median 0.5 m)
+TRIGGER_SAMPLE_SPAN_FRACTION = 0.9  # RunningRedLightTest.get_traffic_light_waypoints: avoids adjacent lanes
+TRIGGER_SAMPLE_STEP_M = 1.0
+JUNCTION_ADVANCE_STEP_M = 0.5
+MAX_JUNCTION_ADVANCE_STEPS = 400  # 200 m: a trigger volume farther from its junction is a map error
 JUNCTION_CLUSTER_M = 60.0  # stop lines this close are treated as one junction (outlier repair, see below)
 # An assigned light farther from its junction cluster-mates' lights than this
 # multiple of the cluster-mates' own spread is a wrong-junction match.
@@ -350,11 +354,41 @@ def _drop_junction_outliers(mapping, light_geometry, transform, stop_centers):
     return to_drop
 
 
-def light_geometry_from_carla(lights):
+def light_stop_waypoints(light, carla_map):
+    """Stop waypoints of a traffic light from its trigger volume: one waypoint per lane the volume spans,
+    advanced to the junction entry, the line RunningRedLightTest scores (its get_traffic_light_waypoints).
+    Not TrafficLight.get_stop_waypoints: in Town01/02 those sit 10-14 m before the junction entry."""
+    import carla
+
+    base_transform = light.get_transform()
+    trigger = light.trigger_volume
+    lane_waypoints = []
+    for x in np.arange(
+        -TRIGGER_SAMPLE_SPAN_FRACTION * trigger.extent.x,
+        TRIGGER_SAMPLE_SPAN_FRACTION * trigger.extent.x,
+        TRIGGER_SAMPLE_STEP_M,
+    ):
+        wp = carla_map.get_waypoint(base_transform.transform(trigger.location + carla.Location(x=float(x))))
+        if not lane_waypoints or lane_waypoints[-1].road_id != wp.road_id or lane_waypoints[-1].lane_id != wp.lane_id:
+            lane_waypoints.append(wp)
+    stop_waypoints = []
+    for wp in lane_waypoints:
+        for _ in range(MAX_JUNCTION_ADVANCE_STEPS):
+            if wp.is_junction:
+                break
+            ahead = wp.next(JUNCTION_ADVANCE_STEP_M)
+            if not ahead or ahead[0].is_junction:
+                break
+            wp = ahead[0]
+        stop_waypoints.append(wp)
+    return stop_waypoints
+
+
+def light_geometry_from_carla(lights, carla_map):
     """Plain-data geometry of live CARLA traffic lights for map_lights_to_bin (CARLA frame).
 
     One dict per light: id, x/y of the light actor, trigger_x/trigger_y of its trigger volume and one
-    entry per stop waypoint (get_stop_waypoints, CARLA >= 0.9.11) with x, y, yaw_deg, lane_width,
+    entry per stop waypoint (light_stop_waypoints) with x, y, yaw_deg, lane_width,
     `backward` = [x, y] of the first waypoint LIGHT_PROBE_STEPS_M behind it (None where the lane ends)
     and `forward` = [x, y, yaw_deg] of the first waypoint each non-zero step ahead of it."""
     geometry = []
@@ -362,7 +396,7 @@ def light_geometry_from_carla(lights):
         location = light.get_location()
         trigger = light.get_transform().transform(light.trigger_volume.location)
         stop_waypoints = []
-        for wp in light.get_stop_waypoints():
+        for wp in light_stop_waypoints(light, carla_map):
             backward, forward = [], []
             for step_m in LIGHT_PROBE_STEPS_M:
                 probes = [wp] if step_m == 0.0 else wp.previous(step_m)
@@ -405,7 +439,7 @@ def light_geometry_from_carla(lights):
 
 def map_lights_to_bin(light_geometry, transform, town_bin):
     """mapping[i] = list of bin traffic-element indices controlled by light_geometry[i]
-    (light_geometry_from_carla, or the same dicts built by a co-sim client without get_stop_waypoints).
+    (light_geometry_from_carla, or the same dicts built by a CARLA 0.9.10 co-sim client).
 
     Semantic matching: each of the light's STOP WAYPOINTS is snapped to its bin
     LANE (nearest drivable-lane segment -- stop lines lie ON lane segments, so
@@ -525,11 +559,11 @@ def map_lights_to_bin(light_geometry, transform, town_bin):
 
 def light_stop_line_overrides(light_geometry, mapping, transform, town_bin):
     """(element indices (K,), lines (K, 6)) for the bin light elements whose exported stop line sits more than
-    LIGHT_STOP_LINE_TOLERANCE_M along the lane from CARLA's stop waypoints, the line RunningRedLightTest
-    scores against (Town04: four approaches whose bin line is 8 m past the waypoint, so an ego stopping at
-    it has already run the light). Each line is the bin's own translated along the element's travel
-    direction onto its most upstream waypoint (a line spanning several lanes then precedes every lane's
-    CARLA line); a light's waypoints go to the nearest of its elements."""
+    LIGHT_STOP_LINE_TOLERANCE_M along the lane from the light's stop waypoints (light_stop_waypoints: the
+    line RunningRedLightTest scores against; Town04: four approaches whose bin line is 8 m past it, so an
+    ego stopping at the bin line has already run the light). Each line is the bin's own translated along
+    the element's travel direction onto its most upstream waypoint (a line spanning several lanes then
+    precedes every lane's CARLA line); a light's waypoints go to the nearest of its elements."""
     import data_utils.mirror_map_bin as mbin
 
     bin_traffic = mbin.read_bin(Path(town_bin))["traffic"]

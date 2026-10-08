@@ -180,7 +180,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                 "sparse_plan": plan_xyz(self._global_plan_world_coord),
                 "dense_plan": plan_xyz(self.dense_global_plan_world_coord),
                 "driving_waypoints": cb.driving_waypoint_samples(self.cmap),
-                "lights": cb.light_geometry_from_carla(self.lights),
+                "lights": cb.light_geometry_from_carla(self.lights, self.cmap),
                 "stop_signs": cb.stop_sign_geometry_from_carla(self.world, self.cmap),
                 "infraction_flags": bool(self.record_infractions_dir),
             }

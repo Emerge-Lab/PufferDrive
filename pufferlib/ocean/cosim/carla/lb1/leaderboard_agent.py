@@ -29,8 +29,8 @@ policy_server.py from the inherited environment, see shadow_ego.py):
 
 CARLA 0.9.10 differences handled here: no World.cast_ray (the ego's body chord rests on the lane's OpenDRIVE
 height profile, lifted by the road mesh's offset from it as probed by a downward semantic lidar; the egg's
-Rotation.get_up_vector() points down, so the pitch comes from the profile too), no
-TrafficLight.get_stop_waypoints (stop waypoints come from the trigger volume, RunningRedLightTest's own recipe).
+Rotation.get_up_vector() points down, so the pitch comes from the profile too); stop waypoints come from the
+trigger volume with RunningRedLightTest's own recipe on both sides (carla_bridge.light_stop_waypoints).
 """
 
 import math
@@ -142,8 +142,8 @@ def driving_waypoint_samples(carla_map):
 
 def light_stop_waypoints(light, carla_map):
     """Stop waypoints of a traffic light from its trigger volume: one waypoint per lane the volume spans,
-    advanced to the junction entry (RunningRedLightTest.get_traffic_light_waypoints; CARLA >= 0.9.11
-    exposes the same list as TrafficLight.get_stop_waypoints)."""
+    advanced to the junction entry (RunningRedLightTest.get_traffic_light_waypoints): the py3.7 copy of
+    carla_bridge.light_stop_waypoints. TrafficLight.get_stop_waypoints is NOT that list in Town01/02."""
     base_transform = light.get_transform()
     trigger = light.trigger_volume
     lane_waypoints = []

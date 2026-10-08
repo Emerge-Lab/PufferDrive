@@ -1,5 +1,5 @@
-"""light_stop_line_overrides moves a bin light stop line along its lane onto CARLA's stop waypoint and leaves
-lines within tolerance as exported."""
+"""light_stop_line_overrides moves a bin light stop line along its lane onto the light's stop waypoint (the
+junction entry RunningRedLightTest scores) and leaves lines within tolerance as exported."""
 
 import math
 import os
