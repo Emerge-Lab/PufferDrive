@@ -22,13 +22,12 @@
 # eval after their own by exporting it.
 set -u
 
-# quick check: TOPOLOGY=1gpu N_SCENES=2; full run: TOPOLOGY=8gpu_64rollouts (whole node) N_SCENES=0 (every scene that passed the checks)
+# quick check: TOPOLOGY=1gpu N_SCENES=2; full run: TOPOLOGY=8gpu_64rollouts (whole node) N_SCENES=0 (the whole SCENE_LIST)
 TOPOLOGY=1gpu
 N_SCENES=2
 RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0046_1000}
 CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || CKPT=$(ls "$RUN_DIR"/models/model_*.pt 2>/dev/null | sort | tail -n 1)
-SCENE_LIST=""        # file of scene ids; empty = every scene that passed the conversion checks
 GOAL_MODE=gt_time:5  # gt_time:<s> | gt | route
 RENDER_VIDEO=1       # one mp4 per scene
 CAM_W=640            # 16:9 render size; the teacher never sees the cameras
@@ -36,6 +35,8 @@ CAM_H=360
 SIM_TIMEOUT_S=3600   # per batch of PARALLEL scenes
 export PD=/home/bjaeger/PufferDrive
 ALPAGYM_ROOT=/home/bjaeger/alpasim-training
+# held-out split Damiano evaluates on; empty = every converted scene that passed the checks (2149 on the cluster, 1584 of them train)
+SCENE_LIST=$ALPAGYM_ROOT/scene_splits/eval_405.txt
 export ALPASIM_ROOT=/home/bjaeger/alpasim
 # Damiano's conversion; /home/shared/data/nurec/all-usdzs is a symlink farm that dangles inside the containers
 BINS=/home/ddacol/code/alpasim-training/data/distill/bins_130kmh
@@ -50,7 +51,7 @@ ALPAGYM_PY=$ALPAGYM_ROOT/.venv/bin/python
 export PATH="$HOME/.local/bin:$PATH"
 
 [ -n "$CKPT" ] || { echo "no checkpoint in $RUN_DIR (final_model.pt or models/model_*.pt)"; exit 1; }
-for path in "$CKPT" "$ALPAGYM_PY" "$ALPASIM_ROOT/pyproject.toml" "$BINS/scene_manifest.jsonl" "$USDZ_DIR"; do
+for path in "$CKPT" "$ALPAGYM_PY" "$ALPASIM_ROOT/pyproject.toml" "$BINS/scene_manifest.jsonl" "$USDZ_DIR" ${SCENE_LIST:+"$SCENE_LIST"}; do
     [ -e "$path" ] || { echo "missing $path"; exit 1; }
 done
 [ -f "$(dirname "$CKPT")/config.yaml" ] || [ -f "$(dirname "$(dirname "$CKPT")")/config.yaml" ] \
