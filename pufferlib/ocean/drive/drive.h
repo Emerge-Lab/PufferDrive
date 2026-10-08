@@ -236,6 +236,7 @@ struct Drive {
     float reward_overspeed;
     float reward_ade;
     float reward_expert_similarity;
+    float expert_similarity_kernel_m;
     int expert_similarity_only;
     int expert_tracking_teleport;
     int reward_conditioning;
@@ -4091,10 +4092,21 @@ static void compute_rewards(Drive *env, int i) {
         env->rewards[i] = 0.0f; // BC-only: the terms above stay logged but never reach the agent
     }
 
-    // Expert similarity reward: -w * ||(x, y)_ego - (x, y)_expert||^2, zero when no logged pose
+    // Expert similarity: -w * d^2 (quadratic penalty) or, with a kernel width, w * exp(-d^2 / kernel^2) (positive
+    // per-step reward, so ending the episode early forfeits it); zero when the logged pose is invalid
     if (env->reward_expert_similarity != 0.0f && env->simulation_mode == SIMULATION_MODE_REPLAY) {
-        float expert_displacement_m = compute_displacement_error(agent, env->timestep);
-        float similarity_reward = -env->reward_expert_similarity * expert_displacement_m * expert_displacement_m;
+        int t = env->timestep;
+        bool expert_pose_valid = t >= 0 && t < agent->trajectory_size && agent->log_valid[t]
+            && agent->log_trajectory_x[t] != INVALID_POSITION;
+        float expert_displacement_m = compute_displacement_error(agent, t);
+        float squared_displacement = expert_displacement_m * expert_displacement_m;
+        float similarity_reward = 0.0f;
+        if (env->expert_similarity_kernel_m > 0.0f) {
+            float kernel_sq = env->expert_similarity_kernel_m * env->expert_similarity_kernel_m;
+            similarity_reward = expert_pose_valid ? env->reward_expert_similarity * expf(-squared_displacement / kernel_sq) : 0.0f;
+        } else {
+            similarity_reward = -env->reward_expert_similarity * squared_displacement;
+        }
         env->rewards[i] += similarity_reward;
         agent_log->reward_expert_similarity += similarity_reward;
     }

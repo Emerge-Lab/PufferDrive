@@ -1977,6 +1977,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_ade = (float) unpack(kwargs, "reward_ade");
     env->reward_expert_similarity = (float) unpack(kwargs, "reward_expert_similarity");
     env->expert_similarity_only = (int) unpack(kwargs, "expert_similarity_only");
+    env->expert_similarity_kernel_m = (float) unpack(kwargs, "expert_similarity_kernel_m");
     env->expert_tracking_teleport = (int) unpack(kwargs, "expert_tracking_teleport");
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");

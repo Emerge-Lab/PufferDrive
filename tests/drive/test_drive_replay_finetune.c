@@ -145,6 +145,56 @@ static int test_static_expert_is_flagged_and_masked(void) {
     return 0;
 }
 
+static int test_expert_similarity_kernel_is_positive_and_bounded(void) {
+    Drive env;
+    Agent agent;
+    Log log;
+    int active[1];
+    float reward[1] = {0};
+    float log_x[2] = {0.0f, 10.0f};
+    float log_y[2] = {0.0f, 10.0f};
+    int log_valid[2] = {1, 0};
+
+    init_similarity_env(&env, &agent, &log, active, reward);
+    agent.log_trajectory_x = log_x;
+    agent.log_trajectory_y = log_y;
+    agent.log_valid = log_valid;
+    agent.trajectory_size = 2;
+    agent.sim_x = 3.0f;
+    agent.sim_y = 4.0f;
+    env.expert_similarity_kernel_m = 5.0f;
+    env.timestep = 0;
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(log.reward_expert_similarity, 0.01f * expf(-25.0f / 25.0f), 1e-6f);
+
+    init_similarity_env(&env, &agent, &log, active, reward);
+    reward[0] = 0.0f;
+    agent.log_trajectory_x = log_x;
+    agent.log_trajectory_y = log_y;
+    agent.log_valid = log_valid;
+    agent.trajectory_size = 2;
+    agent.sim_x = 0.0f;
+    agent.sim_y = 0.0f;
+    env.expert_similarity_kernel_m = 5.0f;
+    env.timestep = 0;
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(log.reward_expert_similarity, 0.01f, 1e-6f);
+
+    init_similarity_env(&env, &agent, &log, active, reward);
+    reward[0] = 0.0f;
+    agent.log_trajectory_x = log_x;
+    agent.log_trajectory_y = log_y;
+    agent.log_valid = log_valid;
+    agent.trajectory_size = 2;
+    agent.sim_x = 0.0f;
+    agent.sim_y = 0.0f;
+    env.expert_similarity_kernel_m = 5.0f;
+    env.timestep = 1; // invalid logged pose pays nothing, not the full reward
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(log.reward_expert_similarity, 0.0f, 1e-6f);
+    return 0;
+}
+
 static int test_expert_similarity_only_drops_rl_terms(void) {
     Drive env;
     Agent agent;
@@ -356,6 +406,7 @@ int main(void) {
     RUN_TEST(test_expert_tracking_teleport_bounds_per_step_error);
     RUN_TEST(test_expert_similarity_reward_is_quadratic);
     RUN_TEST(test_expert_similarity_only_drops_rl_terms);
+    RUN_TEST(test_expert_similarity_kernel_is_positive_and_bounded);
     RUN_TEST(test_expert_tracking_follows_log);
     RUN_TEST(test_episode_max_steps_truncates);
     RUN_TEST(test_init_step_jitter_resamples_within_range);

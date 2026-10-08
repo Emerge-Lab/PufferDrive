@@ -161,6 +161,8 @@ env:
   reward_expert_similarity: 0.0
   # BC-only training: the self-play reward terms are still logged but the agent only receives the similarity reward
   expert_similarity_only: false
+  # >0: similarity term becomes w * exp(-d^2 / kernel^2), a positive per-step reward (kernel in meters); 0 keeps -w * d^2
+  expert_similarity_kernel_m: 0.0
   # --- Map ---
   # Path to map used for training
   map_dir: pufferlib/resources/drive/binaries/carla
