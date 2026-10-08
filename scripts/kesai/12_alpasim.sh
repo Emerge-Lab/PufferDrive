@@ -14,7 +14,8 @@
 # scenes converted to PufferDrive bins; AlpaSim renders, simulates the ego and replays the logged traffic.
 #
 # One-time setup: alpasim-training at ALPAGYM_ROOT (`uv sync --all-packages`), the AlpaSim fork at ALPASIM_ROOT, the
-# NuRec scenes under NUREC_ROOT (all-usdzs/ must hold real files), bins with 130 km/h lane limits at BINS (alpasim-training
+# NuRec scenes as real files at USDZ_DIR (default: Damiano's copy; NUREC_ROOT/all-usdzs is a symlink farm), bins with 130 km/h
+# lane limits at BINS (alpasim-training
 # README step 4; default: Damiano's conversion), and the AlpaSim base image archived to ALPASIM_IMAGE_TAR (default: his too;
 # REPO=$ALPASIM_ROOT OUT_DIR=<dir of ALPASIM_IMAGE_TAR> sbatch
 # --output=<log> --error=<log> $ALPAGYM_ROOT/scripts/build_alpasim_image.sbatch).
@@ -34,7 +35,7 @@ ALPAGYM_ROOT=${ALPAGYM_ROOT:-/home/bjaeger/alpasim-training}
 export ALPASIM_ROOT=${ALPASIM_ROOT:-/home/bjaeger/alpasim}
 NUREC_ROOT=${NUREC_ROOT:-/home/shared/data/nurec}
 BINS=${BINS:-/home/ddacol/code/alpasim-training/data/distill/bins_130kmh}
-USDZ_DIR=${USDZ_DIR:-$NUREC_ROOT/all-usdzs}
+USDZ_DIR=${USDZ_DIR:-/home/ddacol/code/alpasim-training/data/distill/usdz}
 RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
 case "$TOPOLOGY" in
     8gpu*) PARALLEL=${PARALLEL:-32} ;;
