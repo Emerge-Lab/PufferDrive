@@ -90,7 +90,13 @@ mapfile -t SCENES < <("$ALPAGYM_PY" - "$BINS/scene_manifest.jsonl" "$N_SCENES" "
 import json, sys
 manifest, n_scenes, scene_list = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 rows = [json.loads(line) for line in open(manifest).read().splitlines()[1:]]
-scenes = [r["alpasim_scene_id"] for r in rows if r["source_parity_pass"] and r["gt_replay_pass"]]
+def passed_checks(row):
+    if "gt_replay_pass" in row:
+        return row["source_parity_pass"] and row["gt_replay_pass"]
+    if "offroad_verdict" in row:  # manifests built before alpasim-training d29bdd9 (2026-08-31)
+        return row["source_parity_pass"] and row["offroad_verdict"] == "both_pass"
+    sys.exit(f"{manifest}: unknown scene row schema, keys: {sorted(row)}")
+scenes = [r["alpasim_scene_id"] for r in rows if passed_checks(r)]
 print(f"{len(scenes)} of {len(rows)} converted scenes passed the conversion checks", file=sys.stderr)
 if scene_list:
     usable = set(scenes)
