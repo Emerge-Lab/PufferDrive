@@ -78,9 +78,26 @@ if [ ! -f ${MODEL_PATH} ]; then
     exit 1
 fi
 
+# nuPlan (reactive and non-reactive), longest6 (v2 and v1) and AlpaSim evals need one 8-GPU node each: submit them as their own jobs before the long self-play eval below so they queue while it runs.
+echo "Training done, submitting nuPlan reactive eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh \
+    || echo "nuPlan eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh"
+echo "Submitting nuPlan non-reactive eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh \
+    || echo "nuPlan non-reactive eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh"
+echo "Submitting longest6 v2 eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6_v2.sh \
+    || echo "longest6 v2 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6_v2.sh"
+echo "Submitting longest6 v1 eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/14_carla_longest6_v1.sh \
+    || echo "longest6 v1 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/14_carla_longest6_v1.sh"
+echo "Submitting AlpaSim eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
+    || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
+
 # parallel_eval places one shard per allocated node via srun, so each shard's 128
 # env workers get a full node's cores instead of sharing the batch host.
-echo "Training done, evaluating ${MODEL_PATH}"
+echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
 .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 40000 \
     --num-nodes 4 \
@@ -100,20 +117,6 @@ echo "Training done, evaluating ${MODEL_PATH}"
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
-
-# nuPlan (reactive and non-reactive), longest6 and AlpaSim evals need one 8-GPU node each: submit them as their own jobs so this 4-node allocation ends now.
-echo "CARLA eval done, submitting nuPlan reactive eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh \
-    || echo "nuPlan eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh"
-echo "Submitting nuPlan non-reactive eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh \
-    || echo "nuPlan non-reactive eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh"
-echo "Submitting longest6 eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6.sh \
-    || echo "longest6 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6.sh"
-echo "Submitting AlpaSim eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
-    || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
 
 end=$(date +%s)
 runtime=$((end-start))

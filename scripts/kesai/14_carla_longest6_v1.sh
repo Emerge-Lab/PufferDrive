@@ -11,14 +11,14 @@
 #SBATCH --partition dev
 # CARLA longest6 v1 evaluation of a PufferDrive checkpoint through carla_garage's unmodified Leaderboard 1.0
 # (CARLA 0.9.10.1, pufferlib/ocean/cosim/carla/lb1/leaderboard_agent.py), the Leaderboard 1.0 counterpart of
-# 11_carla_longest6.sh. The garage evaluator runs in the `garage` conda env (Python 3.7, the CARLA 0.9.10 egg);
+# 11_carla_longest6_v2.sh. The garage evaluator runs in the `garage` conda env (Python 3.7, the CARLA 0.9.10 egg);
 # the agent starts pufferlib/ocean/cosim/carla/lb1/policy_server.py in a PufferDrive python ($SERVER_PY) per route.
 #
 # One CARLA server + one evaluator per GPU (1-8: whatever the allocation holds, e.g. `sbatch --gres gpu:2`);
 # the 36 routes (one split xml each) are dealt round-robin over the GPUs, every route gets its own server
 # (restarted per route), crashed routes are retried, and the per-route result jsons are aggregated at the end
 # with garage's tools/result_parser.py (results.csv) plus the nuPlan-style HTML report ($OUT/report/index.html)
-# and the obs replay gallery of all routes ($OUT/obs_html/index.html, as in 11_carla_longest6.sh).
+# and the obs replay gallery of all routes ($OUT/obs_html/index.html, as in 11_carla_longest6_v2.sh).
 #
 # Overridable env: RUN_DIR, ROUTE_DIR (the split xmls), ROUTES_XML (the combined longest6.xml, for the parser
 # and the gallery), SCENARIOS (1 = eval_scenarios.json, 0 = no_scenarios.json), REPETITIONS, ROUTE_SUBSET

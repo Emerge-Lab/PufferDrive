@@ -70,7 +70,7 @@ launch config "Cosim: CARLA leaderboard 1.0 agent (garage)" runs `run_evaluator.
 
 All 36 longest6 routes on the cluster: `scripts/kesai/14_carla_longest6_v1.sh` (one CARLA 0.9.10 server
 + evaluator per GPU over the `longest6_split` files, retries, garage's `result_parser.py` aggregation,
-the nuPlan-style HTML report and the obs replay gallery, like `11_carla_longest6.sh`).
+the nuPlan-style HTML report and the obs replay gallery, like `11_carla_longest6_v2.sh`).
 
 The evaluator reads `BENCHMARK=longest6` (background traffic on every spawn point, stop-sign penalty
 1.0) and `ROUTES` (names the route records) from the environment; `run_leaderboard.sh`,

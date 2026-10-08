@@ -1,4 +1,4 @@
-"""Render the interactive observation replays of a CARLA longest6 run (scripts/kesai/11_carla_longest6.sh:
+"""Render the interactive observation replays of a CARLA longest6 run (scripts/kesai/11_carla_longest6_v2.sh:
 <run_dir>/routes/route_XX/obs_html/*.replay.zlib) into <run_dir>/obs_html/, one page per route plus an
 index.html gallery (same navigator as the nuPlan and self-play eval replays).
 
@@ -204,7 +204,7 @@ def collect_jobs(run_dir, towns):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("run_dir", help="output dir of 11_carla_longest6.sh (holds routes/route_*/)")
+    ap.add_argument("run_dir", help="output dir of 11_carla_longest6_v2.sh (holds routes/route_*/)")
     ap.add_argument("--routes", help="evaluated route xml, names the town of every route")
     ap.add_argument("--workers", type=int, default=min(16, os.cpu_count() or 1))
     args = ap.parse_args()
