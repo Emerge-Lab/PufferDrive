@@ -176,6 +176,17 @@ action distribution, not drive on its own.
 5. **Checkpoint durability.** `/workspace` on the node is not a persistent
    volume; a recycle or destroy wipes it.
 
+### Known limitation: data volume
+
+The replay arms draw logs uniformly from `nuplan_mini_train` (3,637 logs, about
+20 hours) and keep each log for `env.resample_frequency` = 256,000 steps. A
+150M-step run across 128 environments therefore sees about 585 distinct logs,
+about 3.3 hours of human driving, with each 20 s log replayed about 3,900
+times. The paper fine-tunes on about 440 hours. Lowering the resample frequency
+(about 1,000 steps cycles the whole mini split) or using more of the nuPlan
+train split would close part of that gap; left as is for now. The anchors were
+collected from about 100 logs (30 min) and about 575 logs (3 h).
+
 ## 5. Commits on `SHIFT`
 
 ```
