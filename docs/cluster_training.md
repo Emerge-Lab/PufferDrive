@@ -2,6 +2,18 @@
 
 How to run PufferDrive training on a SLURM cluster. This is written with the NYU cluster in mind but it should mostly hold for any SLURM cluster.
 
+## Simple path — plain sbatch
+
+For a one-off single-GPU run with no sweep machinery, two ready-made sbatch scripts live in `scripts/`:
+
+```bash
+mkdir -p slurm_logs  # once per clone — slurmd opens the job log here before the script runs
+sbatch --account=<acct> --partition=<gpu-partition> scripts/train.sbatch       # default config
+sbatch --account=<acct> --partition=<gpu-partition> scripts/best_train.sbatch  # best-known hyperparameters
+```
+
+Their `TRAIN_CMD` uses the exact flag format of the console `puffer train` command, so flags copy-paste both ways. Each job echoes the full command, hostname, and git commit into its log (`slurm_logs/train_<jobid>.log`). Set `VENV_PATH` if your venv isn't `.venv`, plus `SINGULARITY_IMAGE` and `SINGULARITY_OVERLAY` to run inside a container (required on NYU Greene). For sweeps, multi-GPU DDP, per-run code isolation, or the NYU GPU heartbeat, use `scripts/submit_cluster.py` below.
+
 ## A quick overview of the setup and launch process
 
 ```bash
@@ -52,6 +64,8 @@ singularity exec --nv \
 ```
 
 ## Submitting training — `submit_cluster.py`
+
+For a plain single-GPU job without any of the machinery below, `scripts/train.sbatch` / `scripts/best_train.sbatch` are simpler (see "Simple path" above).
 
 `scripts/submit_cluster.py` is the canonical submission path. It composes:
 - a `compute_config` YAML (SLURM settings)
