@@ -65,9 +65,10 @@ static TrafficControlElement make_traffic_element(int type, int state_size, int 
     return element;
 }
 
-static int test_set_traffic_light_states_writes_current_timestep_for_lights_only(void) {
-    // Only TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT elements are written, only at env->timestep, and every
-    // other timestep slot must be left alone.
+static int test_set_traffic_light_states_writes_current_and_next_timestep_for_lights_only(void) {
+    // Only TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT elements are written, at env->timestep and the step after
+    // it (c_step increments the timestep before its metrics and obs read the state, and the next sync
+    // only arrives after that step); every other timestep slot must be left alone.
     int light_states[5] = {99, 99, 99, 99, 99};
     int stop_sign_states[5] = {99, 99, 99, 99, 99};
     TrafficControlElement elements[2];
@@ -83,9 +84,9 @@ static int test_set_traffic_light_states_writes_current_timestep_for_lights_only
     EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states), 0);
 
     EXPECT_EQ_INT(light_states[2], 3); // written at the current timestep
+    EXPECT_EQ_INT(light_states[3], 3); // and at the one c_step reads next
     EXPECT_EQ_INT(light_states[0], 99);
     EXPECT_EQ_INT(light_states[1], 99);
-    EXPECT_EQ_INT(light_states[3], 99);
     EXPECT_EQ_INT(light_states[4], 99);
     for (int t = 0; t < 5; t++) {
         EXPECT_EQ_INT(stop_sign_states[t], 99); // non-light element untouched
@@ -118,6 +119,12 @@ static int test_set_traffic_light_states_rejects_out_of_range_timestep_and_state
     EXPECT_EQ_INT(light_states[1], 99);
     EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states), 0);
     EXPECT_EQ_INT(light_states[1], 1);
+    EXPECT_EQ_INT(light_states[2], 1);
+
+    env.timestep = 2; // last slot of the schedule: no next timestep to fill, still a success
+    int last_states[2] = {3, 3};
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, last_states), 0);
+    EXPECT_EQ_INT(light_states[2], 3);
     return 0;
 }
 
@@ -405,7 +412,7 @@ int main(void) {
     int failures = 0;
     RUN_TEST(test_set_agent_sizes_updates_dimensions_radius_and_wheelbase);
     RUN_TEST(test_set_agent_sizes_rejects_out_of_range_index_and_bad_size);
-    RUN_TEST(test_set_traffic_light_states_writes_current_timestep_for_lights_only);
+    RUN_TEST(test_set_traffic_light_states_writes_current_and_next_timestep_for_lights_only);
     RUN_TEST(test_set_traffic_light_states_rejects_out_of_range_timestep_and_state);
     RUN_TEST(test_set_stop_signs_retires_map_signs_and_appends_external_ones);
     RUN_TEST(test_set_stop_signs_rejects_bad_input_untouched);

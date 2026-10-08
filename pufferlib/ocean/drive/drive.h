@@ -4136,6 +4136,10 @@ int c_set_traffic_light_states(Drive *env, const int *states) {
             return -1;
         }
         traffic->states[ts] = states[i];
+        // holds until the next sync: c_step's metrics and obs read timestep + 1 before that sync arrives
+        if (ts + 1 < traffic->state_size) {
+            traffic->states[ts + 1] = states[i];
+        }
     }
     return 0;
 }

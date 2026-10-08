@@ -284,6 +284,8 @@ LIGHT_LANE_ALIGN_COS_MIN = (
     0.5  # forward fallback: the lane must run along the waypoint's heading (no crossing connectors)
 )
 LIGHT_STOP_LINE_TOLERANCE_M = 1.0  # exported bin lines within this of the light's stop waypoint stay (median 0.5 m)
+ROUTE_STOP_LINE_MARGIN_M = 1.0  # a route crossing a stop line extended by this at both ends drives that line's lane
+ROUTE_STOP_LINE_ALIGN_COS_MIN = 0.5  # ... in the element's travel direction (opposing traffic crosses the same line)
 TRIGGER_SAMPLE_SPAN_FRACTION = 0.9  # RunningRedLightTest.get_traffic_light_waypoints: avoids adjacent lanes
 TRIGGER_SAMPLE_STEP_M = 1.0
 JUNCTION_ADVANCE_STEP_M = 0.5
@@ -557,13 +559,42 @@ def map_lights_to_bin(light_geometry, transform, town_bin):
     return mapping, len(data["traffic"])
 
 
-def light_stop_line_overrides(light_geometry, mapping, transform, town_bin):
+def route_crosses_stop_line(route_xy, stop_line, heading):
+    """True when the polyline route_xy (N, 2) crosses stop_line [x1, y1, z1, x2, y2, z2] (extended by
+    ROUTE_STOP_LINE_MARGIN_M at both ends) while running along `heading`, the element's travel direction."""
+    route = np.asarray(route_xy, dtype=np.float64).reshape(-1, 2)
+    if len(route) < 2:
+        return False
+    x1, y1, _, x2, y2, _ = stop_line
+    line_len = math.hypot(x2 - x1, y2 - y1)
+    if line_len <= 0.0:
+        return False
+    ux, uy = (x2 - x1) / line_len, (y2 - y1) / line_len
+    ax, ay = x1 - ROUTE_STOP_LINE_MARGIN_M * ux, y1 - ROUTE_STOP_LINE_MARGIN_M * uy
+    bx, by = x2 + ROUTE_STOP_LINE_MARGIN_M * ux, y2 + ROUTE_STOP_LINE_MARGIN_M * uy
+    p, q = route[:-1], route[1:]
+    d = q - p
+    seg_len = np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)
+    along = (d[:, 0] * math.cos(heading) + d[:, 1] * math.sin(heading)) / seg_len
+    line_side_p = (bx - ax) * (p[:, 1] - ay) - (by - ay) * (p[:, 0] - ax)
+    line_side_q = (bx - ax) * (q[:, 1] - ay) - (by - ay) * (q[:, 0] - ax)
+    seg_side_a = d[:, 0] * (ay - p[:, 1]) - d[:, 1] * (ax - p[:, 0])
+    seg_side_b = d[:, 0] * (by - p[:, 1]) - d[:, 1] * (bx - p[:, 0])
+    crossing = ((line_side_p < 0.0) != (line_side_q < 0.0)) & ((seg_side_a < 0.0) != (seg_side_b < 0.0))
+    return bool(np.any(crossing & (along >= ROUTE_STOP_LINE_ALIGN_COS_MIN)))
+
+
+def light_stop_line_overrides(light_geometry, mapping, transform, town_bin, route_xy=None):
     """(element indices (K,), lines (K, 6)) for the bin light elements whose exported stop line sits more than
     LIGHT_STOP_LINE_TOLERANCE_M along the lane from the light's stop waypoints (light_stop_waypoints: the
     line RunningRedLightTest scores against; Town04: four approaches whose bin line is 8 m past it, so an
     ego stopping at the bin line has already run the light). Each line is the bin's own translated along
     the element's travel direction onto its most upstream waypoint (a line spanning several lanes then
-    precedes every lane's CARLA line); a light's waypoints go to the nearest of its elements."""
+    precedes every lane's CARLA line); a light's waypoints go to the nearest of its elements.
+    route_xy (N, 2), bin frame: only lines the route crosses in their travel direction move (the ones the
+    leaderboard scores); the rest keep the exported position the policy trained with, since a moved
+    neighbouring line beside the ego's own red line is out of distribution (Town04 junctions 483/1249 sit
+    3.8 m apart in CARLA's model and the policy ran that red). None moves every line."""
     import data_utils.mirror_map_bin as mbin
 
     bin_traffic = mbin.read_bin(Path(town_bin))["traffic"]
@@ -588,6 +619,10 @@ def light_stop_line_overrides(light_geometry, mapping, transform, town_bin):
     for j in sorted(along_offsets_by_element):
         shift_m = min(along_offsets_by_element[j])
         if abs(shift_m) <= LIGHT_STOP_LINE_TOLERANCE_M:
+            continue
+        if route_xy is not None and not route_crosses_stop_line(
+            route_xy, bin_traffic[j]["stop_line"], bin_traffic[j]["heading"]
+        ):
             continue
         heading = bin_traffic[j]["heading"]
         dx, dy = shift_m * math.cos(heading), shift_m * math.sin(heading)

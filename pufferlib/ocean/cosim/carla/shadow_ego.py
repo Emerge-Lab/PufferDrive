@@ -366,8 +366,11 @@ class ShadowEgo:
 
         lights = route["lights"]
         light_map, bin_num_traffic = cb.map_lights_to_bin(lights, self.transform, self.town_bin)
+        dense_route_bin_xy = np.array(
+            [self.transform.loc_to_bin(x, y) for x, y in self.dense_plan_xy], np.float64
+        ).reshape(-1, 2)
         light_line_indices, light_lines = cb.light_stop_line_overrides(
-            lights, light_map, self.transform, self.town_bin
+            lights, light_map, self.transform, self.town_bin, route_xy=dense_route_bin_xy
         )
         if len(light_line_indices):
             moved_centers = 0.5 * (light_lines[:, 0:2] + light_lines[:, 3:5])
@@ -375,8 +378,8 @@ class ShadowEgo:
             self.env.set_traffic_light_lines(light_line_indices, light_lines)
             self.stop_line_centers[light_line_indices] = moved_centers
             print(
-                f"[puffer_agent] light stop lines: {len(light_line_indices)} moved onto the leaderboard's red-light lines "
-                f"(max {max_shift_m:.1f} m)"
+                f"[puffer_agent] light stop lines: {len(light_line_indices)} on the route moved onto the leaderboard's "
+                f"red-light lines (max {max_shift_m:.1f} m)"
             )
         # the shadow env runs on CARLA's trigger volumes: the bin's exported stop lines sit up to 9 m off and miss a few
         self._stop_sign_lines, stop_sign_headings = cb.stop_sign_lines(route["stop_signs"], self.transform)

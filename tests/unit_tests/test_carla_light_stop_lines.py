@@ -97,3 +97,21 @@ def test_waypoints_go_to_the_nearest_of_the_lights_elements():
     mx, my = _line_mid(traffic[a])
     moved_mid = 0.5 * (lines[0, 0:2] + lines[0, 3:5])
     assert np.allclose(moved_mid, [mx - 8.0 * math.cos(heading), my - 8.0 * math.sin(heading)], atol=1e-3)
+
+
+def test_only_lines_the_route_crosses_in_travel_direction_move():
+    traffic, light_elements, transform = _setup()
+    a, b = light_elements[2], light_elements[3]
+    light = _light_with_waypoints(transform, [traffic[a], traffic[b]], [-8.0, -8.0])
+    heading = traffic[a]["heading"]
+    mx, my = _line_mid(traffic[a])
+    route = np.array([[mx + s * math.cos(heading), my + s * math.sin(heading)] for s in np.arange(-20.0, 20.0, 1.0)])
+
+    indices, lines = cb.light_stop_line_overrides([light], [[a, b]], transform, TOWN_BIN, route_xy=route)
+    assert indices.tolist() == [a] and lines.shape == (1, 6)
+
+    indices, _ = cb.light_stop_line_overrides([light], [[a, b]], transform, TOWN_BIN, route_xy=route[::-1])
+    assert len(indices) == 0  # opposing traffic crosses the same line against its travel direction
+
+    indices, _ = cb.light_stop_line_overrides([light], [[a, b]], transform, TOWN_BIN)
+    assert indices.tolist() == [a, b]  # no route: every off line moves
