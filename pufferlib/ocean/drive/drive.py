@@ -79,6 +79,7 @@ class Drive(pufferlib.PufferEnv):
         init_step_jitter_steps=0,
         episode_max_steps=0,
         static_expert_min_motion_m=0.0,
+        offroad_expert_linter=False,
         eval_mode=0,
         num_eval_scenarios=16,
         max_scenarios_per_batch=None,
@@ -318,6 +319,7 @@ class Drive(pufferlib.PufferEnv):
         self.init_step_jitter_steps = int(init_step_jitter_steps)
         self.episode_max_steps = int(episode_max_steps)
         self.static_expert_min_motion_m = float(static_expert_min_motion_m)
+        self.offroad_expert_linter = bool(offroad_expert_linter)
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
         self.sdc_controller_str = sdc_controller
@@ -511,6 +513,7 @@ class Drive(pufferlib.PufferEnv):
             "terminate_on_goal": int(self.terminate_on_goal),
             "episode_max_steps": self.episode_max_steps,
             "static_expert_min_motion_m": self.static_expert_min_motion_m,
+            "offroad_expert_linter": int(self.offroad_expert_linter),
             "map_file": map_file,
             "max_agents": max_agents,
             "max_agents_per_env": self.max_agents_per_env,

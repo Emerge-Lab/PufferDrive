@@ -101,6 +101,8 @@ env:
   episode_max_steps: 0
   # Mask agents whose logged trajectory moves less than this over the episode horizon; 0 disables
   static_expert_min_motion_m: 0.0
+  # Replay: redraw jittered starts whose logged pose is off-road and mask sub-episodes whose logged path leaves the road
+  offroad_expert_linter: false
   # options: "control_vehicles", "control_agents", "control_tracks_to_predict", "control_sdc_only"
   control_mode: control_vehicles
   # Controller used by agent 0, the canonical SDC/target.

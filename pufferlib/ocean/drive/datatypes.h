@@ -131,6 +131,7 @@ struct Agent {
     unsigned char is_blind_partner;  // episode-level flag: agent sees no other agents
     unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
     unsigned char is_static_expert;  // episode-level flag: logged motion below the linter floor, masked from training
+    unsigned char is_offroad_expert; // episode-level flag: logged path off-road within the horizon, masked from training
 };
 
 struct RoadMapElement {

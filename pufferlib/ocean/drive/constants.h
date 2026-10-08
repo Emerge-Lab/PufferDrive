@@ -157,6 +157,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define LANE_SWITCH_THRESHOLD 0.05f // Hysteresis: new lane must be 5% better to switch
 #define LANE_ALIGN_COS_THRESHOLD 0.5f
 #define MAX_CHECKED_LANES 32
+#define OFFROAD_LINTER_MAX_START_DRAWS 8 // jittered start redraws before keeping an off-road start
 #define GOAL_LANE_SNAP_MAX_DIST_M 6.0f  // external goals farther than this from any lane get no lane idx
 #define GOAL_LANE_ALIGN_SIN_LIMIT 0.7071f // sin(45 deg): reject lanes diverging more than 45 deg from the route
 #define GOAL_LANE_ALIGN_COS_MIN 0.0f      // reject oncoming lanes

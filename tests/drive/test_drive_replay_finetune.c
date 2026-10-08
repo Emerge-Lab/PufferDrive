@@ -398,8 +398,70 @@ static int test_seeding_flags_log_glitches(void) {
     return 0;
 }
 
+static int test_offroad_linter_redraws_starts_and_masks_horizons(void) {
+    srand(5);
+    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1, 0);
+    env.dynamics_model = DYNAMICS_MODEL_JERK;
+    env.offroad_expert_linter = 1;
+    env.init_step_base = 0;
+    env.init_step_jitter_steps = 27;
+    env.episode_max_steps = 30;
+    allocate(&env);
+    Agent *ego = &env.agents[env.active_agent_indices[0]];
+    float saved_x[10];
+    for (int t = 0; t < 10; t++) { // push frames 0-9 off the map grid: those starts must be redrawn
+        saved_x[t] = ego->log_trajectory_x[t];
+        ego->log_trajectory_x[t] = 1e6f;
+    }
+    EXPECT_TRUE(logged_pose_offroad(&env, ego, 3));
+    EXPECT_FALSE(logged_pose_offroad(&env, ego, 15));
+    int redrawn = 0, masked_horizons = 0;
+    for (int episode = 0; episode < 20; episode++) {
+        env.timestep = -1;
+        c_reset(&env);
+        redrawn += env.init_step >= 10;
+        masked_horizons += ego->is_offroad_expert;
+    }
+    EXPECT_EQ_INT(redrawn, 20);
+    EXPECT_EQ_INT(masked_horizons, 0);
+    for (int t = 0; t < 10; t++) {
+        ego->log_trajectory_x[t] = saved_x[t];
+    }
+
+    ego->log_trajectory_x[30] = 1e6f; // inside every horizon: start in [0, 27], horizon 30 steps
+    for (int episode = 0; episode < 10; episode++) {
+        env.timestep = -1;
+        c_reset(&env);
+        EXPECT_EQ_INT(ego->is_offroad_expert, 1);
+        drive_set_neutral_actions(&env);
+        c_step(&env);
+        EXPECT_EQ_INT(env.masks[0], 0);
+    }
+
+    for (int t = 0; t < 28; t++) { // every start off-road: masked sub-episodes must run out the horizon, not loop
+        ego->log_trajectory_x[t] = 1e6f;
+    }
+    env.offroad_behavior = INFRACTION_BEHAVIOR_STOP;
+    env.termination_mode = 1;
+    env.timestep = -1;
+    c_reset(&env);
+    int steps_in_episode = 0;
+    for (int step = 0; step < 100; step++) {
+        drive_set_neutral_actions(&env);
+        c_step(&env);
+        steps_in_episode++;
+        if (env.truncations[0] || env.terminals[0]) {
+            break;
+        }
+    }
+    EXPECT_EQ_INT(steps_in_episode, env.episode_max_steps);
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
+    RUN_TEST(test_offroad_linter_redraws_starts_and_masks_horizons);
     RUN_TEST(test_seeding_flags_log_glitches);
     RUN_TEST(test_jerk_rear_axle_slip_offsets_box_center);
     RUN_TEST(test_reset_seeds_dynamics_state_from_log);

@@ -11,6 +11,7 @@ four additions.
 | Agents-on-rails log replay: the ego is policy-driven, every other agent replays its logged trajectory | `env.simulation_mode=replay env.control_mode=control_sdc_only env.non_sdc_controller=replay env.non_vehicle_controller=replay` | – |
 | Short sub-episodes with a random start offset inside each log | `env.episode_max_steps`, `env.init_step_jitter_steps` | 22 steps (6.6 s at dt 0.3), offsets 0..9 |
 | Static-position linter: mask sub-episodes whose logged ego moves less than a floor over the horizon | `env.static_expert_min_motion_m` | 1.0 m |
+| Off-road linter (ours): redraw starts whose logged pose is off-road; mask sub-episodes whose logged path leaves the road; masked ones run out their horizon | `env.offroad_expert_linter` | on in the replay arms |
 | Similarity reward `r = -w * ||(x, y)_ego - (x, y)_expert||^2` per step, on top of every self-play reward term | `env.reward_expert_similarity` | 1e-2 |
 | Fixed reward-conditioning vector shared by every agent | `env.reward_conditioning=true env.reward_randomization=false` plus the per-term `env.reward_*` values | Table A4 of the paper |
 | Forward KL penalty `beta * D_KL(pi_theta || pi_pre)` against a frozen copy of the loaded checkpoint | `train.kl_ref_coef` | 2e-2 |

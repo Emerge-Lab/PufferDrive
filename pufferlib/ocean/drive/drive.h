@@ -194,6 +194,7 @@ struct Drive {
     int init_step_jitter_steps;
     int episode_max_steps;
     float static_expert_min_motion_m;
+    int offroad_expert_linter;
     float dt;
     float base_max_speed_mps;
     float spawn_initial_speed;
@@ -466,6 +467,7 @@ static void reset_agent_state(Agent *agent) {
     agent->is_blind_partner = 0;
     agent->is_phantom_braker = 0;
     agent->is_static_expert = 0;
+    agent->is_offroad_expert = 0;
 }
 
 static void invalidate_agent(Agent *agent) {
@@ -2236,7 +2238,7 @@ static void add_log(Drive *env) {
     Log episode_log = {0};
     for (int i = 0; i < env->active_agent_count; i++) {
         Agent *agent = &env->agents[env->active_agent_indices[i]];
-        if (agent->is_blind_partner || agent->is_phantom_braker) {
+        if (agent->is_blind_partner || agent->is_phantom_braker || agent->is_static_expert || agent->is_offroad_expert) {
             continue;
         }
         float episode_duration_s = env->logs[i].episode_length * env->dt;
@@ -3614,7 +3616,8 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     if (get_grid_index(env, agent->sim_x, agent->sim_y) == -1) {
         // Current agent is offgrid, treat as offroad
         agent->metrics_array[OFFROAD_IDX] = 1.0f;
-        apply_infraction_behavior(agent, env->offroad_behavior);
+        // Masked off-road-expert sub-episodes run out their horizon instead of stopping and looping resets
+        apply_infraction_behavior(agent, agent->is_offroad_expert ? INFRACTION_BEHAVIOR_IGNORE : env->offroad_behavior);
         return;
     }
 
@@ -3705,7 +3708,8 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     // Priority 1: Handle offroad
     if (is_offroad) {
         agent->metrics_array[OFFROAD_IDX] = 1.0f;
-        apply_infraction_behavior(agent, env->offroad_behavior);
+        // Masked off-road-expert sub-episodes run out their horizon instead of stopping and looping resets
+        apply_infraction_behavior(agent, agent->is_offroad_expert ? INFRACTION_BEHAVIOR_IGNORE : env->offroad_behavior);
         return;
     }
 
@@ -4913,6 +4917,57 @@ static void select_expert_tracking_action(Drive *env, int active_idx, int agent_
 
 #include "idm.h"
 
+// The off-road verdict compute_metrics would give the agent placed on its logged pose at step (no sweep)
+static bool logged_pose_offroad(Drive *env, Agent *agent, int step) {
+    if (step < 0 || step >= agent->trajectory_size || !agent->log_valid[step]) {
+        return false;
+    }
+    Agent probe = *agent;
+    probe.sim_x = agent->log_trajectory_x[step];
+    probe.sim_y = agent->log_trajectory_y[step];
+    probe.sim_z = agent->log_trajectory_z[step];
+    probe.sim_heading = agent->log_heading[step];
+    probe.cos_heading = cosf(probe.sim_heading);
+    probe.sin_heading = sinf(probe.sim_heading);
+    probe.sim_length = agent->log_length[step];
+    probe.sim_width = agent->log_width[step];
+    copy_pose_to_prev(&probe);
+    if (get_grid_index(env, probe.sim_x, probe.sim_y) == -1) {
+        return true;
+    }
+    bool is_offroad;
+    int lane_idx;
+    float signed_lane_distance, lane_heading;
+    find_lane_and_offroad(env, &probe, &is_offroad, &lane_idx, &signed_lane_distance, &lane_heading);
+    return is_offroad;
+}
+
+static bool any_active_logged_pose_offroad(Drive *env, int step) {
+    for (int i = 0; i < env->active_agent_count; i++) {
+        if (logged_pose_offroad(env, &env->agents[env->active_agent_indices[i]], step)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void flag_offroad_expert(Drive *env, Agent *agent) {
+    agent->is_offroad_expert = 0;
+    if (!env->offroad_expert_linter) {
+        return;
+    }
+    int end_step = agent->trajectory_size - 1;
+    if (env->episode_max_steps > 0 && env->init_step + env->episode_max_steps < end_step) {
+        end_step = env->init_step + env->episode_max_steps;
+    }
+    for (int step = env->init_step; step <= end_step; step++) {
+        if (logged_pose_offroad(env, agent, step)) {
+            agent->is_offroad_expert = 1;
+            return;
+        }
+    }
+}
+
 void c_reset(Drive *env) {
     if (env->timestep == 0) {
         for (int i = 0; i < env->num_total_agents; i++) {
@@ -4930,7 +4985,13 @@ void c_reset(Drive *env) {
 
     begin_episode_rng(env);
     if (env->simulation_mode == SIMULATION_MODE_REPLAY && env->init_step_jitter_steps > 0 && !env->eval_mode) {
-        env->init_step = env->init_step_base + rng_below(&env->rng_state, env->init_step_jitter_steps + 1);
+        int draws = env->offroad_expert_linter ? OFFROAD_LINTER_MAX_START_DRAWS : 1;
+        for (int draw = 0; draw < draws; draw++) {
+            env->init_step = env->init_step_base + rng_below(&env->rng_state, env->init_step_jitter_steps + 1);
+            if (!env->offroad_expert_linter || !any_active_logged_pose_offroad(env, env->init_step)) {
+                break;
+            }
+        }
     }
     env->timestep = env->init_step;
 
@@ -4988,6 +5049,7 @@ void c_reset(Drive *env) {
         seed_dynamics_state_from_log(env, agent, clamped_init_step(env, agent));
         sample_erratic_flags(env, agent);
         flag_static_expert(env, agent);
+        flag_offroad_expert(env, agent);
         generate_reward_coefs(env, agent);
 
         if (env->goal_source == GOAL_SOURCE_GT) {
@@ -5037,7 +5099,8 @@ void c_step(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *a = &env->agents[agent_idx];
-        if (a->stopped || a->removed || a->is_blind_partner || a->is_phantom_braker || a->is_static_expert) {
+        if (a->stopped || a->removed || a->is_blind_partner || a->is_phantom_braker || a->is_static_expert
+            || a->is_offroad_expert) {
             env->masks[i] = 0;
         } else {
             env->masks[i] = 1;

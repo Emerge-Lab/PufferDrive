@@ -279,6 +279,7 @@ class DriveEnvConfig:
     init_step_jitter_steps: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     episode_max_steps: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     static_expert_min_motion_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    offroad_expert_linter: bool = MISSING
     control_mode: ControlMode = MISSING
     sdc_controller: Controller = MISSING
     non_sdc_controller: Controller = MISSING
@@ -605,6 +606,8 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.episode_max_steps", "is only supported in replay mode")
     if env["episode_max_steps"] >= env["scenario_length"]:
         _raise_config_error(context, "env.episode_max_steps", "must be smaller than env.scenario_length")
+    if env["offroad_expert_linter"] and env["simulation_mode"] != "replay":
+        _raise_config_error(context, "env.offroad_expert_linter", "is only supported in replay mode")
     if env["static_expert_min_motion_m"] > 0 and env["simulation_mode"] != "replay":
         _raise_config_error(context, "env.static_expert_min_motion_m", "is only supported in replay mode")
     if env["reward_expert_similarity"] != 0 and env["simulation_mode"] != "replay":

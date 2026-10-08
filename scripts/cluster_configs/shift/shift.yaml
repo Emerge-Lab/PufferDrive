@@ -36,6 +36,7 @@ env.dt: 0.1
 env.episode_max_steps: 66
 env.init_step_jitter_steps: 27
 env.static_expert_min_motion_m: 1.0
+env.offroad_expert_linter: true
 
 # Rewards: all self-play terms stay on, fixed conditioning vector, plus the
 # quadratic expert-similarity term.

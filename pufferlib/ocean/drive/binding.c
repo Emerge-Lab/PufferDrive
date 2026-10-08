@@ -2022,6 +2022,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->terminate_on_goal = (int) unpack(kwargs, "terminate_on_goal");
     env->episode_max_steps = (int) unpack(kwargs, "episode_max_steps");
     env->static_expert_min_motion_m = (float) unpack(kwargs, "static_expert_min_motion_m");
+    env->offroad_expert_linter = (int) unpack(kwargs, "offroad_expert_linter");
     char *map_file = unpack_str(kwargs, "map_file");
     env->map_name = map_file;
     env->num_controllable_agents = (int) unpack(kwargs, "max_agents");
