@@ -1,0 +1,49 @@
+# BC anchor for the selfplay_bc_anchor arm. Same supervised behavior cloning as hrppo_anchor_bc.yaml,
+# but on the self-play base's observation layout (reward-conditioning vector included), so the anchor and
+# the base consume identical observations and the KL between them is defined.
+#
+# Launch with the bc entry point:
+#   python -m pufferlib.pufferl bc puffer_drive <these overrides> env.map_dir=<dir> env.num_maps=<n>
+
+env.simulation_mode: replay
+env.control_mode: control_sdc_only
+env.sdc_controller: expert_tracking
+env.non_sdc_controller: replay
+env.non_vehicle_controller: replay
+env.goal_source: gt
+env.init_mode: create_all_valid
+env.action_type: discrete
+env.dynamics_model: jerk
+env.jerk_rear_axle_slip: true
+# Replay logs are stored at 10 Hz; the tracker targets the next logged pose, so dt must match.
+env.dt: 0.1
+env.max_agents_per_env: 1
+env.num_agents: 32
+env.init_step: 0
+# nuPlan logs are 200 steps at 10 Hz; resample every episode so each env walks through the log set.
+env.scenario_length: 200
+env.resample_frequency: 200
+env.termination_mode: false
+# Infractions in the human log must not freeze the tracked ego.
+env.collision_behavior: ignore
+env.offroad_behavior: ignore
+env.traffic_light_behavior: ignore
+env.stop_sign_behavior: ignore
+# Same observation layout as the self-play base: conditioning on, randomized so the anchor learns to ignore it.
+env.reward_conditioning: true
+env.reward_randomization: true
+env.phantom_braking_prob: 0
+env.partner_blindness_prob: 0
+
+policy.action_type: discrete
+
+# 600 steps x 32 envs at 10 Hz is about 30 minutes of human driving, the paper's
+# "pinch". Scale bc.num_steps for the 3 h / 30 h ablations.
+bc.num_steps: 600
+bc.batch_size: 2048
+bc.learning_rate: 0.0001
+bc.max_epochs: 5000
+bc.patience: 50
+bc.val_fraction: 0.05
+
+wandb: False

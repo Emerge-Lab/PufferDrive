@@ -1,0 +1,29 @@
+# Self-play from the base with a KL anchor to a supervised BC policy. Continues the base's own self-play
+# recipe (gigaflow, randomized reward conditioning, rear-axle slip) from its weights, and adds HR-PPO's
+# reverse KL D_KL(pi_bc || pi) toward the anchor from selfplay_bc_anchor_bc.yaml. No log replay and no
+# similarity reward: human data enters only through the anchor. Not in either paper.
+#
+# Required on the command line:
+#   load_model_path=<self-play base .pt>
+#   train.kl_ref_model_path=<models/model_puffer_drive_bc.pt from selfplay_bc_anchor_bc.yaml>
+
+policy.action_type: discrete
+env.jerk_rear_axle_slip: true
+env.num_agents: 3200
+vec.num_envs: 16
+train.minibatch_size: 256000
+train.max_minibatch_size: 64000
+train.compile: true
+
+# Same fine-tuning learning rate as the other warm-started arms.
+train.learning_rate: 0.0001
+train.kl_ref_coef: 0.075
+train.kl_ref_direction: reference_to_policy
+train.total_timesteps: 2_000_000_000
+train.checkpoint_interval: 50
+train.evaluation_interval_epochs: 50
+train.evaluation_benchmarks: nuplan_single
+
+wandb: True
+wandb_project: shift-experiments
+wandb_group: selfplay_bc_anchor
