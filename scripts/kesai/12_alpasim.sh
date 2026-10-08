@@ -15,8 +15,8 @@
 #
 # One-time setup: alpasim-training at ALPAGYM_ROOT (`uv sync --all-packages`), the AlpaSim fork at ALPASIM_ROOT, the NuRec
 # scenes as real files at USDZ_DIR, their bins with 130 km/h lane limits at BINS (alpasim-training README step 4) and the
-# AlpaSim base image archived in ALPASIM_IMAGE_DIR (REPO=$ALPASIM_ROOT OUT_DIR=$ALPASIM_IMAGE_DIR sbatch
-# --output=<log> --error=<log> $ALPAGYM_ROOT/scripts/build_alpasim_image.sbatch).
+# AlpaSim base image archived in ALPASIM_IMAGE_DIR (cd $ALPAGYM_ROOT && ALPASIM_ROOT=$ALPASIM_ROOT OUT_DIR=$ALPASIM_IMAGE_DIR
+# sbatch scripts/build_alpasim_image.sbatch; ~3 h on a dev node, ~31 GB archive). The archive must be readable by this user.
 #
 # Settings are the plain assignments below. Only RUN_DIR is also read from the environment: 3_train and 7_eval chain this
 # eval after their own by exporting it.
@@ -52,7 +52,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 [ -n "$CKPT" ] || { echo "no checkpoint in $RUN_DIR (final_model.pt or models/model_*.pt)"; exit 1; }
 for path in "$CKPT" "$ALPAGYM_PY" "$ALPASIM_ROOT/pyproject.toml" "$BINS/scene_manifest.jsonl" "$USDZ_DIR" ${SCENE_LIST:+"$SCENE_LIST"}; do
-    [ -e "$path" ] || { echo "missing $path"; exit 1; }
+    [ -r "$path" ] || { echo "missing or not readable: $path"; exit 1; }
 done
 [ -f "$(dirname "$CKPT")/config.yaml" ] || [ -f "$(dirname "$(dirname "$CKPT")")/config.yaml" ] \
     || { echo "no config.yaml next to or one level above $CKPT"; exit 1; }
@@ -72,6 +72,8 @@ BASE_TAG=alpasim-base:$ALPASIM_VERSION
 ALPASIM_IMAGE_TAR=$ALPASIM_IMAGE_DIR/alpasim-base-$ALPASIM_VERSION.tar.zst
 NRE_TAG=$(grep -m1 -oE 'nvcr.io/nvidia/nre/[^[:space:]"]+' "$ALPASIM_ROOT/src/wizard/configs/base_config.yaml")
 [ -n "$NRE_TAG" ] || { echo "no NRE renderer image in $ALPASIM_ROOT/src/wizard/configs/base_config.yaml"; exit 1; }
+[ -r "$ALPASIM_IMAGE_TAR" ] || docker image inspect "$BASE_TAG" > /dev/null 2>&1 \
+    || { echo "$ALPASIM_IMAGE_TAR is missing or not readable and $BASE_TAG is not on $(hostname)"; exit 1; }
 echo "Evaluating checkpoint: $CKPT"
 
 # drop inherited entries from other PufferDrive checkouts: the teacher would import their pufferlib instead of $PD's
@@ -138,7 +140,7 @@ cleanup() {
 }
 trap cleanup EXIT
 if ! docker image inspect "$BASE_TAG" > /dev/null 2>&1; then
-    [ -f "$ALPASIM_IMAGE_TAR" ] || { echo "$BASE_TAG is not on $(hostname) and $ALPASIM_IMAGE_TAR is missing"; exit 1; }
+    [ -r "$ALPASIM_IMAGE_TAR" ] || { echo "$BASE_TAG is not on $(hostname) and $ALPASIM_IMAGE_TAR is missing or not readable"; exit 1; }
     echo "Loading $BASE_TAG from $ALPASIM_IMAGE_TAR"
     LOADED_BASE=1
     zstd -dc "$ALPASIM_IMAGE_TAR" | docker load || exit 1
