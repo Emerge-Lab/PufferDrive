@@ -46,6 +46,10 @@ Environment variables:
                                walker partner boxes below this on either axis grow to it (nuPlan's
                                pedestrian_min_size_m; the training spawn floor is 0.8 m, CARLA walkers
                                are 0.4-0.5 m)
+  COSIM_PEDESTRIAN_SIZE_PAD_M=0.0
+                               added to every walker partner box's length and width after the floor
+                               (nuPlan's pedestrian_size_pad_m; 0.8 lifts CARLA walkers to 1.2-1.3 m,
+                               strictly above the smallest training vehicle)
   COSIM_TELEMETRY=/dir         write a per-policy-step CSV per route, with the shadow env's and the
                                simulator's infraction flags as columns
   COSIM_OBS_HTML=/dir          write an interactive pufferlib.viz replay per route (the exact obs +
@@ -205,6 +209,9 @@ class ShadowEgo:
         self.pedestrian_min_size_m = float(os.environ.get("COSIM_PEDESTRIAN_MIN_SIZE_M", "0.0"))
         if not (self.pedestrian_min_size_m >= 0.0):
             raise ValueError(f"COSIM_PEDESTRIAN_MIN_SIZE_M must be >= 0, got {self.pedestrian_min_size_m}")
+        self.pedestrian_size_pad_m = float(os.environ.get("COSIM_PEDESTRIAN_SIZE_PAD_M", "0.0"))
+        if not (self.pedestrian_size_pad_m >= 0.0):
+            raise ValueError(f"COSIM_PEDESTRIAN_SIZE_PAD_M must be >= 0, got {self.pedestrian_size_pad_m}")
         # Shadow agent pool == the training per-env cap
         self.num_agents = int(env_cfg["max_agents_per_env"])
 
@@ -415,7 +422,7 @@ class ShadowEgo:
             f"[puffer_agent] town={town} tick_dt={self.tick_dt} dt={self.dt} route_goals={len(self.route_goals)} "
             f"max_speed_mps={self.env.max_speed_mps:.1f} (C_vel={self.env.max_speed_mps / self.env.base_max_speed_mps:.2f}) "
             f"zero_partner_stopped_time={int(self.zero_partner_stopped_time)} "
-            f"pedestrian_min_size_m={self.pedestrian_min_size_m:g}"
+            f"pedestrian_min_size_m={self.pedestrian_min_size_m:g} pedestrian_size_pad_m={self.pedestrian_size_pad_m:g}"
         )
         self.initialized = True
 
@@ -472,9 +479,11 @@ class ShadowEgo:
         idx, length, width = [], [], []
         for j, row in enumerate(partners):
             idx.append(1 + j)
-            walker_floor_m = self.pedestrian_min_size_m if row[PARTNER_IS_WALKER] > 0.0 else 0.0
-            length.append(max(2.0 * row[PARTNER_EXTENT_X], MIN_PARTNER_SIZE_M, walker_floor_m))
-            width.append(max(2.0 * row[PARTNER_EXTENT_Y], MIN_PARTNER_SIZE_M, walker_floor_m))
+            is_walker = row[PARTNER_IS_WALKER] > 0.0
+            walker_floor_m = self.pedestrian_min_size_m if is_walker else 0.0
+            walker_pad_m = self.pedestrian_size_pad_m if is_walker else 0.0
+            length.append(max(2.0 * row[PARTNER_EXTENT_X], MIN_PARTNER_SIZE_M, walker_floor_m) + walker_pad_m)
+            width.append(max(2.0 * row[PARTNER_EXTENT_Y], MIN_PARTNER_SIZE_M, walker_floor_m) + walker_pad_m)
         return (np.array(idx, np.int32), np.array(length, np.float32), np.array(width, np.float32))
 
     def _read_light_states(self, light_states, ego_light_id):

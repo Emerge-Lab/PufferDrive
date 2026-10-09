@@ -94,6 +94,7 @@ class PufferDrivePlanner(AbstractPlanner):
         startup_accel_jerk_cap_mps3: float = 0.0,
         startup_brake_jerk_cap_mps3: float = 0.0,
         pedestrian_min_size_m: float = 0.0,
+        pedestrian_size_pad_m: float = 0.0,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
         obs_html_max_steps: int = 800,
@@ -128,6 +129,9 @@ class PufferDrivePlanner(AbstractPlanner):
         :param pedestrian_min_size_m: eval hack: pedestrian and bicycle partner boxes are grown to at
             least this length and width [m] before the policy sees them (training spawns nothing below
             0.8 x 0.8 m, nuPlan pedestrians are 0.4-0.8 m); nuPlan keeps scoring the true boxes. 0 = off.
+        :param pedestrian_size_pad_m: eval hack: pedestrian partner boxes grow by this much in length and
+            width [m] after the floor, so they read strictly larger than the smallest training vehicle
+            (0.8 x 0.8 m); nuPlan keeps scoring the true boxes. 0 = off.
         :param env_overrides: Drive env kwargs overriding DEFAULT_ARCH.
         :param obs_html_dir: write the interactive pufferlib.viz observation replay per
             scenario (the exact obs the policy received, its outputs and encoder pool winners).
@@ -160,6 +164,9 @@ class PufferDrivePlanner(AbstractPlanner):
         self._pedestrian_min_size_m = float(pedestrian_min_size_m)
         if self._pedestrian_min_size_m < 0:
             raise ValueError("pedestrian_min_size_m must be >= 0")
+        self._pedestrian_size_pad_m = float(pedestrian_size_pad_m)
+        if self._pedestrian_size_pad_m < 0:
+            raise ValueError("pedestrian_size_pad_m must be >= 0")
         self._startup_jerk_cap_steps = 0  # resolved in _build from the scenario dt
         self._startup_action_bounds = None  # (lo, hi) on the continuous jerk action while the cap is live
         self._env_overrides = env_overrides or {}
@@ -511,6 +518,8 @@ class PufferDrivePlanner(AbstractPlanner):
             idx, x, y, z, hh, vx, vy, tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
             if self._pedestrian_min_size_m > 0:
                 ln, wd = nb.floor_vru_partner_sizes(tp, ln, wd, self._pedestrian_min_size_m)
+            if self._pedestrian_size_pad_m > 0:
+                ln, wd = nb.pad_pedestrian_partner_sizes(tp, ln, wd, self._pedestrian_size_pad_m)
             env.set_agent_states(idx, x, y, z, hh, vx, vy, np.zeros_like(vx), np.zeros_like(vx))
             env.set_agent_sizes(idx, ln, wd)
         surplus = np.arange(1 + len(objs), self._num_agents, dtype=np.int32)

@@ -27,7 +27,9 @@
 # folder $OUT/obs_html at the end, large; needs LOGGING=1), REPORT (0 = skip the HTML report),
 # MAX_ATTEMPTS, CARLA_ROOT, CARL_WORK_DIR, PY, PD, COSIM_MAX_SPEED_MPS (ego speed cap, default 30),
 # COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: partners' stopped-time obs held at 0; 0 = real stopped times),
-# COSIM_PEDESTRIAN_MIN_SIZE_M (default 0: true CARLA walker boxes; 0.8 = the training spawn floor).
+# COSIM_PEDESTRIAN_MIN_SIZE_M (default 0: true CARLA walker boxes; 0.8 = the training spawn floor),
+# COSIM_PEDESTRIAN_SIZE_PAD_M (default 0.8: added to every walker box's length and width after the floor,
+# so walkers read strictly larger than the smallest training vehicle; 0 = true boxes).
 set -u
 
 export PD=${PD:-/home/bjaeger/PufferDrive}
@@ -76,15 +78,18 @@ export COSIM_DYNAMICS_SOURCE=pufferdrive
 export COSIM_MAX_SPEED_MPS=${COSIM_MAX_SPEED_MPS:-30}
 export COSIM_ZERO_PARTNER_STOPPED_TIME=${COSIM_ZERO_PARTNER_STOPPED_TIME:-1}
 export COSIM_PEDESTRIAN_MIN_SIZE_M=${COSIM_PEDESTRIAN_MIN_SIZE_M:-0}
+export COSIM_PEDESTRIAN_SIZE_PAD_M=${COSIM_PEDESTRIAN_SIZE_PAD_M:-0.8}
 export COSIM_OBS_HTML_MAX_STEPS=${COSIM_OBS_HTML_MAX_STEPS:-20000}
 export COSIM_OBS_HTML_RENDER=0  # routes save the compact replay only; render_carla_obs_html.py renders all pages into $OUT/obs_html
 
 TAG=longest6_v2$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")
+TAG=$TAG$([ "$COSIM_PEDESTRIAN_SIZE_PAD_M" = "0" ] || echo "_pedpad$COSIM_PEDESTRIAN_SIZE_PAD_M")
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 OUT=$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
 {
     echo "checkpoint $CKPT"; echo "routes $ROUTES"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"
+    echo "pedestrian_size_pad_m $COSIM_PEDESTRIAN_SIZE_PAD_M"
     echo "git $(git -C "$PD" rev-parse --short HEAD 2>/dev/null) $(git -C "$PD" diff --quiet 2>/dev/null || echo dirty)"
 } > "$OUT/run_info.txt"
 echo "Results -> $OUT"

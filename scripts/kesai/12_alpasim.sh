@@ -29,6 +29,7 @@ RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
 CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || CKPT=$(ls "$RUN_DIR"/models/model_*.pt 2>/dev/null | sort | tail -n 1)
 GOAL_MODE=gt_time:5  # gt_time:<s> | gt | route
+PEDESTRIAN_SIZE_PAD_M=0.8  # added to every pedestrian box's length and width the teacher sees; 0 = true boxes
 RENDER_VIDEO=0       # one mp4 per scene; 1 also streams the teacher BEV and makes every policy step ~5x slower
 CAM_W=640            # 16:9 render size; the teacher never sees the cameras
 CAM_H=360
@@ -112,10 +113,11 @@ EOF
 [ ${#SCENES[@]} -gt 0 ] || { echo "no scenes to evaluate"; exit 1; }
 
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
-OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE//:/}_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE//:/}$([ "$PEDESTRIAN_SIZE_PAD_M" = "0" ] || echo "_pedpad$PEDESTRIAN_SIZE_PAD_M")_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT"
 {
     echo "checkpoint $CKPT"; echo "scenes ${#SCENES[@]}"; echo "topology $TOPOLOGY parallel $PARALLEL goal_mode $GOAL_MODE"
+    echo "pedestrian_size_pad_m $PEDESTRIAN_SIZE_PAD_M"
     for repo in "$PD" "$ALPAGYM_ROOT" "$ALPASIM_ROOT"; do
         echo "git $repo $(git -C "$repo" rev-parse --short HEAD 2>/dev/null) $(git -C "$repo" diff --quiet 2>/dev/null || echo dirty)"
     done
@@ -161,6 +163,7 @@ cd "$ALPAGYM_ROOT" || exit 1
     --teacher_checkpoint "$CKPT" \
     --teacher_bins_dir "$BINS" \
     --teacher_goal_mode "$GOAL_MODE" \
+    --teacher_pedestrian_size_pad_m "$PEDESTRIAN_SIZE_PAD_M" \
     --render_video "$RENDER_VIDEO_FLAG" \
     --local_scene_dir "$USDZ_DIR" \
     --scene_ids "${SCENES[@]}" \

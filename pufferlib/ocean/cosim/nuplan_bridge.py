@@ -620,6 +620,15 @@ def floor_vru_partner_sizes(types, lengths, widths, min_size_m: float):
     return lengths, widths
 
 
+def pad_pedestrian_partner_sizes(types, lengths, widths, pad_m: float):
+    """Pedestrian boxes grow by pad_m in length and width (0.8 puts every nuPlan pedestrian strictly
+    above the 0.8 x 0.8 m training minimum). Other types untouched."""
+    pedestrian = types == _NUPLAN_AGENT_TYPE["PEDESTRIAN"]
+    lengths = np.where(pedestrian, lengths + pad_m, lengths).astype(np.float32)
+    widths = np.where(pedestrian, widths + pad_m, widths).astype(np.float32)
+    return lengths, widths
+
+
 def tracked_objects_to_arrays(tracked_objects, transform: NuPlanTransform, first_slot: int = 1):
     """nuPlan DetectionsTracks agents -> (idx, x, y, z, h, vx, vy, types, lengths, widths)
     arrays in the bin frame, filling PufferDrive slots first_slot..N."""
