@@ -38,8 +38,8 @@ ALPAGYM_ROOT=/home/bjaeger/alpasim-training
 # held-out split Damiano evaluates on; empty = every converted scene that passed the checks (2149 on the cluster, 1584 of them train)
 SCENE_LIST=$ALPAGYM_ROOT/scene_splits/eval_405.txt
 export ALPASIM_ROOT=/home/bjaeger/alpasim
-# Damiano's conversion; /home/shared/data/nurec/all-usdzs is a symlink farm that dangles inside the containers
-BINS=/home/ddacol/code/alpasim-training/data/distill/bins_130kmh
+# shoulder lanes off-road (py123d 1_bernhard_dev); USDZ_DIR stays Damiano's, the shared all-usdzs symlinks dangle inside the containers
+BINS=/home/shared/data/nurec/bins/eval405_130kmh_ndshoulders
 USDZ_DIR=/home/ddacol/code/alpasim-training/data/distill/usdz
 ALPASIM_IMAGE_DIR=/home/ddacol/code/alpasim-training/data/images
 case "$TOPOLOGY" in
