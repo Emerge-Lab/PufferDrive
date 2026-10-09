@@ -43,9 +43,9 @@ Optional env vars (see `leaderboard_agent.py` docstring): `COSIM_DEVICE`,
 `COSIM_DYNAMICS_SOURCE`, `COSIM_NUM_AGENTS`, `COSIM_MAX_SPEED_MPS` (ego speed cap via
 C_vel; default = the checkpoint's `base_max_speed_mps`, must stay inside the trained range),
 `COSIM_ZERO_PARTNER_STOPPED_TIME` (1 = partners' `seconds_stopped` obs feature held at 0, ego
-untouched; ablation for the parked-car / red-light-queue avoidance), `COSIM_PEDESTRIAN_MIN_SIZE_M`
-and `COSIM_PEDESTRIAN_SIZE_PAD_M` (walker boxes in the policy's obs: a floor on each axis, then an
-additive pad; the longest6 scripts set the pad to 0.8 m), `COSIM_OBS_HTML`,
+untouched; ablation for the parked-car / red-light-queue avoidance), `COSIM_PEDESTRIAN_SIZE_PAD_M`
+(added to every walker box's length and width in the policy's obs; the longest6 scripts set
+0.8 m), `COSIM_OBS_HTML`,
 `COSIM_DEBUG_CARLA_VIEW`, `COSIM_RECORD_INFRACTIONS`.
 
 ### Ego dynamics source

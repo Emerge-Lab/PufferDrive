@@ -28,10 +28,10 @@
 # the interactive obs replay per route, rendered into $OUT/obs_html at the end, large; needs LOGGING=1), REPORT
 # (0 = skip the HTML report), MAX_ATTEMPTS, CARLA_ROOT, GARAGE_WORK_DIR, GARAGE_PY, SERVER_PY, PD,
 # COSIM_MAX_SPEED_MPS (ego speed cap, default 30), COSIM_ZERO_PARTNER_STOPPED_TIME (default 1),
-# COSIM_PEDESTRIAN_MIN_SIZE_M (default 0), COSIM_PEDESTRIAN_SIZE_PAD_M (default 0.8: added to every walker box's
-# length and width after the floor, so walkers read strictly larger than the smallest training vehicle; 0 = true
-# boxes), LIBTIFF5_COMPAT (1: when `import carla` fails for the egg's missing libtiff.so.5, try the garage env's
-# lib dir (`conda install -n garage "libtiff<4.5"`), then link the system libtiff.so.6 under that name; 0: never link).
+# COSIM_PEDESTRIAN_SIZE_PAD_M (default 0.8: added to every walker box's length and width, so walkers read strictly
+# larger than the smallest training vehicle; 0 = true boxes), LIBTIFF5_COMPAT (1: when `import carla` fails for the
+# egg's missing libtiff.so.5, try the garage env's lib dir (`conda install -n garage "libtiff<4.5"`), then link the
+# system libtiff.so.6 under that name; 0: never link).
 set -u
 
 export PD=${PD:-/home/bjaeger/PufferDrive}
@@ -119,7 +119,6 @@ export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
 export COSIM_DYNAMICS_SOURCE=pufferdrive
 export COSIM_MAX_SPEED_MPS=${COSIM_MAX_SPEED_MPS:-30}
 export COSIM_ZERO_PARTNER_STOPPED_TIME=${COSIM_ZERO_PARTNER_STOPPED_TIME:-1}
-export COSIM_PEDESTRIAN_MIN_SIZE_M=${COSIM_PEDESTRIAN_MIN_SIZE_M:-0}
 export COSIM_OBS_HTML_MAX_STEPS=${COSIM_OBS_HTML_MAX_STEPS:-20000}
 export COSIM_OBS_HTML_RENDER=0  # routes save the compact replay only; render_carla_obs_html.py renders all pages into $OUT/obs_html
 

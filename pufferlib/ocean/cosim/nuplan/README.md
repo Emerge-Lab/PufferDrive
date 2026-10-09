@@ -30,14 +30,12 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   change only where the lane graph forces one), so multi-lane roads stop
   pulling the ego toward the road centre. All come from the challenge's route
   roadblock ids only; the planner
-  never reads the logged ego. Eval hack `pedestrian_min_size_m` (env
-  `PEDESTRIAN_MIN_SIZE_M`): pedestrian and bicycle partner boxes are grown to at least
-  this size in the policy's observation (training spawns nothing below 0.8 x 0.8 m,
-  nuPlan pedestrians are 0.4-0.8 m); nuPlan still scores the true boxes. Off by
-  default and in script 9. `pedestrian_size_pad_m` (env `PEDESTRIAN_SIZE_PAD_M`)
-  instead adds this much to every pedestrian box's length and width (after the floor
-  when both are set), so pedestrians read strictly larger than the smallest training
-  vehicle; off by default, script 9 sets 0.8 m. The shadow env consumes the goals of its
+  never reads the logged ego. Eval hack `pedestrian_size_pad_m` (env
+  `PEDESTRIAN_SIZE_PAD_M`): this much is added to every pedestrian partner box's length
+  and width in the policy's observation (training spawns nothing below 0.8 x 0.8 m,
+  nuPlan pedestrians are 0.4-0.8 m), so pedestrians read strictly larger than the
+  smallest training vehicle; nuPlan still scores the true boxes. Off by default,
+  script 9 sets 0.8 m. The shadow env consumes the goals of its
   `num_goals` window itself exactly like training (`goal_regen_mode: finite`,
   consumed slots zeroed in the obs); the planner pushes the next window only
   when the current one is exhausted or its current goal is clearly behind the
