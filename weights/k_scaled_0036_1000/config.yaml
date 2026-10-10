@@ -1,0 +1,268 @@
+agent_index: null
+controlled_exp:
+  train:
+    ent_coef:
+      values:
+      - 0.01
+      - 0.005
+    learning_rate:
+      values:
+      - 0.001
+      - 0.003
+      - 0.01
+env:
+  action_type: continuous
+  allow_map_subset: false
+  base_max_speed_mps: 20.0
+  collision_behavior: stop
+  compute_eval_metrics: false
+  control_mode: control_vehicles
+  disable_red_light_infractions: 0
+  dt: 0.3
+  dynamics_model: jerk
+  eval_perceived_size_margin_m: 0.1
+  eval_standstill_jerk_deadband_mps3: 0.0
+  eval_training_render: false
+  goal_heading_max_deg: 60.0
+  goal_radius: 2.0
+  goal_reach_requires_speed: true
+  goal_regen_mode: finite
+  goal_source: map
+  goal_speed: 3.0
+  goal_speed_randomization: false
+  inactive_agent_threshold: 0.4
+  init_mode: create_all_valid
+  init_step: 0
+  init_step_min_horizon: 20
+  init_step_spread: false
+  map_dir: /home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine
+  max_agents_per_env: 150
+  max_goal_spacing: 200.0
+  max_speed_mps: null
+  min_agents_per_env: 1
+  min_goal_spacing: 20.0
+  non_sdc_controller: policy
+  non_vehicle_controller: auto
+  num_agents: 1024
+  num_goals: 3
+  num_maps: 128
+  obs_boundary_stride: 1
+  obs_dropout_boundary: 0.4
+  obs_dropout_lane: 0.5
+  obs_goal_lane_distance: true
+  obs_lane_stride: 2
+  obs_norm_goal_offset_m: 600.0
+  obs_norm_road_seg_length_m: 10.0
+  obs_norm_road_seg_width_m: 5.0
+  obs_norm_speed_mps: 60.0
+  obs_norm_veh_length_m: 10.0
+  obs_norm_veh_width_m: 5.0
+  obs_norm_xy_offset_m: 200.0
+  obs_norm_z_m: 10.0
+  obs_partner_relative_velocity: true
+  obs_range_partner_m: 200.0
+  obs_range_road_behind_m: 60.0
+  obs_range_road_front_m: 200.0
+  obs_range_road_side_m: 50.0
+  obs_range_traffic_control_m: 200.0
+  obs_slots_boundary_n: 50
+  obs_slots_lane_n: 70
+  obs_slots_partners_n: 20
+  obs_slots_traffic_controls_n: 4
+  offroad_behavior: stop
+  partner_blindness_duration_seconds: 3.0
+  partner_blindness_prob: 0.05
+  partner_blindness_trigger_prob: 0.03
+  phantom_braking_duration_seconds: 3.0
+  phantom_braking_freeze_steering: false
+  phantom_braking_prob: 0.1
+  phantom_braking_trigger_prob: 0.03
+  pose_noise_xy_m: 0.025
+  pose_noise_yaw_deg: 0.25
+  replay_expert_agents: 1
+  resample_frequency: 256000
+  reset_accel_on_stop: true
+  reward_ade: 0.0
+  reward_center_bias: 0.0
+  reward_collision: 1.5
+  reward_comfort: 0.05
+  reward_conditioning: true
+  reward_goal: 1.0
+  reward_lane_align: 0.025
+  reward_lane_center: 0.001
+  reward_log_sampling: false
+  reward_offroad: 1.5
+  reward_overspeed: 0.05
+  reward_randomization: true
+  reward_reverse: 0.005
+  reward_stop_line: 1.0
+  reward_timestep: 2.5e-05
+  reward_vel_align: 1.0
+  reward_velocity: 0.0025
+  scenario_length: 2500
+  sdc_controller: policy
+  simulation_mode: gigaflow
+  spawn_heading_max_deg: 30.0
+  spawn_initial_speed: 0.0
+  spawn_lateral_offset_max_frac: 1.0
+  terminate_on_goal: 0
+  termination_mode: 1
+  traffic_light_behavior: stop
+  traffic_light_junction_phases: 0
+  use_map_cache: 1
+  use_neighbor_cache: 1
+env_name: puffer_drive
+eval:
+  action_selection: mean
+  base_max_speed_mps: null
+  benchmark_config: pufferlib/config/evaluation/benchmark.yaml
+  benchmarks: null
+  capture_observations: false
+  disable_red_light_infractions: null
+  dt: null
+  failure_replay_csv: null
+  goal_radius: null
+  goal_regen_mode: null
+  goal_source: null
+  goal_speed: null
+  map_dir: null
+  max_goal_spacing: null
+  max_rendered_failures: null
+  max_sdc_replay_workers: 4
+  min_goal_spacing: null
+  num_agents: 256
+  num_scenarios: null
+  obs_slots_partners_n: null
+  observation_replay_wave_size: 16
+  observation_replay_writer_count: 4
+  output_dir_name: eval
+  output_name: null
+  output_subdir: null
+  render_filter: null
+  render_scenarios: false
+  reward_comfort: null
+  reward_lane_center: null
+  scenario_offset: 0
+eval_simulation: null
+fps: 15
+gif_path: eval.gif
+git:
+  commit_hash: bfb49c1eca1cf1a69e59981d09b4246a71897b2b
+load_id: null
+load_model_path: null
+local_rank: 0
+max_runs: 200
+max_suggestion_cost: 3600
+neptune: false
+neptune_name: pufferai
+neptune_project: ablations
+no_model_upload: {}
+num_scenarios: 3
+package: ocean
+policy:
+  action_type: discrete
+  actor_head_layer_norm: false
+  actor_hidden_size: 256
+  actor_num_layers: 1
+  backbone_activation: gelu
+  backbone_hidden_size: 1024
+  backbone_layer_norm: false
+  backbone_num_layers: 3
+  boundary_input_size: 256
+  context_input_size: 128
+  critic_head_layer_norm: false
+  critic_hidden_size: 256
+  critic_num_layers: 1
+  ego_input_size: 128
+  encoder_activation: relu
+  encoder_layer_norm: true
+  fp32_heads: true
+  lane_input_size: 256
+  mask_padded_features: true
+  partner_input_size: 256
+  shared_network: false
+  traffic_control_input_size: 128
+policy_name: Drive
+render: 0
+render_mode: auto
+rnn:
+  hidden_size: 512
+  input_size: 512
+rnn_name: null
+run_name: k_scaled_0036_1000
+save_frames: 0
+sweep:
+  downsample: 10
+  goal: maximize
+  method: Protein
+  metric: score
+tag: null
+tb: true
+train:
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_eps: 1.0e-08
+  adam_weight_decay: 0.01
+  adv_filter_enabled: true
+  adv_filter_ewma_beta: 0.25
+  adv_filter_leak_fraction: 0.0
+  adv_filter_threshold_scale: 0.01
+  adv_sampling_prio_alpha: 0.8499999999999999
+  adv_sampling_prio_beta0: 0.8499999999999999
+  anneal_lr: true
+  batch_size: auto
+  bptt_horizon: 128
+  checkpoint_interval: 50
+  clip_coef: 0.2
+  compile: true
+  compile_fullgraph: false
+  compile_mode: default
+  cpu_offload: false
+  data_dir: /home/bjaeger/PufferDrive/experiments/k_scaled_0036_1000
+  device: cuda
+  ent_coef: 0.01
+  ent_coef_anneal: false
+  ent_coef_anneal_start_frac: 0.75
+  ent_coef_final: 0.001
+  evaluation_benchmarks: carla_fast
+  evaluation_interval_epochs: null
+  final_model_name: final_model.pt
+  gae_lambda: 0.95
+  gamma: 0.999
+  learning_rate: 0.0005
+  max_grad_norm: 0.5
+  max_minibatch_size: 131072
+  min_batch_size: null
+  minibatch_size: 131072
+  name: k_scaled_0036_1000
+  normalize_rewards: false
+  optimizer: adamw
+  precision: bfloat16
+  project: ablations
+  render: false
+  render_interval: 1000
+  resume_state_path: null
+  rollout_dtype: float32
+  seed: 1000
+  separate_grad_clip: true
+  tf32: false
+  torch_deterministic: false
+  total_timesteps: 15625000000
+  update_epochs: 3
+  use_rnn: false
+  use_value_bootstrapping: true
+  vf_clip_coef: null
+  vf_coef: 0.5
+  vtrace_c_clip: 1
+  vtrace_rho_clip: 1
+vec:
+  backend: Multiprocessing
+  batch_size: auto
+  num_envs: 16
+  num_workers: auto
+  seed: 42
+  zero_copy: true
+video_path: videos
+wandb: true
+wandb_group: emerge_
+wandb_project: nightly-multi-long

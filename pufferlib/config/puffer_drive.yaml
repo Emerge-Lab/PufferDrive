@@ -57,8 +57,10 @@ env:
   pdm_planning_dt: 0.1
   # Base forward speed cap
   base_max_speed_mps: 20.0
-  # Speed cap when reward_randomization is off (eval); null = base_max_speed_mps. Sets C_vel = max_speed_mps / base_max_speed_mps (training range [0.667, 1.5] -> [13.3, 30] m/s)
+  # Speed cap when reward_randomization is off (eval); null = base_max_speed_mps. Sets C_vel = max_speed_mps / base_max_speed_mps (training range [1/a, a] below)
   max_speed_mps: null
+  # Training C_vel ~ X(a) = 0.5 U(1/a, 1) + 0.5 U(1, a): speed cap = base_max_speed_mps * [1/a, a]; 1.5 = paper (13.3-30 m/s), 2.0 = 10-40 m/s
+  conditioning_speed_scale: 1.5
   # Optional nonzero launch speed for gigaflow random spawns
   spawn_initial_speed: 0.0
   # Gigaflow spawn pose noise: lateral offset as a fraction of half the lane width, heading offset in degrees
@@ -67,6 +69,13 @@ env:
   # Gigaflow dynamics randomization: per-step brownian pose buffeting (std in meters / degrees); 0 disables
   pose_noise_xy_m: 0.0
   pose_noise_yaw_deg: 0.0
+  # Speed-limit randomization (needs SPDZONE1 maps): per episode, with this probability every speed zone shifts its
+  # posted limit by one uniform offset in +-delta, clipped to [min, max]; junction lanes inherit the min over entries.
+  # m/s: 9.72 = 35 km/h, 1.39 = 5 km/h, 36.11 = 130 km/h. 0 disables.
+  speed_limit_random_prob: 0.0
+  speed_limit_random_delta_mps: 9.72
+  speed_limit_random_min_mps: 1.39
+  speed_limit_random_max_mps: 36.11
   # Collision behavior - options: "ignore", "stop", "remove"
   collision_behavior: stop
   # Offroad behavior - options: "ignore", "stop", "remove"
@@ -75,11 +84,14 @@ env:
   traffic_light_behavior: stop
   # Stop sign behavior - options: "ignore", "stop", "remove"
   stop_sign_behavior: stop
+  # Traffic controls observed and enforced; stop-sign runs are detected as in CaRL's RunStopSign2 (reward_stop_line)
   traffic_lights_enabled: true
   stop_signs_enabled: false
   yield_signs_enabled: false
   # Skip red light violation detection (metrics, reward, behavior)
   disable_red_light_infractions: false
+  # Skip stop sign violation detection (metrics, reward, behavior); the sign obs still turn red/green
+  disable_stop_sign_infractions: false
   # Cycle the lights of a junction phase-by-phase (TLPHASE1 bins); false keeps independent lights (legacy)
   traffic_light_junction_phases: false
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map
@@ -105,7 +117,11 @@ env:
   init_step_spread: false
   # sets an upper bound on the random init step
   # the sampled init step can be at most this close to the end of the episode;
+  # also the shortest first episode when stagger_first_episode is on
   init_step_min_horizon: 20
+  # training only: the first episode after every env (re)creation ends at a random step in
+  # [init_step_min_horizon, scenario_length], so sub-envs do not run their episodes in lockstep
+  stagger_first_episode: true
   # options: "control_vehicles", "control_agents", "control_tracks_to_predict", "control_sdc_only"
   control_mode: control_vehicles
   # Controller used by agent 0, the canonical SDC/target.
@@ -129,7 +145,8 @@ env:
   # --- Goal / Target ---
   # Goal regeneration policy - options: "finite" (regen full set when all reached), "rolling" (sliding window)
   goal_regen_mode: "finite"
-  # How the goal set is seeded - options: "route" (agent forward route), "map" (uniform free-roam)
+  # How the goal set is seeded - options: "route" (agent forward route), "map" (uniform free-roam),
+  # replay only: "gt" (raw logged trajectory points), "gt_map" (logged points snapped to the nearest lane center)
   goal_source: map
   # Append normalized lane-graph distance to the current goal lane on each lane obs row
   obs_goal_lane_distance: True
@@ -166,6 +183,8 @@ env:
   reward_reverse: 0.005
   reward_timestep: 2.5e-05
   reward_overspeed: 0.05
+  # m/s above the lane limit before the overspeed penalty fires
+  overspeed_tolerance_mps: 0.0
   reward_ade: 0.0
   # --- Map ---
   # Path to map used for training
@@ -180,6 +199,10 @@ env:
   obs_slots_partners_n: 20
   # Append the partner's velocity relative to ego (ego frame, 2 floats) to every partner row (GIGAFLOW observes velocity)
   obs_partner_relative_velocity: false
+  # Ego lane-angle slot: true = signed heading error theta_f / pi (GIGAFLOW B.1), false = cos(theta_f)
+  obs_lane_heading_signed: false
+  # Append each lane segment's speed limit (/ obs_norm_speed_mps) to its lane row so limit changes ahead are visible
+  obs_lane_speed_limit: false
   obs_slots_traffic_controls_n: 4
   # Fraction of segment observation slots to drop (reduces obs size)
   obs_dropout_lane: 0.5
@@ -268,6 +291,8 @@ train:
   evaluation_interval_epochs: null
   # Select multiple benchmarks with a comma-separated value. eg: carla_fast,womd_single
   evaluation_benchmarks: carla_fast
+  # Submit the carla_cosim SLURM debug hook at start/end of training.
+  cosim_debug_evals: False
   torch_deterministic: false
   cpu_offload: false
   device: cuda
@@ -357,7 +382,7 @@ eval:
   base_max_speed_mps: null
   # Overrides env.goal_regen_mode ("finite" or "rolling") of every selected benchmark; null keeps the benchmark's value.
   goal_regen_mode: null
-  # Overrides env.goal_source ("route", "map" or "gt") of every selected benchmark; null keeps the benchmark's value.
+  # Overrides env.goal_source ("route", "map", "gt" or "gt_map") of every selected benchmark; null keeps the benchmark's value.
   goal_source: null
   # Overrides env.goal_speed of every selected benchmark; null keeps the benchmark's value.
   goal_speed: null
@@ -370,6 +395,8 @@ eval:
   obs_slots_partners_n: null
   # Overrides env.disable_red_light_infractions of every selected benchmark; null keeps the benchmark's value.
   disable_red_light_infractions: null
+  # Overrides env.disable_stop_sign_infractions of every selected benchmark; null keeps the benchmark's value.
+  disable_stop_sign_infractions: null
   output_name: null
   # Results folder inside the run dir; also names the wandb key prefix final_<output_dir_name>_.
   output_dir_name: eval

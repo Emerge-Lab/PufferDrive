@@ -29,7 +29,7 @@ bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 #    wandb=True
 
 python -m pufferlib.pufferl eval puffer_drive nuplan_single \
-    env.map_dir=/home/shared/data/nuPlan/PufferDrive \
+    eval.map_dir=/home/shared/data/nuplan/PufferDrive \
     vec.num_envs=64 \
     eval.max_sdc_replay_workers=64 \
     env.goal_source=gt \

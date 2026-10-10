@@ -96,9 +96,9 @@ struct Agent {
     int displacement_sample_count;
     float distance_since_spawn;
     float seconds_stopped;
-    float lane_curvature; // 1/m at the closest segment of current lane, positive = left turn
+    float lane_curvature;         // 1/m at the closest segment of current lane, positive = left turn
+    float lane_heading_error_rad; // agent heading minus lane heading, positive = agent points left of lane
     int comfort_violation_last_window_idx;
-    int stop_sign_stopped_timestep_count;
 
     // Goal positions
     float list_goal_x[MAX_GOALS];
@@ -114,8 +114,13 @@ struct Agent {
     float gt_goal_y;               // Last valid ground-truth goal position y
     float gt_goal_z;               // Last valid ground-truth goal position z
 
-    int stopped; // 0/1 -> freeze if set
-    int removed; // 0/1 -> remove from sim if set
+    int stopped;                     // 0/1 -> freeze if set
+    int removed;                     // 0/1 -> remove from sim if set
+    int first_collision_partner_idx; // agent index of the first collision partner this episode, -1 if none
+    int stop_sign_target_idx;        // traffic element being approached, -1 if none
+    int stop_sign_stop_completed;    // 0/1 -> stood still inside the target's trigger box
+    int stop_sign_last_failed_idx;   // element run without stopping, not re-targeted until 20 m away
+    int stop_sign_standstill_idx;    // element whose trigger box the agent last stood still in, -1 if none
 
     // Jerk dynamics
     float accel_long;
@@ -134,6 +139,16 @@ struct Agent {
     unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
 };
 
+typedef struct {
+    float mid_x_m;
+    float mid_y_m;
+    float mid_z_m;
+    float half_length_m;
+    float direction_x;
+    float direction_y;
+    float width_m;
+} RoadObservationSegment;
+
 struct RoadMapElement {
     int type;
 
@@ -141,7 +156,8 @@ struct RoadMapElement {
     float *x;
     float *y;
     float *z;
-    float *headings; // Pre-computed heading for each segment
+    float *headings;                              // Pre-computed heading for each segment
+    RoadObservationSegment *observation_segments; // Immutable; owned with the shared road geometry.
 
     // Lane specific info
     int num_entries;
@@ -151,7 +167,8 @@ struct RoadMapElement {
     float speed_limit;
     float length;
     float *cum_lengths;
-    float *widths; // per-point lane width, meters
+    float *widths;      // per-point lane width, meters
+    int speed_zone_idx; // lanes sharing one posted limit; -1 = none (junction lane or map without zones)
 };
 
 struct TrafficControlElement {
@@ -193,6 +210,7 @@ void free_road_element(struct RoadMapElement *element) {
     free(element->y);
     free(element->z);
     free(element->headings);
+    free(element->observation_segments);
     free(element->entry_lanes);
     free(element->exit_lanes);
     free(element->cum_lengths);

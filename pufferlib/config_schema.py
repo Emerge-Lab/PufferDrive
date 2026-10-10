@@ -163,6 +163,8 @@ class GoalSource(Enum):
     route = 0
     map = 1
     gt = 2
+    external = 3
+    gt_map = 4
 
 
 class PackageName(Enum):
@@ -255,16 +257,22 @@ class DriveEnvConfig:
     pdm_planning_dt: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     base_max_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     max_speed_mps: float | None = _constrained_field(POSITIVE_NUMBER_CONSTRAINT, default=None)
+    conditioning_speed_scale: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     spawn_initial_speed: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     spawn_lateral_offset_max_frac: float = _constrained_field(PROBABILITY_CONSTRAINT)
     spawn_heading_max_deg: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     pose_noise_xy_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     pose_noise_yaw_deg: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    speed_limit_random_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
+    speed_limit_random_delta_mps: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    speed_limit_random_min_mps: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    speed_limit_random_max_mps: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING
     stop_sign_behavior: InfractionBehavior = MISSING
     disable_red_light_infractions: bool = MISSING
+    disable_stop_sign_infractions: bool = MISSING
     traffic_light_junction_phases: bool = MISSING
     traffic_lights_enabled: bool = MISSING
     stop_signs_enabled: bool = MISSING
@@ -280,6 +288,7 @@ class DriveEnvConfig:
     init_step: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     init_step_spread: bool = MISSING
     init_step_min_horizon: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    stagger_first_episode: bool = MISSING
     control_mode: ControlMode = MISSING
     sdc_controller: Controller = MISSING
     non_sdc_controller: Controller = MISSING
@@ -315,6 +324,7 @@ class DriveEnvConfig:
     reward_reverse: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_timestep: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_overspeed: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    overspeed_tolerance_mps: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     reward_ade: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
@@ -323,6 +333,8 @@ class DriveEnvConfig:
     obs_slots_boundary_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     obs_slots_partners_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     obs_partner_relative_velocity: bool = MISSING
+    obs_lane_heading_signed: bool = MISSING
+    obs_lane_speed_limit: bool = MISSING
     obs_slots_traffic_controls_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     obs_dropout_lane: float = _constrained_field(PROBABILITY_CONSTRAINT)
     obs_dropout_boundary: float = _constrained_field(PROBABILITY_CONSTRAINT)
@@ -396,6 +408,7 @@ class TrainingConfig:
     final_model_name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     evaluation_interval_epochs: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     evaluation_benchmarks: str | None = MISSING
+    cosim_debug_evals: bool = MISSING
     torch_deterministic: bool = MISSING
     cpu_offload: bool = MISSING
     device: str | int = MISSING
@@ -470,6 +483,7 @@ class EvaluationConfig:
     max_goal_spacing: float | None = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     obs_slots_partners_n: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     disable_red_light_infractions: bool | None = MISSING
+    disable_stop_sign_infractions: bool | None = MISSING
     output_name: str | None = MISSING
     output_dir_name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     scenario_offset: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
@@ -609,8 +623,14 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.init_step_spread", "is only supported in replay mode")
     if env["init_step_spread"] and env["init_step_min_horizon"] >= env["scenario_length"]:
         _raise_config_error(context, "env.init_step_min_horizon", "must be smaller than env.scenario_length")
-    if env["goal_source"] == "gt" and env["simulation_mode"] != "replay":
-        _raise_config_error(context, "env.goal_source", "'gt' is only supported in replay mode")
+    if env["goal_source"] in ("gt", "gt_map") and env["simulation_mode"] != "replay":
+        _raise_config_error(context, "env.goal_source", f"'{env['goal_source']}' is only supported in replay mode")
+    if env["stagger_first_episode"] and env["init_step"] + env["init_step_min_horizon"] > env["scenario_length"]:
+        _raise_config_error(
+            context,
+            "env.stagger_first_episode",
+            "requires env.init_step + env.init_step_min_horizon <= env.scenario_length",
+        )
     if env["terminate_on_goal"] and (env["simulation_mode"] != "replay" or env["control_mode"] != "control_sdc_only"):
         _raise_config_error(context, "env.terminate_on_goal", "requires replay mode with control_sdc_only")
     if env.get("eval_mode") is not None and (

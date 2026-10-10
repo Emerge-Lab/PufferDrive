@@ -1,6 +1,25 @@
 #include "include/drive_fixture.h"
 #include "include/test.h"
 
+// Town03 stop sign 43: eastbound stop line at x 101.6 m, y in [-68.3, -64.9] m, controlling lane 117.
+static const char *TOWN03_MAP = DRIVE_TEST_REPO_ROOT "/pufferlib/resources/drive/binaries/carla/opendrive__Town03.bin";
+static const float TOWN03_STOP_SIGN_LANE_Y = -66.6f;
+static const float TOWN03_STOP_SIGN_LANE_Z = -0.77f;
+static const int TOWN03_STOP_SIGN_IDX = 43;
+
+static void drive_test_drive_east(Agent *agent, float prev_x, float x, float speed) {
+    agent->sim_x = prev_x;
+    agent->sim_y = TOWN03_STOP_SIGN_LANE_Y;
+    agent->sim_z = TOWN03_STOP_SIGN_LANE_Z;
+    agent->sim_heading = 0.0f;
+    agent->cos_heading = 1.0f;
+    agent->sin_heading = 0.0f;
+    copy_pose_to_prev(agent);
+    agent->sim_x = x;
+    agent->sim_speed = speed;
+    agent->sim_speed_signed = speed;
+}
+
 static int test_metric_offroad_outside_grid(void) {
     srand(5);
     Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 2, 0);
@@ -16,6 +35,32 @@ static int test_metric_offroad_outside_grid(void) {
     EXPECT_NEAR(agent->metrics_array[COLLISION_IDX], 0.0f, 1e-5f);
     EXPECT_NEAR(agent->metrics_array[RED_LIGHT_IDX], 0.0f, 1e-5f);
 
+    free_allocated(&env);
+    return 0;
+}
+
+static int test_metric_overspeed_flag_respects_tolerance(void) {
+    srand(5);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 2, 0);
+    int agent_idx = env.active_agent_indices[0];
+    Agent *agent = &env.agents[agent_idx];
+    compute_metrics(&env, agent_idx, 0);
+    float limit = agent->current_lane_idx != -1 ? env.lane_speed_limit_mps[agent->current_lane_idx]
+                                                : UNKNOWN_LANE_SPEED_LIMIT_MPS;
+    agent->sim_speed = limit + 1.0f;
+
+    env.overspeed_tolerance_mps = 0.0f;
+    compute_metrics(&env, agent_idx, 0);
+    EXPECT_NEAR(agent->metrics_array[SPEED_LIMIT_IDX], 1.0f, 1e-6f);
+
+    env.overspeed_tolerance_mps = 2.0f;
+    compute_metrics(&env, agent_idx, 0);
+    EXPECT_NEAR(agent->metrics_array[SPEED_LIMIT_IDX], 0.0f, 1e-6f);
+
+    agent->sim_speed = limit - 0.5f;
+    env.overspeed_tolerance_mps = 0.0f;
+    compute_metrics(&env, agent_idx, 0);
+    EXPECT_NEAR(agent->metrics_array[SPEED_LIMIT_IDX], 0.0f, 1e-6f);
     free_allocated(&env);
     return 0;
 }
@@ -106,11 +151,104 @@ static int test_metric_final_goal_requires_speed(void) {
     return 0;
 }
 
+static void overlap_agent_with(Drive *env, int agent_idx, int target_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    Agent *target = &env->agents[target_idx];
+    agent->sim_x = target->sim_x;
+    agent->sim_y = target->sim_y;
+    agent->sim_z = target->sim_z;
+    agent->sim_heading = target->sim_heading;
+    agent->cos_heading = target->cos_heading;
+    agent->sin_heading = target->sin_heading;
+    copy_pose_to_prev(agent);
+}
+
+static int test_metric_stop_sign_infraction_can_be_disabled(void) {
+    for (int disabled = 0; disabled < 2; disabled++) {
+        srand(5);
+        Drive env = drive_test_make_env(TOWN03_MAP, SIMULATION_MODE_GIGAFLOW, 1, 0);
+        env.stop_signs_enabled = 1;
+        env.stop_sign_behavior = INFRACTION_BEHAVIOR_STOP;
+        env.disable_stop_sign_infractions = disabled;
+        int agent_idx = env.active_agent_indices[0];
+        Agent *agent = &env.agents[agent_idx];
+
+        drive_test_drive_east(agent, 96.0f, 96.8f, 8.0f);
+        compute_metrics(&env, agent_idx, 0);
+        EXPECT_EQ_INT(agent->stop_sign_target_idx, TOWN03_STOP_SIGN_IDX);
+
+        drive_test_drive_east(agent, 101.2f, 102.0f, 8.0f);
+        compute_metrics(&env, agent_idx, 0);
+        EXPECT_NEAR(agent->metrics_array[OFFROAD_IDX], 0.0f, 1e-6f);
+        EXPECT_NEAR(agent->metrics_array[COLLISION_IDX], 0.0f, 1e-6f);
+        EXPECT_NEAR(agent->metrics_array[STOP_SIGN_IDX], disabled ? 0.0f : 1.0f, 1e-6f);
+        EXPECT_EQ_INT(agent->stopped, disabled ? 0 : 1);
+        // the state machine still ran: the run sign is parked in last_failed either way
+        EXPECT_EQ_INT(agent->stop_sign_last_failed_idx, TOWN03_STOP_SIGN_IDX);
+        EXPECT_EQ_INT(agent->stop_sign_target_idx, -1);
+        free_allocated(&env);
+    }
+    return 0;
+}
+
+static int test_metric_mutual_collision_counts_one_infraction(void) {
+    srand(13);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 2, 0);
+    EXPECT_EQ_INT(env.active_agent_count, 2);
+    int first_idx = env.active_agent_indices[0];
+    int second_idx = env.active_agent_indices[1];
+    overlap_agent_with(&env, second_idx, first_idx);
+
+    for (int slot = 0; slot < env.active_agent_count; slot++) {
+        compute_metrics(&env, env.active_agent_indices[slot], slot);
+        compute_rewards(&env, slot);
+    }
+    EXPECT_EQ_INT(env.agents[first_idx].first_collision_partner_idx, second_idx);
+    EXPECT_EQ_INT(env.agents[second_idx].first_collision_partner_idx, first_idx);
+
+    add_log(&env);
+    EXPECT_NEAR(env.log.collision_rate, 2.0f, 1e-6f);
+    EXPECT_NEAR(env.log.total_infractions, 1.0f, 1e-6f);
+
+    free_allocated(&env);
+    return 0;
+}
+
+static int test_metric_non_mutual_collision_counts_per_agent(void) {
+    srand(13);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 3, 0);
+    EXPECT_EQ_INT(env.active_agent_count, 3);
+    int first_idx = env.active_agent_indices[0];
+    int second_idx = env.active_agent_indices[1];
+    int third_idx = env.active_agent_indices[2];
+    overlap_agent_with(&env, second_idx, first_idx);
+    // Second agent already collided with the third earlier this episode.
+    env.agents[second_idx].first_collision_partner_idx = third_idx;
+
+    for (int slot = 0; slot < env.active_agent_count; slot++) {
+        compute_metrics(&env, env.active_agent_indices[slot], slot);
+        compute_rewards(&env, slot);
+    }
+    EXPECT_EQ_INT(env.agents[first_idx].first_collision_partner_idx, second_idx);
+    EXPECT_EQ_INT(env.agents[second_idx].first_collision_partner_idx, third_idx);
+
+    add_log(&env);
+    EXPECT_NEAR(env.log.collision_rate, 2.0f, 1e-6f);
+    EXPECT_NEAR(env.log.total_infractions, 2.0f, 1e-6f);
+
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_metric_offroad_outside_grid);
+    RUN_TEST(test_metric_overspeed_flag_respects_tolerance);
     RUN_TEST(test_metric_invalid_position_resets);
     RUN_TEST(test_metric_on_road_lane_alignment);
     RUN_TEST(test_metric_final_goal_requires_speed);
+    RUN_TEST(test_metric_stop_sign_infraction_can_be_disabled);
+    RUN_TEST(test_metric_mutual_collision_counts_one_infraction);
+    RUN_TEST(test_metric_non_mutual_collision_counts_per_agent);
     return test_summary(failures);
 }

@@ -16,7 +16,7 @@ env:
   reward_comfort: 0.05
   reward_velocity: 0.0025
   reward_lane_align: 0.025
-  reward_lane_center: 0.0038
+  reward_lane_center: 0.0075  # training-range max (REWARD_BOUNDS), not the paper's 0.0038
   reward_timestep: 0.000025
   reward_reverse: 0.005
   goal_speed: 3.0
@@ -37,6 +37,8 @@ env:
   spawn_heading_max_deg: 0.0
   pose_noise_xy_m: 0.0
   pose_noise_yaw_deg: 0.0
+  speed_limit_random_prob: 0.0
+  stagger_first_episode: false
 
 benchmarks:
   - name: carla
@@ -113,6 +115,7 @@ benchmarks:
       map_dir: pufferlib/resources/drive/binaries/nuplan
       use_neighbor_cache: false
       disable_red_light_infractions: true
+      disable_stop_sign_infractions: true
       goal_reach_requires_speed: false
 
   - name: nuplan_single
@@ -128,4 +131,14 @@ benchmarks:
       map_dir: pufferlib/resources/drive/binaries/nuplan
       use_neighbor_cache: false
       disable_red_light_infractions: true
+      disable_stop_sign_infractions: true
       goal_reach_requires_speed: false
+
+  # Closed-loop co-sim against the real external simulators (see
+  # pufferlib/ocean/evaluation_utils/cosim_evaluator.py), unlike the
+  # benchmarks above which replay pre-baked .bin maps in-process.
+  - name: carla_cosim
+    simulation_mode: carla_cosim
+    route_ids: [0, 1, 2]
+    base_carla_port: 2000
+    compute_config: scripts/cluster_configs/nyu_greene.yaml
