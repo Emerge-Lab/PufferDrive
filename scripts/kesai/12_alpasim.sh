@@ -29,6 +29,7 @@ RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
 CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || CKPT=$(ls "$RUN_DIR"/models/model_*.pt 2>/dev/null | sort | tail -n 1)
 GOAL_MODE=gt_time:5  # gt_time:<s> | gt | route
+GOAL_RADIUS_M=2      # goal arrival radius Damiano's reference evals use; the teacher's own gt_time default is 6
 PEDESTRIAN_SIZE_PAD_M=0.8  # added to every pedestrian box's length and width the teacher sees; 0 = true boxes
 RENDER_VIDEO=0       # one mp4 per scene; 1 also streams the teacher BEV and makes every policy step ~5x slower
 CAM_W=640            # 16:9 render size; the teacher never sees the cameras
@@ -113,10 +114,10 @@ EOF
 [ ${#SCENES[@]} -gt 0 ] || { echo "no scenes to evaluate"; exit 1; }
 
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
-OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE//:/}$([ "$PEDESTRIAN_SIZE_PAD_M" = "0" ] || echo "_pedpad$PEDESTRIAN_SIZE_PAD_M")_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE//:/}_r${GOAL_RADIUS_M}$([ "$PEDESTRIAN_SIZE_PAD_M" = "0" ] || echo "_pedpad$PEDESTRIAN_SIZE_PAD_M")_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT"
 {
-    echo "checkpoint $CKPT"; echo "scenes ${#SCENES[@]}"; echo "topology $TOPOLOGY parallel $PARALLEL goal_mode $GOAL_MODE"
+    echo "checkpoint $CKPT"; echo "scenes ${#SCENES[@]}"; echo "topology $TOPOLOGY parallel $PARALLEL goal_mode $GOAL_MODE goal_radius_m $GOAL_RADIUS_M"
     echo "pedestrian_size_pad_m $PEDESTRIAN_SIZE_PAD_M"
     for repo in "$PD" "$ALPAGYM_ROOT" "$ALPASIM_ROOT"; do
         echo "git $repo $(git -C "$repo" rev-parse --short HEAD 2>/dev/null) $(git -C "$repo" diff --quiet 2>/dev/null || echo dirty)"
@@ -163,6 +164,7 @@ cd "$ALPAGYM_ROOT" || exit 1
     --teacher_checkpoint "$CKPT" \
     --teacher_bins_dir "$BINS" \
     --teacher_goal_mode "$GOAL_MODE" \
+    --teacher_goal_radius "$GOAL_RADIUS_M" \
     --teacher_pedestrian_size_pad_m "$PEDESTRIAN_SIZE_PAD_M" \
     --render_video "$RENDER_VIDEO_FLAG" \
     --local_scene_dir "$USDZ_DIR" \
@@ -176,24 +178,45 @@ cd "$ALPAGYM_ROOT" || exit 1
     > "$OUT/evaluate.log" 2>&1
 EVAL_STATUS=$?
 
+# results.txt: the official score, AlpaSim's km between incidents (all and at-fault) and the mean of every per-scene metric
 if [ -f "$OUT/alpagym/evaluation.yaml" ]; then
-    "$ALPAGYM_PY" - "$OUT/alpagym" <<'EOF'
-import sys
+    "$ALPAGYM_PY" - "$OUT/alpagym/evaluation.yaml" "$OUT/alpagym/alpasim/wizard_0/aggregate/results-summary.json" "$OUT/results.txt" <<'EOF'
+import json, statistics, sys
 from pathlib import Path
 import yaml
-run = Path(sys.argv[1])
-summary = yaml.safe_load((run / "evaluation.yaml").read_text())
-print(f"\n{len(summary['scenes'])} scenes evaluated, complete: {summary['complete']}")
-aggregate = run / "metrics" / "aggregate.yaml"
-if aggregate.exists():
-    for name, stats in yaml.safe_load(aggregate.read_text())["metrics"].items():
-        print(f"  {name:34s} mean {stats['mean']:9.4f}  median {stats['median']:9.4f}  n {stats['num_finite']}")
+summary = yaml.safe_load(Path(sys.argv[1]).read_text())
+aggregate_path = Path(sys.argv[2])
+scenes = summary["scenes"]
+official = summary.get("official_score")
+if official is None:
+    lines = [f"official_score n/a  (incomplete: {len(scenes)} scenes finished, {len(summary['failed_scenes'])} failed)"]
+else:
+    lines = [f"official_score {official['score']:.4f}  scenes {official['num_scored']}  failed {official['num_failed']}"]
+rows = []
+runs = json.loads(aggregate_path.read_text())["metrics_results"] if aggregate_path.exists() else []
+for run in runs:
+    prefix = f"{run['run_name']} " if len(runs) > 1 else ""
+    for name in ("avg_dist_between_incidents", "avg_dist_between_incidents_at_fault"):
+        km_per_incident = run.get(name)
+        if km_per_incident is None:
+            rows.append((prefix + name, "n/a  (no incidents)"))
+            continue
+        per_km = f"{1.0 / km_per_incident:.4f} incidents/km" if km_per_incident > 0 else "inf incidents/km"
+        rows.append((prefix + name, f"{km_per_incident:9.4f} km  ({per_km})"))
+for name in sorted({name for scene in scenes for name in scene["metrics"]}):
+    values = [float(scene["metrics"][name]) for scene in scenes if name in scene["metrics"]]
+    rows.append((name, f"mean {statistics.mean(values):9.4f}  n {len(values)}"))
+width = max((len(name) for name, _ in rows), default=0)
+lines += [f"{name:{width}s} {value}" for name, value in rows]
+text = "".join(line + "\n" for line in lines)
+Path(sys.argv[3]).write_text(text)
+sys.stdout.write("\n" + text)
 EOF
 fi
 if [ $EVAL_STATUS -ne 0 ]; then
     echo "AlpaSim evaluation failed (exit $EVAL_STATUS); last host lines of $OUT/evaluate.log:"
     grep -vE '^[a-z0-9_-]+-[0-9]+-[0-9]+ +\|' "$OUT/evaluate.log" | tail -n 30
 fi
-echo "per-scene metrics -> $OUT/alpagym/metrics/per_scene.csv; videos -> $OUT/alpagym/alpasim/wizard_0/rollouts"
+echo "results -> $OUT/results.txt; per-scene metrics -> $OUT/alpagym/evaluation.yaml; videos -> $OUT/alpagym/alpasim/wizard_0/rollouts"
 echo "Done -> $OUT"
 exit $EVAL_STATUS
