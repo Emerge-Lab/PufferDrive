@@ -31,6 +31,7 @@ CKPT=$RUN_DIR/final_model.pt
 GOAL_MODE=gt_time:5  # gt_time:<s> | gt | route
 GOAL_RADIUS_M=2      # goal arrival radius Damiano's reference evals use; the teacher's own gt_time default is 6
 VRU_SIZE_PAD_M=0.8   # added to the length and width of every pedestrian and two-wheeler box the teacher sees; 0 = true boxes
+PARTNER_SPLIT_LENGTH_M=7  # actors longer than this (training max 7 m) reach the teacher as ceil(length / this) touching pieces; 0 = one box
 RENDER_VIDEO=0       # one mp4 per scene; 1 also streams the teacher BEV and makes every policy step ~5x slower
 OBS_REPLAY=1         # PufferDrive observation replay html per scene -> $OUT/obs_replays
 CAM_W=640            # 16:9 render size; the teacher never sees the cameras
@@ -119,11 +120,12 @@ EOF
 [ ${#SCENES[@]} -gt 0 ] || { echo "no scenes to evaluate"; exit 1; }
 
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
-OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE//:/}_r${GOAL_RADIUS_M}$([ "$VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$VRU_SIZE_PAD_M")_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE//:/}_r${GOAL_RADIUS_M}$([ "$VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$VRU_SIZE_PAD_M")$([ "$PARTNER_SPLIT_LENGTH_M" = "0" ] || echo "_split$PARTNER_SPLIT_LENGTH_M")_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT"
 {
     echo "checkpoint $CKPT"; echo "scenes ${#SCENES[@]}"; echo "topology $TOPOLOGY parallel $PARALLEL goal_mode $GOAL_MODE goal_radius_m $GOAL_RADIUS_M"
     echo "vru_size_pad_m $VRU_SIZE_PAD_M"
+    echo "partner_split_length_m $PARTNER_SPLIT_LENGTH_M"
     for repo in "$PD" "$ALPAGYM_ROOT" "$ALPASIM_ROOT"; do
         echo "git $repo $(git -C "$repo" rev-parse --short HEAD 2>/dev/null) $(git -C "$repo" diff --quiet 2>/dev/null || echo dirty)"
     done
@@ -175,6 +177,7 @@ cd "$ALPAGYM_ROOT" || exit 1
     --teacher_goal_mode "$GOAL_MODE" \
     --teacher_goal_radius "$GOAL_RADIUS_M" \
     --teacher_vru_size_pad_m "$VRU_SIZE_PAD_M" \
+    --teacher_partner_split_length_m "$PARTNER_SPLIT_LENGTH_M" \
     --render_video "$RENDER_VIDEO_FLAG" \
     --teacher_obs_replay "$OBS_REPLAY_FLAG" \
     --local_scene_dir "$USDZ_DIR" \

@@ -303,6 +303,7 @@ struct Drive {
     float obs_norm_road_seg_width_m;
     float obs_norm_z_m;
     float eval_perceived_size_margin_m;
+    float obs_partner_split_length_m; // 0 disables; longer partners are observed as ceil(length / this) equal pieces
     int cosim_eval_semantics; // co-sim: apply the eval-only obs/action tweaks without native eval batching
     float eval_standstill_jerk_deadband_mps3; // 0 disables; eval-only standstill deadband on j_long
     float obs_range_traffic_control_m;
@@ -4878,7 +4879,8 @@ static int write_partner_obs(
         }
     }
 
-    for (int j = 0; j < partners_to_write; j++) {
+    int row_features = partner_feature_count(env);
+    for (int j = 0; j < partners_to_write && partners_written < env->obs_slots_partners_n; j++) {
         Agent *other = &env->agents[nearby_agents[j].index];
         float rel_x, rel_y, rel_heading_x, rel_heading_y, rel_vx, rel_vy;
         project_point_to_ego_frame(ego, other->sim_x, other->sim_y, &rel_x, &rel_y);
@@ -4892,10 +4894,18 @@ static int write_partner_obs(
             &rel_vx,
             &rel_vy);
         project_vector_to_ego_frame(ego, other->cos_heading, other->sin_heading, &rel_heading_x, &rel_heading_y);
-        obs[obs_idx++] = rel_x / env->obs_norm_xy_offset_m;
-        obs[obs_idx++] = rel_y / env->obs_norm_xy_offset_m;
+        // float count: agent lengths are not range-checked at load, an int cast could overflow
+        float piece_count = 1.0f;
+        if (env->obs_partner_split_length_m > 0.0f && other->sim_length > env->obs_partner_split_length_m) {
+            piece_count = ceilf(other->sim_length / env->obs_partner_split_length_m);
+        }
+        float piece_length_m = other->sim_length / piece_count;
+        float rear_piece_offset_m = 0.5f * (piece_length_m - other->sim_length);
+        int row_start = obs_idx;
+        obs[obs_idx++] = (rel_x + rear_piece_offset_m * rel_heading_x) / env->obs_norm_xy_offset_m;
+        obs[obs_idx++] = (rel_y + rear_piece_offset_m * rel_heading_y) / env->obs_norm_xy_offset_m;
         obs[obs_idx++] = nearby_agents[j].dz / env->obs_norm_z_m;
-        obs[obs_idx++] = other->sim_length / env->obs_norm_veh_length_m;
+        obs[obs_idx++] = piece_length_m / env->obs_norm_veh_length_m;
         obs[obs_idx++] = other->sim_width / env->obs_norm_veh_width_m;
         obs[obs_idx++] = rel_heading_x;
         obs[obs_idx++] = rel_heading_y;
@@ -4906,6 +4916,15 @@ static int write_partner_obs(
             obs[obs_idx++] = rel_vy / env->obs_norm_speed_mps;
         }
         partners_written++;
+        for (int piece_idx = 1; (float) piece_idx < piece_count && partners_written < env->obs_slots_partners_n;
+             piece_idx++) {
+            float piece_offset_m = rear_piece_offset_m + (float) piece_idx * piece_length_m;
+            memcpy(&obs[obs_idx], &obs[row_start], row_features * sizeof(float));
+            obs[obs_idx] = (rel_x + piece_offset_m * rel_heading_x) / env->obs_norm_xy_offset_m;
+            obs[obs_idx + 1] = (rel_y + piece_offset_m * rel_heading_y) / env->obs_norm_xy_offset_m;
+            obs_idx += row_features;
+            partners_written++;
+        }
     }
 
     *partner_count = partners_written;

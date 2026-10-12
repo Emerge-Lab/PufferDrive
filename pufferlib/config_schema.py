@@ -346,6 +346,7 @@ class DriveEnvConfig:
     obs_norm_road_seg_width_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     obs_norm_z_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     eval_perceived_size_margin_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    obs_partner_split_length_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     eval_standstill_jerk_deadband_mps3: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     obs_range_road_front_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     obs_range_road_behind_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
