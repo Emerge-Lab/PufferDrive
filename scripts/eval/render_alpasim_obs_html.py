@@ -2,13 +2,14 @@
 <run_dir>/obs_replays/<clipgt>.replay.zlib) into one page per scene plus an index.html gallery (same
 navigator as the nuPlan, CARLA and self-play eval replays).
 
-usage: python scripts/eval/render_alpasim_obs_html.py <run_dir> [--workers N]
+usage: python scripts/eval/render_alpasim_obs_html.py <run_dir> [--prune] [--workers N]
 
 Pages are named s<score>_<flags>_<clipgt>.html so the gallery lists the worst first (flags: COL at-fault
 collision, OFF offroad, CORR left the corridor laterally, PROG progress score < 1); each page carries the
 scene's AlpaSim score criteria and per-metric values as a panel, every violated per-step metric linking to the
 replay step of its first violation. The page the run wrote (<clipgt>.html) is replaced by the renamed one.
-Runs before 2026-10-12 keep everything under <run_dir>/alpagym/; both layouts are read.
+--prune deletes each .replay.zlib once its page is written (the page embeds the same bytes).
+Reads the tidy_alpasim_run.py layout (<run_dir>/alpasim/*) and the untidied AlpaSim trees of older runs.
 """
 
 import argparse
@@ -60,18 +61,32 @@ ALPASIM_STEP_SECONDS = 0.1
 
 
 def run_layout(run_dir):
-    """-> (obs replay dir, AlpaSim wizard dir) of the tidied layout, else of the pre-2026-10-12 alpagym/ nesting."""
-    for base in (run_dir, run_dir / "alpagym"):
-        if (base / "obs_replays").is_dir():
-            return base / "obs_replays", base / "alpasim" / "wizard_0"
-    raise SystemExit(f"no obs_replays/ under {run_dir} or {run_dir / 'alpagym'}")
+    """-> (obs replay dir, results-summary.json, metrics_unprocessed.parquet, eval-config.yaml) of the tidied
+    layout, else of an AlpaSim wizard tree (2026-10-12 layout, then the older alpagym/ nesting)."""
+    obs_dirs = [base / "obs_replays" for base in (run_dir, run_dir / "alpagym") if (base / "obs_replays").is_dir()]
+    if not obs_dirs:
+        raise SystemExit(f"no obs_replays/ under {run_dir} or {run_dir / 'alpagym'}")
+    tidied = run_dir / "alpasim"
+    candidates = [
+        (tidied / "results-summary.json", tidied / "metrics_unprocessed.parquet", tidied / "eval-config.yaml")
+    ]
+    for wizard_dir in (run_dir / "alpasim" / "wizard_0", run_dir / "alpagym" / "alpasim" / "wizard_0"):
+        aggregate = wizard_dir / "aggregate"
+        candidates.append(
+            (
+                aggregate / "results-summary.json",
+                aggregate / "metrics_unprocessed.parquet",
+                wizard_dir / "eval-config.yaml",
+            )
+        )
+    for summary_path, metrics_path, eval_config_path in candidates:
+        if summary_path.is_file():
+            return obs_dirs[0], summary_path, metrics_path, eval_config_path
+    raise SystemExit(f"no results-summary.json under {run_dir}: the run has not been scored")
 
 
-def scene_rows(wizard_dir):
+def scene_rows(summary_path):
     """clipgt -> results-summary rollout row (score, status, failure_reason, metrics, score_metrics)."""
-    summary_path = wizard_dir / "aggregate" / "results-summary.json"
-    if not summary_path.is_file():
-        raise SystemExit(f"no {summary_path}: the run has not been scored")
     summary = json.loads(summary_path.read_text())
     rows = {}
     for row in summary["rollouts"]:
@@ -81,22 +96,26 @@ def scene_rows(wizard_dir):
     return rows, summary.get("score_criteria", {})
 
 
-def max_gt_dist_m(wizard_dir):
-    return float(
-        yaml.safe_load((wizard_dir / "eval-config.yaml").read_text())["aggregation_modifiers"][
-            "max_dist_to_gt_trajectory"
-        ]
-    )
+def max_gt_dist_m(eval_config_path):
+    return float(yaml.safe_load(eval_config_path.read_text())["aggregation_modifiers"]["max_dist_to_gt_trajectory"])
 
 
-def scoring_timeline(wizard_dir, row, frames, stop_gt_dist_m):
+def scene_series(metrics_path, rows):
+    """clipgt -> its rollout's per-step metrics (PER_STEP_SERIES rows of metrics_unprocessed.parquet)."""
+    df = pd.read_parquet(metrics_path, columns=["name", "timestamps_us", "values", "clipgt_id", "rollout_id"])
+    df = df[df["name"].isin(PER_STEP_SERIES)]
+    series = {}
+    for (clipgt, rollout_id), scene_df in df.groupby(["clipgt_id", "rollout_id"]):
+        if clipgt in rows and rows[clipgt]["rollout_id"] == rollout_id:
+            series[clipgt] = scene_df
+    return series
+
+
+def scoring_timeline(df, frames, stop_gt_dist_m):
     """AlpaSim scores from the first eval_relevant step through the first collision, offroad or stop_gt_dist_m
     from the gt trajectory. -> {scored: series -> first replay step > 0 inside that window, after: first one past it,
     stop_step, stop_reasons}. The replay ends with the per-step series, so index i is replay step i - (length - frames)."""
-    df = pd.read_parquet(wizard_dir / "rollouts" / row["clipgt_id"] / row["rollout_id"] / "metrics.parquet")
-    wide = (
-        df[df["name"].isin(PER_STEP_SERIES)].pivot(index="timestamps_us", columns="name", values="values").sort_index()
-    )
+    wide = df.pivot(index="timestamps_us", columns="name", values="values").sort_index()
     wide["collision_at_fault"] = ((wide["collision_front"] > 0) | (wide["collision_lateral"] > 0)).astype(np.float64)
     offset = len(wide) - frames
     relevant = np.flatnonzero(wide["eval_relevant"].to_numpy() > 0)
@@ -224,15 +243,17 @@ def render_page(zlib_path, html_path, panel):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("run_dir", help="output dir of 12_alpasim.sh (holds obs_replays/ and alpasim/wizard_0/)")
+    ap.add_argument("run_dir", help="output dir of 12_alpasim.sh (holds obs_replays/ and alpasim/)")
+    ap.add_argument("--prune", action="store_true", help="delete each .replay.zlib once its page is written")
     ap.add_argument("--workers", type=int, default=min(16, os.cpu_count() or 1))
     args = ap.parse_args()
-    obs_dir, wizard_dir = run_layout(Path(args.run_dir))
+    obs_dir, summary_path, metrics_path, eval_config_path = run_layout(Path(args.run_dir))
     replays = {p.name[: -len(".replay.zlib")]: p for p in sorted(obs_dir.glob("*.replay.zlib"))}
     if not replays:
         raise SystemExit(f"no {obs_dir}/*.replay.zlib")
-    rows, criteria = scene_rows(wizard_dir)
-    stop_gt_dist_m = max_gt_dist_m(wizard_dir)
+    rows, criteria = scene_rows(summary_path)
+    series = scene_series(metrics_path, rows)
+    stop_gt_dist_m = max_gt_dist_m(eval_config_path)
     jobs = [(clipgt, replay, obs_dir / page_name(clipgt, rows.get(clipgt))) for clipgt, replay in replays.items()]
 
     def render(job):
@@ -241,7 +262,7 @@ def main():
         panel = ""
         if row is not None:
             frames = int(viz.read_replay_zlib(replay, chunk_names=("metrics_f32",))[0]["frames"])
-            panel = score_panel(row, criteria, scoring_timeline(wizard_dir, row, frames, stop_gt_dist_m))
+            panel = score_panel(row, criteria, scoring_timeline(series[clipgt], frames, stop_gt_dist_m))
         render_page(replay, html_path, panel)
         run_page = obs_dir / f"{clipgt}.html"
         if run_page != html_path and run_page.exists():
@@ -251,10 +272,14 @@ def main():
         list(pool.map(render, jobs))
     file_metrics = {html_path.name: gallery_metrics(rows.get(clipgt)) for clipgt, _, html_path in jobs}
     viz.build_gallery_index(str(obs_dir), file_metrics=file_metrics)
+    if args.prune:
+        for replay in replays.values():
+            replay.unlink()
     unscored = sum(clipgt not in rows for clipgt in replays)
     print(
         f"[render_alpasim_obs_html] {len(jobs)} scene pages rendered"
-        f"{f', {unscored} without a score (no panel)' if unscored else ''} -> {obs_dir / 'index.html'}"
+        f"{f', {unscored} without a score (no panel)' if unscored else ''}{', replays pruned' if args.prune else ''}"
+        f" -> {obs_dir / 'index.html'}"
     )
 
 
