@@ -32,10 +32,13 @@ GOAL_MODE=gt_time:5  # gt_time:<s> | gt | route
 GOAL_RADIUS_M=2      # goal arrival radius Damiano's reference evals use; the teacher's own gt_time default is 6
 VRU_SIZE_PAD_M=0.8   # added to the length and width of every pedestrian and two-wheeler box the teacher sees; 0 = true boxes
 RENDER_VIDEO=0       # one mp4 per scene; 1 also streams the teacher BEV and makes every policy step ~5x slower
-OBS_REPLAY=1         # PufferDrive observation replay html per scene -> $OUT/alpagym/obs_replays
+OBS_REPLAY=1         # PufferDrive observation replay html per scene -> $OUT/obs_replays
 CAM_W=640            # 16:9 render size; the teacher never sees the cameras
 CAM_H=360
 SIM_TIMEOUT_S=3600   # per batch of PARALLEL scenes
+ALPASIM_LOG_LEVEL=WARNING  # AlpaSim services; INFO logs every sim event (~100 MB per 400 scenes in evaluate.log and the worker logs)
+PROMETHEUS=0         # AlpaSim performance telemetry (~80 MB per run); only alpagym_runtime.perf reads it
+KEEP_ROLLOUT_LOGS=imperfect  # rollout.asl (~36 MB per scene, offline analysis only) kept after scoring: all | imperfect (score < 1) | failed | none
 export PD=/home/bjaeger/PufferDrive
 ALPAGYM_ROOT=/home/bjaeger/alpasim-training
 # held-out split Damiano evaluates on; empty = every converted scene that passed the checks (2149 on the cluster, 1584 of them train)
@@ -54,6 +57,7 @@ ALPAGYM_PY=$ALPAGYM_ROOT/.venv/bin/python
 export PATH="$HOME/.local/bin:$PATH"
 
 [ -n "$CKPT" ] || { echo "no checkpoint in $RUN_DIR (final_model.pt or models/model_*.pt)"; exit 1; }
+case "$KEEP_ROLLOUT_LOGS" in all|imperfect|failed|none) ;; *) echo "KEEP_ROLLOUT_LOGS must be all, imperfect, failed or none, got $KEEP_ROLLOUT_LOGS"; exit 1 ;; esac
 for path in "$CKPT" "$ALPAGYM_PY" "$ALPASIM_ROOT/pyproject.toml" "$BINS/scene_manifest.jsonl" "$USDZ_DIR" ${SCENE_LIST:+"$SCENE_LIST"}; do
     [ -r "$path" ] || { echo "missing or not readable: $path"; exit 1; }
 done
@@ -133,8 +137,10 @@ BASEPORT=$((6000 + (${SLURM_JOB_ID:-$$} % 90) * 20))
 LOADED_BASE=0
 PULLED_NRE=0
 cleanup() {
-    local compose_file=$OUT/alpagym/alpasim/wizard_0/docker-compose.yaml
-    [ -f "$compose_file" ] && docker compose -f "$compose_file" down --volumes --remove-orphans > /dev/null 2>&1
+    local compose_file
+    for compose_file in "$OUT/alpagym/alpasim/wizard_0/docker-compose.yaml" "$OUT/alpasim/wizard_0/docker-compose.yaml"; do
+        [ -f "$compose_file" ] && docker compose -f "$compose_file" down --volumes --remove-orphans > /dev/null 2>&1
+    done
     for container in $(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME"); do
         docker rm -f "$container" > /dev/null 2>&1
     done
@@ -156,10 +162,11 @@ if ! docker image inspect "$NRE_TAG" > /dev/null 2>&1; then
 fi
 
 # the teacher is an external driver, but the 8gpu topologies re-assert driver.skip=false and abort at startup
-OVERRIDES="wizard.baseport=$BASEPORT runtime.endpoints.driver.skip=true"
+[ "$PROMETHEUS" = "1" ] && PROMETHEUS_FLAG=true || PROMETHEUS_FLAG=false
+OVERRIDES="wizard.baseport=$BASEPORT runtime.endpoints.driver.skip=true wizard.log_level=$ALPASIM_LOG_LEVEL wizard.prometheus.start_prometheus=$PROMETHEUS_FLAG"
 [ "$RENDER_VIDEO" = "1" ] && RENDER_VIDEO_FLAG=true || RENDER_VIDEO_FLAG=false
 [ "$OBS_REPLAY" = "1" ] && OBS_REPLAY_FLAG=true || OBS_REPLAY_FLAG=false
-echo "${#SCENES[@]} scenes, $TOPOLOGY with $PARALLEL in flight; full log: $OUT/evaluate.log"
+echo "${#SCENES[@]} scenes, $TOPOLOGY with $PARALLEL in flight; full log: $OUT/evaluate.log (logs/ once the run is tidied)"
 cd "$ALPAGYM_ROOT" || exit 1
 "$ALPAGYM_PY" -m alpagym_host.evaluate \
     --model_kind teacher \
@@ -220,6 +227,45 @@ if [ $EVAL_STATUS -ne 0 ]; then
     echo "AlpaSim evaluation failed (exit $EVAL_STATUS); last host lines of $OUT/evaluate.log:"
     grep -vE '^[a-z0-9_-]+-[0-9]+-[0-9]+ +\|' "$OUT/evaluate.log" | tail -n 30
 fi
-echo "results -> $OUT/results.txt; per-scene metrics -> $OUT/alpagym/evaluation.yaml; videos -> $OUT/alpagym/alpasim/wizard_0/rollouts; obs replays -> $OUT/alpagym/obs_replays"
+# tidy: results.txt, obs_replays/, logs/ and the AlpaSim wizard tree (alpasim/, which AlpaSim's own tooling expects as is)
+# side by side; the alpagym run dir dissolves into them
+mkdir -p "$OUT/logs"
+[ -d "$OUT/alpagym/alpasim" ] && mv "$OUT/alpagym/alpasim" "$OUT/alpasim"
+[ -d "$OUT/alpagym/obs_replays" ] && mv "$OUT/alpagym/obs_replays" "$OUT/obs_replays"
+for f in "$OUT/evaluate.log" "$OUT/run_info.txt" "$OUT/alpagym/config.json" "$OUT/alpagym/evaluation.yaml" "$OUT/alpagym/logs/evaluation.log"; do
+    [ -f "$f" ] && mv "$f" "$OUT/logs/"
+done
+WIZARD=$OUT/alpasim/wizard_0
+[ -d "$WIZARD/txt-logs" ] && mv "$WIZARD"/txt-logs/* "$OUT/logs/" 2>/dev/null && rmdir "$WIZARD/txt-logs"
+[ -d "$WIZARD/controller" ] && mv "$WIZARD/controller" "$OUT/logs/controller"
+rmdir "$OUT/alpagym/logs" "$OUT/alpagym" 2>/dev/null
+
+# rollout.asl is only read offline (re-scoring, videos, obs replay rebuilds, failure analysis): keep it for the scenes worth a look
+SUMMARY=$WIZARD/aggregate/results-summary.json
+if [ "$KEEP_ROLLOUT_LOGS" = "all" ]; then
+    :
+elif [ -f "$SUMMARY" ]; then
+    "$ALPAGYM_PY" - "$SUMMARY" "$WIZARD/rollouts" "$KEEP_ROLLOUT_LOGS" <<'EOF'
+import json, sys
+from pathlib import Path
+summary, rollouts, keep = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+keep_rule = {"imperfect": lambda r: r["score"] < 1, "failed": lambda r: r["status"] == "fail", "none": lambda r: False}[keep]
+removed = freed = kept = 0
+for row in json.loads(summary.read_text())["rollouts"]:
+    log = rollouts / row["clipgt_id"] / row["rollout_id"] / "rollout.asl"
+    if not log.exists():
+        continue
+    if keep_rule(row):
+        kept += 1
+        continue
+    freed += log.stat().st_size
+    log.unlink()
+    removed += 1
+print(f"rollout logs: kept {kept} ({keep}), removed {removed} ({freed / 1e9:.1f} GB)")
+EOF
+else
+    echo "no $SUMMARY: keeping every rollout log"
+fi
+echo "results -> $OUT/results.txt; obs replays -> $OUT/obs_replays; logs -> $OUT/logs; AlpaSim tree (per-scene metrics, aggregate, kept rollout logs) -> $OUT/alpasim"
 echo "Done -> $OUT"
 exit $EVAL_STATUS
