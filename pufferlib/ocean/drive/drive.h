@@ -4819,7 +4819,7 @@ static int write_partner_obs(
     float *obs,
     int obs_idx,
     int *partner_count) {
-    // Partner blindness restricts visibility to an ego-width forward corridor while triggered
+    // Partner blindness restricts visibility to a forward corridor of ego width plus margin while triggered
     if (ego->partner_blindness_counter > 0) {
         ego->partner_blindness_counter--;
     }
@@ -4850,7 +4850,8 @@ static int write_partner_obs(
             project_vector_to_ego_frame(ego, other->cos_heading, other->sin_heading, &rel_heading_x, &rel_heading_y);
             float lateral_half_extent_m
                 = 0.5f * (fabsf(rel_heading_y) * other->sim_length + fabsf(rel_heading_x) * other->sim_width);
-            partner_visible = rel_x > 0.0f && fabsf(rel_y) <= lateral_half_extent_m + 0.5f * ego->sim_width;
+            partner_visible = rel_x > 0.0f
+                && fabsf(rel_y) <= lateral_half_extent_m + 0.5f * ego->sim_width + PARTNER_BLINDNESS_CORRIDOR_MARGIN_M;
         }
         nearby_agents[nearby_count].index = partner_scan[j].agent_idx;
         nearby_agents[nearby_count].dist_sq = dist_sq;

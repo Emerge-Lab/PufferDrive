@@ -59,7 +59,7 @@ srun torchrun \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders \
+    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v17 \
     env.num_maps=128 \
     env.obs_stride_merge_segments=true \
     train.name=${RUN_NAME} \

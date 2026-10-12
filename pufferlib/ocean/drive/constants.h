@@ -274,6 +274,8 @@ static const int ROAD_OFFSETS[25][2]
 #define OBS_VALID_COUNT_FEATURES 4
 // Heading deviation since last kept point that forces a keep when obs stride > 1 (~15 degrees).
 #define OBS_STRIDE_HEADING_THRESHOLD 0.2618f
+// Lateral slack beyond the ego's half width on each side of a blind partner's forward corridor
+#define PARTNER_BLINDNESS_CORRIDOR_MARGIN_M 1.0f
 
 // =====================================================================================
 // 9. REWARDS
