@@ -266,6 +266,10 @@ EOF
 else
     echo "no $SUMMARY: keeping every rollout log"
 fi
-echo "results -> $OUT/results.txt; obs replays -> $OUT/obs_replays; logs -> $OUT/logs; AlpaSim tree (per-scene metrics, aggregate, kept rollout logs) -> $OUT/alpasim"
+# score-named pages with the AlpaSim score panel + index.html gallery, as 9_nuPlan.sh and 11_carla_longest6_v2.sh
+if [ -d "$OUT/obs_replays" ] && [ -f "$SUMMARY" ]; then
+    "$ALPAGYM_PY" "$PD/scripts/eval/render_alpasim_obs_html.py" "$OUT" || echo "obs replay gallery failed"
+fi
+echo "results -> $OUT/results.txt; obs replays -> $OUT/obs_replays/index.html; logs -> $OUT/logs; AlpaSim tree (per-scene metrics, aggregate, kept rollout logs) -> $OUT/alpasim"
 echo "Done -> $OUT"
 exit $EVAL_STATUS
