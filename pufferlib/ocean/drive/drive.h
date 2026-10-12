@@ -219,6 +219,7 @@ struct Drive {
     float speed_limit_random_min_mps;
     float speed_limit_random_max_mps;
     float *lane_speed_limit_mps;        // per-episode effective limit per road element (zone-randomized)
+    float *lane_speed_limit_base_mps;   // the same before any co-sim cap (c_set_lane_speed_limit_cap)
     float *speed_zone_offset_mps;       // num_speed_zones
     unsigned char *lane_limit_resolved; // scratch for junction-lane inheritance
     int dynamics_model;
@@ -3654,11 +3655,13 @@ void init(Drive *env) {
             env->map_name);
     }
     env->lane_speed_limit_mps = (float *) malloc(env->num_road_elements * sizeof(float));
+    env->lane_speed_limit_base_mps = (float *) malloc(env->num_road_elements * sizeof(float));
     env->lane_limit_resolved = (unsigned char *) calloc(env->num_road_elements, sizeof(unsigned char));
     env->speed_zone_offset_mps
         = (float *) malloc((env->num_speed_zones > 0 ? env->num_speed_zones : 1) * sizeof(float));
     begin_episode_rng(env);
     sample_zone_speed_limits(env);
+    memcpy(env->lane_speed_limit_base_mps, env->lane_speed_limit_mps, env->num_road_elements * sizeof(float));
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         int steps = env->scenario_length;
         if (steps > 0) {
@@ -3713,6 +3716,7 @@ void c_close(Drive *env) {
     free(env->active_agent_indices);
     free(env->logs);
     free(env->lane_speed_limit_mps);
+    free(env->lane_speed_limit_base_mps);
     free(env->speed_zone_offset_mps);
     free(env->lane_limit_resolved);
     free(env->obs_neighbor_scratch);
@@ -4117,6 +4121,18 @@ int c_set_agent_sizes(Drive *env, int count, const int *idx, const float *length
         agent->sim_width = width[k];
         update_agent_radius(agent); // collision broad-phase uses this; stale radius under/over-detects hits
         agent->wheelbase = 0.6f * agent->sim_length; // matches spawn/log-replay sizing (see move_expert)
+    }
+    return 0;
+}
+
+// Co-sim: cap every lane's effective speed limit at cap_mps for the coming ticks; 0 restores the episode limits
+int c_set_lane_speed_limit_cap(Drive *env, float cap_mps) {
+    if (!(cap_mps >= 0.0f) || !isfinite(cap_mps)) {
+        return -1;
+    }
+    for (int i = 0; i < env->num_road_elements; i++) {
+        float base_mps = env->lane_speed_limit_base_mps[i];
+        env->lane_speed_limit_mps[i] = (cap_mps > 0.0f && base_mps > cap_mps) ? cap_mps : base_mps;
     }
     return 0;
 }
@@ -5484,6 +5500,7 @@ void c_reset(Drive *env) {
 
     begin_episode_rng(env);
     sample_zone_speed_limits(env);
+    memcpy(env->lane_speed_limit_base_mps, env->lane_speed_limit_mps, env->num_road_elements * sizeof(float));
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         generate_traffic_light_states(env);
         // stale poses must neither block nor escape the spawn overlap check

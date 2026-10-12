@@ -1102,6 +1102,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         .perturbation-line.blindness { border-color:#6d28d9; border-top-style:dashed; }
         .perturbation-line.phantom-braking { border-color:#b45309; }
         .perturbation-line.human-log { border-color:#ff0000; }
+        .perturbation-line.collision-onset { border-color:currentColor; border-top-style:dashed; }
         /* Agent panel: dark instrument-cluster surface in both themes — scoped variable overrides restyle all children. */
         #hud-telemetry { --border:#4a5468; --muted:#aab3c5; --field:rgba(255,255,255,.07); --accent:#7cbcff; position:absolute; top:14px; right:14px; width:372px; max-height:calc(100vh - 90px); padding:12px 14px; overflow-y:auto; display:none; background:rgba(54,62,77,.95); color:#eef1f6; }
         [data-theme="dark"] #hud-telemetry { background:rgba(48,56,70,.95); }
@@ -1152,6 +1153,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
                 <div class="label">Active perturbations</div>
                 <div class="perturbation-key"><span class="perturbation-line blindness"></span><span>Partner blindness</span></div>
                 <div class="perturbation-key"><span class="perturbation-line phantom-braking"></span><span>Phantom braking</span></div>
+                <div class="perturbation-key"><span class="perturbation-line collision-onset"></span><span>Collision: sharp box = sim footprint, dashed = pose one step before the onset</span></div>
                 <div class="perturbation-key" id="ghost-key" style="display:none"><span class="perturbation-line human-log"></span><span>Human driver (log) &middot; G toggles</span></div>
             </div>
             <button type="button" class="toggle-header is-collapsed" id="overrides-header" data-target="overrides-body"><span>Eval overrides</span><span>&#9662;</span></button>
@@ -1422,6 +1424,33 @@ self.onmessage = async event => {
                 rr(-a.l/2-padding, -a.w/2-padding, a.l+2*padding, a.w+2*padding, Math.min(a.w*0.30, a.l*0.10)+padding);
             }
             ctx.stroke();
+            ctx.restore();
+        }
+        function infractionOnset(frame, idx, metricIdx) {
+            // First frame of the flag's current run ending at `frame`; -1 when the flag is clear.
+            const stride = H.agent_cap * F.mf;
+            let base = (frame * H.agent_cap + idx) * F.mf + metricIdx;
+            if (!(C.metrics_f32[base] > 0)) return -1;
+            let onset = frame;
+            while (onset > 0 && C.metrics_f32[base - stride] > 0) { onset--; base -= stride; }
+            return onset;
+        }
+        function drawCollisionFootprint(a, f, outline) {
+            // Sprites round their corners; the simulator collides on the sharp box drawn here.
+            const onset = infractionOnset(f, a.idx, 0);
+            if (onset < 0) return;
+            ctx.save();
+            ctx.strokeStyle = outline; ctx.lineWidth = 1.5 / cam.z;
+            ctx.strokeRect(-a.l/2, -a.w/2, a.l, a.w);
+            ctx.restore();
+            if (onset !== f || f === 0) return;
+            const prev = agentAt(f - 1, a.idx);
+            if (!prev) return;
+            // The swept test can flag a contact made between frames: show where the car was one step earlier.
+            ctx.save();
+            ctx.rotate(-a.h); ctx.translate(prev.x - a.x, prev.y - a.y); ctx.rotate(prev.h);
+            ctx.strokeStyle = outline; ctx.lineWidth = 1.5 / cam.z; ctx.setLineDash([4 / cam.z, 3 / cam.z]);
+            ctx.strokeRect(-prev.l/2, -prev.w/2, prev.l, prev.w);
             ctx.restore();
         }
         function drawPerturbationOutlines(a) {
@@ -1768,7 +1797,12 @@ self.onmessage = async event => {
                 for (let i=0;i<refs.coefCells.length;i++) refs.coefCells[i].textContent = formatCoef(C.coefs_f32[cb+i]);
             }
             updatePolicy(f, agent);
-            const warnings = []; if(C.metrics_f32[mb] === 1) warnings.push("COLLISION"); if(C.metrics_f32[mb+1] === 1) warnings.push("OFFROAD"); if(C.metrics_f32[mb+2] === 1) warnings.push("RED LIGHT"); if(C.metrics_f32[mb+3] === 1) warnings.push("STOP SIGN");
+            const warnings = [];
+            ["COLLISION", "OFFROAD", "RED LIGHT", "STOP SIGN"].forEach((name, metricIdx) => {
+                const onset = infractionOnset(f, agent.idx, metricIdx);
+                if (onset < 0) return;
+                warnings.push(onset < f ? `${name} since <a href="#" style="color:inherit" onclick="step=${onset};play=false;updateBtn();draw(true);return false">step ${onset}</a>` : name);
+            });
             const warnKey = warnings.join('|'), warnRow = document.getElementById('warn-row');
             if (warnKey !== lastWarnKey) { lastWarnKey = warnKey; warnRow.style.display = warnings.length ? 'flex' : 'none'; warnRow.innerHTML = warnings.map(w=>`<span class="warn-chip">${w}</span>`).join(''); }
             const obs = decodeObs(f, agent.slot); if (obs) { obsBox.style.display='block'; drawObs(obs, {l:agent.l*H.scales.meters_to_position, w:agent.w*H.scales.meters_to_position}); } else obsBox.style.display='none';
@@ -1784,7 +1818,7 @@ self.onmessage = async event => {
             ctx.lineCap='round'; ctx.strokeStyle=colors.road; ctx.lineWidth=.5; ctx.stroke(paths[0]); ctx.strokeStyle=colors.line; ctx.setLineDash([1,1]); ctx.stroke(paths[1]); ctx.setLineDash([]); ctx.strokeStyle=colors.edge; ctx.lineWidth=.8; ctx.stroke(paths[2]);
             drawCurrentLane(target, colors);
             drawGhosts(f);
-            for(const a of getFrameAgents(f)){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
+            for(const a of getFrameAgents(f)){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); drawCollisionFootprint(a, f, darkMode?'#fff':'#111'); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
             for(let i=0;i<H.traffic_static_count;i++){ const t=trafficAt(f,i); if(!t) continue; const sl=t.stop_line; ctx.lineCap='butt'; if(t.type === 1){ ctx.strokeStyle=trafficColor(t); ctx.lineWidth=Math.min(1.5,3/cam.z); } else { ctx.strokeStyle=t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth=Math.min(1.2,2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]); } ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke(); ctx.setLineDash([]); }
             if(target){ for(const g of selectedGoals(f,target)){ ctx.strokeStyle='#38bdf8'; ctx.fillStyle='rgba(56,189,248,.22)'; ctx.lineWidth=Math.max(.25,2.5/cam.z); ctx.beginPath(); ctx.arc(g.x,g.y,g.radius,0,7); ctx.fill(); ctx.stroke(); } }
             ctx.restore(); lastDrawn = f;

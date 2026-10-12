@@ -1626,6 +1626,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             # numpy scalars of the saved RNG state, not just tensors.
             tstate = torch.load(trainer_state_path, map_location=train_config["device"], weights_only=False)
             pufferl.optimizer.load_state_dict(tstate["optimizer_state_dict"])
+            # The saved groups carry the old run's annealed lr; train.learning_rate is this run's base.
+            for param_group in pufferl.optimizer.param_groups:
+                param_group["lr"] = train_config["learning_rate"]
+                param_group["initial_lr"] = train_config["learning_rate"]
             pufferl.global_step = tstate.get("global_step", pufferl.global_step)
             pufferl.epoch = tstate.get("update", pufferl.epoch)
             # Fast-forward the LR scheduler to the resumed epoch so the cosine
@@ -1654,8 +1658,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
     all_logs = []
     last_training_evaluation_epoch = None
+    stop_after_epochs = args["train"]["stop_after_epochs"]
+    stop_epoch = float("inf") if stop_after_epochs is None else pufferl.epoch + stop_after_epochs
 
-    while pufferl.global_step < train_config["total_timesteps"]:
+    while pufferl.global_step < train_config["total_timesteps"] and pufferl.epoch < stop_epoch:
         if is_cuda_device(train_config["device"]):
             torch.compiler.cudagraph_mark_step_begin()
         try:
@@ -2497,10 +2503,9 @@ def _run_eval_rollout(
 
 
 def render_training_replays(env_name, args, policy, epoch, global_step, run_dir):
-    """Render one HTML replay per training map with the live policy, observations included."""
+    """Render one HTML replay per selected training map with the live policy, observations included."""
     run_args = copy.deepcopy(args)
     env_config = run_args["env"]
-    num_scenarios = env_config["num_maps"]
     # Fixed-length episodes: eval-mode summaries flush on the resample boundary.
     env_config["termination_mode"] = False
     env_config["compute_eval_metrics"] = True
@@ -2511,9 +2516,19 @@ def render_training_replays(env_name, args, policy, epoch, global_step, run_dir)
     capture_observations = run_args["eval"]["capture_observations"]
     # Observation replays render at multi-GB RSS each; the obs writer count bounds that too.
     max_renderer_count = run_args["eval"]["observation_replay_writer_count"] if capture_observations else None
+    # Same maps and episode seeds at every render of a run, so renders across epochs compare like for like.
+    render_seed = run_args["train"]["seed"] if run_args["train"]["seed"] is not None else 0
+    render_rng = np.random.default_rng(render_seed)
+    render_num_maps = run_args["train"]["render_num_maps"]
+    if render_num_maps is None:
+        map_indices = list(range(env_config["num_maps"]))
+    else:
+        map_indices = sorted(render_rng.choice(env_config["num_maps"], size=render_num_maps, replace=False).tolist())
+    map_seed_pairs = [(map_idx, int(render_rng.integers(0, 2**63, dtype=np.int64))) for map_idx in map_indices]
+    num_scenarios = len(map_seed_pairs)
     num_workers = min(run_args["vec"]["num_envs"], num_scenarios)
-    worker_env_kwargs, total_steps = drive_benchmark._plan_benchmark_eval_workers(
-        run_args, num_scenarios, num_workers, env_config["scenario_length"], capture_replay=True
+    worker_env_kwargs, total_steps = drive_benchmark._plan_failure_replay_workers(
+        run_args, map_seed_pairs, num_workers, env_config["scenario_length"]
     )
     output_dir = os.path.join(run_dir, "renders", f"epoch_{epoch:06d}_step_{global_step}")
 
@@ -2528,7 +2543,7 @@ def render_training_replays(env_name, args, policy, epoch, global_step, run_dir)
             "Rendering training replays",
             num_scenarios,
             policy=policy,
-            replay_output_dir=os.path.join(output_dir, "replays"),
+            replay_output_dir=os.path.join(output_dir, drive_eval_replay.ZLIB_REPLAY_DIR_NAME),
             capture_observations=capture_observations,
         )
         drive_eval_replay._render_eval_replays(

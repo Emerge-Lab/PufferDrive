@@ -353,6 +353,10 @@ train:
   # Rendering options
   render: false
   render_interval: 1000
+  # Training maps per render pass, a seeded random subset; null renders every map
+  render_num_maps: null
+  # Stop after this many epochs in this process (debug/render runs); null runs to total_timesteps
+  stop_after_epochs: null
 sweep:
   method: Protein
   metric: score

@@ -40,6 +40,8 @@
 #   VRU_SIZE_PAD_M  [m] add this to pedestrian and bicycle partner boxes' length and width in the policy's
 #             observation (training never spawns below 0.8 m; 0.8 = strictly above the smallest training
 #             vehicle); unset/0 = off.
+#   PEDESTRIAN_SPEED_CAP_MPS  [m/s] cap every observed lane limit while a pedestrian is ahead within
+#             PEDESTRIAN_SPEED_CAP_RADIUS_M (default 30 m); unset/0 = off.
 #   OBS_SLOTS_PARTNERS_N  shadow-env partner obs slots (unset = planner yaml, 40).
 #   EVAL_PERCEIVED_SIZE_MARGIN_M  [m per side] ego box inflation in the policy's obs (unset = arch.py, 0.2).
 #   REWARD_OVERSPEED  overspeed conditioning alpha fed to the policy (unset = arch.py, 0.1).
@@ -88,6 +90,8 @@ EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
 [ -n "${STARTUP_ACCEL_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_accel_jerk_cap_mps3=$STARTUP_ACCEL_JERK_CAP")
 [ -n "${STARTUP_BRAKE_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_brake_jerk_cap_mps3=$STARTUP_BRAKE_JERK_CAP")
 [ -n "${VRU_SIZE_PAD_M:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.vru_size_pad_m=$VRU_SIZE_PAD_M")
+[ -n "${PEDESTRIAN_SPEED_CAP_MPS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.pedestrian_speed_cap_mps=$PEDESTRIAN_SPEED_CAP_MPS")
+[ -n "${PEDESTRIAN_SPEED_CAP_RADIUS_M:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.pedestrian_speed_cap_radius_m=$PEDESTRIAN_SPEED_CAP_RADIUS_M")
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_slots_partners_n=$OBS_SLOTS_PARTNERS_N")
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_perceived_size_margin_m=$EVAL_PERCEIVED_SIZE_MARGIN_M")
 [ -n "${REWARD_OVERSPEED:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.reward_overspeed=$REWARD_OVERSPEED")

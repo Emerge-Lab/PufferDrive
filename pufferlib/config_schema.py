@@ -416,7 +416,7 @@ class TrainingConfig:
     tf32: bool = MISSING
     rollout_dtype: RolloutDtype = MISSING
     total_timesteps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
-    learning_rate: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    learning_rate: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     gamma: float = _constrained_field(PROBABILITY_CONSTRAINT)
     gae_lambda: float = _constrained_field(PROBABILITY_CONSTRAINT)
     update_epochs: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
@@ -456,6 +456,8 @@ class TrainingConfig:
     adv_filter_leak_fraction: float = _constrained_field(PROBABILITY_CONSTRAINT)
     render: bool = MISSING
     render_interval: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    render_num_maps: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    stop_after_epochs: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     # Derived by load_config from rnn_name and intentionally absent from YAML.
     use_rnn: bool = MISSING
 
@@ -674,6 +676,8 @@ def _validate_cross_field_constraints(config, context):
         not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip()
     ):
         _raise_config_error(context, "train.evaluation_benchmarks", "must be a non-empty string")
+    if train["render_num_maps"] is not None and train["render_num_maps"] > config["env"]["num_maps"]:
+        _raise_config_error(context, "train.render_num_maps", "must not exceed env.num_maps")
     if not context.startswith("evaluation") and context != "simulation profiling":
         for field_name in ("batch_size", "bptt_horizon"):
             if train[field_name] != "auto":

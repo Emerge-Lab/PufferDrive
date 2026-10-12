@@ -94,6 +94,8 @@ class PufferDrivePlanner(AbstractPlanner):
         startup_accel_jerk_cap_mps3: float = 0.0,
         startup_brake_jerk_cap_mps3: float = 0.0,
         vru_size_pad_m: float = 0.0,
+        pedestrian_speed_cap_mps: float = 0.0,
+        pedestrian_speed_cap_radius_m: float = 30.0,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
         obs_html_max_steps: int = 800,
@@ -129,6 +131,11 @@ class PufferDrivePlanner(AbstractPlanner):
             and width [m] before the policy sees them, so they read strictly larger than the smallest
             training vehicle (0.8 x 0.8 m; nuPlan pedestrians are 0.4-0.8 m, bicycles ~0.5 m wide); nuPlan
             keeps scoring the true boxes. 0 = off.
+        :param pedestrian_speed_cap_mps: eval hack: while a pedestrian is ahead of the ego's front bumper
+            within pedestrian_speed_cap_radius_m, every lane speed limit the policy observes is capped at
+            this value [m/s], so it slows down by itself (the CARLA garage autopilot crawls at 2 m/s within
+            its 30 m detection radius). 0 = off.
+        :param pedestrian_speed_cap_radius_m: radius [m] of the pedestrian check above.
         :param env_overrides: Drive env kwargs overriding DEFAULT_ARCH.
         :param obs_html_dir: write the interactive pufferlib.viz observation replay per
             scenario (the exact obs the policy received, its outputs and encoder pool winners).
@@ -161,6 +168,10 @@ class PufferDrivePlanner(AbstractPlanner):
         self._vru_size_pad_m = float(vru_size_pad_m)
         if self._vru_size_pad_m < 0:
             raise ValueError("vru_size_pad_m must be >= 0")
+        self._pedestrian_speed_cap_mps = float(pedestrian_speed_cap_mps)
+        self._pedestrian_speed_cap_radius_m = float(pedestrian_speed_cap_radius_m)
+        if self._pedestrian_speed_cap_mps < 0 or self._pedestrian_speed_cap_radius_m <= 0:
+            raise ValueError("pedestrian_speed_cap_mps must be >= 0 and pedestrian_speed_cap_radius_m > 0")
         self._startup_jerk_cap_steps = 0  # resolved in _build from the scenario dt
         self._startup_action_bounds = None  # (lo, hi) on the continuous jerk action while the cap is live
         self._env_overrides = env_overrides or {}
@@ -508,12 +519,19 @@ class PufferDrivePlanner(AbstractPlanner):
             ox, oy = ego_state.center.x, ego_state.center.y
             objs.sort(key=lambda o: (o.center.x - ox) ** 2 + (o.center.y - oy) ** 2)
             objs = objs[: self._num_agents - 1]
+        pedestrian_ahead = False
         if objs:
             idx, x, y, z, hh, vx, vy, tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
             if self._vru_size_pad_m > 0:
                 ln, wd = nb.pad_vru_partner_sizes(tp, ln, wd, self._vru_size_pad_m)
             env.set_agent_states(idx, x, y, z, hh, vx, vy, np.zeros_like(vx), np.zeros_like(vx))
             env.set_agent_sizes(idx, ln, wd)
+            pedestrian = tp == nb.PEDESTRIAN_PARTNER_TYPE_ID
+            dx, dy = x[pedestrian] - ex, y[pedestrian] - ey
+            ahead = dx * math.cos(h) + dy * math.sin(h) > 0.5 * ego_state.car_footprint.length
+            pedestrian_ahead = bool(np.any(ahead & (np.hypot(dx, dy) <= self._pedestrian_speed_cap_radius_m)))
+        if self._pedestrian_speed_cap_mps > 0:
+            env.set_lane_speed_limit_cap(self._pedestrian_speed_cap_mps if pedestrian_ahead else 0.0)
         surplus = np.arange(1 + len(objs), self._num_agents, dtype=np.int32)
         if len(surplus):
             far = np.full(len(surplus), FAR_AWAY, np.float32)

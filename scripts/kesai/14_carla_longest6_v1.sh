@@ -29,7 +29,9 @@
 # (0 = skip the HTML report), MAX_ATTEMPTS, CARLA_ROOT, GARAGE_WORK_DIR, GARAGE_PY, SERVER_PY, PD,
 # COSIM_MAX_SPEED_MPS (ego speed cap, default 30), COSIM_ZERO_PARTNER_STOPPED_TIME (default 1),
 # COSIM_VRU_SIZE_PAD_M (default 0.8: added to the length and width of every walker and two-wheeler box, so they read
-# strictly larger than the smallest training vehicle; 0 = true boxes), LIBTIFF5_COMPAT (1: when `import carla` fails for
+# strictly larger than the smallest training vehicle; 0 = true boxes), COSIM_PEDESTRIAN_SPEED_CAP_MPS (default 5.56 =
+# 20 km/h: while a walker is ahead within COSIM_PEDESTRIAN_SPEED_CAP_RADIUS_M (default 30), every lane limit the policy
+# observes is capped there, the garage autopilot's slow-near-walkers rule; 0 = off), LIBTIFF5_COMPAT (1: when `import carla` fails for
 # the egg's missing libtiff.so.5, try the garage env's lib dir (`conda install -n garage "libtiff<4.5"`), then link the
 # system libtiff.so.6 under that name; 0: never link).
 set -u
@@ -60,6 +62,8 @@ CARLA_VIEW=${CARLA_VIEW:-0}
 OBS_HTML=${OBS_HTML:-1}
 REPORT=${REPORT:-$LOGGING}
 export COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-0.8}
+export COSIM_PEDESTRIAN_SPEED_CAP_MPS=${COSIM_PEDESTRIAN_SPEED_CAP_MPS:-5.56}
+export COSIM_PEDESTRIAN_SPEED_CAP_RADIUS_M=${COSIM_PEDESTRIAN_SPEED_CAP_RADIUS_M:-30}
 EVALUATOR=$GARAGE_WORK_DIR/leaderboard/leaderboard/leaderboard_evaluator_local.py
 CARLA_EGG=$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
 AGENT=$PD/pufferlib/ocean/cosim/carla/lb1/leaderboard_agent.py
@@ -78,12 +82,13 @@ if [ "$NUM_GPUS" -lt 1 ] || [ "$NUM_GPUS" -gt 8 ]; then echo "NUM_GPUS=$NUM_GPUS
 
 TAG=longest6_v1$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")
 TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
+TAG=$TAG$([ "$COSIM_PEDESTRIAN_SPEED_CAP_MPS" = "0" ] || echo "_pedcap${COSIM_PEDESTRIAN_SPEED_CAP_MPS}mps${COSIM_PEDESTRIAN_SPEED_CAP_RADIUS_M}m")
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 OUT=$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
 {
     echo "checkpoint $CKPT"; echo "routes $ROUTE_DIR ($ROUTES_XML)"; echo "scenarios $SCENARIO_FILE"
-    echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"; echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
+    echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"; echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M pedestrian_speed_cap_mps $COSIM_PEDESTRIAN_SPEED_CAP_MPS radius_m $COSIM_PEDESTRIAN_SPEED_CAP_RADIUS_M"
     echo "git $(git -C "$PD" rev-parse --short HEAD 2>/dev/null) $(git -C "$PD" diff --quiet 2>/dev/null || echo dirty)"
 } > "$OUT/run_info.txt"
 echo "Results -> $OUT"

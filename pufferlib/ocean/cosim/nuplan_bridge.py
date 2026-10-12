@@ -608,7 +608,8 @@ def partner_tracked_objects(tracked_objects, map_api, static_on_lane: dict):
     return kept
 
 
-VRU_PARTNER_TYPE_IDS = (_NUPLAN_AGENT_TYPE["PEDESTRIAN"], _NUPLAN_AGENT_TYPE["BICYCLE"])
+PEDESTRIAN_PARTNER_TYPE_ID = _NUPLAN_AGENT_TYPE["PEDESTRIAN"]
+VRU_PARTNER_TYPE_IDS = (PEDESTRIAN_PARTNER_TYPE_ID, _NUPLAN_AGENT_TYPE["BICYCLE"])
 
 
 def pad_vru_partner_sizes(types, lengths, widths, pad_m: float):

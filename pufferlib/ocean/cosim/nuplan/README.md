@@ -35,7 +35,11 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   policy's observation (training spawns nothing below 0.8 x 0.8 m, nuPlan pedestrians
   are 0.4-0.8 m, bicycles ~0.5 m wide), so they read strictly larger than the smallest
   training vehicle; nuPlan still scores the true boxes. Off by default, script 9 sets
-  0.8 m. The shadow env consumes the goals of its
+  0.8 m. `pedestrian_speed_cap_mps` (env `PEDESTRIAN_SPEED_CAP_MPS`, radius
+  `pedestrian_speed_cap_radius_m` / `PEDESTRIAN_SPEED_CAP_RADIUS_M`, 30 m): while a pedestrian
+  is ahead within the radius, every lane limit the policy observes is capped at this value, so
+  it slows down like the CARLA garage autopilot does near walkers. Off by default. The shadow
+  env consumes the goals of its
   `num_goals` window itself exactly like training (`goal_regen_mode: finite`,
   consumed slots zeroed in the obs); the planner pushes the next window only
   when the current one is exhausted or its current goal is clearly behind the
