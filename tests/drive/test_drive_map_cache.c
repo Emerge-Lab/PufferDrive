@@ -330,8 +330,8 @@ static int test_road_observation_cache_handles_widths_and_zero_length_segments(v
     Drive env = {.road_elements = roads, .num_road_elements = 3};
     cache_road_observation_geometry(&env);
     const RoadObservationSegment expected_lane[] = {
-        {3.0f, 4.0f, 2.0f, 5.0f, 0.6f, 0.8f, 3.0f},
-        {6.0f, 8.0f, 3.0f, 0.0f, 0.0f, 0.0f, 5.0f},
+        {3.0f, 4.0f, 2.0f, 5.0f, 0.6f, 0.8f, 3.0f, 1},
+        {6.0f, 8.0f, 3.0f, 0.0f, 0.0f, 0.0f, 5.0f, 1},
     };
     RoadObservationSegment expected_boundary[2];
     memcpy(expected_boundary, expected_lane, sizeof(expected_boundary));
@@ -345,10 +345,47 @@ static int test_road_observation_cache_handles_widths_and_zero_length_segments(v
     return 0;
 }
 
+// 5 straight 10 m segments then a 90 degree turn of two 10 m segments; stride 2.
+static int test_stride_merge_chords_stay_connected_and_split_at_bends(void) {
+    float x[] = {0.0f, 10.0f, 20.0f, 30.0f, 40.0f, 50.0f, 50.0f, 50.0f};
+    float y[] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 10.0f, 20.0f};
+    float z[8] = {0.0f};
+    float headings[] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.5708f, 1.5708f, 1.5708f};
+    RoadMapElement roads[] = {
+        {.type = ROAD_EDGE_BOUNDARY, .segment_size = 8, .x = x, .y = y, .z = z, .headings = headings},
+    };
+    Drive legacy = {.road_elements = roads, .num_road_elements = 1, .obs_boundary_stride = 2};
+    cache_road_observation_geometry(&legacy);
+    const int expected_legacy_observed[] = {1, 0, 1, 0, 1, 1, 0};
+    for (int segment_idx = 0; segment_idx < 7; segment_idx++) {
+        EXPECT_EQ_INT(roads[0].observation_segments[segment_idx].observed, expected_legacy_observed[segment_idx]);
+        EXPECT_NEAR(roads[0].observation_segments[segment_idx].half_length_m, 5.0f, 1e-5f);
+    }
+    free(roads[0].observation_segments);
+
+    Drive merged
+        = {.road_elements = roads, .num_road_elements = 1, .obs_boundary_stride = 2, .obs_stride_merge_segments = 1};
+    cache_road_observation_geometry(&merged);
+    // runs [0,1] [2,3] [4] [5,6] -> carriers 0, 2, 4, 5 spanning x 0-20, 20-40, 40-50, then y 0-20
+    const RoadObservationSegment expected[] = {
+        {10.0f, 0.0f, 0.0f, 10.0f, 1.0f, 0.0f, 0.0f, 1},
+        {15.0f, 0.0f, 0.0f, 5.0f, 1.0f, 0.0f, 0.0f, 0},
+        {30.0f, 0.0f, 0.0f, 10.0f, 1.0f, 0.0f, 0.0f, 1},
+        {35.0f, 0.0f, 0.0f, 5.0f, 1.0f, 0.0f, 0.0f, 0},
+        {45.0f, 0.0f, 0.0f, 5.0f, 1.0f, 0.0f, 0.0f, 1},
+        {50.0f, 10.0f, 0.0f, 10.0f, 0.0f, 1.0f, 0.0f, 1},
+        {50.0f, 15.0f, 0.0f, 5.0f, 0.0f, 1.0f, 0.0f, 0},
+    };
+    EXPECT_EQ_INT(memcmp(roads[0].observation_segments, expected, sizeof(expected)), 0);
+    free(roads[0].observation_segments);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_road_observation_cache_follows_map_ownership);
     RUN_TEST(test_road_observation_cache_handles_widths_and_zero_length_segments);
+    RUN_TEST(test_stride_merge_chords_stay_connected_and_split_at_bends);
     RUN_TEST(test_all_cache_modes_produce_identical_step_outputs);
     RUN_TEST(test_cache_mode_matrix_has_expected_map_and_neighbor_allocations);
     RUN_TEST(test_mixed_neighbor_modes_share_map_and_populate_neighbor_cache);

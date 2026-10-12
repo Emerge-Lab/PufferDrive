@@ -29,8 +29,9 @@ RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
 CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || CKPT=$(ls "$RUN_DIR"/models/model_*.pt 2>/dev/null | sort | tail -n 1)
 GOAL_MODE=gt_time:5  # gt_time:<s> | gt | route
-PEDESTRIAN_SIZE_PAD_M=0.8  # added to every pedestrian box's length and width the teacher sees; 0 = true boxes
+VRU_SIZE_PAD_M=0.8   # added to the length and width of every pedestrian and two-wheeler box the teacher sees; 0 = true boxes
 RENDER_VIDEO=0       # one mp4 per scene; 1 also streams the teacher BEV and makes every policy step ~5x slower
+OBS_REPLAY=1         # PufferDrive observation replay html per scene -> $OUT/alpagym/obs_replays
 CAM_W=640            # 16:9 render size; the teacher never sees the cameras
 CAM_H=360
 SIM_TIMEOUT_S=3600   # per batch of PARALLEL scenes
@@ -113,11 +114,11 @@ EOF
 [ ${#SCENES[@]} -gt 0 ] || { echo "no scenes to evaluate"; exit 1; }
 
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
-OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE//:/}$([ "$PEDESTRIAN_SIZE_PAD_M" = "0" ] || echo "_pedpad$PEDESTRIAN_SIZE_PAD_M")_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE//:/}$([ "$VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$VRU_SIZE_PAD_M")_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT"
 {
     echo "checkpoint $CKPT"; echo "scenes ${#SCENES[@]}"; echo "topology $TOPOLOGY parallel $PARALLEL goal_mode $GOAL_MODE"
-    echo "pedestrian_size_pad_m $PEDESTRIAN_SIZE_PAD_M"
+    echo "vru_size_pad_m $VRU_SIZE_PAD_M"
     for repo in "$PD" "$ALPAGYM_ROOT" "$ALPASIM_ROOT"; do
         echo "git $repo $(git -C "$repo" rev-parse --short HEAD 2>/dev/null) $(git -C "$repo" diff --quiet 2>/dev/null || echo dirty)"
     done
@@ -156,6 +157,7 @@ fi
 # the teacher is an external driver, but the 8gpu topologies re-assert driver.skip=false and abort at startup
 OVERRIDES="wizard.baseport=$BASEPORT runtime.endpoints.driver.skip=true"
 [ "$RENDER_VIDEO" = "1" ] && RENDER_VIDEO_FLAG=true || RENDER_VIDEO_FLAG=false
+[ "$OBS_REPLAY" = "1" ] && OBS_REPLAY_FLAG=true || OBS_REPLAY_FLAG=false
 echo "${#SCENES[@]} scenes, $TOPOLOGY with $PARALLEL in flight; full log: $OUT/evaluate.log"
 cd "$ALPAGYM_ROOT" || exit 1
 "$ALPAGYM_PY" -m alpagym_host.evaluate \
@@ -163,8 +165,9 @@ cd "$ALPAGYM_ROOT" || exit 1
     --teacher_checkpoint "$CKPT" \
     --teacher_bins_dir "$BINS" \
     --teacher_goal_mode "$GOAL_MODE" \
-    --teacher_pedestrian_size_pad_m "$PEDESTRIAN_SIZE_PAD_M" \
+    --teacher_vru_size_pad_m "$VRU_SIZE_PAD_M" \
     --render_video "$RENDER_VIDEO_FLAG" \
+    --teacher_obs_replay "$OBS_REPLAY_FLAG" \
     --local_scene_dir "$USDZ_DIR" \
     --scene_ids "${SCENES[@]}" \
     --topology "$TOPOLOGY" \
@@ -194,6 +197,6 @@ if [ $EVAL_STATUS -ne 0 ]; then
     echo "AlpaSim evaluation failed (exit $EVAL_STATUS); last host lines of $OUT/evaluate.log:"
     grep -vE '^[a-z0-9_-]+-[0-9]+-[0-9]+ +\|' "$OUT/evaluate.log" | tail -n 30
 fi
-echo "per-scene metrics -> $OUT/alpagym/metrics/per_scene.csv; videos -> $OUT/alpagym/alpasim/wizard_0/rollouts"
+echo "per-scene metrics -> $OUT/alpagym/metrics/per_scene.csv; videos -> $OUT/alpagym/alpasim/wizard_0/rollouts; obs replays -> $OUT/alpagym/obs_replays"
 echo "Done -> $OUT"
 exit $EVAL_STATUS

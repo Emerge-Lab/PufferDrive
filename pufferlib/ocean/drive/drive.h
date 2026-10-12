@@ -139,6 +139,7 @@ struct SharedMapData {
     struct LaneGraph lane_graph;
     int obs_lane_stride;
     int obs_boundary_stride;
+    int obs_stride_merge_segments;
     int ref_count;
     pid_t owner_pid;
 };
@@ -288,6 +289,7 @@ struct Drive {
     int yield_signs_enabled;
     int obs_lane_stride;
     int obs_boundary_stride;
+    int obs_stride_merge_segments;
     int obs_slots_lane_kept;
     int obs_slots_boundary_kept;
     int road_dropout_enabled;

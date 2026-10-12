@@ -207,6 +207,8 @@ env:
   # Stride for lane and boundary segments; 1 means use every segment, 2 means use every other segment, etc.
   obs_lane_stride: 2
   obs_boundary_stride: 1
+  # true: strided-out segments merge into one chord so polylines stay connected; false = pre-2026-10-12 gaps
+  obs_stride_merge_segments: false
   # --- Observation normalization ---
   obs_norm_speed_mps: 60.0
   # num_goals * max_goal_spacing; goals beyond this collapse to a unit direction vector

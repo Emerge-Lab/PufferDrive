@@ -12,7 +12,7 @@ CLEAN_EVAL_OVERRIDES); only the structural co-sim keys (map, pool wiring) are se
 
 Actor state rows (CARLA frame, physics quantities from CARLA's own physics):
   ACTOR_STATE  [x, y, z, yaw_deg, vx, vy, vz, angular_velocity_z_deg_s, accel_x, accel_y]
-  PARTNER_ROW  ACTOR_STATE + [box_z, extent_x, extent_y, extent_z, is_walker, actor_id]
+  PARTNER_ROW  ACTOR_STATE + [box_z, extent_x, extent_y, extent_z, is_walker, is_two_wheeler, actor_id]
 
 init_route(route) once the ego exists, route = {
   town, tick_dt,
@@ -42,11 +42,10 @@ Environment variables:
                                1: every partner's seconds_stopped observation feature is held at 0 (the
                                ego's own counter is untouched). Ablates the stopped-time cue behind
                                parked-car / red-light-queue avoidance.
-  COSIM_PEDESTRIAN_SIZE_PAD_M=0.0
-                               added to every walker partner box's length and width (nuPlan's
-                               pedestrian_size_pad_m; the training spawn floor is 0.8 m, CARLA walkers
-                               are 0.4-0.5 m, so 0.8 lifts them to 1.2-1.3 m, strictly above the
-                               smallest training vehicle)
+  COSIM_VRU_SIZE_PAD_M=0.0     added to the length and width of every walker and two-wheeler partner box
+                               (nuPlan's vru_size_pad_m; the training spawn floor is 0.8 m, CARLA walkers
+                               are 0.4-0.5 m and bicycles 0.4 m wide, so 0.8 lifts them strictly above
+                               the smallest training vehicle)
   COSIM_TELEMETRY=/dir         write a per-policy-step CSV per route, with the shadow env's and the
                                simulator's infraction flags as columns
   COSIM_OBS_HTML=/dir          write an interactive pufferlib.viz replay per route (the exact obs +
@@ -76,7 +75,7 @@ from pufferlib.ocean.drive.drive import Drive
 
 
 ACTOR_STATE_COLUMNS = 10
-PARTNER_ROW_COLUMNS = 16
+PARTNER_ROW_COLUMNS = 17
 (
     STATE_X,
     STATE_Y,
@@ -95,6 +94,7 @@ PARTNER_ROW_COLUMNS = 16
     PARTNER_EXTENT_Y,
     PARTNER_EXTENT_Z,
     PARTNER_IS_WALKER,
+    PARTNER_IS_TWO_WHEELER,
     PARTNER_ACTOR_ID,
 ) = range(ACTOR_STATE_COLUMNS, PARTNER_ROW_COLUMNS)
 
@@ -203,9 +203,9 @@ class ShadowEgo:
         env_cfg = self.cfg["env"]
         self.max_speed_mps = cosim_max_speed_mps(env_cfg)
         self.zero_partner_stopped_time = env_flag("COSIM_ZERO_PARTNER_STOPPED_TIME")
-        self.pedestrian_size_pad_m = float(os.environ.get("COSIM_PEDESTRIAN_SIZE_PAD_M", "0.0"))
-        if not (self.pedestrian_size_pad_m >= 0.0):
-            raise ValueError(f"COSIM_PEDESTRIAN_SIZE_PAD_M must be >= 0, got {self.pedestrian_size_pad_m}")
+        self.vru_size_pad_m = float(os.environ.get("COSIM_VRU_SIZE_PAD_M", "0.0"))
+        if not (self.vru_size_pad_m >= 0.0):
+            raise ValueError(f"COSIM_VRU_SIZE_PAD_M must be >= 0, got {self.vru_size_pad_m}")
         # Shadow agent pool == the training per-env cap
         self.num_agents = int(env_cfg["max_agents_per_env"])
 
@@ -416,7 +416,7 @@ class ShadowEgo:
             f"[puffer_agent] town={town} tick_dt={self.tick_dt} dt={self.dt} route_goals={len(self.route_goals)} "
             f"max_speed_mps={self.env.max_speed_mps:.1f} (C_vel={self.env.max_speed_mps / self.env.base_max_speed_mps:.2f}) "
             f"zero_partner_stopped_time={int(self.zero_partner_stopped_time)} "
-            f"pedestrian_size_pad_m={self.pedestrian_size_pad_m:g}"
+            f"vru_size_pad_m={self.vru_size_pad_m:g}"
         )
         self.initialized = True
 
@@ -473,9 +473,10 @@ class ShadowEgo:
         idx, length, width = [], [], []
         for j, row in enumerate(partners):
             idx.append(1 + j)
-            walker_pad_m = self.pedestrian_size_pad_m if row[PARTNER_IS_WALKER] > 0.0 else 0.0
-            length.append(max(2.0 * row[PARTNER_EXTENT_X], MIN_PARTNER_SIZE_M) + walker_pad_m)
-            width.append(max(2.0 * row[PARTNER_EXTENT_Y], MIN_PARTNER_SIZE_M) + walker_pad_m)
+            is_vru = row[PARTNER_IS_WALKER] > 0.0 or row[PARTNER_IS_TWO_WHEELER] > 0.0
+            vru_pad_m = self.vru_size_pad_m if is_vru else 0.0
+            length.append(max(2.0 * row[PARTNER_EXTENT_X], MIN_PARTNER_SIZE_M) + vru_pad_m)
+            width.append(max(2.0 * row[PARTNER_EXTENT_Y], MIN_PARTNER_SIZE_M) + vru_pad_m)
         return (np.array(idx, np.int32), np.array(length, np.float32), np.array(width, np.float32))
 
     def _read_light_states(self, light_states, ego_light_id):

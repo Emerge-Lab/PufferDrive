@@ -147,6 +147,7 @@ typedef struct {
     float direction_x;
     float direction_y;
     float width_m;
+    int observed;
 } RoadObservationSegment;
 
 struct RoadMapElement {

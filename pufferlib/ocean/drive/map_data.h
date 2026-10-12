@@ -56,6 +56,68 @@ static void add_entity_to_grid(
     cell_entities_insert_index[grid_index] = count + 1;
 }
 
+static void set_observation_segment_geometry(
+    RoadMapElement *road,
+    int start_point_idx,
+    int end_point_idx,
+    int carrier_idx) {
+    RoadObservationSegment *segment = &road->observation_segments[carrier_idx];
+    // Preserve the observation formulas and float rounding, including zero-length segments.
+    segment->mid_x_m = (road->x[start_point_idx] + road->x[end_point_idx]) / 2.0f;
+    segment->mid_y_m = (road->y[start_point_idx] + road->y[end_point_idx]) / 2.0f;
+    segment->mid_z_m = (road->z[start_point_idx] + road->z[end_point_idx]) / 2.0f;
+    float half_dx_m = road->x[end_point_idx] - segment->mid_x_m;
+    float half_dy_m = road->y[end_point_idx] - segment->mid_y_m;
+    segment->half_length_m = sqrtf(half_dx_m * half_dx_m + half_dy_m * half_dy_m);
+    segment->direction_x = segment->half_length_m > 0.0f ? half_dx_m / segment->half_length_m : half_dx_m;
+    segment->direction_y = segment->half_length_m > 0.0f ? half_dy_m / segment->half_length_m : half_dy_m;
+    segment->width_m
+        = is_road_lane(road->type) ? 0.5f * (road->widths[start_point_idx] + road->widths[end_point_idx]) : 0.0f;
+}
+
+// Legacy stride: every obs_stride-th segment is observed with its own extent, so the skipped ones leave gaps.
+static void mark_strided_observation_segments(RoadMapElement *road, int obs_stride) {
+    int last_kept_idx = 0;
+    for (int segment_idx = 0; segment_idx < road->segment_size - 1; segment_idx++) {
+        int observed = 1;
+        if (obs_stride > 1 && segment_idx > 0) {
+            float heading_dev_rad
+                = fabsf(normalize_heading(road->headings[segment_idx] - road->headings[last_kept_idx]));
+            observed = segment_idx - last_kept_idx >= obs_stride || heading_dev_rad > OBS_STRIDE_HEADING_THRESHOLD;
+        }
+        if (observed) {
+            last_kept_idx = segment_idx;
+        }
+        road->observation_segments[segment_idx].observed = observed;
+    }
+}
+
+// One chord from the run's first point to its last point, carried by the run's middle segment.
+static void close_observation_segment_run(RoadMapElement *road, int first_segment_idx, int last_segment_idx) {
+    int carrier_idx = (first_segment_idx + last_segment_idx) / 2;
+    set_observation_segment_geometry(road, first_segment_idx, last_segment_idx + 1, carrier_idx);
+    road->observation_segments[carrier_idx].observed = 1;
+}
+
+// Runs of up to obs_stride near-collinear segments become one chord, so the polyline stays connected.
+static void merge_strided_observation_segments(RoadMapElement *road, int obs_stride) {
+    int segment_count = road->segment_size - 1;
+    int run_start_idx = 0;
+    for (int segment_idx = 0; segment_idx < segment_count; segment_idx++) {
+        if (segment_idx > run_start_idx
+            && fabsf(normalize_heading(road->headings[segment_idx] - road->headings[run_start_idx]))
+                   > OBS_STRIDE_HEADING_THRESHOLD) {
+            close_observation_segment_run(road, run_start_idx, segment_idx - 1);
+            run_start_idx = segment_idx;
+        }
+        if (segment_idx - run_start_idx + 1 < obs_stride && segment_idx < segment_count - 1) {
+            continue;
+        }
+        close_observation_segment_run(road, run_start_idx, segment_idx);
+        run_start_idx = segment_idx + 1;
+    }
+}
+
 // Build after loading lane widths and before sharing the immutable road elements.
 static void cache_road_observation_geometry(Drive *env) {
     for (int road_idx = 0; road_idx < env->num_road_elements; road_idx++) {
@@ -77,20 +139,14 @@ static void cache_road_observation_geometry(Drive *env) {
         if (road->observation_segments == NULL) {
             raise_error_with_message(ERROR_MEMORY_ALLOCATION, "Failed to cache geometry for road %d", road_idx);
         }
-        int has_lane_width = is_road_lane(road->type);
         for (int segment_idx = 0; segment_idx < road->segment_size - 1; segment_idx++) {
-            RoadObservationSegment *segment = &road->observation_segments[segment_idx];
-            // Preserve the observation formulas and float rounding, including zero-length segments.
-            segment->mid_x_m = (road->x[segment_idx] + road->x[segment_idx + 1]) / 2.0f;
-            segment->mid_y_m = (road->y[segment_idx] + road->y[segment_idx + 1]) / 2.0f;
-            segment->mid_z_m = (road->z[segment_idx] + road->z[segment_idx + 1]) / 2.0f;
-            float half_dx_m = road->x[segment_idx + 1] - segment->mid_x_m;
-            float half_dy_m = road->y[segment_idx + 1] - segment->mid_y_m;
-            segment->half_length_m = sqrtf(half_dx_m * half_dx_m + half_dy_m * half_dy_m);
-            segment->direction_x = segment->half_length_m > 0.0f ? half_dx_m / segment->half_length_m : half_dx_m;
-            segment->direction_y = segment->half_length_m > 0.0f ? half_dy_m / segment->half_length_m : half_dy_m;
-            segment->width_m
-                = has_lane_width ? 0.5f * (road->widths[segment_idx] + road->widths[segment_idx + 1]) : 0.0f;
+            set_observation_segment_geometry(road, segment_idx, segment_idx + 1, segment_idx);
+        }
+        int obs_stride = is_road_lane(road->type) ? env->obs_lane_stride : env->obs_boundary_stride;
+        if (env->obs_stride_merge_segments) {
+            merge_strided_observation_segments(road, obs_stride);
+        } else {
+            mark_strided_observation_segments(road, obs_stride);
         }
     }
 }
@@ -209,24 +265,9 @@ static int init_grid_map(Drive *env) {
         }
         RoadMapElement *element = &env->road_elements[i];
         int is_lane = is_road_lane(element->type);
-        int obs_stride = 1;
-        if (is_lane) {
-            obs_stride = env->obs_lane_stride;
-        } else if (is_road_edge(element->type)) {
-            obs_stride = env->obs_boundary_stride;
-        }
-        int last_kept_idx = 0;
         for (int j = 0; j < element->segment_size - 1; j++) {
-            // Keep a point every obs_stride points, plus wherever heading deviates enough
-            // since the last kept point (densifies curves/intersections)
-            int valid_for_obs = 1;
-            if (obs_stride > 1 && j > 0) {
-                float heading_dev = fabsf(normalize_heading(element->headings[j] - element->headings[last_kept_idx]));
-                valid_for_obs = j - last_kept_idx >= obs_stride || heading_dev > OBS_STRIDE_HEADING_THRESHOLD;
-            }
             int obs_kind = OBS_ENTITY_NONE;
-            if (valid_for_obs) {
-                last_kept_idx = j;
+            if (element->observation_segments[j].observed) {
                 obs_kind = is_lane ? OBS_ENTITY_LANE : OBS_ENTITY_EDGE;
             }
             float x_center = (element->x[j] + element->x[j + 1]) / 2;
@@ -1009,7 +1050,8 @@ static struct SharedMapData *map_cache_lookup(Drive *env) {
     for (int i = 0; i < g_map_cache_count; i++) {
         if (g_map_cache[i] != NULL && strcmp(g_map_cache[i]->map_name, env->map_name) == 0
             && g_map_cache[i]->obs_lane_stride == env->obs_lane_stride
-            && g_map_cache[i]->obs_boundary_stride == env->obs_boundary_stride) {
+            && g_map_cache[i]->obs_boundary_stride == env->obs_boundary_stride
+            && g_map_cache[i]->obs_stride_merge_segments == env->obs_stride_merge_segments) {
             return g_map_cache[i];
         }
     }
@@ -1039,6 +1081,7 @@ static struct SharedMapData *map_cache_store(Drive *env) {
     entry->lane_graph = env->lane_graph;
     entry->obs_lane_stride = env->obs_lane_stride;
     entry->obs_boundary_stride = env->obs_boundary_stride;
+    entry->obs_stride_merge_segments = env->obs_stride_merge_segments;
     entry->ref_count = 1;
     entry->owner_pid = getpid();
     map_cache_insert(entry);

@@ -608,12 +608,15 @@ def partner_tracked_objects(tracked_objects, map_api, static_on_lane: dict):
     return kept
 
 
-def pad_pedestrian_partner_sizes(types, lengths, widths, pad_m: float):
-    """Pedestrian boxes grow by pad_m in length and width (0.8 puts every nuPlan pedestrian strictly
-    above the 0.8 x 0.8 m training minimum). Other types untouched."""
-    pedestrian = types == _NUPLAN_AGENT_TYPE["PEDESTRIAN"]
-    lengths = np.where(pedestrian, lengths + pad_m, lengths).astype(np.float32)
-    widths = np.where(pedestrian, widths + pad_m, widths).astype(np.float32)
+VRU_PARTNER_TYPE_IDS = (_NUPLAN_AGENT_TYPE["PEDESTRIAN"], _NUPLAN_AGENT_TYPE["BICYCLE"])
+
+
+def pad_vru_partner_sizes(types, lengths, widths, pad_m: float):
+    """Pedestrian and bicycle boxes grow by pad_m in length and width (0.8 puts every nuPlan pedestrian
+    and bicycle strictly above the 0.8 x 0.8 m training minimum). Other types untouched."""
+    vru = np.isin(types, VRU_PARTNER_TYPE_IDS)
+    lengths = np.where(vru, lengths + pad_m, lengths).astype(np.float32)
+    widths = np.where(vru, widths + pad_m, widths).astype(np.float32)
     return lengths, widths
 
 

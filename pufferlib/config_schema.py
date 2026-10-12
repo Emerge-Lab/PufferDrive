@@ -336,6 +336,7 @@ class DriveEnvConfig:
     obs_dropout_boundary: float = _constrained_field(PROBABILITY_CONSTRAINT)
     obs_lane_stride: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     obs_boundary_stride: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    obs_stride_merge_segments: bool = MISSING
     obs_norm_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     obs_norm_goal_offset_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     obs_norm_xy_offset_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)

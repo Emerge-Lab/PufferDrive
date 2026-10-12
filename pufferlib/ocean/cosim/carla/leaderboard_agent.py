@@ -111,7 +111,10 @@ def partner_row(actor):
     """shadow_ego PARTNER_ROW of a live CARLA vehicle or walker."""
     box = actor.bounding_box
     is_walker = 1.0 if "walker" in actor.type_id else 0.0
-    return actor_state_row(actor) + [box.location.z, box.extent.x, box.extent.y, box.extent.z, is_walker, actor.id]
+    is_two_wheeler = 1.0 if actor.attributes.get("number_of_wheels") == "2" else 0.0
+    return actor_state_row(actor) + [
+        box.location.z, box.extent.x, box.extent.y, box.extent.z, is_walker, is_two_wheeler, actor.id
+    ]
 
 
 class PufferAgent(autonomous_agent.AutonomousAgent):
@@ -257,16 +260,25 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             )
         # Zero momentum before the teleport: CARLA's collision resolver reacts violently to a
         # physics body carrying velocity into a new pose (carla issue #8076).
+        # One ordered batch: the server reorders async actor commands, and a late zero left the ego reading 0 m/s on 3 % of ticks
         zero = carla.Vector3D(x=0.0, y=0.0, z=0.0)
-        self.vehicle.set_target_velocity(zero)
-        self.vehicle.set_target_angular_velocity(zero)
-        self.vehicle.set_transform(
-            carla.Transform(carla.Location(x=x, y=y, z=z), carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=roll_deg))
+        CarlaDataProvider.get_client().apply_batch_sync(
+            [
+                carla.command.ApplyTargetVelocity(self.vehicle.id, zero),
+                carla.command.ApplyTargetAngularVelocity(self.vehicle.id, zero),
+                carla.command.ApplyTransform(
+                    self.vehicle.id,
+                    carla.Transform(carla.Location(x=x, y=y, z=z), carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=roll_deg)),
+                ),
+                carla.command.ApplyTargetVelocity(
+                    self.vehicle.id, carla.Vector3D(x=speed * forward[0], y=speed * forward[1], z=speed * forward[2])
+                ),
+                carla.command.ApplyTargetAngularVelocity(
+                    self.vehicle.id, carla.Vector3D(x=0.0, y=0.0, z=yaw_delta_deg / self.shadow.dt)
+                ),
+            ],
+            False,
         )
-        self.vehicle.set_target_velocity(
-            carla.Vector3D(x=speed * forward[0], y=speed * forward[1], z=speed * forward[2])
-        )
-        self.vehicle.set_target_angular_velocity(carla.Vector3D(x=0.0, y=0.0, z=yaw_delta_deg / self.shadow.dt))
 
     def _road_surface(self, x, y, reference_z, yaw_deg):
         """(z, pitch_deg) resting the body on the road mesh: bumper-to-bumper chord, lifted until no sample is below the mesh; None off the mesh."""

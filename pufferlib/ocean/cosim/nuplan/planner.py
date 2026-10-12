@@ -93,7 +93,7 @@ class PufferDrivePlanner(AbstractPlanner):
         startup_jerk_cap_seconds: float = 1.5,
         startup_accel_jerk_cap_mps3: float = 0.0,
         startup_brake_jerk_cap_mps3: float = 0.0,
-        pedestrian_size_pad_m: float = 0.0,
+        vru_size_pad_m: float = 0.0,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
         obs_html_max_steps: int = 800,
@@ -125,10 +125,10 @@ class PufferDrivePlanner(AbstractPlanner):
             during the start window [m/s³]; 0 = uncapped. nuPlan's Savitzky-Golay jerk extrapolates at
             the trajectory edges, so a ramp that starts at t=0 reads ~2x its raw jerk.
         :param startup_brake_jerk_cap_mps3: same cap for braking jerk; 0 = uncapped.
-        :param pedestrian_size_pad_m: eval hack: pedestrian partner boxes grow by this much in length and
-            width [m] before the policy sees them, so they read strictly larger than the smallest training
-            vehicle (0.8 x 0.8 m; nuPlan pedestrians are 0.4-0.8 m); nuPlan keeps scoring the true boxes.
-            0 = off.
+        :param vru_size_pad_m: eval hack: pedestrian and bicycle partner boxes grow by this much in length
+            and width [m] before the policy sees them, so they read strictly larger than the smallest
+            training vehicle (0.8 x 0.8 m; nuPlan pedestrians are 0.4-0.8 m, bicycles ~0.5 m wide); nuPlan
+            keeps scoring the true boxes. 0 = off.
         :param env_overrides: Drive env kwargs overriding DEFAULT_ARCH.
         :param obs_html_dir: write the interactive pufferlib.viz observation replay per
             scenario (the exact obs the policy received, its outputs and encoder pool winners).
@@ -158,9 +158,9 @@ class PufferDrivePlanner(AbstractPlanner):
             < 0
         ):
             raise ValueError("startup_jerk_cap_seconds and the startup jerk caps must be >= 0")
-        self._pedestrian_size_pad_m = float(pedestrian_size_pad_m)
-        if self._pedestrian_size_pad_m < 0:
-            raise ValueError("pedestrian_size_pad_m must be >= 0")
+        self._vru_size_pad_m = float(vru_size_pad_m)
+        if self._vru_size_pad_m < 0:
+            raise ValueError("vru_size_pad_m must be >= 0")
         self._startup_jerk_cap_steps = 0  # resolved in _build from the scenario dt
         self._startup_action_bounds = None  # (lo, hi) on the continuous jerk action while the cap is live
         self._env_overrides = env_overrides or {}
@@ -510,8 +510,8 @@ class PufferDrivePlanner(AbstractPlanner):
             objs = objs[: self._num_agents - 1]
         if objs:
             idx, x, y, z, hh, vx, vy, tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
-            if self._pedestrian_size_pad_m > 0:
-                ln, wd = nb.pad_pedestrian_partner_sizes(tp, ln, wd, self._pedestrian_size_pad_m)
+            if self._vru_size_pad_m > 0:
+                ln, wd = nb.pad_vru_partner_sizes(tp, ln, wd, self._vru_size_pad_m)
             env.set_agent_states(idx, x, y, z, hh, vx, vy, np.zeros_like(vx), np.zeros_like(vx))
             env.set_agent_sizes(idx, ln, wd)
         surplus = np.arange(1 + len(objs), self._num_agents, dtype=np.int32)

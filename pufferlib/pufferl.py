@@ -1507,6 +1507,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "obs_slots_lane_n",
             "obs_boundary_stride",
             "obs_lane_stride",
+            "obs_stride_merge_segments",
             "obs_dropout_boundary",
             "obs_dropout_lane",
             "obs_slots_partners_n",

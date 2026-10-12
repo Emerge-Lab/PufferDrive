@@ -37,7 +37,7 @@
 #   SLIDING_GOAL_WINDOW=true|false  refill the goal window after every consumed goal (default false).
 #   STARTUP_ACCEL_JERK_CAP / STARTUP_BRAKE_JERK_CAP  [m/s^3] ego jerk caps for the first
 #             STARTUP_JERK_CAP_SECONDS (default 1.5) of every scenario; unset/0 = off.
-#   PEDESTRIAN_SIZE_PAD_M  [m] add this to pedestrian partner boxes' length and width in the policy's
+#   VRU_SIZE_PAD_M  [m] add this to pedestrian and bicycle partner boxes' length and width in the policy's
 #             observation (training never spawns below 0.8 m; 0.8 = strictly above the smallest training
 #             vehicle); unset/0 = off.
 #   OBS_SLOTS_PARTNERS_N  shadow-env partner obs slots (unset = planner yaml, 40).
@@ -87,7 +87,7 @@ EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
 [ -n "${STARTUP_JERK_CAP_SECONDS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_jerk_cap_seconds=$STARTUP_JERK_CAP_SECONDS")
 [ -n "${STARTUP_ACCEL_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_accel_jerk_cap_mps3=$STARTUP_ACCEL_JERK_CAP")
 [ -n "${STARTUP_BRAKE_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_brake_jerk_cap_mps3=$STARTUP_BRAKE_JERK_CAP")
-[ -n "${PEDESTRIAN_SIZE_PAD_M:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.pedestrian_size_pad_m=$PEDESTRIAN_SIZE_PAD_M")
+[ -n "${VRU_SIZE_PAD_M:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.vru_size_pad_m=$VRU_SIZE_PAD_M")
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_slots_partners_n=$OBS_SLOTS_PARTNERS_N")
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_perceived_size_margin_m=$EVAL_PERCEIVED_SIZE_MARGIN_M")
 [ -n "${REWARD_OVERSPEED:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.reward_overspeed=$REWARD_OVERSPEED")
