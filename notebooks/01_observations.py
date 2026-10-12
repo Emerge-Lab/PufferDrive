@@ -69,6 +69,8 @@ ego, target, partners, lanes, boundaries, traffic = unpack_obs(
     obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
     obs_dropout_lane=env.obs_dropout_lane,
     obs_dropout_boundary=env.obs_dropout_boundary,
+    obs_partner_relative_velocity=env.obs_partner_relative_velocity,
+    obs_lane_speed_limit=env.obs_lane_speed_limit,
 )
 print(f"ego: {ego.shape} = {ego}")
 print(f"target: {target.shape}")
@@ -283,6 +285,8 @@ img = plot_observation(
     obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
     obs_dropout_lane=env.obs_dropout_lane,
     obs_dropout_boundary=env.obs_dropout_boundary,
+    obs_partner_relative_velocity=env.obs_partner_relative_velocity,
+    obs_lane_speed_limit=env.obs_lane_speed_limit,
     obs_lane_stride=env.obs_lane_stride,
     obs_boundary_stride=env.obs_boundary_stride,
     obs_goal_lane_distance=env.obs_goal_lane_distance,
