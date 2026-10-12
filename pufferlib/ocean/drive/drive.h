@@ -4819,7 +4819,7 @@ static int write_partner_obs(
     float *obs,
     int obs_idx,
     int *partner_count) {
-    // Partner blindness: zero partner obs for the configured duration once triggered
+    // Partner blindness restricts visibility to an ego-width forward corridor while triggered
     if (ego->partner_blindness_counter > 0) {
         ego->partner_blindness_counter--;
     }
@@ -4827,12 +4827,7 @@ static int write_partner_obs(
         && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
         ego->partner_blindness_counter = env->partner_blindness_duration;
     }
-    if (ego->partner_blindness_counter > 0) {
-        int partner_obs_stride = env->obs_slots_partners_n * partner_feature_count(env);
-        memset(&obs[obs_idx], 0, partner_obs_stride * sizeof(float));
-        *partner_count = 0;
-        return obs_idx + partner_obs_stride;
-    }
+    int corridor_only = ego->partner_blindness_counter > 0;
 
     typedef struct {
         int index;
@@ -4847,11 +4842,21 @@ static int write_partner_obs(
         float dy = partner_scan[j].y - ego->sim_y;
         float dz = partner_scan[j].z - ego->sim_z;
         float dist_sq = dx * dx + dy * dy + dz * dz;
+        int partner_visible = 1;
+        if (corridor_only) {
+            Agent *other = &env->agents[partner_scan[j].agent_idx];
+            float rel_x, rel_y, rel_heading_x, rel_heading_y;
+            project_point_to_ego_frame(ego, other->sim_x, other->sim_y, &rel_x, &rel_y);
+            project_vector_to_ego_frame(ego, other->cos_heading, other->sin_heading, &rel_heading_x, &rel_heading_y);
+            float lateral_half_extent_m
+                = 0.5f * (fabsf(rel_heading_y) * other->sim_length + fabsf(rel_heading_x) * other->sim_width);
+            partner_visible = rel_x > 0.0f && fabsf(rel_y) <= lateral_half_extent_m + 0.5f * ego->sim_width;
+        }
         nearby_agents[nearby_count].index = partner_scan[j].agent_idx;
         nearby_agents[nearby_count].dist_sq = dist_sq;
         nearby_agents[nearby_count].dz = dz;
-        // branchless append: self and out-of-range candidates are overwritten by the next one
-        nearby_count += (partner_scan[j].agent_idx != ego_agent_idx) & !(dist_sq > range_sq);
+        // branchless append: self, out-of-range and corridor-hidden candidates are overwritten by the next one
+        nearby_count += (partner_scan[j].agent_idx != ego_agent_idx) & !(dist_sq > range_sq) & partner_visible;
     }
 
     int partners_written = 0;
