@@ -284,6 +284,12 @@ train:
   coplayer_policy_path: null
   # Co-player action selection - options: "sample", "mode" (argmax), "mean"
   coplayer_action_selection: sample
+  # Adds anchor_coef * KL(pi_base || pi) to every minibatch loss, averaged over anchor_batch_size observations
+  # drawn from anchor_obs_path, where pi_base is the policy as the first update starts. 0 disables.
+  anchor_coef: 0.0
+  anchor_batch_size: 4096
+  # .pt holding {"obs": [N, obs_dim] float tensor in the learner's layout, "meta": {...}} (see collect_anchor_obs)
+  anchor_obs_path: null
   # ---
   adam_beta1: 0.9
   adam_beta2: 0.999

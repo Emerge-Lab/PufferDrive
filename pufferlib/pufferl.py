@@ -39,6 +39,7 @@ import pufferlib
 from pufferlib.ocean.drive.drive import (
     ROW_KIND_IDLE,
     ROW_KIND_LOGREPLAY,
+    Drive,
     RewardConditioningView,
     drive_io_layout,
 )
@@ -125,6 +126,20 @@ def logits_to_float(logits):
     if isinstance(logits, torch.Tensor):
         return logits.float()
     return tuple(l.float() for l in logits)
+
+
+def action_kl(base_logits, logits):
+    """Per-row KL(base || new) between the action distributions two policies output, summed over action heads."""
+    if isinstance(logits, torch.distributions.Normal):
+        return torch.distributions.kl_divergence(base_logits, logits).sum(1)
+    if isinstance(logits, torch.Tensor):
+        base_logits, logits = (base_logits,), (logits,)
+    return sum(
+        torch.nn.functional.kl_div(
+            head.log_softmax(-1), base_head.log_softmax(-1), reduction="none", log_target=True
+        ).sum(-1)
+        for base_head, head in zip(base_logits, logits)
+    )
 
 
 # Env keys that define what a policy observes; a fine-tuned checkpoint brings them along from its config.yaml.
@@ -358,6 +373,78 @@ def logreplay_mix_env_kwargs(make_env, env_config, vec_config, logreplay_fractio
     )
     logreplay_config["logreplay_scene_count"] = scene_count
     return [env_config] * (num_envs - logreplay_env_count) + [logreplay_config] * logreplay_env_count
+
+
+def collect_anchor_obs(env_kwargs, policy, sample_count, device, seed=0):
+    """An anchor buffer for train.anchor_obs_path: what `policy` observes on its unmasked SDC rows while it drives
+    every SDC of a log-replay env built from env_kwargs."""
+    module = base_policy(policy)
+    if getattr(module, "hidden_size", None) is not None:
+        raise pufferlib.APIUsageError("Anchor buffers are for feed-forward policies")
+    if env_kwargs.get("eval_mode"):
+        raise pufferlib.APIUsageError(
+            "collect_anchor_obs rolls out training episodes; pass env kwargs with eval_mode=0"
+        )
+    io_layout = policy_io_layout(policy, "anchor")
+    env = Drive(**{**env_kwargs, **LOGREPLAY_ENV_SETUP})
+    collected = []
+    collected_count = 0
+    try:
+        obs_columns = reward_conditioning_obs_columns(env, io_layout, "anchor", device)
+        env_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
+        observations, _ = env.reset(seed=seed)
+        for _ in range(sample_count):
+            policy_obs = torch.as_tensor(observations).to(device)
+            if obs_columns is not None:
+                policy_obs = policy_obs.index_select(1, obs_columns)
+            rows = torch.as_tensor(np.flatnonzero(env.masks & env.learner_masks), device=device)
+            collected.append(policy_obs[rows].half().cpu())
+            collected_count += len(rows)
+            if collected_count >= sample_count:
+                break
+            with torch.no_grad():
+                logits, _ = policy.forward_eval(policy_obs, {})
+                logits = logits_to_float(logits)
+                action, _, _, cont_action = pufferlib.pytorch.sample_logits(
+                    logits, env_continuous=env_continuous, policy=module
+                )
+            env_action = policy_env_actions(module, logits, action, cont_action, env.single_action_space)
+            observations, _, _, _, _ = env.step(env_action)
+    finally:
+        env.close()
+    if collected_count < sample_count:
+        raise RuntimeError(
+            f"Collected {collected_count} of {sample_count} anchor observations; no SDC row was unmasked"
+        )
+    meta = {"io_layout": io_layout, "map_dir": str(env_kwargs["map_dir"]), "seed": seed}
+    return {"obs": torch.cat(collected)[:sample_count], "meta": meta}
+
+
+def load_anchor_obs(path, obs_shape, policy, device):
+    """The anchor buffer's observations, validated against the learner's observation layout."""
+    if not path:
+        raise pufferlib.APIUsageError("train.anchor_coef > 0 needs train.anchor_obs_path")
+    anchor = torch.load(path, map_location="cpu", weights_only=True)
+    if not isinstance(anchor, dict) or not isinstance(anchor.get("obs"), torch.Tensor):
+        raise pufferlib.APIUsageError(f"Anchor buffer {path} must be a dict with an 'obs' tensor")
+    obs = anchor["obs"]
+    if not obs.is_floating_point() or obs.dim() != 2 or tuple(obs.shape[1:]) != tuple(obs_shape) or len(obs) == 0:
+        raise pufferlib.APIUsageError(
+            f"Anchor buffer {path} needs a non-empty float [N, {obs_shape[0]}] 'obs' tensor in the learner's "
+            f"observation layout; got {obs.dtype} {tuple(obs.shape)}"
+        )
+    if not torch.isfinite(obs).all():
+        raise pufferlib.APIUsageError(f"Anchor buffer {path} holds non-finite observations")
+    meta = anchor.get("meta", {})
+    if not isinstance(meta, dict):
+        raise pufferlib.APIUsageError(f"Anchor buffer {path} 'meta' must be a dict")
+    io_layout = meta.get("io_layout")
+    if io_layout is not None and io_layout != policy_io_layout(policy, "learner"):
+        raise pufferlib.APIUsageError(
+            f"Anchor buffer {path} was collected for observation layout {io_layout}, not the learner's "
+            f"{policy_io_layout(policy, 'learner')}"
+        )
+    return obs.to(device)
 
 
 class FrozenCoplayer:
@@ -621,6 +708,26 @@ class PuffeRL:
             self.policy = torch.compile(policy, **compile_kwargs)
             self.policy.forward_eval = torch.compile(self.uncompiled_policy.forward_eval, **compile_kwargs)
             pufferlib.pytorch.sample_logits = torch.compile(pufferlib.pytorch.sample_logits, **compile_kwargs)
+
+        # Anchor: KL to the policy as training starts, on a fixed buffer of observations in the learner's layout.
+        self.anchor_obs = None
+        self.anchor_policy = None
+        anchor_coef = config.get("anchor_coef", 0.0)
+        if not isinstance(anchor_coef, (int, float)) or not 0.0 <= anchor_coef < float("inf"):
+            raise pufferlib.APIUsageError(f"train.anchor_coef must be finite and >= 0; got {anchor_coef}")
+        if anchor_coef > 0:
+            anchor_batch_size = config.get("anchor_batch_size")
+            if not isinstance(anchor_batch_size, int) or anchor_batch_size < 1:
+                raise pufferlib.APIUsageError(
+                    f"train.anchor_batch_size must be an integer >= 1; got {anchor_batch_size}"
+                )
+            if config["use_rnn"]:
+                raise pufferlib.APIUsageError(
+                    "train.anchor_coef needs a feed-forward learner; the anchor buffer holds no observation histories"
+                )
+            self.anchor_obs = load_anchor_obs(
+                config.get("anchor_obs_path"), buffer_obs_shape, self.uncompiled_policy, device
+            )
 
         # Optimizer
         if config["optimizer"] == "adam":
@@ -1080,6 +1187,12 @@ class PuffeRL:
         profile("train", epoch)
         profile("train_misc", epoch, nest=True)
         losses = defaultdict(float)
+        if self.anchor_obs is not None and self.anchor_policy is None:
+            # Taken at the first update, so weights loaded after construction (load_training_state) are the base.
+            self.anchor_policy = copy.deepcopy(self.uncompiled_policy).requires_grad_(False)
+        if self.anchor_obs is not None:
+            with torch.no_grad():
+                losses["anchor_kl"] = self._anchor_kl().item()
         if self.segment_logreplay is not None:
             logreplay_steps = self.segment_logreplay[:, None].float()
             losses["logreplay_sample_fraction"] = masked_mean(logreplay_steps, self.masks.float()).item()
@@ -1202,20 +1315,33 @@ class PuffeRL:
             v_loss = masked_mean(v_loss, weights)
         entropy_loss = masked_mean(entropy if weights is None else entropy.view_as(weights), weights)
         loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+        stats = {
+            "policy_loss": pg_loss.item(),
+            "value_loss": v_loss.item(),
+            "entropy": entropy_loss.item(),
+            "old_approx_kl": old_approx_kl.item(),
+            "approx_kl": approx_kl.item(),
+            "clipfrac": clipfrac.item(),
+        }
+        if self.anchor_obs is not None:
+            anchor_kl = self._anchor_kl()
+            loss = loss + config["anchor_coef"] * anchor_kl
+            stats["anchor_kl_mean"] = anchor_kl.item()
 
-        return (
-            loss,
-            newvalue,
-            ratio,
-            {
-                "policy_loss": pg_loss.item(),
-                "value_loss": v_loss.item(),
-                "entropy": entropy_loss.item(),
-                "old_approx_kl": old_approx_kl.item(),
-                "approx_kl": approx_kl.item(),
-                "clipfrac": clipfrac.item(),
-            },
+        return loss, newvalue, ratio, stats
+
+    def _anchor_kl(self):
+        """Mean KL(pi_base || pi) over a random batch of anchor-buffer observations."""
+        sample_idx = torch.randint(
+            len(self.anchor_obs), (self.config["anchor_batch_size"],), device=self.anchor_obs.device
         )
+        anchor_obs = self.anchor_obs[sample_idx].float()
+        state = dict(lstm_h=None, lstm_c=None)
+        with torch.no_grad(), self.amp_context:
+            base_logits, _ = self.anchor_policy(anchor_obs, state)
+        with self.amp_context:
+            logits, _ = self.policy(anchor_obs, state)
+        return action_kl(logits_to_float(base_logits), logits_to_float(logits)).mean()
 
     def _compute_advantages(self, ratio, rho_clip, c_clip):
         config = self.config
@@ -1428,7 +1554,7 @@ class PuffeRL:
             self.optimizer.zero_grad()
 
         if total_minibatches > 0:
-            for key in ("policy_loss", "value_loss", "entropy", "old_approx_kl", "approx_kl", "clipfrac"):
+            for key in stats:
                 losses[key] /= total_minibatches
 
         y_pred = flat_values[valid_idx]

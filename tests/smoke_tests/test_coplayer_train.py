@@ -26,6 +26,7 @@ from pufferlib.ocean.drive.drive import (
 from pufferlib.pufferl import (
     COPLAYER_ENV_SETUP,
     PuffeRL,
+    collect_anchor_obs,
     load_config,
     load_env,
     load_policy,
@@ -343,7 +344,8 @@ def test_ppo_against_frozen_coplayer(
             trainer.train()
             if resample == 0:
                 assert trainer.losses["masked_fraction"] == 0.0
-            assert "logreplay_sample_fraction" not in trainer.losses, "log-replay mixing is off by default"
+            off_by_default = {"anchor_kl", "anchor_kl_mean", "logreplay_sample_fraction"}
+            assert not off_by_default & set(trainer.losses), "both strategies are off by default"
         assert trainer.global_step >= EPOCHS * HORIZON * vecenv.num_agents
 
         for key, value in trainer.coplayer.policy.state_dict().items():
@@ -528,6 +530,12 @@ def finetune_train_config(args, tmp_path, coplayer_path, **train_overrides):
     return dict(**args["train"], env="puffer_drive", eval={}, run_name="finetune_test")
 
 
+def save_anchor_buffer(tmp_path, args, learner, sample_count):
+    path = str(tmp_path / "anchor.pt")
+    torch.save(collect_anchor_obs({**args["env"], "num_agents": 8}, learner, sample_count, "cpu"), path)
+    return path
+
+
 class CoplayerRowRecorder:
     """Records which global rows the frozen co-player acts on."""
 
@@ -581,6 +589,114 @@ def test_logreplay_mix_trains_on_both_scene_types(tmp_path):
     finally:
         vecenv.close()
         trainer.utilization.stop()
+
+
+def test_anchor_kl_starts_at_zero_and_pulls_toward_the_base(tmp_path):
+    """pi_base is the learner as the first update starts. anchor_kl, measured as each update starts, is exactly 0
+    at the first update and positive after; anchor_kl_mean, over the update's minibatches, is already positive at
+    the first update (two epochs, two optimizer steps); pi_base never changes."""
+    args = single_map_finetune_args(tmp_path, 0.0)
+    coplayer_path, _ = write_coplayer_checkpoint(str(tmp_path / "coplayer_run"), args, True, False)
+    torch.manual_seed(0)
+    vecenv = load_env("puffer_drive", args)
+    learner = load_policy(args, vecenv, "puffer_drive", reward_conditioning=False)
+    anchor_path = save_anchor_buffer(tmp_path, args, learner, 256)
+    config = finetune_train_config(
+        args, tmp_path, coplayer_path, anchor_coef=1.0, anchor_batch_size=64, anchor_obs_path=anchor_path
+    )
+    config["update_epochs"] = 2
+    trainer = PuffeRL(config, vecenv, learner, NullLogger())
+    try:
+        assert trainer.anchor_obs.shape == (256, *trainer.observations.shape[2:])
+        assert trainer.anchor_policy is None
+        initial_state = {k: v.clone() for k, v in trainer.uncompiled_policy.state_dict().items()}
+        anchor_kls = []
+        for _ in range(EPOCHS):
+            trainer.evaluate()
+            trainer.last_log_time = 0.0
+            trainer.train()
+            anchor_kls.append(trainer.losses["anchor_kl"])
+            if len(anchor_kls) == 1:
+                assert trainer.losses["anchor_kl_mean"] > 0.0
+        assert anchor_kls[0] == 0.0
+        assert all(kl > 0.0 for kl in anchor_kls[1:])
+        for key, value in trainer.anchor_policy.state_dict().items():
+            assert torch.equal(value, initial_state[key]), f"pi_base parameter {key} changed"
+        assert not any(p.requires_grad for p in trainer.anchor_policy.parameters())
+        assert "logreplay_sample_fraction" not in trainer.losses
+    finally:
+        vecenv.close()
+        trainer.utilization.stop()
+
+
+def test_logreplay_mix_and_anchor_together(tmp_path):
+    args = single_map_finetune_args(tmp_path, 0.25)
+    coplayer_path, _ = write_coplayer_checkpoint(str(tmp_path / "coplayer_run"), args, True, False)
+    torch.manual_seed(0)
+    vecenv = load_env("puffer_drive", args)
+    learner = load_policy(args, vecenv, "puffer_drive", reward_conditioning=False)
+    anchor_path = save_anchor_buffer(tmp_path, args, learner, 256)
+    config = finetune_train_config(
+        args, tmp_path, coplayer_path, anchor_coef=0.5, anchor_batch_size=128, anchor_obs_path=anchor_path
+    )
+    trainer = PuffeRL(config, vecenv, learner, NullLogger())
+    try:
+        planned_share = np.count_nonzero(vecenv.row_kinds() == ROW_KIND_LOGREPLAY) / vecenv.learner_row_count()
+        assert planned_share == pytest.approx(0.25, abs=0.05)
+        logged_keys = set()
+        for _ in range(EPOCHS):
+            trainer.evaluate()
+            logged_keys.update(trainer.stats)
+            trainer.last_log_time = 0.0
+            logs = trainer.train()
+            assert logs["losses/logreplay_sample_fraction"] == pytest.approx(planned_share)
+            assert np.isfinite(logs["losses/anchor_kl"]) and np.isfinite(logs["losses/anchor_kl_mean"])
+        assert logs["losses/anchor_kl"] > 0.0
+        assert {"score", "logreplay/score"} <= logged_keys
+    finally:
+        vecenv.close()
+        trainer.utilization.stop()
+
+
+@pytest.mark.parametrize(
+    "train_overrides, message",
+    [
+        ({"anchor_coef": 1.0, "anchor_obs_path": None}, "anchor_obs_path"),
+        ({"anchor_coef": -1.0}, "finite and >= 0"),
+        ({"anchor_coef": float("nan")}, "finite and >= 0"),
+        ({"anchor_coef": "1e-1"}, "finite and >= 0"),
+        ({"anchor_coef": 1.0, "anchor_batch_size": 0}, "anchor_batch_size"),
+    ],
+    ids=["no-buffer", "negative", "nan", "string", "batch-size"],
+)
+def test_anchor_config_errors(tmp_path, train_overrides, message):
+    args = single_map_finetune_args(tmp_path, 0.0)
+    coplayer_path, _ = write_coplayer_checkpoint(str(tmp_path / "coplayer_run"), args, True, False)
+    vecenv = load_env("puffer_drive", args)
+    learner = load_policy(args, vecenv, "puffer_drive", reward_conditioning=False)
+    config = finetune_train_config(args, tmp_path, coplayer_path, **train_overrides)
+    try:
+        with pytest.raises(pufferlib.APIUsageError, match=message):
+            PuffeRL(config, vecenv, learner, NullLogger())
+    finally:
+        vecenv.close()
+
+
+def test_anchor_rejects_a_recurrent_learner(tmp_path):
+    args = single_map_finetune_args(tmp_path, 0.0)
+    coplayer_path, _ = write_coplayer_checkpoint(str(tmp_path / "coplayer_run"), args, True, False)
+    vecenv = load_env("puffer_drive", args)
+    feed_forward = load_policy(args, vecenv, "puffer_drive", reward_conditioning=False)
+    anchor_path = save_anchor_buffer(tmp_path, args, feed_forward, 64)
+    args["rnn_name"] = "Recurrent"
+    args["train"]["use_rnn"] = True
+    recurrent = load_policy(args, vecenv, "puffer_drive", reward_conditioning=False)
+    config = finetune_train_config(args, tmp_path, coplayer_path, anchor_coef=1.0, anchor_obs_path=anchor_path)
+    try:
+        with pytest.raises(pufferlib.APIUsageError, match="feed-forward"):
+            PuffeRL(config, vecenv, recurrent, NullLogger())
+    finally:
+        vecenv.close()
 
 
 def test_logreplay_mix_rejects_failure_branching(tmp_path):
