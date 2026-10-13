@@ -863,11 +863,17 @@ class PuffeRL:
 
                 advantage_square_sum = (torch.square(mb_adv - advantage_mean) * loss_weight).sum()
                 torch.distributed.all_reduce(advantage_square_sum, op=torch.distributed.ReduceOp.SUM)
-                advantage_std = torch.sqrt(advantage_square_sum / (advantage_sum_and_count[1] - 1))
+                singleton_batch = advantage_sum_and_count[1].item() == 1
+                advantage_std = (
+                    torch.sqrt(advantage_square_sum / (advantage_sum_and_count[1] - 1))
+                    if not singleton_batch
+                    else advantage_square_sum.new_zeros(())
+                )
             else:
                 filtered_advantage = mb_adv[loss_mask]
                 advantage_mean = filtered_advantage.mean()
-                advantage_std = filtered_advantage.std()
+                singleton_batch = filtered_advantage.numel() == 1
+                advantage_std = filtered_advantage.std() if not singleton_batch else filtered_advantage.new_zeros(())
 
             mb_adv = (mb_adv - advantage_mean) / (advantage_std + 1e-8)
             if adv_weights is not None:
