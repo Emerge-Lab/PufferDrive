@@ -456,6 +456,7 @@ class TrainingConfig:
     data_dir: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     resume_state_path: str | None = MISSING
     checkpoint_interval: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    checkpoint_keep_interval: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     batch_size: int | str = MISSING
     min_batch_size: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     minibatch_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
@@ -756,6 +757,11 @@ def _validate_cross_field_constraints(config, context):
     """Validate relationships and context-dependent rules spanning config fields."""
     if config["load_id"] is not None and not (config["wandb"] or config["neptune"]):
         _raise_config_error(context, "load_id", "requires wandb or neptune")
+    train = config["train"]
+    if train["checkpoint_keep_interval"] % train["checkpoint_interval"] != 0:
+        _raise_config_error(
+            context, "train.checkpoint_keep_interval", "must be 0 or a multiple of train.checkpoint_interval"
+        )
 
     env = config["env"]
     if env["min_agents_per_env"] > env["max_agents_per_env"]:

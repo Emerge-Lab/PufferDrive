@@ -296,6 +296,18 @@ class TestConfigSchema(unittest.TestCase):
             validate_puffer_drive_config(args, "test")
 
     @patch("sys.argv", ["pufferl.py"])
+    def test_checkpoint_keep_interval_must_be_a_multiple_of_the_checkpoint_interval(self):
+        args = load_config("puffer_drive")
+        args["train"]["checkpoint_interval"] = 50
+        for keep_interval in (0, 250):
+            args["train"]["checkpoint_keep_interval"] = keep_interval
+            validate_puffer_drive_config(args, "test")
+        args["train"]["checkpoint_keep_interval"] = 75
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "checkpoint_keep_interval"):
+            validate_puffer_drive_config(args, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
     def test_preload_map_cache_requires_use_map_cache(self):
         args = load_config("puffer_drive")
         args["env"]["preload_map_cache"] = True

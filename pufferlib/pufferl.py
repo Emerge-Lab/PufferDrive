@@ -874,8 +874,10 @@ class PuffeRL:
         model_path = os.path.join(models_dir, model_name)
         if not os.path.exists(model_path):
             torch.save(self.uncompiled_policy.state_dict(), model_path)
+        keep_interval = self.config["checkpoint_keep_interval"]
         for old_model_path in glob.glob(os.path.join(models_dir, "model_*.pt")):
-            if old_model_path != model_path:
+            old_epoch = int(os.path.basename(old_model_path)[: -len(".pt")].rsplit("_", 1)[1])
+            if old_model_path != model_path and not (keep_interval > 0 and old_epoch % keep_interval == 0):
                 os.remove(old_model_path)
 
         current_score = self.last_stats.get("puffer_score", self.last_stats.get("score", -float("inf")))
