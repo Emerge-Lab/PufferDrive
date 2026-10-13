@@ -204,6 +204,9 @@ class Serial:
     def learner_row_count(self):
         return sum(env.learner_row_count() for env in self.envs)
 
+    def row_kinds(self):
+        return np.concatenate([env.row_kinds() for env in self.envs])
+
     def recv(self):
         recv_precheck(self)
         return (
@@ -633,6 +636,10 @@ class Multiprocessing:
     def learner_row_count(self):
         """Learner rows across all workers; waits until every worker has built its scenes."""
         return sum(self._call_workers("learner_row_count"))
+
+    def row_kinds(self):
+        """Each global row's owner kind, in row order; waits until every worker has built its scenes."""
+        return np.concatenate(self._call_workers("row_kinds"))
 
     def _call_workers(self, method_name, *method_args):
         # Each worker runs the call between steps and replies; returns every worker's result once all have run it.

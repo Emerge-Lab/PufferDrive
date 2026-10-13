@@ -35,6 +35,11 @@ vec:
   batch_size: auto
   zero_copy: true
   seed: 42
+  # Co-player training only: share of learner rows that drive log-replay scenes (SDC on policy, the log replays
+  # everyone else) instead of co-player scenes. load_env turns the last envs into log-replay envs; 0 disables.
+  logreplay_fraction: 0.0
+  # Maps of those log-replay scenes (a dir or a single .bin); null uses env.map_dir.
+  logreplay_map_dir: null
 env:
   # --- Simulation ---
   # Options: "gigaflow", "replay"

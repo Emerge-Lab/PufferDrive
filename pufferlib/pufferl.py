@@ -36,7 +36,12 @@ import torch.distributed
 from torch.distributed.elastic.multiprocessing.errors import record
 
 import pufferlib
-from pufferlib.ocean.drive.drive import RewardConditioningView, drive_io_layout
+from pufferlib.ocean.drive.drive import (
+    ROW_KIND_IDLE,
+    ROW_KIND_LOGREPLAY,
+    RewardConditioningView,
+    drive_io_layout,
+)
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
 import pufferlib.sweep
@@ -156,6 +161,14 @@ COPLAYER_MATCHED_ENV_KEYS = CHECKPOINT_OBS_ENV_KEYS - {"reward_conditioning", "r
 COPLAYER_ENV_SETUP = {
     "control_mode": "control_vehicles",
     "non_sdc_controller": "policy",
+    "non_vehicle_controller": "replay",
+    "log_sdc_only": True,
+    "learner_agents": "sdc",
+}
+# Log-replay scenes of a co-player mix (vec.logreplay_fraction): the learner drives the SDC, the log everyone else.
+LOGREPLAY_ENV_SETUP = {
+    "control_mode": "control_sdc_only",
+    "non_sdc_controller": "replay",
     "non_vehicle_controller": "replay",
     "log_sdc_only": True,
     "learner_agents": "sdc",
@@ -282,6 +295,71 @@ def apply_coplayer_env_setup(env_config, coplayer_policy_path):
         print(f"Co-player training env overrides (configured, used): {changed}")
 
 
+def logreplay_mix_env_kwargs(make_env, env_config, vec_config, logreplay_fraction, logreplay_map_dir):
+    """Per-env kwargs that turn the last co-player envs of a vecenv into log-replay envs, sized so that about
+    logreplay_fraction of the learner rows drive in log replay."""
+    num_envs = vec_config["num_envs"]
+    backend = vec_config.get("backend")
+    if not isinstance(logreplay_fraction, (int, float)) or not 0.0 < logreplay_fraction < 1.0:
+        raise pufferlib.APIUsageError(f"vec.logreplay_fraction must be in [0, 1); got {logreplay_fraction}")
+    wrong_setup = {
+        key: env_config.get(key) for key, value in COPLAYER_ENV_SETUP.items() if env_config.get(key) != value
+    }
+    if wrong_setup:
+        raise pufferlib.APIUsageError(
+            f"vec.logreplay_fraction mixes log-replay scenes into co-player training, whose env needs "
+            f"{COPLAYER_ENV_SETUP}; got {wrong_setup}"
+        )
+    if env_config.get("eval_mode"):
+        raise pufferlib.APIUsageError("vec.logreplay_fraction runs only in training (env.eval_mode=0)")
+    if env_config.get("failure_branching"):
+        raise pufferlib.APIUsageError("vec.logreplay_fraction does not combine with env.failure_branching yet")
+    if num_envs < 2 or backend in ("PufferEnv", pufferlib.PufferEnv):
+        raise pufferlib.APIUsageError(
+            "vec.logreplay_fraction needs vec.num_envs >= 2 on the Serial or Multiprocessing backend"
+        )
+    if backend in ("Serial", pufferlib.vector.Serial) and vec_config.get("batch_size", num_envs) != num_envs:
+        raise pufferlib.APIUsageError(
+            "Serial builds only vec.batch_size envs; set it to vec.num_envs for a log-replay mix"
+        )
+
+    coplayer_probe = make_env(**env_config)
+    coplayer_learner_rows = coplayer_probe.learner_row_count()
+    rows_per_env = coplayer_probe.num_agents
+    coplayer_probe.close()
+    if coplayer_learner_rows == 0:
+        raise pufferlib.APIUsageError("The co-player env has no learner rows; check that each SDC is policy-controlled")
+    logreplay_config = {**env_config, **LOGREPLAY_ENV_SETUP}
+    if logreplay_map_dir is not None:
+        map_count = 1
+        if os.path.isdir(logreplay_map_dir):
+            map_count = sum(name.endswith(".bin") for name in os.listdir(logreplay_map_dir))
+        logreplay_config.update(map_dir=logreplay_map_dir, num_maps=map_count)
+    # Built here so a bad log-replay config fails now, not inside a worker process.
+    make_env(**logreplay_config, logreplay_scene_count=1).close()
+
+    learner_ratio = logreplay_fraction / (1.0 - logreplay_fraction)
+    # Fewest log-replay envs whose rows hold the share, so the most envs keep their co-player scenes.
+    needed_env_count = (
+        learner_ratio * num_envs * coplayer_learner_rows / (rows_per_env + learner_ratio * coplayer_learner_rows)
+    )
+    logreplay_env_count = max(1, int(np.ceil(needed_env_count)))
+    if logreplay_env_count >= num_envs:
+        raise pufferlib.APIUsageError(
+            f"vec.logreplay_fraction {logreplay_fraction} leaves no co-player env out of vec.num_envs={num_envs}"
+        )
+    coplayer_rows = (num_envs - logreplay_env_count) * coplayer_learner_rows
+    scene_count = max(1, round(learner_ratio * coplayer_rows / logreplay_env_count))
+    logreplay_rows = logreplay_env_count * scene_count
+    print(
+        f"Log-replay mix: the last {logreplay_env_count} of {num_envs} envs drive {scene_count} log-replay SDC scenes "
+        f"each; {logreplay_rows / (logreplay_rows + coplayer_rows):.3f} of the learner rows "
+        f"(vec.logreplay_fraction={logreplay_fraction})"
+    )
+    logreplay_config["logreplay_scene_count"] = scene_count
+    return [env_config] * (num_envs - logreplay_env_count) + [logreplay_config] * logreplay_env_count
+
+
 class FrozenCoplayer:
     """A frozen policy acting for every vecenv row that is not a learner row."""
 
@@ -345,13 +423,16 @@ class LearnerBatchSlots:
     """Where one vecenv batch's learner rows sit in the rollout buffer. They step together, so they share one
     step index and a contiguous block of segments, one segment per buffered learner row."""
 
-    def __init__(self, learner_rows, device, hidden_size):
+    def __init__(self, learner_rows, row_kinds, device, hidden_size):
         self.learner_rows = learner_rows
         self.learner_positions_np = np.flatnonzero(learner_rows)
-        self.coplayer_positions_np = np.flatnonzero(~learner_rows)
+        self.coplayer_positions_np = np.flatnonzero(~learner_rows & (row_kinds != ROW_KIND_IDLE))
         self.learner_positions_cpu = torch.as_tensor(self.learner_positions_np)
         self.learner_positions = self.learner_positions_cpu.to(device)
         self.coplayer_positions = torch.as_tensor(self.coplayer_positions_np, device=device)
+        self.learner_logreplay = torch.as_tensor(
+            row_kinds[self.learner_positions_np] == ROW_KIND_LOGREPLAY, device=device
+        )
         self.learner_count = len(self.learner_positions_np)
         self.lstm_h = self.lstm_c = None
         if hidden_size is not None:
@@ -429,6 +510,7 @@ class PuffeRL:
                 raise pufferlib.APIUsageError(
                     "The vecenv has no learner rows; check that each SDC is policy-controlled"
                 )
+            self.row_kinds = vecenv.row_kinds()
             self.learner_slots = {}
             self.empty_learner_batches = set()
 
@@ -482,6 +564,10 @@ class PuffeRL:
         self.ratio = torch.ones(segments, horizon, device=device)
         self.importance = torch.ones(segments, horizon, device=device)
         self.masks = torch.zeros(segments, horizon, device=device, dtype=torch.bool)
+        # Which segments hold a log-replay learner row of a co-player mix; None without a mix.
+        self.segment_logreplay = None
+        if self.coplayer is not None and (self.row_kinds == ROW_KIND_LOGREPLAY).any():
+            self.segment_logreplay = torch.zeros(segments, device=device, dtype=torch.bool)
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
@@ -880,7 +966,7 @@ class PuffeRL:
         if slots is not None and slots.buffered_count > 0:
             self._close_learner_segments(slots, rewards, dones, truncations)
         hidden_size = self.uncompiled_policy.hidden_size if self.config["use_rnn"] else None
-        slots = LearnerBatchSlots(learner_rows, self.config["device"], hidden_size)
+        slots = LearnerBatchSlots(learner_rows, self.row_kinds[env_id], self.config["device"], hidden_size)
         if slots.learner_count == 0:
             self.empty_learner_batches.add(env_id.start)
         else:
@@ -896,6 +982,10 @@ class PuffeRL:
         slots.buffered_count = min(slots.learner_count, self.segments - self.free_idx)
         slots.step = 0
         self.free_idx += slots.buffered_count
+        if self.segment_logreplay is not None:
+            self.segment_logreplay[slots.segment_start : self.free_idx] = slots.learner_logreplay[
+                : slots.buffered_count
+            ]
 
     def _close_learner_segments(self, slots, rewards, dones, truncations):
         """End the open segments early: this step's reward still belongs to them, the steps after are masked."""
@@ -990,6 +1080,9 @@ class PuffeRL:
         profile("train", epoch)
         profile("train_misc", epoch, nest=True)
         losses = defaultdict(float)
+        if self.segment_logreplay is not None:
+            logreplay_steps = self.segment_logreplay[:, None].float()
+            losses["logreplay_sample_fraction"] = masked_mean(logreplay_steps, self.masks.float()).item()
         if config["use_rnn"]:
             self._train_ppo_trajectory(losses, profile, epoch)
         else:
@@ -2875,9 +2968,15 @@ def load_env(env_name, args, seed=None):
     env_module = importlib.import_module(module_name)
     make_env = env_module.env_creator(env_name)
     vec_kwargs = dict(args["vec"])
+    logreplay_fraction = vec_kwargs.pop("logreplay_fraction", 0.0)
+    logreplay_map_dir = vec_kwargs.pop("logreplay_map_dir", None)
     if seed is not None:
         vec_kwargs["seed"] = seed
-    return pufferlib.vector.make(make_env, env_kwargs=args["env"], **vec_kwargs)
+    if not logreplay_fraction:
+        return pufferlib.vector.make(make_env, env_kwargs=args["env"], **vec_kwargs)
+    env_kwargs = logreplay_mix_env_kwargs(make_env, args["env"], vec_kwargs, logreplay_fraction, logreplay_map_dir)
+    env_count = len(env_kwargs)
+    return pufferlib.vector.make([make_env] * env_count, env_args=[[]] * env_count, env_kwargs=env_kwargs, **vec_kwargs)
 
 
 def load_policy(args, vecenv, env_name="", reward_conditioning=None):

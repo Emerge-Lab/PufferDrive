@@ -41,6 +41,10 @@ REWARD_COEF_NAMES = binding.reward_coef_names()
 LEARNER_AGENTS_VALUES = {"all": binding.LEARNER_AGENTS_ALL, "sdc": binding.LEARNER_AGENTS_SDC}
 REWARD_COEF_OVERRIDE_SDC_KEY = "sdc"
 REWARD_COEF_OVERRIDE_OTHERS_KEY = "others"
+# row_kinds() values: a row no scene owns, a row of an ordinary scene, a row of a log-replay mixing scene.
+ROW_KIND_IDLE = 0
+ROW_KIND_SCENE = 1
+ROW_KIND_LOGREPLAY = 2
 
 
 def reward_coef_index(name):
@@ -211,6 +215,7 @@ class Drive(pufferlib.PufferEnv):
         failure_branch_count=9,
         failure_branch_offset_steps=5,
         failure_branch_replays=3,
+        logreplay_scene_count=0,
         eval_mode=0,
         num_eval_scenarios=16,
         max_scenarios_per_batch=None,
@@ -558,6 +563,28 @@ class Drive(pufferlib.PufferEnv):
                 "learner_agents='sdc' requires sdc_controller='policy' and log_sdc_only=True "
                 f"(got sdc_controller={self.sdc_controller_str!r}, log_sdc_only={self.log_sdc_only})"
             )
+        # A log-replay env of a co-player mix packs this many one-row SDC scenes; its other rows stay idle.
+        self.logreplay_scene_count = int(logreplay_scene_count)
+        if self.logreplay_scene_count:
+            if self.eval_mode:
+                raise ValueError("log-replay mixing runs only in training (eval_mode=0)")
+            if not 1 <= self.logreplay_scene_count <= num_agents:
+                raise ValueError(
+                    f"logreplay_scene_count must be in [1, num_agents={num_agents}]. Got: {self.logreplay_scene_count}"
+                )
+            if (
+                self.simulation_mode != binding.SIMULATION_MODE_REPLAY
+                or self.control_mode != binding.CONTROL_MODE_SDC_ONLY
+                or self.learner_agents != "sdc"
+            ):
+                raise ValueError(
+                    "logreplay_scene_count needs replay simulation_mode, control_mode='control_sdc_only' and "
+                    f"learner_agents='sdc'; got {self.simulation_mode_str!r}, {self.control_mode_str!r}, "
+                    f"{self.learner_agents!r}"
+                )
+            if self.failure_branching:
+                raise ValueError("logreplay_scene_count does not combine with failure_branching")
+        self.scene_row_count = self.logreplay_scene_count or num_agents
 
         if self.init_mode_str == "create_all_valid":
             self.init_mode = binding.INIT_MODE_CREATE_ALL_VALID
@@ -605,7 +632,7 @@ class Drive(pufferlib.PufferEnv):
         scene_init_steps = self._scene_init_steps(num_agents)
         agent_offsets, map_ids, num_envs = binding.shared(
             map_files=self.map_files,
-            num_agents=num_agents,
+            num_agents=self.scene_row_count,
             num_maps=num_maps,
             starting_map_counter=self.starting_map_counter,
             eval_mode=self.eval_mode,
@@ -799,10 +826,18 @@ class Drive(pufferlib.PufferEnv):
     def learner_row_count(self):
         return int(np.count_nonzero(self.learner_masks))
 
+    def row_kinds(self):
+        kinds = np.full(self.num_agents, ROW_KIND_IDLE, dtype=np.int8)
+        kinds[: self.agent_offsets[-1]] = ROW_KIND_LOGREPLAY if self.logreplay_scene_count else ROW_KIND_SCENE
+        return kinds
+
     def _logged_agent_count(self):
         # vec_log waits for this many finished agent-episodes; with log_sdc_only only SDCs finish one.
         # Branch episodes go to vec_failure_branch_log, never to vec_log.
         logged_scenes = self.failure_branch_roles != binding.FAILURE_BRANCH_ROLE_BRANCH
+        if self.log_sdc_only and self.control_mode == binding.CONTROL_MODE_SDC_ONLY:
+            # shared() packs only scenes whose SDC drives, so vec_get's sdc_active is true for every scene.
+            return max(1, int(np.count_nonzero(logged_scenes)))
         if self.log_sdc_only:
             sdc_active = np.array([state["sdc_active"] for state in binding.vec_get(self.c_envs)], dtype=bool)
             return max(1, int(np.count_nonzero(sdc_active & logged_scenes)))
@@ -882,6 +917,8 @@ class Drive(pufferlib.PufferEnv):
             log = binding.vec_log(self.c_envs, self.log_agent_count)
             if log and self.failure_branching:
                 log["failure_branch"] = binding.vec_failure_branch_log(self.c_envs)
+            if log and self.logreplay_scene_count:
+                log = {"logreplay": log}
             if log:
                 info.append(log)
                 # print(log)
@@ -909,7 +946,7 @@ class Drive(pufferlib.PufferEnv):
                 )
                 scene_init_steps = self._scene_init_steps(self.num_agents)
                 agent_offsets, map_ids, num_envs = binding.shared(
-                    num_agents=self.num_agents,
+                    num_agents=self.scene_row_count,
                     num_maps=self.num_maps,
                     starting_map_counter=self.starting_map_counter,
                     eval_mode=self.eval_mode,

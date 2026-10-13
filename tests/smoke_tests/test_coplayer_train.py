@@ -14,9 +14,22 @@ import pytest
 import torch
 import yaml
 
+import pufferlib
 import pufferlib.ocean.torch as drive_torch
-from pufferlib.ocean.drive.drive import REWARD_COEF_NAMES, Drive, reward_coef_to_normalized
-from pufferlib.pufferl import COPLAYER_ENV_SETUP, PuffeRL, load_config, load_env, load_policy
+from pufferlib.ocean.drive.drive import (
+    REWARD_COEF_NAMES,
+    ROW_KIND_IDLE,
+    ROW_KIND_LOGREPLAY,
+    Drive,
+    reward_coef_to_normalized,
+)
+from pufferlib.pufferl import (
+    COPLAYER_ENV_SETUP,
+    PuffeRL,
+    load_config,
+    load_env,
+    load_policy,
+)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MAP_PATHS = [
@@ -330,6 +343,7 @@ def test_ppo_against_frozen_coplayer(
             trainer.train()
             if resample == 0:
                 assert trainer.losses["masked_fraction"] == 0.0
+            assert "logreplay_sample_fraction" not in trainer.losses, "log-replay mixing is off by default"
         assert trainer.global_step >= EPOCHS * HORIZON * vecenv.num_agents
 
         for key, value in trainer.coplayer.policy.state_dict().items():
@@ -478,3 +492,99 @@ def test_ppo_against_frozen_coplayer_with_failure_branching(tmp_path, learner_re
     finally:
         vecenv.close()
         trainer.utilization.stop()
+
+
+def single_map_finetune_args(tmp_path, logreplay_fraction):
+    """nuBenchmark's co-player finetune in small: one map, a conditioned env for the co-player and an
+    unconditioned learner, 4 envs on 2 workers in two vecenv batches."""
+    map_dir = tmp_path / "maps"
+    map_dir.mkdir()
+    os.symlink(MAP_PATHS[0], map_dir / os.path.basename(MAP_PATHS[0]))
+    args = base_args(str(map_dir), 0, 2, 2)
+    args["env"].update(num_maps=1, reward_conditioning=True)
+    args["vec"].update(num_envs=4, num_workers=2, batch_size=2, logreplay_fraction=logreplay_fraction)
+    return args
+
+
+def finetune_train_config(args, tmp_path, coplayer_path, **train_overrides):
+    args["train"].update(
+        compile=False,
+        torch_deterministic=True,
+        anneal_lr=False,
+        learning_rate=3e-3,
+        update_epochs=1,
+        bptt_horizon=HORIZON,
+        batch_size="auto",
+        minibatch_size=2**20,
+        max_minibatch_size=2**20,
+        total_timesteps=10_000_000,
+        checkpoint_interval=10_000_000,
+        data_dir=str(tmp_path / "learner_run"),
+        adv_filter_enabled=False,
+        render=False,
+        coplayer_policy_path=coplayer_path,
+        **train_overrides,
+    )
+    return dict(**args["train"], env="puffer_drive", eval={}, run_name="finetune_test")
+
+
+class CoplayerRowRecorder:
+    """Records which global rows the frozen co-player acts on."""
+
+    def __init__(self, trainer):
+        self.act = trainer.coplayer.act
+        self.rows = []
+        trainer.coplayer.act = self.recording_act
+
+    def recording_act(self, observations, done_mask, global_rows):
+        self.rows.append(global_rows.cpu().numpy())
+        return self.act(observations, done_mask, global_rows)
+
+
+def test_logreplay_mix_trains_on_both_scene_types(tmp_path):
+    """vec.logreplay_fraction turns the last env into log-replay SDC scenes: every PPO update holds the target
+    share of log-replay learner samples, their metrics log under logreplay/ next to the co-player scenes' usual
+    keys, and the co-player never acts on the log-replay env's idle rows."""
+    args = single_map_finetune_args(tmp_path, 0.5)
+    coplayer_path, _ = write_coplayer_checkpoint(str(tmp_path / "coplayer_run"), args, True, False)
+    torch.manual_seed(0)
+    vecenv = load_env("puffer_drive", args)
+    learner = load_policy(args, vecenv, "puffer_drive", reward_conditioning=False)
+    trainer = PuffeRL(finetune_train_config(args, tmp_path, coplayer_path), vecenv, learner, NullLogger())
+    recorder = CoplayerRowRecorder(trainer)
+    try:
+        row_kinds = vecenv.row_kinds()
+        logreplay_rows = np.flatnonzero(row_kinds == ROW_KIND_LOGREPLAY)
+        assert logreplay_rows.min() >= 3 * vecenv.num_agents // 4, "the last env holds the log-replay scenes"
+        assert vecenv.learner_masks[logreplay_rows].all()
+        planned_share = len(logreplay_rows) / vecenv.learner_row_count()
+        assert planned_share == pytest.approx(0.5, abs=0.05)
+        assert trainer.segments == vecenv.learner_row_count()
+        learner_before = {k: v.clone() for k, v in trainer.uncompiled_policy.state_dict().items()}
+        logged_keys = set()
+        for _ in range(EPOCHS):
+            trainer.evaluate()
+            logged_keys.update(trainer.stats)
+            trainer.last_log_time = 0.0
+            trainer.train()
+            # Without infractions no learner step is masked, so samples split exactly like rows.
+            assert trainer.losses["logreplay_sample_fraction"] == pytest.approx(planned_share)
+        assert {"score", "collision_rate", "n", "logreplay/score", "logreplay/collision_rate", "logreplay/n"} <= (
+            logged_keys
+        )
+        acted_rows = np.concatenate(recorder.rows)
+        assert not (row_kinds[acted_rows] == ROW_KIND_IDLE).any(), "the co-player acted on idle rows"
+        assert not np.asarray(vecenv.learner_masks)[acted_rows].any()
+        assert any(
+            not torch.equal(value, learner_before[key]) for key, value in trainer.uncompiled_policy.state_dict().items()
+        ), "learner did not train"
+    finally:
+        vecenv.close()
+        trainer.utilization.stop()
+
+
+def test_logreplay_mix_rejects_failure_branching(tmp_path):
+    args = single_map_finetune_args(tmp_path, 0.5)
+    args["env"].update(failure_branching=True, failure_branch_count=3)
+    with pytest.raises(pufferlib.APIUsageError, match="does not combine with env.failure_branching"):
+        load_env("puffer_drive", args)
