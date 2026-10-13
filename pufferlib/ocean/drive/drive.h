@@ -304,7 +304,7 @@ struct Drive {
     float obs_norm_z_m;
     float eval_perceived_size_margin_m;
     float obs_partner_split_length_m; // 0 disables; longer partners are observed as ceil(length / this) equal pieces
-    int cosim_eval_semantics; // co-sim: apply the eval-only obs/action tweaks without native eval batching
+    int cosim_eval_semantics;         // co-sim: apply the eval-only obs/action tweaks without native eval batching
     float eval_standstill_jerk_deadband_mps3; // 0 disables; eval-only standstill deadband on j_long
     float obs_range_traffic_control_m;
     float obs_range_partner_m;

@@ -26,7 +26,16 @@ from torch import nn
 
 ENV_NAME = "puffer_drive"
 RECOMPILE_EPOCH_FACTOR = 1.25
-PROFILE_SECTIONS = ("env", "eval_copy", "eval_forward", "eval_misc", "train_copy", "train_forward", "learn", "train_misc")
+PROFILE_SECTIONS = (
+    "env",
+    "eval_copy",
+    "eval_forward",
+    "eval_misc",
+    "train_copy",
+    "train_forward",
+    "learn",
+    "train_misc",
+)
 SLOT_ENCODER_COUNTS = {
     "lane_encoder": "obs_slots_lane_kept",
     "boundary_encoder": "obs_slots_boundary_kept",

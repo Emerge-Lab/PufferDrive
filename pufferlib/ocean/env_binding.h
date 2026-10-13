@@ -1005,7 +1005,7 @@ static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
     PyObject *yaw_rate_arr = PyTuple_GetItem(args, 8);
     PyObject *accel_long_arr = PyTuple_GetItem(args, 9);
     PyObject *seconds_stopped_arr = PyTuple_GetItem(args, 10); // None keeps c_step's accumulation
-    PyObject *steering_arr = PyTuple_GetItem(args, 11); // None derives steering from yaw_rate
+    PyObject *steering_arr = PyTuple_GetItem(args, 11);        // None derives steering from yaw_rate
     if (!PyArray_Check(idx_arr) || !PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(z_arr)
         || !PyArray_Check(heading_arr) || !PyArray_Check(vx_arr) || !PyArray_Check(vy_arr)
         || !PyArray_Check(yaw_rate_arr) || !PyArray_Check(accel_long_arr)) {
@@ -1033,8 +1033,17 @@ static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
         = seconds_stopped_arr == Py_None ? NULL : (float *) PyArray_DATA((PyArrayObject *) seconds_stopped_arr);
     float *steering = steering_arr == Py_None ? NULL : (float *) PyArray_DATA((PyArrayObject *) steering_arr);
     int count = (int) PyArray_SIZE((PyArrayObject *) idx_arr);
-    PyObject *value_arrs[10] = {
-        x_arr, y_arr, z_arr, heading_arr, vx_arr, vy_arr, yaw_rate_arr, accel_long_arr, seconds_stopped_arr, steering_arr};
+    PyObject *value_arrs[10]
+        = {x_arr,
+           y_arr,
+           z_arr,
+           heading_arr,
+           vx_arr,
+           vy_arr,
+           yaw_rate_arr,
+           accel_long_arr,
+           seconds_stopped_arr,
+           steering_arr};
     for (int k = 0; k < 10; k++) {
         if (value_arrs[k] == Py_None) {
             continue;
@@ -1196,8 +1205,7 @@ static PyObject *vec_set_stop_signs(PyObject *self, PyObject *args) {
 
 static PyObject *vec_set_traffic_light_lines(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 3) {
-        PyErr_SetString(
-            PyExc_TypeError, "vec_set_traffic_light_lines requires 3 arguments (vec_env, indices, lines)");
+        PyErr_SetString(PyExc_TypeError, "vec_set_traffic_light_lines requires 3 arguments (vec_env, indices, lines)");
         return NULL;
     }
     VecEnv *vec = unpack_vecenv(args);

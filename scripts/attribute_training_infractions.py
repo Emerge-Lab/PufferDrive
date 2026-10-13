@@ -3,6 +3,7 @@
 usage: python scripts/attribute_training_infractions.py <run>/renders/<epoch>/replays [dt]
 (needs eval.keep_zlib_replays=true on the render)
 """
+
 import glob
 import os
 import sys
@@ -102,7 +103,15 @@ def analyze(path, dt):
         if kind == "collision":
             tag, detail = classify_collision(f32, i32, m, t, a)
         elif kind == "offroad":
-            tag = "offroad within spawn frames" if t < SPAWN_FRAMES else ("offroad at creep speed (<1 m/s)" if speed < 1.0 else ("offroad slow (1-4 m/s)" if speed < 4.0 else "offroad fast (>4 m/s)"))
+            tag = (
+                "offroad within spawn frames"
+                if t < SPAWN_FRAMES
+                else (
+                    "offroad at creep speed (<1 m/s)"
+                    if speed < 1.0
+                    else ("offroad slow (1-4 m/s)" if speed < 4.0 else "offroad fast (>4 m/s)")
+                )
+            )
             detail = f"{speed:.1f} m/s, lane dist {m[tp, a, LANE_DIST_IDX]:.1f} m"
         else:
             tag = kind
@@ -127,8 +136,10 @@ def main():
             if not perturbed:
                 totals[(kind, tag)] += 1
     n_inf = sum(totals.values())
-    print(f"\n== totals over {len(paths)} episodes, {logged_total} logged agent-episodes, {n_inf} first infractions"
-          f" ({n_inf / max(logged_total, 1):.3f} per agent-episode)")
+    print(
+        f"\n== totals over {len(paths)} episodes, {logged_total} logged agent-episodes, {n_inf} first infractions"
+        f" ({n_inf / max(logged_total, 1):.3f} per agent-episode)"
+    )
     for (kind, tag), n in sorted(totals.items(), key=lambda kv: -kv[1]):
         print(f"  {n:3d}  {kind:9s} {tag}")
 

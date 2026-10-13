@@ -105,7 +105,13 @@ def partner_row(actor):
     is_walker = 1.0 if "walker" in actor.type_id else 0.0
     is_two_wheeler = 1.0 if actor.attributes.get("number_of_wheels") == "2" else 0.0
     return actor_state_row(actor) + [
-        box.location.z, box.extent.x, box.extent.y, box.extent.z, is_walker, is_two_wheeler, actor.id
+        box.location.z,
+        box.extent.x,
+        box.extent.y,
+        box.extent.z,
+        is_walker,
+        is_two_wheeler,
+        actor.id,
     ]
 
 
@@ -430,7 +436,9 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
             for w in self.vehicle.get_physics_control().wheels
         ]
         front_left, rear_left = wheels[0][1:], wheels[2][1:]
-        half_wheelbase_m = 0.5 * math.sqrt(sum((a - b) ** 2 for a, b in zip(front_left, rear_left))) / WHEEL_POSITION_CM_PER_M
+        half_wheelbase_m = (
+            0.5 * math.sqrt(sum((a - b) ** 2 for a, b in zip(front_left, rear_left))) / WHEEL_POSITION_CM_PER_M
+        )
         body_rear_m, body_front_m = body.location.x - body.extent.x, body.location.x + body.extent.x
         assert body_rear_m < -half_wheelbase_m < half_wheelbase_m < body_front_m
         self.body_chord_offsets_m = (body_rear_m, -half_wheelbase_m, 0.0, half_wheelbase_m, body_front_m)
@@ -537,7 +545,11 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
         self._previous_body_z = z
         self._previous_lane_center_z = carla_z if wp is None else wp.transform.location.z
         self._previous_pitch_rad = pitch_rad
-        forward = (math.cos(yaw_rad) * math.cos(pitch_rad), math.sin(yaw_rad) * math.cos(pitch_rad), math.sin(pitch_rad))
+        forward = (
+            math.cos(yaw_rad) * math.cos(pitch_rad),
+            math.sin(yaw_rad) * math.cos(pitch_rad),
+            math.sin(pitch_rad),
+        )
         # Zero momentum before the teleport: CARLA's collision resolver reacts violently to a
         # physics body carrying velocity into a new pose (carla issue #8076).
         # One ordered batch: the server reorders async actor commands, and a late zero left the ego reading 0 m/s on 3 % of ticks
@@ -548,7 +560,9 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
                 carla.command.ApplyTargetAngularVelocity(self.vehicle.id, zero),
                 carla.command.ApplyTransform(
                     self.vehicle.id,
-                    carla.Transform(carla.Location(x=x, y=y, z=z), carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=0.0)),
+                    carla.Transform(
+                        carla.Location(x=x, y=y, z=z), carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=0.0)
+                    ),
                 ),
                 carla.command.ApplyTargetVelocity(
                     self.vehicle.id, carla.Vector3D(x=speed * forward[0], y=speed * forward[1], z=speed * forward[2])

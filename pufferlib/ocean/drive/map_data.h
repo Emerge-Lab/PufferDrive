@@ -106,7 +106,7 @@ static void merge_strided_observation_segments(RoadMapElement *road, int obs_str
     for (int segment_idx = 0; segment_idx < segment_count; segment_idx++) {
         if (segment_idx > run_start_idx
             && fabsf(normalize_heading(road->headings[segment_idx] - road->headings[run_start_idx]))
-                   > OBS_STRIDE_HEADING_THRESHOLD) {
+                > OBS_STRIDE_HEADING_THRESHOLD) {
             close_observation_segment_run(road, run_start_idx, segment_idx - 1);
             run_start_idx = segment_idx;
         }

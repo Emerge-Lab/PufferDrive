@@ -27,7 +27,11 @@ def _polyline(road):
 
 
 def _edges(data):
-    return [{"id": int(r["id"]), "type": int(r["type"]), "pts": _polyline(r)} for r in data["roads"] if r["type"] in ROAD_EDGE_TYPES]
+    return [
+        {"id": int(r["id"]), "type": int(r["type"]), "pts": _polyline(r)}
+        for r in data["roads"]
+        if r["type"] in ROAD_EDGE_TYPES
+    ]
 
 
 def collect_map(bin_file: pathlib.Path, compare_file: pathlib.Path | None) -> dict:
@@ -375,7 +379,7 @@ def build_html(maps: list[dict], meta: dict) -> str:
     <canvas id="map" aria-label="PufferDrive map with road edges"></canvas>
     <div class="legend" id="legend"></div>
     <div class="tooltip" id="tooltip" hidden></div>
-    <div class="hint">drag to pan · wheel to zoom · click to drop a mark (1/2/3 category) · u undo · c copy report · bins: {meta['bin_dir']}{compare_note}</div>
+    <div class="hint">drag to pan · wheel to zoom · click to drop a mark (1/2/3 category) · u undo · c copy report · bins: {meta["bin_dir"]}{compare_note}</div>
   </div>
   <aside>
     <div class="stats" id="stats"></div>
@@ -396,8 +400,12 @@ def build_html(maps: list[dict], meta: dict) -> str:
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bin-dir", required=True, help="Directory of PufferDrive *.bin map files to inspect")
-    parser.add_argument("--compare-dir", default=None, help="Second bin directory whose road edges are overlaid in orange")
-    parser.add_argument("--towns", nargs="*", default=None, help="Subset of towns, e.g. Town04 Town06 (default: all bins)")
+    parser.add_argument(
+        "--compare-dir", default=None, help="Second bin directory whose road edges are overlaid in orange"
+    )
+    parser.add_argument(
+        "--towns", nargs="*", default=None, help="Subset of towns, e.g. Town04 Town06 (default: all bins)"
+    )
     parser.add_argument("--output", default=None, help="Output .html (default: <bin-dir>/map_inspector.html)")
     args = parser.parse_args()
 

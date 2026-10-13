@@ -113,7 +113,13 @@ def partner_row(actor):
     is_walker = 1.0 if "walker" in actor.type_id else 0.0
     is_two_wheeler = 1.0 if actor.attributes.get("number_of_wheels") == "2" else 0.0
     return actor_state_row(actor) + [
-        box.location.z, box.extent.x, box.extent.y, box.extent.z, is_walker, is_two_wheeler, actor.id
+        box.location.z,
+        box.extent.x,
+        box.extent.y,
+        box.extent.z,
+        is_walker,
+        is_two_wheeler,
+        actor.id,
     ]
 
 
@@ -268,7 +274,9 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                 carla.command.ApplyTargetAngularVelocity(self.vehicle.id, zero),
                 carla.command.ApplyTransform(
                     self.vehicle.id,
-                    carla.Transform(carla.Location(x=x, y=y, z=z), carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=roll_deg)),
+                    carla.Transform(
+                        carla.Location(x=x, y=y, z=z), carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=roll_deg)
+                    ),
                 ),
                 carla.command.ApplyTargetVelocity(
                     self.vehicle.id, carla.Vector3D(x=speed * forward[0], y=speed * forward[1], z=speed * forward[2])

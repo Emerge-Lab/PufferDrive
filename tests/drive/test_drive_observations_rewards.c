@@ -301,7 +301,8 @@ static int test_partner_obs_relative_velocity(void) {
 }
 
 static int test_partner_obs_split_long_partner(void) {
-    // Ego heading +x; 4 m car 10 m behind; 13 m truck 20 m ahead heading +y -> split at 7 m into 6.5 m pieces at y -/+3.25.
+    // Ego heading +x; 4 m car 10 m behind; 13 m truck 20 m ahead heading +y -> split at 7 m into 6.5 m pieces at y
+    // -/+3.25.
     Drive env = {0};
     env.obs_norm_speed_mps = 10.0f;
     env.obs_norm_xy_offset_m = 100.0f;
@@ -356,8 +357,7 @@ static int test_partner_obs_split_long_partner(void) {
     EXPECT_NEAR(obs[row_features + 3], 0.65f, 1e-6f);
     EXPECT_NEAR(obs[2 * row_features], 0.2f, 1e-6f);
     EXPECT_NEAR(obs[2 * row_features + 1], 0.0325f, 1e-6f);
-    EXPECT_EQ_INT(
-        memcmp(&obs[row_features + 2], &obs[2 * row_features + 2], (row_features - 2) * sizeof(float)), 0);
+    EXPECT_EQ_INT(memcmp(&obs[row_features + 2], &obs[2 * row_features + 2], (row_features - 2) * sizeof(float)), 0);
 
     env.obs_slots_partners_n = 2;
     memset(obs, 0, sizeof(obs));
