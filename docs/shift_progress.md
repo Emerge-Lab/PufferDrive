@@ -155,7 +155,36 @@ As drivers, the one-hot anchors crawl and drift off-road. That is typical of
 tiny-data behavior cloning, and in HR-PPO the anchor only needs to shape the
 action distribution, not drive on its own.
 
-## 4. Open items
+## 4. nuPlan co-simulation results (paper metrics)
+
+`scripts/eval/run_nuplan_paper_eval.sh` runs each checkpoint through nuPlan's closed-loop simulator on
+reduced Val14 with the paper's Table A4 conditioning (`scripts/eval/hift_eval_conditioning.txt`), and
+`scripts/eval/nuplan_paper_metrics.py` scores it with the paper's Appendix F.1 definitions. The paper's
+12,147 scenarios are proprietary; ours are the first 112 of reduced Val14's 318 (disk-limited), one seed,
+non-reactive agents. Cells are paper / ours.
+
+| Arm | ADE (m) | FDE (m) | At-fault collisions | Drivable area | Red light | Progress | Brake taps |
+|---|---|---|---|---|---|---|---|
+| Human expert (calibration) | – / 0.01 | – / 0.01 | – / 0.4% | – / 0% | – / 1.8% | – / 0.99 | – / 0% |
+| Self-play base | 7.3 / 15.8 | 16.0 / 37.9 | 2.7% / 6.3% | 0.86% / 0.9% | 0.29% / 6.3% | 0.88 / 0.66 | 26% / 30% |
+| SHIFT (kernel similarity for us) | 6.0 / 12.3 | 13.3 / 29.3 | 1.6% / 0.9% | 0.58% / 0.9% | 0.19% / 3.6% | 0.88 / 0.73 | 8% / 21% |
+| SHIFT, quadratic similarity | 6.0 / 17.1 | 13.3 / 42.1 | 1.6% / 14.3% | 0.58% / 0.9% | 0.19% / 5.4% | 0.88 / 0.58 | 8% / 29% |
+| Extra self-play | 7.5 / 15.6 | 16.6 / 37.4 | 2.8% / 5.4% | 0.91% / 0.9% | 0.31% / 6.3% | 0.87 / 0.67 | 27% / 27% |
+| BC only | 7.7 / 42.7 | 23.2 / 106 | 21% / 84% | 16% / 97% | 13% / 2.7% | 0.80 / 0.26 | 0.2% / 0% |
+| BC + RL from scratch | 32.0 / 69.0 | 66.1 / 174 | 55% / 73% | 93% / 100% | 3.2% / 2.7% | 0.26 / 0.33 | 11% / 11% |
+| HR-PPO / self-play + BC anchor | 8.3 / 15.2 | 24.5 / 37.3 | 20% / 18% | 5.7% / 2.7% | 15% / 3.6% | 0.80 / 0.68 | 0.3% / 13% |
+| BC + RL fine-tune, kernel (ours only) | – / 9.6 | – / 21.7 | – / 8.0% | – / 2.7% | – / 3.6% | – / 0.72 | – / 11% |
+
+- Relative to its base, kernel SHIFT moves every metric the paper's way: ADE -22% (paper -18%), FDE -23%
+  (-17%), collisions -86% (-40%), red light -43% (-34%), brake taps -32% (-69%).
+- The absolute gap is mostly the base: it trails the expert (progress 0.66 vs 0.88), doubling ADE and FDE.
+- The red-light scorer has a floor of about 2-3%: the human expert scores 1.8%, and three scenarios are
+  flagged for nearly every arm, including the barely moving BC-only policy.
+- The quadratic similarity reward fails for us under either conditioning vector; the kernel reward works.
+- Simulation logs pickle the planner, about 5 GB per checkpoint per challenge, so the runner scores and
+  deletes them one challenge at a time.
+
+## 5. Open items
 
 1. **Replay `dt` versus the base's `dt`.** Replay steps one log frame per sim
    step (`log_dt` is read from the bins but unused), so the replay arms run at
@@ -187,7 +216,7 @@ times. The paper fine-tunes on about 440 hours. Lowering the resample frequency
 train split would close part of that gap; left as is for now. The anchors were
 collected from about 100 logs (30 min) and about 575 logs (3 h).
 
-## 5. Commits on `SHIFT`
+## 6. Commits on `SHIFT`
 
 ```
 324d8b7a Add optional soft BC labels from the expert tracker's per-action errors
