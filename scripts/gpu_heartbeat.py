@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hold GPU utilization above a floor so the cluster's idle-GPU reclaimer does not scancel long jobs."""
+"""Hold smoothed GPU utilization at a target so the cluster's idle-GPU reclaimer does not scancel long jobs."""
 
 import argparse
 import math
@@ -9,13 +9,13 @@ import time
 
 import torch
 
-DEFAULT_TARGET_UTILIZATION_PERCENT = 85.0
+DEFAULT_TARGET_UTILIZATION_PERCENT = 80.0
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_MATRIX_SIZE = 4096
 MIN_MATRIX_SIZE = 256
 MAX_MATRIX_SIZE = 32768
 MIN_POLL_INTERVAL_SECONDS = 0.5
-MAX_POLL_INTERVAL_SECONDS = 60.0
+MAX_POLL_INTERVAL_SECONDS = 10.0
 CHUNK_TARGET_SECONDS = 0.25
 CHUNKS_IN_FLIGHT = 2
 CALIBRATION_MATMULS = 16
@@ -23,7 +23,10 @@ MAX_MATMULS_PER_CHUNK = 1024
 MAX_MATMULS_PER_WINDOW = 1 << 20
 EVENT_POLL_SECONDS = 0.001
 MAX_EVENT_POLLS = 10000
-MAX_HOLD_WINDOWS = 15
+UTILIZATION_SMOOTHING_SECONDS = 300.0
+UNSEEN_STARTUP_SECONDS = 300.0  # job time before this process runs (container start, extension build)
+SAMPLE_INTERVAL_SECONDS = 0.25
+MAX_SAMPLES_PER_WINDOW = math.ceil(MAX_POLL_INTERVAL_SECONDS / SAMPLE_INTERVAL_SECONDS) + 1
 STATUS_INTERVAL_SECONDS = 300.0
 
 terminate_requested = False
@@ -64,9 +67,46 @@ def read_utilization_percent():
         return None  # unreadable utilization must fall through to generating load, never to idling
 
 
-def hold_window_count(utilization_percent, target_utilization_percent):
-    deficit_fraction = (target_utilization_percent - utilization_percent) / target_utilization_percent
-    return max(0, math.ceil(MAX_HOLD_WINDOWS * deficit_fraction))
+def window_reading_percent(readings):
+    """Mean of a window's samples; None when any is unreadable, so the window counts as idle."""
+    if any(reading is None for reading in readings):
+        return None
+    return sum(readings) / len(readings)
+
+
+def sample_utilization_until(window_end_seconds):
+    readings = []
+    for _ in range(MAX_SAMPLES_PER_WINDOW):
+        idle_seconds = window_end_seconds - time.monotonic()
+        if idle_seconds <= 0.0:
+            break
+        time.sleep(min(SAMPLE_INTERVAL_SECONDS, idle_seconds))
+        readings.append(read_utilization_percent())
+    return readings
+
+
+class FireController:
+    """Fires through the startup span, then whenever the exponentially smoothed utilization is below the target."""
+
+    def __init__(self, poll_interval_seconds, target_utilization_percent):
+        self.target_utilization_percent = target_utilization_percent
+        self.smoothing_weight = 1.0 - math.exp(-poll_interval_seconds / UTILIZATION_SMOOTHING_SECONDS)
+        # smoothing starts at the target after the startup span, so it does not coast down from 100%
+        self.smoothed_utilization_percent = target_utilization_percent
+        # firing at 100% for this span brings the unseen idle start back up to the target on average
+        startup_seconds = (UNSEEN_STARTUP_SECONDS * target_utilization_percent / (100.0 - target_utilization_percent)
+                           if target_utilization_percent < 100.0 else 0.0)
+        self.startup_windows_remaining = math.ceil(startup_seconds / poll_interval_seconds)
+
+    # a reading after a fired window measures our own load, which the reclaimer sees too
+    def record_and_decide_fire(self, utilization_percent):
+        if self.startup_windows_remaining > 0:
+            self.startup_windows_remaining -= 1
+            return True
+        reading_percent = 0.0 if utilization_percent is None else utilization_percent
+        deviation_percent = reading_percent - self.smoothed_utilization_percent
+        self.smoothed_utilization_percent += self.smoothing_weight * deviation_percent
+        return self.smoothed_utilization_percent < self.target_utilization_percent
 
 
 def wait_for_chunk(completion_event):
@@ -133,13 +173,17 @@ def main():
     windows_training_only = 0
     utilization_sum = 0.0
     training_utilization_sum = 0.0
-    hold_windows_remaining = 0
+    controller = FireController(args.poll_interval_seconds, args.target_utilization_percent)
     previous_window_fired = False
+    pending_readings = []
     next_status_seconds = time.monotonic() + STATUS_INTERVAL_SECONDS
 
     while not terminate_requested:
         window_end_seconds = time.monotonic() + args.poll_interval_seconds
-        utilization_percent = read_utilization_percent()
+        if not pending_readings:
+            pending_readings.append(read_utilization_percent())
+        utilization_percent = window_reading_percent(pending_readings)
+        pending_readings = []
         windows_total += 1
         if utilization_percent is None:
             windows_unreadable += 1
@@ -149,19 +193,14 @@ def main():
             windows_training_only += 1
             training_utilization_sum += utilization_percent
 
-        # a reading taken right after our own load measures the heartbeat, not training
-        if utilization_percent is None:
-            hold_windows_remaining = MAX_HOLD_WINDOWS
-        elif hold_windows_remaining == 0 and not previous_window_fired:
-            hold_windows_remaining = hold_window_count(utilization_percent, args.target_utilization_percent)
-
-        previous_window_fired = hold_windows_remaining > 0
+        previous_window_fired = controller.record_and_decide_fire(utilization_percent)
         if previous_window_fired:
             if generate_load(left, right, chunk_events, chunk_matmuls, window_end_seconds) < 0:
                 log("ERROR: matmul chunk did not complete within the poll budget")
                 return 1
             windows_fired += 1
-            hold_windows_remaining -= 1
+        else:
+            pending_readings = sample_utilization_until(window_end_seconds)
 
         idle_seconds = window_end_seconds - time.monotonic()
         if idle_seconds > 0.0:
@@ -176,6 +215,8 @@ def main():
         training_utilization = (training_utilization_sum / windows_training_only
                                 if windows_training_only else float("nan"))
         log(f"mean_utilization={mean_utilization:.1f}% training_utilization={training_utilization:.1f}% "
+            f"smoothed_utilization={controller.smoothed_utilization_percent:.1f}% "
+            f"startup_windows_left={controller.startup_windows_remaining} "
             f"fired={windows_fired}/{windows_total} unreadable={windows_unreadable}")
         windows_total = windows_fired = windows_unreadable = windows_training_only = 0
         utilization_sum = training_utilization_sum = 0.0

@@ -103,9 +103,24 @@ Key flags:
 cluster's idle-GPU reclaimer issues a `scancel` from `uid 0` (root) during
 the first eval / checkpoint dip in GPU utilization.
 
-`scripts/gpu_heartbeat.py` monitors `nvidia-smi` and runs short matmul bursts
-when utilization drops below 65%, so the cluster always sees the GPU as
-active. It cooperates with training and steps aside when training is busy.
+`scripts/gpu_heartbeat.py` reads utilization through NVML, averaged over each
+2 s window from samples every 0.25 s, smooths those readings with a 5-minute
+exponential average, and fills the next 2 s with matmuls whenever that average
+is below 80% (`--target-utilization-percent`). Its own load counts in the
+average, as it does for the reclaimer. After startup, a run that stays at
+least that busy in every few-minute stretch never triggers it; a stall from
+full load reaches the line after about a minute, so the 5-minute window at its
+onset dips to about 66-70%. It fires through its first 20 minutes (at the 80%
+target), which brings up to ~5 idle minutes of container start and extension
+build before it runs back up to the target on average; start it before the
+build to shrink that gap. NYU's published policy cancels jobs below 50%
+(`ga*`, `gl*`, `gr*` nodes) or 60% (`gh*`) and warns below 70% or 75%, without
+stating the averaging window or the metric, so this assumes NVML utilization
+averaged over 5 minutes or longer. It fires only the shortfall because a firing
+window slows training: the GPU time-slices between the two processes, and a
+lattice run on H100 measured 134K steps/s alone against 91K with an earlier
+heartbeat that fired in ~78% of windows. An unreadable reading counts as 0%, so
+a broken NVML read makes it fire, never idle.
 
 ### Environment knobs the container path sets
 
