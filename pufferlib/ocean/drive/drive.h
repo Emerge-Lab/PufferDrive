@@ -5113,13 +5113,19 @@ void c_step(Drive *env) {
     int early_reset = 0;
     if (env->termination_mode == 1) {
         int count_inactive = 0;
+        int count_checked = 0;
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
+            // With log_sdc_only (frozen co-players), only the SDC's status ends the episode.
+            if (env->log_sdc_only && agent_idx != EGO_IDX) {
+                continue;
+            }
+            count_checked++;
             if (env->agents[agent_idx].removed || env->agents[agent_idx].stopped) {
                 count_inactive++;
             }
         }
-        float ratio_inactive = (float) count_inactive / (float) env->active_agent_count;
+        float ratio_inactive = count_checked ? (float) count_inactive / (float) count_checked : 0.0f;
         if (ratio_inactive > env->inactive_agent_threshold) {
             early_reset = 1;
         }
