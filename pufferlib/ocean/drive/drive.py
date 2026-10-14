@@ -139,6 +139,8 @@ class Drive(pufferlib.PufferEnv):
         lattice_low_speed_distances_m=(5.0, 10.0, 15.0, 20.0),
         lattice_lon_speeds_mps=(0.0, 1.0, 2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0),
         lattice_lon_durations_s=(1.2, 2.4, 3.6, 4.8, 6.0),
+        lattice_lon_urgency=False,
+        lattice_lon_urgency_fracs=(0.4, 0.7, 1.0),
         lattice_stop_distances_m=(5.0, 10.0, 20.0, 40.0),
         lattice_backup_distances_m=(1.0, 2.0, 5.0, 10.0),
         lattice_low_speed_mps=3.0,
@@ -239,6 +241,12 @@ class Drive(pufferlib.PufferEnv):
         self.lattice_low_speed_distances_m = [float(value) for value in lattice_low_speed_distances_m]
         self.lattice_lon_speeds_mps = [float(value) for value in lattice_lon_speeds_mps]
         self.lattice_lon_durations_s = [float(value) for value in lattice_lon_durations_s]
+        self.lattice_lon_urgency = bool(lattice_lon_urgency)
+        self.lattice_lon_urgency_fracs = [float(value) for value in lattice_lon_urgency_fracs]
+        # second speed-cell index: comfort levels under lattice_lon_urgency, else durations
+        self.lattice_lon_slot_count = len(
+            self.lattice_lon_urgency_fracs if self.lattice_lon_urgency else self.lattice_lon_durations_s
+        )
         self.lattice_stop_distances_m = [float(value) for value in lattice_stop_distances_m]
         self.lattice_backup_distances_m = [float(value) for value in lattice_backup_distances_m]
         self.lattice_low_speed_mps = float(lattice_low_speed_mps)
@@ -257,7 +265,7 @@ class Drive(pufferlib.PufferEnv):
             (len(self.lattice_lat_offsets_m) + 2 + int(self.lattice_oncoming_overtake))
             * len(self.lattice_lat_durations_s),
             binding.LATTICE_GATE_COUNT,
-            len(self.lattice_lon_speeds_mps) * len(self.lattice_lon_durations_s)
+            len(self.lattice_lon_speeds_mps) * self.lattice_lon_slot_count
             + len(self.lattice_stop_distances_m)
             + 2
             + len(self.lattice_backup_distances_m)
@@ -630,6 +638,8 @@ class Drive(pufferlib.PufferEnv):
             "lattice_low_speed_distances_m": self.lattice_low_speed_distances_m,
             "lattice_lon_speeds_mps": self.lattice_lon_speeds_mps,
             "lattice_lon_durations_s": self.lattice_lon_durations_s,
+            "lattice_lon_urgency": self.lattice_lon_urgency,
+            "lattice_lon_urgency_fracs": self.lattice_lon_urgency_fracs,
             "lattice_stop_distances_m": self.lattice_stop_distances_m,
             "lattice_backup_distances_m": self.lattice_backup_distances_m,
             "lattice_low_speed_mps": self.lattice_low_speed_mps,
@@ -639,6 +649,7 @@ class Drive(pufferlib.PufferEnv):
             "lattice_oncoming_overtake": self.lattice_oncoming_overtake,
             "lattice_turnaround": self.lattice_turnaround,
             "lattice_overtake_commit": self.lattice_overtake_commit,
+            "lattice_mask_feature_count": sum(self.lattice_nvec),
         }
 
     def _sample_init_step(self):

@@ -155,6 +155,24 @@ static int init_lattice_config(Drive *env) {
     if (cfg->turnaround != 0 && cfg->turnaround != 1) {
         return lattice_config_error("lattice_turnaround", (float) cfg->turnaround);
     }
+    if (cfg->lon_urgency != 0 && cfg->lon_urgency != 1) {
+        return lattice_config_error("lattice_lon_urgency", (float) cfg->lon_urgency);
+    }
+    if (!lattice_values_ok(
+            cfg->lon_urgency_fracs,
+            cfg->lon_urgency_count,
+            LATTICE_MAX_LON_DURATIONS,
+            LATTICE_CHECK_EPS,
+            1.0f)) {
+        return lattice_config_error("lattice_lon_urgency_fracs count or range (0, 1]", (float) cfg->lon_urgency_count);
+    }
+    for (int level_idx = 1; level_idx < cfg->lon_urgency_count; level_idx++) {
+        if (!(cfg->lon_urgency_fracs[level_idx] > cfg->lon_urgency_fracs[level_idx - 1])) {
+            return lattice_config_error(
+                "lattice_lon_urgency_fracs must be strictly ascending",
+                cfg->lon_urgency_fracs[level_idx]);
+        }
+    }
     if ((cfg->overtake_commit != 0 && cfg->overtake_commit != 1) || (cfg->overtake_commit && !cfg->oncoming_overtake)) {
         return lattice_config_error(
             "lattice_overtake_commit must be 0 or 1 and needs lattice_oncoming_overtake",
@@ -183,7 +201,8 @@ static int init_lattice_config(Drive *env) {
         return lattice_config_error("dt must divide the 1.2 s stop grid and the 0.3 s back-up grid", env->dt);
     }
     cfg->lat_cell_count = (cfg->lat_offset_count + 2 + cfg->oncoming_overtake) * cfg->lat_duration_count;
-    cfg->lon_speed_cell_count = cfg->lon_speed_count * cfg->lon_duration_count;
+    cfg->lon_slot_count = cfg->lon_urgency ? cfg->lon_urgency_count : cfg->lon_duration_count;
+    cfg->lon_speed_cell_count = cfg->lon_speed_count * cfg->lon_slot_count;
     cfg->lon_stop_cell_base = cfg->lon_speed_cell_count;
     cfg->lon_stop_line_cell = cfg->lon_stop_cell_base + cfg->stop_distance_count;
     cfg->lon_emergency_cell = cfg->lon_stop_line_cell + 1;
@@ -3229,6 +3248,91 @@ static int lattice_lat_cell_ok(Drive *env, const struct LatticeAgent *lattice_ag
     return lattice_check_ok(env, agent, &check);
 }
 
+// shortest duration (dt steps, URGENCY_T_MIN..MAX) keeping quartic accel and jerk within frac of the car's limits
+static int lattice_urgency_speed_steps(
+    const Drive *env,
+    const Agent *agent,
+    const LatticeContext *ctx,
+    float speed_mps,
+    float frac,
+    int first_steps) {
+    float c_throttle = agent->reward_coefs[REWARD_COEF_THROTTLE];
+    float c_acc = agent->reward_coefs[REWARD_COEF_ACC];
+    float accel0 = ctx->lon_accel0;
+    double accel_low = fminf_inline(frac * ACCEL_LONG_LIMIT[0], accel0) - LATTICE_CHECK_EPS;
+    double accel_high = fmaxf_inline(frac * ACCEL_LONG_LIMIT[1] * c_acc, accel0) + LATTICE_CHECK_EPS;
+    double jerk_low = frac * JERK_LONG[0] * c_throttle - LATTICE_CHECK_EPS;
+    double jerk_high = frac * JERK_LONG[3] * c_throttle + LATTICE_CHECK_EPS;
+    int min_steps = (int) lroundf(LATTICE_URGENCY_T_MIN_S / env->dt);
+    int max_steps = (int) lroundf(LATTICE_URGENCY_T_MAX_S / env->dt);
+    for (int steps = first_steps > min_steps ? first_steps : min_steps; steps <= max_steps; steps++) {
+        float horizon_s = steps * env->dt;
+        double coefs[6];
+        lattice_quartic_speed_coefs(ctx->lon_sigma0, ctx->lon_speed0, accel0, speed_mps, horizon_s, coefs);
+        double jerk_start = lattice_poly_third(coefs, 0.0);
+        double jerk_end = lattice_poly_third(coefs, horizon_s);
+        double accel_end = lattice_poly_point(coefs, horizon_s).second;
+        double vertex_s = coefs[4] != 0.0 ? -coefs[3] / (4.0 * coefs[4]) : 0.0;
+        double accel_vertex
+            = vertex_s > 0.0 && vertex_s < horizon_s ? lattice_poly_point(coefs, vertex_s).second : accel_end;
+        int jerk_ok
+            = jerk_start >= jerk_low && jerk_start <= jerk_high && jerk_end >= jerk_low && jerk_end <= jerk_high;
+        int accel_ok = accel_end >= accel_low && accel_end <= accel_high && accel_vertex >= accel_low
+            && accel_vertex <= accel_high;
+        if (jerk_ok && accel_ok) {
+            return steps;
+        }
+    }
+    return 0;
+}
+
+// comfort-level speed cell: shortest comfortable duration passing the full check, then up to two longer comfortable
+// ones
+static int lattice_build_urgency_speed_cell(
+    Drive *env,
+    const Agent *agent,
+    const LatticeContext *ctx,
+    float speed_mps,
+    float frac,
+    int cell,
+    LatticeCheck *check,
+    struct LatticeLonPlan *plan) {
+    int steps = lattice_urgency_speed_steps(env, agent, ctx, speed_mps, frac, 0);
+    if (steps == 0) {
+        // never leave the plan unset: the decode commits what this builds even when the check fails
+        int max_steps = (int) lroundf(LATTICE_URGENCY_T_MAX_S / env->dt);
+        set_lattice_lon_speed_plan(
+            plan,
+            ctx->lon_sigma0,
+            ctx->lon_speed0,
+            ctx->lon_accel0,
+            speed_mps,
+            max_steps,
+            env->dt,
+            ctx->now_step,
+            cell);
+        return 0;
+    }
+    for (int attempt = 0; attempt <= LATTICE_STOP_FALLBACK_CANDIDATES && steps > 0; attempt++) {
+        set_lattice_lon_speed_plan(
+            plan,
+            ctx->lon_sigma0,
+            ctx->lon_speed0,
+            ctx->lon_accel0,
+            speed_mps,
+            steps,
+            env->dt,
+            ctx->now_step,
+            cell);
+        check->horizon_steps = steps;
+        if (lattice_check_ok(env, agent, check)) {
+            return 1;
+        }
+        steps = lattice_urgency_speed_steps(env, agent, ctx, speed_mps, frac, steps + 1);
+    }
+    return 0;
+}
+
 // longitudinal candidate checked against the held lateral plan; stop cells pick their duration here
 static int lattice_build_lon_cell(
     Drive *env,
@@ -3255,12 +3359,32 @@ static int lattice_build_lon_cell(
     }
     if (cell < cfg->lon_speed_cell_count) {
         int speed_idx = cell % cfg->lon_speed_count;
-        int duration_idx = cell / cfg->lon_speed_count;
+        int slot_idx = cell / cfg->lon_speed_count;
         float speed_mps = cfg->lon_speeds_mps[speed_idx];
-        set_lattice_lon_speed_plan(plan, ctx->lon_sigma0, ctx->lon_speed0, ctx->lon_accel0, speed_mps, cfg->lon_duration_steps[duration_idx], env->dt, ctx->now_step, cell);
-        check.horizon_steps = cfg->lon_duration_steps[duration_idx];
         check.check_end_speed = 1;
         check.end_speed_mps = speed_mps;
+        if (cfg->lon_urgency) {
+            return lattice_build_urgency_speed_cell(
+                env,
+                agent,
+                ctx,
+                speed_mps,
+                cfg->lon_urgency_fracs[slot_idx],
+                cell,
+                &check,
+                plan);
+        }
+        set_lattice_lon_speed_plan(
+            plan,
+            ctx->lon_sigma0,
+            ctx->lon_speed0,
+            ctx->lon_accel0,
+            speed_mps,
+            cfg->lon_duration_steps[slot_idx],
+            env->dt,
+            ctx->now_step,
+            cell);
+        check.horizon_steps = cfg->lon_duration_steps[slot_idx];
         return lattice_check_ok(env, agent, &check);
     }
     if (cell >= cfg->lon_backup_cell_base) {

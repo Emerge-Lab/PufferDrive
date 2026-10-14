@@ -1,3 +1,5 @@
+import math
+
 from torch import nn
 import torch
 import torch.nn.functional as F
@@ -15,6 +17,187 @@ ACTIVATIONS = {"relu": nn.ReLU, "tanh": nn.Tanh, "gelu": nn.GELU}
 LATTICE_MASK_ENCODER_SIZE = 64
 LATTICE_MASKED_LOGIT = -1e9
 LATTICE_SPECIAL_CELL_LOGIT_BIAS = -2.0
+# structured head factors; the cell layout they index is init_lattice_config in lattice.h
+LATTICE_KIND_OFFSET, LATTICE_KIND_LANE_RIGHT, LATTICE_KIND_LANE_LEFT, LATTICE_KIND_ONCOMING = range(4)
+(
+    LATTICE_MODE_CRUISE,
+    LATTICE_MODE_STOP,
+    LATTICE_MODE_STOP_LINE,
+    LATTICE_MODE_EMERGENCY,
+    LATTICE_MODE_BACKUP,
+    LATTICE_MODE_TURN,
+) = range(6)
+LATTICE_BELL_MIN_SIGMA_SPACINGS = 0.35
+LATTICE_BELL_MAX_SIGMA_RANGES = 2.0
+LATTICE_BELL_INIT_SIGMA_RANGES = 0.4
+LATTICE_BELL_CENTRE_MARGIN_SPACINGS = 2.0
+
+
+def masked_log_softmax(logits, allowed, dim):
+    """log_softmax over the allowed entries; a fully disallowed slice stays finite (its cells are masked later)."""
+    return F.log_softmax(logits.masked_fill(~allowed, LATTICE_MASKED_LOGIT), dim=dim)
+
+
+class LatticeBell:
+    """Bell curve over an ascending menu: centre in [first, last] widened by a margin, spread log-bounded, both smooth."""
+
+    def __init__(self, values):
+        self.values = [float(value) for value in values]
+        spacing = min((later - earlier for earlier, later in zip(self.values, self.values[1:])), default=1.0)
+        span = max(self.values[-1] - self.values[0], spacing)
+        margin = LATTICE_BELL_CENTRE_MARGIN_SPACINGS * spacing
+        self.centre_low, self.centre_high = self.values[0] - margin, self.values[-1] + margin
+        self.log_sigma_min = math.log(LATTICE_BELL_MIN_SIGMA_SPACINGS * spacing)
+        self.log_sigma_max = math.log(LATTICE_BELL_MAX_SIGMA_RANGES * span)
+        init_fraction = (math.log(LATTICE_BELL_INIT_SIGMA_RANGES * span) - self.log_sigma_min) / (
+            self.log_sigma_max - self.log_sigma_min
+        )
+        self.init_sigma_raw = math.log(init_fraction / (1.0 - init_fraction))
+
+    def centre_and_spread(self, centre_raw, spread_raw):
+        centre = self.centre_low + (self.centre_high - self.centre_low) * torch.sigmoid(centre_raw)
+        log_sigma = self.log_sigma_min + (self.log_sigma_max - self.log_sigma_min) * torch.sigmoid(spread_raw)
+        return centre, log_sigma.exp()
+
+    def logits(self, values, centre_raw, spread_raw):
+        centre, sigma = self.centre_and_spread(centre_raw, spread_raw)
+        z = (values.unsqueeze(0) - centre.unsqueeze(1)) / sigma.unsqueeze(1)
+        return -0.5 * z * z
+
+
+class LatticeStructuredHead(nn.Module):
+    """Head outputs -> exact log-probabilities over the env's lattice cells (layout of init_lattice_config, lattice.h),
+    chained level by level with the masks applied at every level: lateral kind -> in-lane offset (bell) -> duration;
+    longitudinal mode -> speed (bell) -> comfort level/duration, stop distance (bell over ln m), back-up distance."""
+
+    def __init__(self, env):
+        super().__init__()
+        offsets = [float(value) for value in env.lattice_lat_offsets_m]
+        speeds = [float(value) for value in env.lattice_lon_speeds_mps]
+        log_stops = [math.log(float(value)) for value in env.lattice_stop_distances_m]
+        for name, values in (("lat_offsets_m", offsets), ("lon_speeds_mps", speeds), ("stop_distances_m", log_stops)):
+            if any(later <= earlier for earlier, later in zip(values, values[1:])):
+                raise ValueError(f"policy.lattice_structured_head needs strictly ascending env.lattice_{name}")
+        self.nvec = [int(count) for count in env.lattice_nvec]
+        self.offset_bell, self.speed_bell, self.stop_bell = (
+            LatticeBell(offsets),
+            LatticeBell(speeds),
+            LatticeBell(log_stops),
+        )
+        self.register_buffer("offset_values", torch.tensor(offsets), persistent=False)
+        self.register_buffer("speed_values", torch.tensor(speeds), persistent=False)
+        self.register_buffer("stop_values", torch.tensor(log_stops), persistent=False)
+        self.oncoming, self.turnaround = int(env.lattice_oncoming_overtake), int(env.lattice_turnaround)
+        self.offset_count, self.lat_duration_count = len(offsets), len(env.lattice_lat_durations_s)
+        self.choice_count = self.offset_count + 2 + self.oncoming
+        self.speed_count, self.slot_count = len(speeds), int(env.lattice_lon_slot_count)
+        self.stop_count, self.backup_count = len(log_stops), len(env.lattice_backup_distances_m)
+        if self.choice_count * self.lat_duration_count != self.nvec[1]:
+            raise ValueError(
+                f"lateral cells {self.nvec[1]} != {self.choice_count} choices x {self.lat_duration_count} durations"
+            )
+        if (
+            self.speed_count * self.slot_count + self.stop_count + 2 + self.backup_count + self.turnaround
+            != self.nvec[3]
+        ):
+            raise ValueError(f"longitudinal cells {self.nvec[3]} do not match the menus")
+        self.layout = [
+            ("lat_gate", self.nvec[0]),
+            ("lat_kind", LATTICE_KIND_ONCOMING + self.oncoming),
+            ("offset_bell", 2),
+            ("lat_duration", self.lat_duration_count),
+            ("lon_gate", self.nvec[2]),
+            ("lon_mode", LATTICE_MODE_TURN + self.turnaround),
+            ("speed_bell", 2),
+            ("lon_slot", self.slot_count),
+            ("stop_bell", 2),
+            ("backup", self.backup_count),
+            ("exit", self.nvec[4]),
+        ]
+        self.param_count = sum(size for _, size in self.layout)
+        # lateral choices (cell = choice_count * duration + choice): lane right, offsets, lane left, [oncoming]
+        choice_kind = [LATTICE_KIND_LANE_RIGHT] + [LATTICE_KIND_OFFSET] * self.offset_count + [LATTICE_KIND_LANE_LEFT]
+        choice_kind += [LATTICE_KIND_ONCOMING] * self.oncoming
+        kind_count = LATTICE_KIND_ONCOMING + self.oncoming
+        self.register_buffer("choice_kind", torch.tensor(choice_kind, dtype=torch.long), persistent=False)
+        self.register_buffer("choice_kind_onehot", F.one_hot(self.choice_kind, kind_count).float(), persistent=False)
+        self.register_buffer("prior", self.initial_prior(), persistent=False)
+
+    def initial_prior(self):
+        """Constant offsets added to the head output: unmasked factors start at the linear head's initial cell
+        distribution for the same menu (uniform cells, special longitudinal cells at LATTICE_SPECIAL_CELL_LOGIT_BIAS),
+        bells near-flat at the menu midpoint. Weight decay pulls the learned part back toward this prior."""
+        kind_choices = [self.offset_count, 1, 1] + [1] * self.oncoming
+        mode_cells = [self.speed_count * self.slot_count, self.stop_count, 1, 1, self.backup_count] + [
+            1
+        ] * self.turnaround
+        mode_bias = [0.0] + [LATTICE_SPECIAL_CELL_LOGIT_BIAS] * (len(mode_cells) - 1)
+        values = {
+            "lat_kind": [math.log(count) for count in kind_choices],
+            "lon_mode": [math.log(count) + bias for count, bias in zip(mode_cells, mode_bias)],
+            "offset_bell": [0.0, self.offset_bell.init_sigma_raw],
+            "speed_bell": [0.0, self.speed_bell.init_sigma_raw],
+            "stop_bell": [0.0, self.stop_bell.init_sigma_raw],
+        }
+        return torch.cat(
+            [torch.tensor(values.get(name, [0.0] * size), dtype=torch.float32) for name, size in self.layout]
+        )
+
+    def split(self, params):
+        sizes = [size for _, size in self.layout]
+        return dict(zip((name for name, _ in self.layout), torch.split(params.float() + self.prior, sizes, dim=1)))
+
+    def lateral_cells(self, parts, allowed):
+        batch = allowed.shape[0]
+        cell_allowed = allowed.view(batch, self.lat_duration_count, self.choice_count)
+        choice_allowed = cell_allowed.any(dim=1)
+        kind_allowed = (choice_allowed.float() @ self.choice_kind_onehot) > 0.0
+        kind_lp = masked_log_softmax(parts["lat_kind"], kind_allowed, dim=1)
+        offset_logits = self.offset_bell.logits(
+            self.offset_values, parts["offset_bell"][:, 0], parts["offset_bell"][:, 1]
+        )
+        offset_lp = masked_log_softmax(offset_logits, choice_allowed[:, 1 : 1 + self.offset_count], dim=1)
+        lane_and_oncoming = offset_lp.new_zeros(batch, self.choice_count - 1 - self.offset_count)
+        choice_lp = kind_lp[:, self.choice_kind] + torch.cat(
+            [offset_lp.new_zeros(batch, 1), offset_lp, lane_and_oncoming], dim=1
+        )
+        duration_logits = parts["lat_duration"].unsqueeze(2).expand(-1, -1, self.choice_count)
+        duration_lp = masked_log_softmax(duration_logits, cell_allowed, dim=1)
+        return (choice_lp.unsqueeze(1) + duration_lp).reshape(batch, -1)
+
+    def longitudinal_cells(self, parts, allowed):
+        batch = allowed.shape[0]
+        speed_cells = self.speed_count * self.slot_count
+        stop_end = speed_cells + self.stop_count
+        backup_start = stop_end + 2
+        speed_allowed_cells = allowed[:, :speed_cells].view(batch, self.slot_count, self.speed_count)
+        speed_allowed = speed_allowed_cells.any(dim=1)
+        stop_allowed = allowed[:, speed_cells:stop_end]
+        backup_allowed = allowed[:, backup_start : backup_start + self.backup_count]
+        mode_allowed = [speed_allowed.any(1), stop_allowed.any(1), allowed[:, stop_end], allowed[:, stop_end + 1]]
+        mode_allowed += [backup_allowed.any(1)] + ([allowed[:, -1]] if self.turnaround else [])
+        mode_lp = masked_log_softmax(parts["lon_mode"], torch.stack(mode_allowed, dim=1), dim=1)
+        speed_logits = self.speed_bell.logits(self.speed_values, parts["speed_bell"][:, 0], parts["speed_bell"][:, 1])
+        speed_lp = masked_log_softmax(speed_logits, speed_allowed, dim=1)
+        slot_logits = parts["lon_slot"].unsqueeze(2).expand(-1, -1, self.speed_count)
+        slot_lp = masked_log_softmax(slot_logits, speed_allowed_cells, dim=1)
+        cruise = mode_lp[:, LATTICE_MODE_CRUISE, None, None] + speed_lp.unsqueeze(1) + slot_lp
+        stop_logits = self.stop_bell.logits(self.stop_values, parts["stop_bell"][:, 0], parts["stop_bell"][:, 1])
+        stops = mode_lp[:, LATTICE_MODE_STOP, None] + masked_log_softmax(stop_logits, stop_allowed, dim=1)
+        backups = mode_lp[:, LATTICE_MODE_BACKUP, None] + masked_log_softmax(parts["backup"], backup_allowed, dim=1)
+        singles = [mode_lp[:, LATTICE_MODE_STOP_LINE, None], mode_lp[:, LATTICE_MODE_EMERGENCY, None]]
+        turn = [mode_lp[:, LATTICE_MODE_TURN, None]] if self.turnaround else []
+        return torch.cat([cruise.reshape(batch, -1), stops, *singles, backups, *turn], dim=1)
+
+    def forward(self, params, lattice_masks):
+        """Per-factor logits in env order; every allowed cell gets its exact chained log-probability."""
+        parts = self.split(params)
+        allowed = lattice_masks > 0.5
+        nvec = self.nvec
+        lat_start, lon_start = nvec[0], sum(nvec[:3])
+        lat = self.lateral_cells(parts, allowed[:, lat_start : lat_start + nvec[1]])
+        lon = self.longitudinal_cells(parts, allowed[:, lon_start : lon_start + nvec[3]])
+        return torch.cat([parts["lat_gate"], lat, parts["lon_gate"], lon, parts["exit"]], dim=1)
 
 
 class DriveBackbone(nn.Module):
@@ -343,6 +526,7 @@ class Drive(nn.Module):
         action_type: str,
         actor_head_layer_norm: bool = False,
         critic_head_layer_norm: bool = False,
+        lattice_structured_head: bool = False,
     ):
         super().__init__()
 
@@ -392,6 +576,9 @@ class Drive(nn.Module):
         self.is_lattice = action_type == "lattice"
         # LSTMWrapper hands its state to decode_actions so the masks never live on self
         self.decode_uses_state = self.is_lattice
+        if lattice_structured_head and not self.is_lattice:
+            raise ValueError("policy.lattice_structured_head needs action_type 'lattice'")
+        self.lattice_structured = LatticeStructuredHead(env) if lattice_structured_head else None
         if self.is_lattice:
             self.lattice_nvec = [int(n) for n in env.lattice_nvec]
             self.lattice_mask_features = sum(self.lattice_nvec)
@@ -437,7 +624,11 @@ class Drive(nn.Module):
         if self.is_continuous:
             self.action_dim = env.single_action_space.shape[0]
         elif self.is_lattice:
-            self.action_dim = self.lattice_mask_features
+            self.action_dim = (
+                self.lattice_structured.param_count
+                if self.lattice_structured is not None
+                else self.lattice_mask_features
+            )
         else:
             self.action_dim = self.action_long_norm.numel() * self.action_lat_norm.numel()
 
@@ -454,14 +645,14 @@ class Drive(nn.Module):
         actor_output_dim = self.action_dim * 2 if self.is_continuous else self.action_dim
         actor_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(actor_in, actor_output_dim), std=0.01))
         self.actor_head = nn.Sequential(*actor_head_layers)
-        if self.is_lattice:
+        if self.is_lattice and self.lattice_structured is None:
             # gates start unbiased; stop, stop-line, EMERGENCY and back-up cells start unlikely
             lon_cell_offset = sum(self.lattice_nvec[:3])
-            first_special_cell = len(env.lattice_lon_speeds_mps) * len(env.lattice_lon_durations_s)
+            first_special_cell = len(env.lattice_lon_speeds_mps) * env.lattice_lon_slot_count
             with torch.no_grad():
-                self.actor_head[-1].bias[lon_cell_offset + first_special_cell : lon_cell_offset + self.lattice_nvec[3]] = (
-                    LATTICE_SPECIAL_CELL_LOGIT_BIAS
-                )
+                self.actor_head[-1].bias[
+                    lon_cell_offset + first_special_cell : lon_cell_offset + self.lattice_nvec[3]
+                ] = LATTICE_SPECIAL_CELL_LOGIT_BIAS
 
         # n-layer MLP for critic head (num_layers = number of hidden layers)
         critic_head_layers = []
@@ -479,7 +670,14 @@ class Drive(nn.Module):
         """Shared by forward() and decode_actions(): Normal(loc, scale) for a Gaussian action
         type (continuous or spline), masked per-factor logits for lattice, raw logits otherwise."""
         if self.is_lattice:
-            logits = self.actor_head(hidden)
+            if self.lattice_structured is None:
+                logits = self.actor_head(hidden)
+            else:
+                # last layer and bells in fp32: bf16 rounding of a narrow bell's centre moves log-probs by ~0.03 nats
+                head_hidden = self.actor_head[:-1](hidden)
+                with torch.autocast(device_type=head_hidden.device.type, enabled=False):
+                    params = self.actor_head[-1](head_hidden.float())
+                    logits = self.lattice_structured(params, lattice_masks.to(params.device))
             masked = logits.masked_fill(lattice_masks.to(logits.device) < 0.5, LATTICE_MASKED_LOGIT)
             return pufferlib.pytorch.LatticeLogits(*torch.split(masked, self.lattice_nvec, dim=1))
         if self.is_continuous:

@@ -2263,10 +2263,174 @@ static int test_turn_random_rollouts(void) {
     return 0;
 }
 
+// hybrid menu: 5 offsets, 21 speeds x 3 comfort levels, 8 stop distances -> MultiDiscrete([2, 28, 2, 77, 5])
+static int test_hybrid_menu_layout(void) {
+    Drive env = make_hybrid_lattice_env(TOWN06, 1, 0.3f);
+    const struct LatticeConfig *cfg = &env.lattice;
+    EXPECT_EQ_INT(cfg->nvec[1], 28);
+    EXPECT_EQ_INT(cfg->nvec[3], 77);
+    EXPECT_EQ_INT(cfg->lon_slot_count, 3);
+    EXPECT_EQ_INT(cfg->lon_speed_cell_count, 63);
+    EXPECT_EQ_INT(cfg->lon_stop_cell_base, 63);
+    EXPECT_EQ_INT(cfg->lon_stop_line_cell, 71);
+    EXPECT_EQ_INT(cfg->lon_emergency_cell, 72);
+    EXPECT_EQ_INT(cfg->lon_backup_cell_base, 73);
+    EXPECT_EQ_INT(cfg->mask_feature_count, 2 + 28 + 2 + 77 + 5);
+    EXPECT_EQ_INT(lattice_lat_lane_side(cfg, 7 + 6), 1);
+    EXPECT_NEAR(lattice_lat_cell_offset(cfg, 7 + 2), -0.45f, 1e-6f);
+    free_allocated(&env);
+    return 0;
+}
+
+static int urgency_steps_at(Drive *env, float speed_mps, float frac) {
+    struct LatticeAgent *lattice_agent = &env->lattice_agents[0];
+    Agent *agent = &env->agents[env->active_agent_indices[0]];
+    LatticeContext ctx = lattice_make_context(env, lattice_agent, agent, env->timestep + 1);
+    return lattice_urgency_speed_steps(env, agent, &ctx, speed_mps, frac, 0);
+}
+
+// shortest T on the 0.3 s grid with peak accel 1.5|dv|/T and peak jerk 6|dv|/T^2 inside frac of the limits (c = 1)
+static int test_urgency_speed_durations(void) {
+    Drive env = make_hybrid_lattice_env(TOWN06, 1, 0.3f);
+    place_lattice_agent(&env, 0, STRAIGHT_LANE_TOWN06, 40.0f, 5.0f);
+    EXPECT_EQ_INT(urgency_steps_at(&env, 8.0f, 1.0f), 8);   // 2.4 s: jerk needs 2.12 s
+    EXPECT_EQ_INT(urgency_steps_at(&env, 8.0f, 0.7f), 9);   // 2.7 s: accel 1.75 needs 2.57 s
+    EXPECT_EQ_INT(urgency_steps_at(&env, 8.0f, 0.4f), 15);  // 4.5 s: accel 1.0 needs exactly 4.5 s
+    EXPECT_EQ_INT(urgency_steps_at(&env, 0.0f, 1.0f), 10);  // 3.0 s: end jerk +4 needs 2.74 s
+    EXPECT_EQ_INT(urgency_steps_at(&env, 5.0f, 0.4f), 4);   // hold: the shortest 1.2 s
+    EXPECT_EQ_INT(urgency_steps_at(&env, 12.0f, 1.0f), 14); // 4.2 s: accel needs 4.2 s
+    EXPECT_EQ_INT(urgency_steps_at(&env, 20.0f, 0.4f), 0);  // 15 m/s gently needs 22.5 s
+    Agent *agent = slot0_agent(&env);
+    agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.25f;
+    agent->reward_coefs[REWARD_COEF_ACC] = 1.5f;
+    EXPECT_EQ_INT(urgency_steps_at(&env, 8.0f, 1.0f), 7); // 2.1 s: jerk cap 5 needs 1.90 s, accel cap 3.75 needs 1.2 s
+    agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
+    agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
+    struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+    LatticeContext ctx = lattice_make_context(&env, lattice_agent, agent, env.timestep + 1);
+    int cell_8_firm = 2 * env.lattice.lon_speed_count + 8;
+    struct LatticeLonPlan plan = {0};
+    EXPECT_TRUE(lattice_build_lon_cell(&env, lattice_agent, agent, &ctx, cell_8_firm, NULL, &plan, NULL));
+    EXPECT_NEAR(plan.target_speed_mps, 8.0f, 0.0f);
+    EXPECT_EQ_INT(plan.end_step - plan.start_step, 8);
+    int cell_20_gentle = 20;
+    EXPECT_FALSE(lattice_build_lon_cell(&env, lattice_agent, agent, &ctx, cell_20_gentle, NULL, &plan, NULL));
+    EXPECT_FALSE(lattice_agent->mask[lattice_mask_offset(&env.lattice, LATTICE_FACTOR_LON_CELL) + cell_20_gentle]);
+    free_allocated(&env);
+    return 0;
+}
+
+// every accepted comfort-level plan, densely sampled, keeps accel and jerk inside its fraction of the car's limits
+static int test_urgency_plans_respect_comfort_caps(void) {
+    Drive env = make_hybrid_lattice_env(TOWN06, 1, 0.3f);
+    const float start_speeds[] = {0.0f, 3.0f, 8.0f, 14.0f};
+    const float start_accels[] = {0.0f, 1.5f, -3.0f};
+    int accepted = 0;
+    for (int speed_case = 0; speed_case < 4; speed_case++) {
+        for (int accel_case = 0; accel_case < 3; accel_case++) {
+            place_lattice_agent(&env, 0, STRAIGHT_LANE_TOWN06, 40.0f, start_speeds[speed_case]);
+            Agent *agent = slot0_agent(&env);
+            struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+            LatticeContext ctx = lattice_make_context(&env, lattice_agent, agent, env.timestep + 1);
+            ctx.lon_accel0 = start_accels[accel_case];
+            for (int cell = 0; cell < env.lattice.lon_speed_cell_count; cell++) {
+                float speed_mps = env.lattice.lon_speeds_mps[cell % env.lattice.lon_speed_count];
+                float frac = env.lattice.lon_urgency_fracs[cell / env.lattice.lon_speed_count];
+                int steps = lattice_urgency_speed_steps(&env, agent, &ctx, speed_mps, frac, 0);
+                if (steps == 0) {
+                    continue;
+                }
+                accepted++;
+                double coefs[6];
+                double horizon = (double) (float) (steps * env.dt);
+                lattice_quartic_speed_coefs(0.0, ctx.lon_speed0, ctx.lon_accel0, speed_mps, horizon, coefs);
+                double accel_low = fmin(frac * ACCEL_LONG_LIMIT[0], ctx.lon_accel0) - 1e-4;
+                double accel_high = fmax(frac * ACCEL_LONG_LIMIT[1], ctx.lon_accel0) + 1e-4;
+                for (int sample = 0; sample <= 400; sample++) {
+                    double u = horizon * sample / 400.0;
+                    LatticePlanPoint point = lattice_poly_point(coefs, u);
+                    double jerk = lattice_poly_third(coefs, u);
+                    EXPECT_TRUE(point.second >= accel_low && point.second <= accel_high);
+                    EXPECT_TRUE(jerk >= frac * JERK_LONG[0] - 1e-4 && jerk <= frac * JERK_LONG[3] + 1e-4);
+                }
+                EXPECT_NEAR((float) lattice_poly_point(coefs, horizon).first, speed_mps, 1e-3f);
+            }
+        }
+    }
+    printf("  comfort-level plans checked: %d\n", accepted);
+    EXPECT_TRUE(accepted > 100);
+    free_allocated(&env);
+    return 0;
+}
+
+// comfort fractions must lie in (0, 1], strictly ascending; the flag must be 0 or 1
+static int test_urgency_config_rejected(void) {
+    Drive control = drive_test_env_config(TOWN06, SIMULATION_MODE_GIGAFLOW, 1, 0);
+    control.dynamics_model = DYNAMICS_MODEL_SPLINE_WERLING;
+    control.action_type = ACTION_TYPE_LATTICE;
+    control.dt = 0.3f;
+    lattice_test_default_menu(&control.lattice, 0.3f);
+    lattice_test_hybrid_menu(&control.lattice);
+    EXPECT_EQ_INT(init_lattice_config(&control), 0);
+    const float bad_fracs[][3] = {{0.0f, 0.5f, 1.0f}, {0.4f, 0.7f, 1.5f}, {0.7f, 0.4f, 1.0f}};
+    for (int case_idx = 0; case_idx < 3; case_idx++) {
+        Drive env = drive_test_env_config(TOWN06, SIMULATION_MODE_GIGAFLOW, 1, 0);
+        env.dynamics_model = DYNAMICS_MODEL_SPLINE_WERLING;
+        env.action_type = ACTION_TYPE_LATTICE;
+        env.dt = 0.3f;
+        lattice_test_default_menu(&env.lattice, 0.3f);
+        memcpy(env.lattice.lon_urgency_fracs, bad_fracs[case_idx], sizeof bad_fracs[case_idx]);
+        EXPECT_EQ_INT(init_lattice_config(&env), -1);
+    }
+    Drive env = drive_test_env_config(TOWN06, SIMULATION_MODE_GIGAFLOW, 1, 0);
+    env.dynamics_model = DYNAMICS_MODEL_SPLINE_WERLING;
+    env.action_type = ACTION_TYPE_LATTICE;
+    env.dt = 0.3f;
+    lattice_test_default_menu(&env.lattice, 0.3f);
+    env.lattice.lon_urgency = 2;
+    EXPECT_EQ_INT(init_lattice_config(&env), -1);
+    return 0;
+}
+
+// hybrid menu: identical runs match bit for bit; random valid actions on two towns keep observations finite
+static int test_hybrid_determinism_and_rollouts(void) {
+    Drive env_a = make_hybrid_lattice_env(TOWN06, 8, 0.3f);
+    Drive env_b = make_hybrid_lattice_env(TOWN06, 8, 0.3f);
+    unsigned long long rng_a = 17, rng_b = 17;
+    int obs_size = compute_observation_size(&env_a);
+    float lon_new = 0.0f, invalid = 0.0f;
+    for (int step = 0; step < 300; step++) {
+        random_valid_actions(&env_a, &rng_a);
+        random_valid_actions(&env_b, &rng_b);
+        c_step(&env_a);
+        c_step(&env_b);
+        EXPECT_TRUE(
+            memcmp(env_a.observations, env_b.observations, env_a.active_agent_count * obs_size * sizeof(float)) == 0);
+        for (int value = 0; value < env_a.active_agent_count * obs_size; value++) {
+            EXPECT_FINITE(env_a.observations[value]);
+        }
+    }
+    for (int active_idx = 0; active_idx < env_a.active_agent_count; active_idx++) {
+        lon_new += env_a.lattice_agents[active_idx].counters.lon_new;
+        invalid += env_a.lattice_agents[active_idx].counters.invalid_actions;
+    }
+    printf("  hybrid rollout: new speed plans %.0f, invalid actions %.0f\n", lon_new, invalid);
+    EXPECT_TRUE(lon_new > 0.0f);
+    EXPECT_NEAR(invalid, 0.0f, 0.0f);
+    free_allocated(&env_a);
+    free_allocated(&env_b);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_polynomials_and_bellman);
     RUN_TEST(test_menu_layout);
+    RUN_TEST(test_hybrid_menu_layout);
+    RUN_TEST(test_urgency_speed_durations);
+    RUN_TEST(test_urgency_plans_respect_comfort_caps);
+    RUN_TEST(test_urgency_config_rejected);
+    RUN_TEST(test_hybrid_determinism_and_rollouts);
     RUN_TEST(test_exit_slots_and_predecessors_all_towns);
     RUN_TEST(test_rail_geometry_all_towns);
     RUN_TEST(test_long_drive_no_rail_drift);

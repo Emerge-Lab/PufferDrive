@@ -9,6 +9,7 @@ import os
 import sys
 
 import numpy as np
+import pytest
 import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -32,11 +33,11 @@ SEED = 5
 STEPS = 150
 
 
-def _build_config(rnn=False, oncoming_overtake=False, turnaround=False):
+def _build_config(rnn=False, oncoming_overtake=False, turnaround=False, config_name="puffer_drive_spline_werling"):
     saved_argv = sys.argv
     sys.argv = [saved_argv[0]]
     try:
-        args = load_config("puffer_drive_spline_werling")
+        args = load_config(config_name)
     finally:
         sys.argv = saved_argv
     args["vec"].update({"backend": "Serial", "num_envs": 2, "seed": SEED})
@@ -176,8 +177,8 @@ def test_spline_werling_low_speed_penalty_rollout():
         raise AssertionError("a zero full speed must be rejected by the binding")
 
 
-def _policy_losses(rnn):
-    args = _build_config(rnn=rnn)
+def _policy_losses(rnn, config_name="puffer_drive_spline_werling"):
+    args = _build_config(rnn=rnn, oncoming_overtake=True, turnaround=True, config_name=config_name)
     vecenv = load_env("puffer_drive", args)
     try:
         policy = load_policy(args, vecenv, "puffer_drive")
@@ -213,6 +214,104 @@ def test_spline_werling_policy_and_ppo_loss():
 
 def test_spline_werling_recurrent_policy():
     _policy_losses(rnn=True)
+
+
+HYBRID_CONFIG = "puffer_drive_spline_werling_hybrid"
+# must match constants.h
+LATTICE_OBS_SPEED_NORM_MPS = 20.0
+# write_lattice_plan_obs columns: 6 target speed, 7 remaining time, 8 stop flag, 11 planned minus actual speed
+PLAN_TARGET_SPEED_COLUMN = 6
+PLAN_REMAINING_TIME_COLUMN = 7
+PLAN_STOP_FLAG_COLUMN = 8
+PLAN_SPEED_GAP_COLUMN = 11
+
+
+def test_hybrid_policy_and_ppo_loss():
+    _policy_losses(rnn=False, config_name=HYBRID_CONFIG)
+
+
+def test_hybrid_recurrent_policy():
+    _policy_losses(rnn=True, config_name=HYBRID_CONFIG)
+
+
+def test_hybrid_forced_cells_commit_the_named_plans():
+    """The structured head's cell meanings equal the env's: force cells and read the committed plan back."""
+    args = _build_config(oncoming_overtake=True, turnaround=True, config_name=HYBRID_CONFIG)
+    vecenv = load_env("puffer_drive", args)
+    try:
+        policy = load_policy(args, vecenv, "puffer_drive")
+        head = policy.lattice_structured
+        env = vecenv.driver_env
+        nvec, speeds = env.lattice_nvec, env.lattice_lon_speeds_mps
+        lon_start, mask_count = sum(nvec[:3]), sum(nvec)
+        plan_start = binding.EGO_FEATURES
+        rng = np.random.default_rng(SEED)
+        obs, _ = vecenv.reset(seed=SEED)
+        for _ in range(5):
+            obs, _, _, _, _ = vecenv.step(_random_valid_actions(obs, nvec, rng))
+        checked_speed = checked_stop = mismatches = 0
+        for _ in range(40):
+            actions = _random_valid_actions(obs, nvec, rng)
+            masks = obs[:, -mask_count:] > 0.5
+            wanted = {}
+            for row in range(obs.shape[0]):
+                if not masks[row, nvec[0] + nvec[1] + 1]:
+                    continue
+                allowed = np.flatnonzero(masks[row, lon_start : lon_start + nvec[3]])
+                speed_cells = head.speed_count * head.slot_count
+                cruise = [cell for cell in allowed if cell < speed_cells]
+                stops = [cell for cell in allowed if speed_cells <= cell < speed_cells + head.stop_count]
+                cell = rng.choice(stops) if stops and row % 2 else (rng.choice(cruise) if cruise else None)
+                if cell is None:
+                    continue
+                actions[row, 2], actions[row, 3] = 1, cell
+                wanted[row] = cell
+            obs, _, terminals, truncations, _ = vecenv.step(actions)
+            index0_only = np.zeros(mask_count, dtype=bool)
+            index0_only[np.cumsum([0] + list(nvec[:-1]))] = True
+            for row, cell in wanted.items():
+                plan = obs[row, plan_start : plan_start + 12]
+                frozen = np.array_equal(obs[row, -mask_count:] > 0.5, index0_only)
+                if terminals[row] or truncations[row] or frozen or not plan.any():
+                    continue  # reset, removed, frozen by an infraction this step or not policy-driven: no plan to read
+                if cell < head.speed_count * head.slot_count:
+                    target_mps = plan[PLAN_TARGET_SPEED_COLUMN] * LATTICE_OBS_SPEED_NORM_MPS
+                    matched = abs(target_mps - speeds[cell % head.speed_count]) < 1e-4
+                    checked_speed += 1
+                else:
+                    matched = plan[PLAN_STOP_FLAG_COLUMN] == 1.0
+                    checked_stop += 1
+                # the env may still replace a fresh plan in the same step (lost-car rebuild, automatic replan): a hold
+                # at the current speed, i.e. no time left and no speed difference
+                hold = plan[PLAN_REMAINING_TIME_COLUMN] == 0.0 and plan[PLAN_SPEED_GAP_COLUMN] == 0.0
+                assert matched or hold, f"cell {cell} committed plan columns {plan.tolist()}"
+                mismatches += not matched
+        assert checked_speed > 20 and checked_stop > 5
+        assert mismatches <= 0.01 * (checked_speed + checked_stop)
+    finally:
+        vecenv.close()
+
+
+def test_hybrid_checkpoint_round_trip():
+    args = _build_config(oncoming_overtake=True, turnaround=True, config_name=HYBRID_CONFIG)
+    vecenv = load_env("puffer_drive", args)
+    try:
+        torch.manual_seed(SEED)
+        policy = load_policy(args, vecenv, "puffer_drive")
+        torch.manual_seed(SEED + 1)
+        restored = load_policy(args, vecenv, "puffer_drive")
+        restored.load_state_dict(policy.state_dict(), strict=True)
+        assert not any("prior" in key or "_idx" in key or "_values" in key for key in policy.state_dict())
+        obs, _ = vecenv.reset(seed=SEED)
+        obs_tensor = torch.as_tensor(obs)
+        with torch.no_grad():
+            for left, right in zip(policy(obs_tensor)[0], restored(obs_tensor)[0]):
+                assert torch.equal(left, right)
+            with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+                logits, _ = policy(obs_tensor)
+        assert all(factor.dtype == torch.float32 for factor in logits)
+    finally:
+        vecenv.close()
 
 
 def _capture_lattice_replay():
@@ -288,3 +387,18 @@ if __name__ == "__main__":
     test_spline_werling_policy_and_ppo_loss()
     test_spline_werling_recurrent_policy()
     print("OK")
+
+
+def test_hybrid_rejects_a_python_c_menu_mismatch(monkeypatch):
+    original = Drive._env_init_kwargs
+
+    def off_by_one(self, *args, **kwargs):
+        env_kwargs = original(self, *args, **kwargs)
+        env_kwargs["lattice_mask_feature_count"] += 1
+        return env_kwargs
+
+    monkeypatch.setattr(Drive, "_env_init_kwargs", off_by_one)
+    env_kwargs = dict(_build_config(config_name=HYBRID_CONFIG)["env"])
+    env_kwargs.update({"num_maps": 1, "use_map_cache": False})
+    with pytest.raises(ValueError, match="lattice mask features"):
+        Drive(**env_kwargs)

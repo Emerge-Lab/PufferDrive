@@ -21,6 +21,10 @@ static inline void lattice_test_default_menu(struct LatticeConfig *cfg, float de
     memcpy(cfg->lon_speeds_mps, speeds, sizeof speeds);
     cfg->lon_duration_count = 5;
     memcpy(cfg->lon_durations_s, lon_durations, sizeof lon_durations);
+    const float urgency_fracs[] = {0.4f, 0.7f, 1.0f};
+    cfg->lon_urgency = 0;
+    cfg->lon_urgency_count = 3;
+    memcpy(cfg->lon_urgency_fracs, urgency_fracs, sizeof urgency_fracs);
     cfg->stop_distance_count = 4;
     memcpy(cfg->stop_distances_m, stops, sizeof stops);
     cfg->backup_distance_count = 4;
@@ -28,6 +32,34 @@ static inline void lattice_test_default_menu(struct LatticeConfig *cfg, float de
     cfg->low_speed_mps = 3.0f;
     cfg->decision_period_s = decision_period_s;
     cfg->exit_mode = LATTICE_EXIT_MODE_POLICY;
+}
+
+// hybrid menu (puffer_drive_spline_werling_hybrid.yaml without overtake/turnaround): MultiDiscrete([2, 28, 2, 77, 5])
+static inline void lattice_test_hybrid_menu(struct LatticeConfig *cfg) {
+    const float offsets[] = {-0.9f, -0.45f, 0.0f, 0.45f, 0.9f};
+    const float stops[] = {3.0f, 5.0f, 7.0f, 10.0f, 14.0f, 20.0f, 28.0f, 40.0f};
+    cfg->lat_offset_count = 5;
+    memcpy(cfg->lat_offsets_m, offsets, sizeof offsets);
+    cfg->lon_speed_count = 21;
+    for (int speed_idx = 0; speed_idx < 21; speed_idx++) {
+        cfg->lon_speeds_mps[speed_idx] = (float) speed_idx;
+    }
+    cfg->lon_urgency = 1;
+    cfg->stop_distance_count = 8;
+    memcpy(cfg->stop_distances_m, stops, sizeof stops);
+}
+
+static inline Drive make_hybrid_lattice_env(const char *map_file, int num_agents, float dt) {
+    Drive env = drive_test_env_config(map_file, SIMULATION_MODE_GIGAFLOW, num_agents, 0);
+    env.dynamics_model = DYNAMICS_MODEL_SPLINE_WERLING;
+    env.action_type = ACTION_TYPE_LATTICE;
+    env.dt = dt;
+    env.scenario_length = 5000;
+    lattice_test_default_menu(&env.lattice, 0.3f);
+    lattice_test_hybrid_menu(&env.lattice);
+    allocate(&env);
+    c_reset(&env);
+    return env;
 }
 
 static inline Drive make_lattice_env(const char *map_file, int num_agents, float dt) {

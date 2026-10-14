@@ -50,6 +50,7 @@ LATTICE_DURATION_TOLERANCE = 1e-4
 LATTICE_MAX_PLAN_STEPS = 400
 LATTICE_BACKUP_MAX_M = 20.0 - 0.2 - 2.93 - 3.5
 LATTICE_STOP_T_MAX_S = 12.0
+LATTICE_URGENCY_MIN_FRAC = 1e-6  # comfort fractions lie in (0, 1]; mirrors lattice.h's LATTICE_CHECK_EPS lower bound
 # Must match constants.h LATTICE_BORROW_MIN_D_M = LATTICE_BORROW_FRACTION * LATTICE_NEIGHBOUR_MIN_M.
 LATTICE_BORROW_MIN_D_M = 0.5 * 2.5
 
@@ -346,6 +347,8 @@ class DriveEnvConfig:
     lattice_low_speed_distances_m: list[float] = MISSING
     lattice_lon_speeds_mps: list[float] = MISSING
     lattice_lon_durations_s: list[float] = MISSING
+    lattice_lon_urgency: bool = MISSING
+    lattice_lon_urgency_fracs: list[float] = MISSING
     lattice_stop_distances_m: list[float] = MISSING
     lattice_backup_distances_m: list[float] = MISSING
     lattice_low_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
@@ -414,6 +417,7 @@ class DrivePolicyConfig:
     critic_head_layer_norm: bool = MISSING
     shared_network: bool = MISSING
     action_type: ActionType = MISSING
+    lattice_structured_head: bool = MISSING
 
 
 @dataclass
@@ -646,6 +650,8 @@ def _validate_lattice_config(config, context):
             "env.dynamics_model",
             "'spline_werling' requires env.action_type and policy.action_type 'lattice', and vice versa",
         )
+    if policy["lattice_structured_head"] and not uses_lattice:
+        _raise_config_error(context, "policy.lattice_structured_head", "needs env.dynamics_model 'spline_werling'")
     if not uses_lattice:
         return
     from pufferlib.ocean.drive import binding
@@ -734,9 +740,25 @@ def _validate_lattice_config(config, context):
         binding.LATTICE_MAX_LON_SPEEDS,
         0.0,
         env["base_max_speed_mps"],
+        ascending=policy["lattice_structured_head"],
     )
     _validate_lattice_list(
-        env["lattice_stop_distances_m"], "env.lattice_stop_distances_m", context, binding.LATTICE_MAX_STOP_DISTANCES, 0.5, 500.0
+        env["lattice_stop_distances_m"],
+        "env.lattice_stop_distances_m",
+        context,
+        binding.LATTICE_MAX_STOP_DISTANCES,
+        0.5,
+        500.0,
+        ascending=policy["lattice_structured_head"],
+    )
+    _validate_lattice_list(
+        env["lattice_lon_urgency_fracs"],
+        "env.lattice_lon_urgency_fracs",
+        context,
+        binding.LATTICE_MAX_LON_DURATIONS,
+        LATTICE_URGENCY_MIN_FRAC,
+        1.0,
+        ascending=True,
     )
     _validate_lattice_list(
         env["lattice_backup_distances_m"],

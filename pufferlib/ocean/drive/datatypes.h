@@ -192,6 +192,9 @@ struct LatticeConfig {
     float lon_speeds_mps[LATTICE_MAX_LON_SPEEDS];
     int lon_duration_count;
     float lon_durations_s[LATTICE_MAX_LON_DURATIONS];
+    int lon_urgency; // speed cells pair a speed with a comfort level (lon_urgency_fracs) instead of a duration
+    int lon_urgency_count;
+    float lon_urgency_fracs[LATTICE_MAX_LON_DURATIONS];
     int stop_distance_count;
     float stop_distances_m[LATTICE_MAX_STOP_DISTANCES];
     int backup_distance_count;
@@ -207,6 +210,7 @@ struct LatticeConfig {
     int lat_duration_steps[LATTICE_MAX_LAT_DURATIONS];
     int lon_duration_steps[LATTICE_MAX_LON_DURATIONS];
     int lat_cell_count;
+    int lon_slot_count; // second speed-cell index: durations or comfort levels
     int lon_speed_cell_count;
     int lon_stop_cell_base;
     int lon_stop_line_cell;

@@ -410,9 +410,9 @@ static const int ROAD_OFFSETS[25][2]
 // -- Menu capacities (config lists are validated against these)
 #define LATTICE_MAX_LAT_OFFSETS 5
 #define LATTICE_MAX_LAT_DURATIONS 6
-#define LATTICE_MAX_LON_SPEEDS 12
+#define LATTICE_MAX_LON_SPEEDS 24
 #define LATTICE_MAX_LON_DURATIONS 6
-#define LATTICE_MAX_STOP_DISTANCES 6
+#define LATTICE_MAX_STOP_DISTANCES 10
 #define LATTICE_MAX_BACKUP_DISTANCES 6
 #define LATTICE_MAX_LAT_CELLS ((LATTICE_MAX_LAT_OFFSETS + 3) * LATTICE_MAX_LAT_DURATIONS)
 #define LATTICE_MAX_LON_CELLS                                                                                          \
@@ -586,6 +586,8 @@ static const float LATTICE_TURN_CURVATURE_SCALES[LATTICE_TURN_RADIUS_COUNT] = {1
 #define LATTICE_STOP_T_MAX_S 12.0f
 #define LATTICE_BACKUP_T_GRID_S 0.3f
 #define LATTICE_BACKUP_T_MAX_S 12.0f
+#define LATTICE_URGENCY_T_MIN_S 1.2f // speed plans under env.lattice_lon_urgency search [min, max] in dt steps
+#define LATTICE_URGENCY_T_MAX_S 6.0f
 #define LATTICE_COMFORT_ACCEL_MPS2 3.0f
 #define LATTICE_COMFORT_BRAKE_JERK -5.0f
 #define LATTICE_LOW_SPEED_CURVATURE_PEAK 5.77f // max |d''| * S^2 / D of the rest-to-rest quintic

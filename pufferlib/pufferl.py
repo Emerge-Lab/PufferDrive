@@ -1459,6 +1459,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "lattice_low_speed_distances_m",
             "lattice_lon_speeds_mps",
             "lattice_lon_durations_s",
+            "lattice_lon_urgency",
+            "lattice_lon_urgency_fracs",
             "lattice_stop_distances_m",
             "lattice_backup_distances_m",
             "lattice_low_speed_mps",
