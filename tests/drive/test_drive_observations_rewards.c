@@ -369,6 +369,65 @@ static int test_partner_obs_split_long_partner(void) {
     return 0;
 }
 
+static int test_partner_obs_blindness_corridor_toggle(void) {
+    // Ego heading +x, blind for the frame; car 20 m ahead in the corridor, car 20 m to the left outside it
+    Drive env = {0};
+    env.obs_norm_speed_mps = 10.0f;
+    env.obs_norm_xy_offset_m = 100.0f;
+    env.obs_norm_z_m = 10.0f;
+    env.obs_norm_veh_length_m = 10.0f;
+    env.obs_norm_veh_width_m = 5.0f;
+    env.obs_range_partner_m = 100.0f;
+    env.obs_slots_partners_n = 3;
+    env.num_agents = 3;
+    env.active_agent_count = 3;
+    int active[3] = {0, 1, 2};
+    env.active_agent_indices = active;
+    Agent agents[3];
+    agents[0] = drive_test_agent(0.0f, 0.0f, 0.0f);
+    agents[1] = drive_test_agent(20.0f, 0.0f, 0.0f);
+    agents[2] = drive_test_agent(0.0f, 20.0f, 0.0f);
+    for (int agent_idx = 0; agent_idx < 3; agent_idx++) {
+        update_agent_speed(&agents[agent_idx]);
+    }
+    env.agents = agents;
+    PartnerScanEntry partner_scan[3] = {
+        {agents[0].sim_x, agents[0].sim_y, agents[0].sim_z, 0},
+        {agents[1].sim_x, agents[1].sim_y, agents[1].sim_z, 1},
+        {agents[2].sim_x, agents[2].sim_y, agents[2].sim_z, 2},
+    };
+    float obs[3 * PARTNER_FEATURES];
+    int partner_count = 0;
+
+    env.partner_blindness_corridor = 1;
+    agents[0].partner_blindness_counter = 2;
+    memset(obs, 0, sizeof(obs));
+    int end_idx = write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
+    EXPECT_EQ_INT(partner_count, 1);
+    EXPECT_EQ_INT(end_idx, 3 * PARTNER_FEATURES);
+    EXPECT_EQ_INT(agents[0].partner_blindness_counter, 1);
+    EXPECT_NEAR(obs[0], 0.2f, 1e-6f);
+    EXPECT_NEAR(obs[1], 0.0f, 1e-6f);
+
+    env.partner_blindness_corridor = 0;
+    agents[0].partner_blindness_counter = 2;
+    memset(obs, 0, sizeof(obs));
+    end_idx = write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
+    EXPECT_EQ_INT(partner_count, 0);
+    EXPECT_EQ_INT(end_idx, 3 * PARTNER_FEATURES);
+    EXPECT_EQ_INT(agents[0].partner_blindness_counter, 1);
+    for (int i = 0; i < 3 * PARTNER_FEATURES; i++) {
+        EXPECT_NEAR(obs[i], 0.0f, 0.0f);
+    }
+
+    agents[0].partner_blindness_counter = 0;
+    memset(obs, 0, sizeof(obs));
+    end_idx = write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
+    EXPECT_EQ_INT(partner_count, 2);
+    EXPECT_EQ_INT(end_idx, 3 * PARTNER_FEATURES);
+    return 0;
+}
+
 static int test_reward_lane_align_wrong_way(void) {
     Drive env;
     Agent agent;
@@ -450,6 +509,7 @@ int main(void) {
     RUN_TEST(test_reward_coef_goal_speed_pinned);
     RUN_TEST(test_partner_obs_relative_velocity);
     RUN_TEST(test_partner_obs_split_long_partner);
+    RUN_TEST(test_partner_obs_blindness_corridor_toggle);
     RUN_TEST(test_reward_lane_align_wrong_way);
     return test_summary(failures);
 }

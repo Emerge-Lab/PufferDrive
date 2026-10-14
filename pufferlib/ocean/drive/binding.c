@@ -2165,6 +2165,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->partner_blindness_trigger_prob = (float) unpack(kwargs, "partner_blindness_trigger_prob");
     env->partner_blindness_duration
         = (int) ceilf((float) unpack(kwargs, "partner_blindness_duration_seconds") / env->dt);
+    env->partner_blindness_corridor = (int) unpack(kwargs, "partner_blindness_corridor");
     env->phantom_braking_prob = (float) unpack(kwargs, "phantom_braking_prob");
     env->phantom_braking_trigger_prob = (float) unpack(kwargs, "phantom_braking_trigger_prob");
     env->phantom_braking_duration = (int) ceilf((float) unpack(kwargs, "phantom_braking_duration_seconds") / env->dt);

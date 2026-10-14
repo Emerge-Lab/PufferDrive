@@ -315,6 +315,7 @@ struct Drive {
     float partner_blindness_prob;
     float partner_blindness_trigger_prob;
     int partner_blindness_duration;
+    int partner_blindness_corridor;
     float phantom_braking_prob;
     float phantom_braking_trigger_prob;
     int phantom_braking_duration;
@@ -4828,7 +4829,14 @@ static int write_partner_obs(
         && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
         ego->partner_blindness_counter = env->partner_blindness_duration;
     }
-    int corridor_only = ego->partner_blindness_counter > 0;
+    int blind = ego->partner_blindness_counter > 0;
+    if (blind && !env->partner_blindness_corridor) {
+        int partner_obs_stride = env->obs_slots_partners_n * partner_feature_count(env);
+        memset(&obs[obs_idx], 0, partner_obs_stride * sizeof(float));
+        *partner_count = 0;
+        return obs_idx + partner_obs_stride;
+    }
+    int corridor_only = blind;
 
     typedef struct {
         int index;

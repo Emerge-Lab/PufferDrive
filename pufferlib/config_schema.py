@@ -356,6 +356,7 @@ class DriveEnvConfig:
     partner_blindness_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     partner_blindness_trigger_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     partner_blindness_duration_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    partner_blindness_corridor: bool = MISSING
     phantom_braking_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     phantom_braking_trigger_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     phantom_braking_duration_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
