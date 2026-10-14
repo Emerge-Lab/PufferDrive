@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0048_${SEED}
+export RUN_NAME=k_scaled_0049_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -62,6 +62,7 @@ srun torchrun \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v18 \
     env.num_maps=128 \
     env.obs_stride_merge_segments=true \
+    env.partner_blindness_corridor=false \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
