@@ -87,6 +87,7 @@ class Drive(pufferlib.PufferEnv):
         inactive_agent_threshold=0.4,
         adversarial_termination_mode="target_inactive_or_no_nearby_adversary",
         target_failure_episode_end="terminated",
+        adversarial_attack_deadline_seconds=0.0,
         target_collision_continuation_seconds=2.0,
         terminate_on_goal=False,
         buf=None,
@@ -274,6 +275,7 @@ class Drive(pufferlib.PufferEnv):
             "terminated": binding.TARGET_FAILURE_EPISODE_END_TERMINATED,
             "truncated": binding.TARGET_FAILURE_EPISODE_END_TRUNCATED,
         }[target_failure_episode_end]
+        self.adversarial_attack_deadline_seconds = float(adversarial_attack_deadline_seconds)
         self.target_collision_continuation_seconds = float(target_collision_continuation_seconds)
         self.terminate_on_goal = terminate_on_goal
         self.rng = np.random.default_rng(seed)
@@ -558,6 +560,7 @@ class Drive(pufferlib.PufferEnv):
             "inactive_agent_threshold": float(self.inactive_agent_threshold),
             "adversarial_termination_mode": self.adversarial_termination_mode,
             "target_failure_episode_end": self.target_failure_episode_end,
+            "adversarial_attack_deadline_seconds": self.adversarial_attack_deadline_seconds,
             "target_collision_continuation_seconds": self.target_collision_continuation_seconds,
             "terminate_on_goal": int(self.terminate_on_goal),
             "map_file": map_file,

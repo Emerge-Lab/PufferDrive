@@ -97,6 +97,7 @@ env:
   adversarial_termination_mode: target_inactive_or_no_nearby_adversary
   # Done signal sent to all agents when target failure resets the episode.
   target_failure_episode_end: terminated
+  adversarial_attack_deadline_seconds: 0.0
   target_collision_continuation_seconds: 10.0
   # End the episode as soon as the agent reaches its final goal. Only active in
   # control_sdc_only replay mode (single active agent).

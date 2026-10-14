@@ -419,6 +419,7 @@ struct Drive {
     float inactive_agent_threshold;
     int adversarial_termination_mode;
     int target_failure_episode_end;
+    float adversarial_attack_deadline_seconds;
     float target_collision_continuation_seconds;
     int target_collision_continuation_remaining_step_count;
     int terminate_on_goal;
@@ -6467,6 +6468,7 @@ void c_step(Drive *env) {
     int adversarial_early_reset = 0;
     int target_failure_early_reset = 0;
     int target_collision_continuation_active = 0;
+    int adversarial_attack_deadline_expired = 0;
     if (env->adversarial_termination_mode != ADVERSARIAL_TERMINATION_MODE_DISABLED) {
         int target_agent_idx = env->active_agent_indices[0];
         int target_inactive = env->agents[target_agent_idx].removed || env->agents[target_agent_idx].stopped;
@@ -6480,6 +6482,9 @@ void c_step(Drive *env) {
         int all_adversaries_inactive = active_adversary_count == 0;
         target_collision_continuation_active = env->target_collision_continuation_remaining_step_count
             > TARGET_COLLISION_CONTINUATION_INACTIVE_STEP_COUNT;
+        adversarial_attack_deadline_expired = env->adversarial_attack_deadline_seconds > 0.0f
+            && env->timestep >= (int) ceilf(env->adversarial_attack_deadline_seconds / env->dt)
+            && !target_collision_continuation_active;
         int target_collision_continuation_expired = 0;
         if (target_collision_continuation_active && !target_collided_this_step) {
             env->target_collision_continuation_remaining_step_count--;
@@ -6528,7 +6533,7 @@ void c_step(Drive *env) {
 
     int hitter_collision_early_reset = env->terminate_hitter_on_collision && target_collided_this_step;
     if (env->timestep == env->scenario_length || early_reset || adversarial_early_reset
-        || hitter_collision_early_reset) {
+        || adversarial_attack_deadline_expired || hitter_collision_early_reset) {
         for (int i = 0; i < env->active_agent_count; i++) {
             if (hitter_collision_early_reset) {
                 env->terminals[i]

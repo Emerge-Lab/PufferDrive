@@ -319,6 +319,7 @@ class DriveEnvConfig:
     inactive_agent_threshold: float = _constrained_field(PROBABILITY_CONSTRAINT)
     adversarial_termination_mode: AdversarialTerminationMode = MISSING
     target_failure_episode_end: TargetFailureEpisodeEnd = MISSING
+    adversarial_attack_deadline_seconds: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     target_collision_continuation_seconds: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     terminate_on_goal: bool = MISSING
     init_step: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
