@@ -2154,6 +2154,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_lane_kept = (int) unpack(kwargs, "obs_slots_lane_kept");
     env->obs_slots_boundary_kept = (int) unpack(kwargs, "obs_slots_boundary_kept");
     env->partner_blindness_prob = (float) unpack(kwargs, "partner_blindness_prob");
+    env->partner_blindness_rate_randomization = (int) unpack(kwargs, "partner_blindness_rate_randomization");
     env->partner_blindness_trigger_prob = (float) unpack(kwargs, "partner_blindness_trigger_prob");
     env->partner_blindness_duration
         = (int) ceilf((float) unpack(kwargs, "partner_blindness_duration_seconds") / env->dt);

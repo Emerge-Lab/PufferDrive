@@ -130,6 +130,7 @@ static inline Drive drive_test_env_config(
     env.obs_range_road_behind_m = 20.0f;
     env.obs_range_road_side_m = 30.0f;
     env.partner_blindness_prob = 0.0f;
+    env.partner_blindness_rate_randomization = 1;
     env.partner_blindness_trigger_prob = 0.1f;
     env.phantom_braking_prob = 0.0f;
     env.phantom_braking_trigger_prob = 0.0f;

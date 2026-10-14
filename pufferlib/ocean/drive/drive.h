@@ -309,6 +309,7 @@ struct Drive {
     float obs_range_road_side_m;
     // Robustness
     float partner_blindness_prob;
+    int partner_blindness_rate_randomization;
     float partner_blindness_trigger_prob;
     int partner_blindness_duration;
     float phantom_braking_prob;
@@ -481,8 +482,10 @@ static void begin_episode_rng(Drive *env) {
         env->episode_seed = rng_next(&env->seed_stream_rng) >> 1;
     }
     rng_seed(&env->rng_state, env->episode_seed);
-    // Per-episode perturbation rates: uniform in [0, configured max]
-    env->episode_partner_blindness_prob = sample_uniform(&env->rng_state, 0.0f, env->partner_blindness_prob);
+    // Per-episode perturbation rates: uniform in [0, configured max]; blindness can be pinned to its max
+    env->episode_partner_blindness_prob = env->partner_blindness_rate_randomization
+        ? sample_uniform(&env->rng_state, 0.0f, env->partner_blindness_prob)
+        : env->partner_blindness_prob;
     env->episode_phantom_braking_prob = sample_uniform(&env->rng_state, 0.0f, env->phantom_braking_prob);
 }
 
