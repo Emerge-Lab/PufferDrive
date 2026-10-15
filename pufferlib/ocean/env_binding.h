@@ -1120,26 +1120,6 @@ static PyObject *vec_recompute_observations(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-static PyObject *vec_set_lane_speed_limit_cap(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 2) {
-        PyErr_SetString(PyExc_TypeError, "vec_set_lane_speed_limit_cap requires 2 arguments");
-        return NULL;
-    }
-    VecEnv *vec = unpack_vecenv(args);
-    if (!vec) {
-        return NULL;
-    }
-    double cap_mps = PyFloat_AsDouble(PyTuple_GetItem(args, 1));
-    if (cap_mps == -1.0 && PyErr_Occurred()) {
-        return NULL;
-    }
-    if (c_set_lane_speed_limit_cap((Drive *) vec->envs[0], (float) cap_mps) != 0) {
-        PyErr_SetString(PyExc_ValueError, "vec_set_lane_speed_limit_cap: cap must be finite and >= 0");
-        return NULL;
-    }
-    Py_RETURN_NONE;
-}
-
 static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 2) {
         PyErr_SetString(PyExc_TypeError, "vec_set_traffic_light_states requires 2 arguments");
@@ -1578,10 +1558,6 @@ static PyMethodDef methods[]
         vec_set_traffic_light_states,
         METH_VARARGS,
         "Override traffic light states (co-sim)"},
-       {"vec_set_lane_speed_limit_cap",
-        vec_set_lane_speed_limit_cap,
-        METH_VARARGS,
-        "Cap every lane's observed speed limit, 0 restores the map limits (co-sim)"},
        {"vec_set_stop_signs",
         vec_set_stop_signs,
         METH_VARARGS,

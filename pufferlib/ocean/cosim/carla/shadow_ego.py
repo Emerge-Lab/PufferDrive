@@ -46,12 +46,6 @@ Environment variables:
                                (nuPlan's vru_size_pad_m; the training spawn floor is 0.8 m, CARLA walkers
                                are 0.4-0.5 m and bicycles 0.4 m wide, so 0.8 lifts them strictly above
                                the smallest training vehicle)
-  COSIM_PEDESTRIAN_SPEED_CAP_MPS=0.0
-                               while a walker is ahead of the ego's front bumper within
-                               COSIM_PEDESTRIAN_SPEED_CAP_RADIUS_M (default 30, the garage autopilot's
-                               detection radius), every lane speed limit the policy observes is capped at
-                               this value, so it slows down by itself (nuPlan's pedestrian_speed_cap_mps;
-                               the autopilot crawls at 2 m/s in the same situation). 0 = off
   COSIM_TELEMETRY=/dir         write a per-policy-step CSV per route, with the shadow env's and the
                                simulator's infraction flags as columns
   COSIM_OBS_HTML=/dir          write an interactive pufferlib.viz replay per route (the exact obs +
@@ -212,14 +206,6 @@ class ShadowEgo:
         self.vru_size_pad_m = float(os.environ.get("COSIM_VRU_SIZE_PAD_M", "0.0"))
         if not (self.vru_size_pad_m >= 0.0):
             raise ValueError(f"COSIM_VRU_SIZE_PAD_M must be >= 0, got {self.vru_size_pad_m}")
-        self.pedestrian_speed_cap_mps = float(os.environ.get("COSIM_PEDESTRIAN_SPEED_CAP_MPS", "0.0"))
-        if not (self.pedestrian_speed_cap_mps >= 0.0):
-            raise ValueError(f"COSIM_PEDESTRIAN_SPEED_CAP_MPS must be >= 0, got {self.pedestrian_speed_cap_mps}")
-        self.pedestrian_speed_cap_radius_m = float(os.environ.get("COSIM_PEDESTRIAN_SPEED_CAP_RADIUS_M", "30.0"))
-        if not (self.pedestrian_speed_cap_radius_m > 0.0):
-            raise ValueError(
-                f"COSIM_PEDESTRIAN_SPEED_CAP_RADIUS_M must be > 0, got {self.pedestrian_speed_cap_radius_m}"
-            )
         # Shadow agent pool == the training per-env cap
         self.num_agents = int(env_cfg["max_agents_per_env"])
 
@@ -430,8 +416,7 @@ class ShadowEgo:
             f"[puffer_agent] town={town} tick_dt={self.tick_dt} dt={self.dt} route_goals={len(self.route_goals)} "
             f"max_speed_mps={self.env.max_speed_mps:.1f} (C_vel={self.env.max_speed_mps / self.env.base_max_speed_mps:.2f}) "
             f"zero_partner_stopped_time={int(self.zero_partner_stopped_time)} "
-            f"vru_size_pad_m={self.vru_size_pad_m:g} pedestrian_speed_cap_mps={self.pedestrian_speed_cap_mps:g} "
-            f"(radius {self.pedestrian_speed_cap_radius_m:g} m)"
+            f"vru_size_pad_m={self.vru_size_pad_m:g}"
         )
         self.initialized = True
 
@@ -494,12 +479,6 @@ class ShadowEgo:
             width.append(max(2.0 * row[PARTNER_EXTENT_Y], MIN_PARTNER_SIZE_M) + vru_pad_m)
         return (np.array(idx, np.int32), np.array(length, np.float32), np.array(width, np.float32))
 
-    def _walker_ahead(self, x, y, is_walker, ego_x, ego_y, ego_heading):
-        """A walker within pedestrian_speed_cap_radius_m and ahead of the ego's front bumper (bin frame)."""
-        dx, dy = x[is_walker] - ego_x, y[is_walker] - ego_y
-        ahead = dx * math.cos(ego_heading) + dy * math.sin(ego_heading) > self.ego_extent[0]
-        return bool(np.any(ahead & (np.hypot(dx, dy) <= self.pedestrian_speed_cap_radius_m)))
-
     def _read_light_states(self, light_states, ego_light_id):
         """Ground truth for every mapped bin traffic element, via the
         precomputed light_bin_indices_by_id table (see init_route)."""
@@ -557,7 +536,6 @@ class ShadowEgo:
         ebx, eby = float(ego["x"][0]), float(ego["y"][0])
 
         partners = np.asarray(snapshot["partners"], dtype=np.float64).reshape(-1, PARTNER_ROW_COLUMNS)
-        walker_ahead = False
         if len(partners):
             states = self._read_states(partners)
             sizes = self._read_sizes(partners)
@@ -565,11 +543,8 @@ class ShadowEgo:
             self.env.set_agent_sizes(*sizes)
             is_walker = (partners[:, PARTNER_IS_WALKER] > 0.0).astype(np.float32)
             self._last_partners = (states[1], states[2], states[4], states[5], states[6], sizes[1], sizes[2], is_walker)
-            walker_ahead = self._walker_ahead(states[1], states[2], is_walker > 0.0, ebx, eby, float(ego["heading"][0]))
         else:
             self._last_partners = None
-        if self.pedestrian_speed_cap_mps > 0.0:
-            self.env.set_lane_speed_limit_cap(self.pedestrian_speed_cap_mps if walker_ahead else 0.0)
         n_used = 1 + len(partners)
         if n_used < self.num_agents:
             sp = np.arange(n_used, self.num_agents, dtype=np.int32)

@@ -51,9 +51,6 @@ export STARTUP_ACCEL_JERK_CAP=2
 export STARTUP_BRAKE_JERK_CAP=2
 # pedestrian and bicycle partner boxes grow by this much in length and width in the policy's obs (0 = off): 0.8 puts them strictly above the smallest training vehicle
 export VRU_SIZE_PAD_M=0.8
-# cap every observed lane limit [m/s] while a pedestrian is ahead within PEDESTRIAN_SPEED_CAP_RADIUS_M (0 = off; 5.56 = 20 km/h)
-export PEDESTRIAN_SPEED_CAP_MPS=0
-export PEDESTRIAN_SPEED_CAP_RADIUS_M=30
 # Shadow-env obs overrides: partner slots (training 20, GIGAFLOW eval 40; 40 real partners max-pooled is OOD in
 # sidewalk crowds) and the ego perceived-size margin [m per side] (0.2 = native eval; nuPlan's 2.3 x 5.2 m ego
 # reads as 2.7 x 5.6 m). Unset = planner yaml / arch.py defaults (40 / 0.2).
@@ -66,7 +63,6 @@ ABLATION_TAG=""
 [ "$STARTUP_ACCEL_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
 [ "$STARTUP_BRAKE_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jbrk${STARTUP_BRAKE_JERK_CAP}"
 [ "$VRU_SIZE_PAD_M" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_vrupad${VRU_SIZE_PAD_M}m"
-[ "$PEDESTRIAN_SPEED_CAP_MPS" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_pedcap${PEDESTRIAN_SPEED_CAP_MPS}mps${PEDESTRIAN_SPEED_CAP_RADIUS_M}m"
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && ABLATION_TAG="${ABLATION_TAG}_slots${OBS_SLOTS_PARTNERS_N}"
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && ABLATION_TAG="${ABLATION_TAG}_margin${EVAL_PERCEIVED_SIZE_MARGIN_M}"
 [ -n "${REWARD_OVERSPEED:-}" ] && ABLATION_TAG="${ABLATION_TAG}_overspeed${REWARD_OVERSPEED}"

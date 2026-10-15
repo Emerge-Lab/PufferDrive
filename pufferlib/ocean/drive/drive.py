@@ -887,10 +887,6 @@ class Drive(pufferlib.PufferEnv):
             np.ascontiguousarray(width, dtype=np.float32),
         )
 
-    def set_lane_speed_limit_cap(self, cap_mps):
-        """co-sim: cap every lane's observed speed limit at cap_mps [m/s] from now on; 0 restores the map limits."""
-        binding.vec_set_lane_speed_limit_cap(self.c_envs, float(cap_mps))
-
     def recompute_observations(self):
         """recompute observations from current state without stepping
         dynamics or advancing the timestep (call after set_agent_states)."""
