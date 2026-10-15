@@ -4,14 +4,13 @@ reaches its final goal).
 Feature under test (drive.h, c_step): when terminate_on_goal is enabled AND the env is in
 replay + control_sdc_only mode, the episode truncates as soon as the single
 active agent reaches its last goal (current_goal_idx ==
-num_goals with REACHED_GOAL_IDX set), instead of running to
+goal_count with REACHED_GOAL_IDX set), instead of running to
 scenario_length.
 
 Fixture map
 -----------
-Uses the single checked-in replay .bin under
-pufferlib/resources/drive/binaries/sdc_replay_test/, whose logged SDC trajectory
-reaches its final goal well before scenario_length ("all goals in position").
+Uses the moving-SDC nuPlan fixture shared with the C goal checks. The stationary
+SDC fixture is rejected under GT eligibility rules.
 
 The env is built with termination_mode disabled so the ONLY source of early reset is
 terminate_on_goal — that isolates the feature from the inactive-agent path.
@@ -20,11 +19,20 @@ terminate_on_goal — that isolates the feature from the inactive-agent path.
 import os
 
 import numpy as np
+import pytest
 
 from pufferlib.ocean.drive.drive import Drive
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MAP_DIR = os.path.join(REPO_ROOT, "pufferlib", "resources", "drive", "binaries", "sdc_replay_test")
+MAP_DIR = os.path.join(
+    REPO_ROOT,
+    "pufferlib",
+    "resources",
+    "drive",
+    "binaries",
+    "nuplan",
+    "nuplan__00018a38-0063-54d1-a3c1-1ab931a4a1e5.bin",
+)
 
 # Long enough that a goal-reaching replay truncates well before the length cap,
 # so an early reset is unambiguously the goal firing and not the length boundary.

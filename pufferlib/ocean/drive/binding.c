@@ -1630,6 +1630,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
     int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
     float goal_radius = (float) unpack(kwargs, "goal_radius");
+    int goal_source = (int) unpack(kwargs, "goal_source");
     int num_eval_scenarios = unpack(kwargs, "num_eval_scenarios");
     PyObject *eval_map_indices = PyDict_GetItemString(kwargs, "eval_map_indices");
     int use_eval_map_indices = eval_map_indices != NULL && eval_map_indices != Py_None;
@@ -1817,9 +1818,20 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
+    int candidate_map_count = num_maps;
+    int *candidate_map_ids = NULL;
+    if (!eval_mode && goal_source == GOAL_SOURCE_GT) {
+        candidate_map_ids = malloc(num_maps * sizeof(int));
+        for (int candidate_idx = 0; candidate_idx < num_maps; candidate_idx++) {
+            candidate_map_ids[candidate_idx] = candidate_idx;
+        }
+    }
+    int sampling_attempt_count = 0;
 
     while (total_agent_count < num_agents && env_count < max_envs
+           && (candidate_map_ids == NULL || sampling_attempt_count++ < num_agents + num_maps)
            && (!eval_mode || use_eval_map_indices || s_map_counter < end_map_index)) {
+        int candidate_idx = 0;
         if (eval_mode) {
             if (use_eval_map_indices) {
                 map_id = (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, env_count));
@@ -1828,7 +1840,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 s_map_counter += 1;
             }
         } else {
-            map_id = rng_below(&shared_rng, num_maps);
+            candidate_idx = rng_below(&shared_rng, candidate_map_count);
+            map_id = candidate_map_ids == NULL ? candidate_idx : candidate_map_ids[candidate_idx];
         }
 
         const char *map_file = PyUnicode_AsUTF8(PyList_GetItem(map_files, map_id));
@@ -1844,9 +1857,11 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->num_max_agents = max_agents_per_env;
         env->eval_mode = eval_mode;
         env->goal_radius = goal_radius;
+        env->goal_source = goal_source;
         load_map_binary(map_file, env);
 
-        if (env->num_total_agents > 0 && env->agents[EGO_IDX].route_length != 0) {
+        if (env->num_total_agents > 0 && env->agents[EGO_IDX].route_length != 0
+            && (env->goal_source != GOAL_SOURCE_GT || gt_goal_step(env, &env->agents[EGO_IDX]) >= 0)) {
             set_active_agents(env);
         }
 
@@ -1868,6 +1883,19 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             free(env->static_agent_indices);
             free(env->expert_static_agent_indices);
             free(env);
+            if (candidate_map_ids != NULL) {
+                candidate_map_ids[candidate_idx] = candidate_map_ids[--candidate_map_count];
+            }
+            if (candidate_map_count == 0) {
+                free(candidate_map_ids);
+                Py_DECREF(agent_offsets);
+                Py_DECREF(map_ids);
+                PyErr_SetString(
+                    PyExc_ValueError,
+                    "No eligible GT replay scenarios: each SDC needs a route, a valid initial state, and an unreached "
+                    "endpoint");
+                return NULL;
+            }
             continue;
         }
 
@@ -1901,6 +1929,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             break;
         }
     }
+    free(candidate_map_ids);
     if (total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }

@@ -17,7 +17,7 @@ Use converted WOMD `.bin` scenarios and a frozen target checkpoint. Training use
 `pufferlib/config/puffer_drive.yaml`; selecting an evaluation benchmark does not
 apply its environment settings to training.
 
-Example matching the `adversarial_womd` benchmark's scene settings. Replace the
+GT-endpoint training recipe. Replace the
 checkpoint path; `num_maps=-1` makes all available training maps eligible:
 
 ```bash
@@ -35,22 +35,32 @@ puffer train puffer_drive \
   env.sdc_controller=policy \
   env.non_sdc_controller=policy \
   env.max_agents_per_env=128 \
-  env.goal_source=route \
+  env.goal_source=gt \
+  env.num_goals=3 \
   env.goal_regen_mode=finite \
-  env.min_goal_spacing=30.0 \
-  env.max_goal_spacing=30.0 \
+  env.goal_speed=3.0 \
+  env.termination_mode=false \
+  env.terminate_on_goal=false \
   env.target_infraction_behavior=remove \
-  env.adversarial_termination_mode=target_inactive \
+  env.adversarial_termination_mode=either \
   env.target_collision_continuation_seconds=0.0 \
   env.traffic_light_behavior=ignore \
   env.resample_frequency=910 \
+  train.bptt_horizon=92 \
+  train.batch_size=auto \
+  train.minibatch_size=65504 \
+  train.max_minibatch_size=65504 \
+  train.use_value_bootstrapping=false \
   train.target_policy=/path/to/target.pt
 ```
 
 - `replay` initializes from recorded trajectories; policy controllers still act
   freely. Keep `eval_mode` false (the wrapper default), and retain adversarial rewards.
 - The SDC is inserted into active slot 0 and excluded from PPO updates when using
-  the frozen target. Scenarios with no SDC route are rejected during sampling.
+  the frozen target. Sampling rejects scenes with no SDC route, an invalid SDC at
+  initialization, or an SDC already at its GT endpoint.
+- GT training drops rejected maps from the current sampling pool and raises an
+  explicit error if no eligible scenarios remain, rather than retrying forever.
 - Use `num_maps=-1` for all available maps, or a positive count no larger than the
   available file count. Training samples from this pool; it does not guarantee a
   pass through every scenario. Use a training split; the benchmark points at validation data.
@@ -61,23 +71,35 @@ puffer train puffer_drive \
   caps scene population, whereas replay evaluation keeps whole scenes.
 - `resample_frequency=910` is an example (ten full 91-step episodes). Tune it for
   dataset diversity versus loading cost; ordinary episode resets reuse the same file.
+- The 92-slot rollout accommodates an initial observation plus 91 outcomes; PPO
+  segments need not align with episodes. Both minibatch limits are `65504 = 92 * 712`
+  to satisfy horizon divisibility. The auto batch size is
+  `vec.num_envs * env.num_agents * 92` and must be at least the minibatch size.
+- Disable timeout value bootstrapping for these finite scenarios. Keep gamma,
+  GAE lambda, learning rate, and other optimizer settings unchanged initially.
 - Keep `init_step_spread=false`: counting currently uses the fixed initial step,
   while randomized initialization can select a different population.
 - Proximity-based adversarial termination and targeted spawning are Gigaflow-only.
   Replay does not enforce `min_agents_per_env`; target-only scenes can be sampled.
 
 ### Ground-truth goals
-`env.goal_source=gt` is implemented for replay. It selects `num_goals` evenly
-spaced time indices from the remaining logged trajectory, including its final
-frame, instead of using route-distance spacing. It applies to both the policy
-target and policy adversaries; it does not make their controllers replay logs.
-GT goals are not regenerated after completion. The SDC route requirement remains.
+`env.goal_source=gt` gives each policy agent one actual goal: the last valid logged
+position at or after `init_step`. Counting and initialization use the same GT
+eligibility rules, excluding tracks already at their endpoint. Non-SDC vehicles
+do not need a route; the SDC route requirement remains.
 
-Keep `route` for the recipe above until GT selection is checked: `binding.shared`
-does not receive `goal_source`, so preliminary counting uses route-based eligibility
-while GT initialization can admit route-less non-SDC agents. GT waypoint selection
-also does not filter invalid logged frames. These are existing limitations, not
-reasons to add redundant checks to simulation hot paths.
+Keep `num_goals` equal to the checkpoint's observation slot count (usually 3).
+Only slot 0 contains a goal; unused slots are zeroed. This preserves input size,
+but the goal distribution differs from route training. GT goals remain lane-less,
+so goal-lane-distance features stay zero. Goal spacing/regeneration settings do
+not create intermediate GT goals. Policy actions still control motion.
+
+Reaching the endpoint removes the agent at any speed. Goal reward still requires
+speed <= 3 m/s. Successful SDC removal lets surviving adversaries finish; SDC
+collision/offroad failure or no remaining adversaries ends the scene with
+`adversarial_termination_mode=either`. Removed agents retain their rollout slots,
+and successful completion is scored separately from failure. Goals reset with
+the episode; no goals are regenerated during it.
 
 ## Coding Standards
 - **Naming:** explicit (`active_agent_count`, `closest_lane_idx`); never `n/tmp/val/foo` except tiny local math. Keep units in names: `_seconds/_meters/_mps/_idx/_count`.
