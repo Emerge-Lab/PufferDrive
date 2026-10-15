@@ -10,8 +10,9 @@
 #SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/mfu_bench_%j.err
 #SBATCH --partition dev
 
-# Measures MFU of the real PPO loop (rollout, update, whole epoch) and SPS on this node's GPU, with and without
-# policy.fused_slot_encoder, and adds hardware-counter utilization of one step if Nsight Compute is available.
+# Measures MFU of the real PPO loop (rollout, update, whole epoch) and SPS on this node's GPU: reference encoders,
+# policy.fused_slot_encoder with the Triton kernels, and the same with the CUDA kernels (PUFFER_SLOT_ENCODER_BACKEND=cuda),
+# and adds hardware-counter utilization of one step if Nsight Compute is available.
 # 32 envs on 18 threads, like the multinode training script (blocking workers allow 2 per hardware thread).
 
 echo "START TIME: $(date)"
@@ -28,21 +29,25 @@ NUM_ENVS=${NUM_ENVS:-32}      # override: NUM_ENVS=48 sbatch scripts/kesai/16_mf
 MINIBATCH=${MINIBATCH:-131072}
 echo "=== MFU result (paste this block back) ===" | tee ${RESULT_FILE}
 python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} 2>&1 | grep -v "^MFU_RESULT" | grep "reference\|capability" | tee -a ${RESULT_FILE}
-python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused 2>&1 | grep -v "^MFU_RESULT" | grep "fused" | tee -a ${RESULT_FILE}
-echo "--- rollout split (env = waiting for the simulation workers, the rest is the trainer process) ---" | tee -a ${RESULT_FILE}
+python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused 2>&1 | grep -v "^MFU_RESULT" | grep "fused" | sed 's/^fused/fused+triton/' | tee -a ${RESULT_FILE}
+env PUFFER_SLOT_ENCODER_BACKEND=cuda python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused 2>&1 | grep -v "^MFU_RESULT" | grep "fused\|Error" | sed 's/^fused/fused+cuda/' | tee -a ${RESULT_FILE}
+echo "--- rollout split, fused+triton (env = waiting for the simulation workers, the rest is the trainer process) ---" | tee -a ${RESULT_FILE}
 python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused --rollout-only --profile --warmup 1 --epochs 2 2>&1 | grep -A5 "section split" | tee -a ${RESULT_FILE}
+echo "--- rollout split, fused+cuda ---" | tee -a ${RESULT_FILE}
+env PUFFER_SLOT_ENCODER_BACKEND=cuda python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused --rollout-only --profile --warmup 1 --epochs 2 2>&1 | grep -A5 "section split" | tee -a ${RESULT_FILE}
 
 NCU=$(command -v ncu || ls /opt/nvidia/nsight-compute/*/ncu 2>/dev/null | tail -1)
 if [ -n "${NCU}" ]; then
     echo "--- hardware counters (ncu range replay, one update minibatch of ${MINIBATCH} rows + one rollout forward) ---" | tee -a ${RESULT_FILE}
     METRICS=gpu__time_duration.sum,sm__ops_path_tensor_op_hmma_src_bf16_dst_fp32.sum,dram__bytes.sum
-    for variant in reference fused; do
-        FLAG=""; [ ${variant} = fused ] && FLAG="--fused"
+    for variant in reference fused fused_cuda; do
+        FLAG=""; [ ${variant} != reference ] && FLAG="--fused"
+        BACKEND=triton; [ ${variant} = fused_cuda ] && BACKEND=cuda
         CSV=/home/bjaeger/PufferDrive/experiments/logs/mfu_bench_${SLURM_JOB_ID}_${variant}.csv
-        timeout 600 ${NCU} --replay-mode range --target-processes application-only --clock-control none --nvtx \
+        ( export PUFFER_SLOT_ENCODER_BACKEND=${BACKEND}; timeout 600 ${NCU} --replay-mode range --target-processes application-only --clock-control none --nvtx \
             --nvtx-include "update" --nvtx-include "rollout" --nvtx-include "calibrate" --print-nvtx-rename kernel \
             --metrics ${METRICS} --csv --page raw --print-units base \
-            python scripts/profile_policy_step.py --rows ${MINIBATCH} ${FLAG} > ${CSV} 2>&1 \
+            python scripts/profile_policy_step.py --rows ${MINIBATCH} ${FLAG} > ${CSV} 2>&1 ) \
             && { echo "${variant}:" | tee -a ${RESULT_FILE}; python scripts/profile_policy_step.py --parse ${CSV} --rows ${MINIBATCH} | tee -a ${RESULT_FILE}; } \
             || echo "${variant}: ncu failed (counters restricted or unsupported), see ${CSV}" | tee -a ${RESULT_FILE}
     done
