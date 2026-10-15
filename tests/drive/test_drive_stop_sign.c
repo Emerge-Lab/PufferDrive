@@ -294,6 +294,34 @@ static int test_standstill_clears_beyond_proximity(void) {
     return 0;
 }
 
+// Two lanes' signs 4 m apart: 19 m out on a curved approach the agent sits in the neighbour line's frame
+// (|across| 0.1 m) and latches it; once it is in its own lane the own sign must take over and complete.
+static int test_neighbour_lane_target_yields_to_own_lane_sign(void) {
+    TrafficControlElement tcs[2];
+    tcs[0] = drive_test_stop_sign();
+    tcs[0].stop_line[1] = 2.0f;
+    tcs[0].stop_line[4] = 6.0f;
+    tcs[1] = drive_test_stop_sign();
+    Agent agent = drive_test_stop_agent(-20.0f, 3.9f, 0.0f);
+    Drive env = drive_test_stop_env(tcs, &agent);
+    env.num_traffic_elements = 2;
+    drive_test_step_to(&agent, -19.0f, 3.9f, 8.0f);
+    EXPECT_FALSE(update_stop_sign_state(&env, 0));
+    EXPECT_EQ_INT(agent.stop_sign_target_idx, 0);
+    drive_test_step_to(&agent, -10.0f, 0.5f, 8.0f);
+    EXPECT_FALSE(update_stop_sign_state(&env, 0));
+    EXPECT_EQ_INT(agent.stop_sign_target_idx, 1);
+    EXPECT_EQ_INT(agent.stop_sign_stop_completed, 0);
+    drive_test_step_to(&agent, -2.5f, 0.0f, 0.0f);
+    EXPECT_FALSE(update_stop_sign_state(&env, 0));
+    EXPECT_EQ_INT(agent.stop_sign_target_idx, 1);
+    EXPECT_EQ_INT(agent.stop_sign_stop_completed, 1);
+    drive_test_step_to(&agent, 0.5f, 0.0f, 3.0f);
+    EXPECT_FALSE(update_stop_sign_state(&env, 0));
+    EXPECT_EQ_INT(agent.stop_sign_last_failed_idx, -1);
+    return 0;
+}
+
 static int test_traffic_light_ignored(void) {
     TrafficControlElement tc = drive_test_stop_sign();
     tc.type = TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT;
@@ -331,6 +359,7 @@ int main(void) {
     RUN_TEST(test_state_clears_beyond_proximity);
     RUN_TEST(test_spawn_inside_box_counts_as_stopped);
     RUN_TEST(test_standstill_before_targeting_counts);
+    RUN_TEST(test_neighbour_lane_target_yields_to_own_lane_sign);
     RUN_TEST(test_standstill_outside_box_before_targeting_does_not_count);
     RUN_TEST(test_standstill_clears_beyond_proximity);
     RUN_TEST(test_traffic_light_ignored);

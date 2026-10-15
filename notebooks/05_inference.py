@@ -205,6 +205,8 @@ img = plot_observation(
     obs_slots_boundary_n=env.obs_slots_boundary_n,
     obs_dropout_lane=env.obs_dropout_lane,
     obs_dropout_boundary=env.obs_dropout_boundary,
+    obs_partner_relative_velocity=env.obs_partner_relative_velocity,
+    obs_lane_speed_limit=env.obs_lane_speed_limit,
     obs_lane_stride=env.obs_lane_stride,
     obs_boundary_stride=env.obs_boundary_stride,
     obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
@@ -241,6 +243,8 @@ for t in range(HORIZON):
         obs_slots_boundary_n=env.obs_slots_boundary_n,
         obs_dropout_lane=env.obs_dropout_lane,
         obs_dropout_boundary=env.obs_dropout_boundary,
+        obs_partner_relative_velocity=env.obs_partner_relative_velocity,
+        obs_lane_speed_limit=env.obs_lane_speed_limit,
         obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
     )
     ego_features_over_time.append(ego)
@@ -290,6 +294,8 @@ ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     obs_slots_boundary_n=env.obs_slots_boundary_n,
     obs_dropout_lane=env.obs_dropout_lane,
     obs_dropout_boundary=env.obs_dropout_boundary,
+    obs_partner_relative_velocity=env.obs_partner_relative_velocity,
+    obs_lane_speed_limit=env.obs_lane_speed_limit,
     obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
 )
 
@@ -364,6 +370,8 @@ partner_labels = [
     "sim_speed_signed",
     "seconds_stopped",
 ]
+if env.obs_partner_relative_velocity:
+    partner_labels += ["rel_vx", "rel_vy"]
 for p in range(min(int(n_visible), 5)):
     vals = ", ".join(f"{partner_labels[j]}={partners[p, j]:.3f}" for j in range(env.partner_features))
     print(f"  [{p}] {vals}")
@@ -477,6 +485,8 @@ def unpack_all_timesteps(bufs, agent_idx):
             obs_slots_boundary_n=env.obs_slots_boundary_n,
             obs_dropout_lane=env.obs_dropout_lane,
             obs_dropout_boundary=env.obs_dropout_boundary,
+            obs_partner_relative_velocity=env.obs_partner_relative_velocity,
+            obs_lane_speed_limit=env.obs_lane_speed_limit,
             obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
         )
         egos.append(ego)
@@ -554,6 +564,8 @@ for t in range(HORIZON):
         obs_slots_boundary_n=env.obs_slots_boundary_n,
         obs_dropout_lane=env.obs_dropout_lane,
         obs_dropout_boundary=env.obs_dropout_boundary,
+        obs_partner_relative_velocity=env.obs_partner_relative_velocity,
+        obs_lane_speed_limit=env.obs_lane_speed_limit,
         obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
     )
     dists = np.sqrt(part[:, 0] ** 2 + part[:, 1] ** 2)
@@ -581,6 +593,8 @@ ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     obs_slots_boundary_n=env.obs_slots_boundary_n,
     obs_dropout_lane=env.obs_dropout_lane,
     obs_dropout_boundary=env.obs_dropout_boundary,
+    obs_partner_relative_velocity=env.obs_partner_relative_velocity,
+    obs_lane_speed_limit=env.obs_lane_speed_limit,
     obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
 )
 
@@ -644,7 +658,7 @@ if bnd_mask.any():
 for i in range(partners.shape[0]):
     if np.allclose(partners[i], 0):
         continue
-    rx, ry, rz, length, width, hc, hs, speed, _ = partners[i]
+    rx, ry, rz, length, width, hc, hs, speed = partners[i][:8]
     heading = np.arctan2(hs, hc)
     rect = Rectangle(
         (-length / 2, -width / 2), length, width, facecolor="orange", edgecolor="black", alpha=0.6, zorder=9
@@ -791,6 +805,8 @@ partner_labels = [
     "sim_speed_signed",
     "seconds_stopped",
 ]
+if env.obs_partner_relative_velocity:
+    partner_labels += ["rel_vx", "rel_vy"]
 obs_slots_partners_n = env.obs_slots_partners_n
 pf = env.partner_features
 

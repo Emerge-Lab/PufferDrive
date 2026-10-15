@@ -13,48 +13,54 @@
 # alpasim-training's teacher driver runs the policy in a shadow env of this checkout (PUFFERDRIVE_ROOT=$PD) on the
 # scenes converted to PufferDrive bins; AlpaSim renders, simulates the ego and replays the logged traffic.
 #
-# One-time setup: alpasim-training at ALPAGYM_ROOT (`uv sync --all-packages`), the AlpaSim fork at ALPASIM_ROOT, the
-# NuRec scenes and converted bins under NUREC_ROOT (alpasim-training README steps 3-4; all-usdzs/ must hold real files),
-# and the AlpaSim base image archived to ALPASIM_IMAGE_TAR (REPO=$ALPASIM_ROOT OUT_DIR=<dir of ALPASIM_IMAGE_TAR> sbatch
-# --output=<log> --error=<log> $ALPAGYM_ROOT/scripts/build_alpasim_image.sbatch).
+# One-time setup: alpasim-training at ALPAGYM_ROOT (`uv sync --all-packages`), the AlpaSim fork at ALPASIM_ROOT, the NuRec
+# scenes as real files at USDZ_DIR, their bins with 130 km/h lane limits at BINS (alpasim-training README step 4) and the
+# AlpaSim base image archived in ALPASIM_IMAGE_DIR (cd $ALPAGYM_ROOT && ALPASIM_ROOT=$ALPASIM_ROOT OUT_DIR=$ALPASIM_IMAGE_DIR
+# sbatch scripts/build_alpasim_image.sbatch; ~3 h on a dev node, ~31 GB archive). The archive must be readable by this user.
 #
-# Overridable env: RUN_DIR, CKPT (default RUN_DIR/final_model.pt, else the newest RUN_DIR/models/model_*.pt), PD,
-# ALPAGYM_ROOT, ALPASIM_ROOT, NUREC_ROOT, BINS, USDZ_DIR, ALPASIM_IMAGE_TAR, TOPOLOGY (8gpu_64rollouts = whole node;
-# 1gpu for a quick check), PARALLEL (scenes in flight: 32 on 8gpu, at most 4 on 1gpu), N_SCENES (0 = every scene that
-# passed the conversion checks), SCENE_LIST (file of scene ids), GOAL_MODE (gt | route), CAM_W/CAM_H (16:9 render size;
-# the teacher never sees the cameras), RENDER_VIDEO (1 = one mp4 per scene), SIM_TIMEOUT_S (per batch of PARALLEL scenes).
+# Settings are the plain assignments below. Only RUN_DIR is also read from the environment: 3_train and 7_eval chain this
+# eval after their own by exporting it.
 set -u
 
-export PD=${PD:-/home/bjaeger/PufferDrive}
-ALPAGYM_ROOT=${ALPAGYM_ROOT:-/home/bjaeger/alpasim-training}
-export ALPASIM_ROOT=${ALPASIM_ROOT:-/home/bjaeger/alpasim}
-NUREC_ROOT=${NUREC_ROOT:-/home/shared/data/nurec}
-BINS=${BINS:-$NUREC_ROOT/bins}
-USDZ_DIR=${USDZ_DIR:-$NUREC_ROOT/all-usdzs}
-RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0043_1000}
-TOPOLOGY=${TOPOLOGY:-8gpu_64rollouts}
+# quick check: TOPOLOGY=1gpu N_SCENES=2; full run: TOPOLOGY=8gpu_64rollouts (whole node) N_SCENES=0 (the whole SCENE_LIST)
+TOPOLOGY=8gpu_64rollouts
+N_SCENES=0
+RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
+CKPT=$RUN_DIR/final_model.pt
+[ -f "$CKPT" ] || CKPT=$(ls "$RUN_DIR"/models/model_*.pt 2>/dev/null | sort | tail -n 1)
+GOAL_MODE=gt_time:5  # gt_time:<s> | gt | route
+GOAL_RADIUS_M=2      # goal arrival radius Damiano's reference evals use; the teacher's own gt_time default is 6
+VRU_SIZE_PAD_M=0.8   # added to the length and width of every pedestrian and two-wheeler box the teacher sees; 0 = true boxes
+PARTNER_SPLIT_LENGTH_M=7  # actors longer than this (training max 7 m) reach the teacher as ceil(length / this) touching pieces; 0 = one box
+RENDER_VIDEO=0       # one mp4 per scene; 1 also streams the teacher BEV and makes every policy step ~5x slower
+OBS_REPLAY=1         # PufferDrive observation replay html per scene -> $OUT/obs_replays
+CAM_W=640            # 16:9 render size; the teacher never sees the cameras
+CAM_H=360
+SIM_TIMEOUT_S=3600   # per batch of PARALLEL scenes
+ALPASIM_LOG_LEVEL=WARNING  # AlpaSim services; INFO also keeps the per-event INFO lines runtime workers and renderer print anyway (~110 MB per 400 scenes)
+PROMETHEUS=0         # AlpaSim performance telemetry (~80 MB per run); only alpagym_runtime.perf reads it
+KEEP_ROLLOUT_LOGS=none  # rollout.asl (~36 MB per scene, offline re-scoring/failure analysis only): all | imperfect (score < 1) | failed | none (never written)
+export PD=/home/bjaeger/PufferDrive
+ALPAGYM_ROOT=/home/bjaeger/alpasim-training
+# held-out split Damiano evaluates on; empty = every converted scene that passed the checks (2149 on the cluster, 1584 of them train)
+SCENE_LIST=$ALPAGYM_ROOT/scene_splits/eval_405.txt
+export ALPASIM_ROOT=/home/bjaeger/alpasim
+# shoulder lanes off-road (py123d 1_bernhard_dev); USDZ_DIR stays Damiano's, the shared all-usdzs symlinks dangle inside the containers
+BINS=/home/shared/data/nurec/bins/eval405_130kmh_ndshoulders
+USDZ_DIR=/home/ddacol/code/alpasim-training/data/distill/usdz
+ALPASIM_IMAGE_DIR=/home/ddacol/code/alpasim-training/data/images
 case "$TOPOLOGY" in
-    8gpu*) PARALLEL=${PARALLEL:-32} ;;
-    *) PARALLEL=${PARALLEL:-4} ;;
+    8gpu*) PARALLEL=32 ;;  # scenes in flight
+    *) PARALLEL=4 ;;
 esac
-N_SCENES=${N_SCENES:-0}
-SCENE_LIST=${SCENE_LIST:-}
-GOAL_MODE=${GOAL_MODE:-gt}
-CAM_W=${CAM_W:-640}
-CAM_H=${CAM_H:-360}
-RENDER_VIDEO=${RENDER_VIDEO:-1}
-SIM_TIMEOUT_S=${SIM_TIMEOUT_S:-3600}
 ALPAGYM_PY=$ALPAGYM_ROOT/.venv/bin/python
 # uv: the host syncs the AlpaSim checkout's venv before it starts the Wizard
 export PATH="$HOME/.local/bin:$PATH"
 
-if [ -z "${CKPT:-}" ]; then
-    CKPT=$RUN_DIR/final_model.pt
-    [ -f "$CKPT" ] || CKPT=$(ls "$RUN_DIR"/models/model_*.pt 2>/dev/null | sort | tail -n 1)
-fi
 [ -n "$CKPT" ] || { echo "no checkpoint in $RUN_DIR (final_model.pt or models/model_*.pt)"; exit 1; }
-for path in "$CKPT" "$ALPAGYM_PY" "$ALPASIM_ROOT/pyproject.toml" "$BINS/scene_manifest.jsonl" "$USDZ_DIR"; do
-    [ -e "$path" ] || { echo "missing $path"; exit 1; }
+case "$KEEP_ROLLOUT_LOGS" in all|imperfect|failed|none) ;; *) echo "KEEP_ROLLOUT_LOGS must be all, imperfect, failed or none, got $KEEP_ROLLOUT_LOGS"; exit 1 ;; esac
+for path in "$CKPT" "$ALPAGYM_PY" "$ALPASIM_ROOT/pyproject.toml" "$BINS/scene_manifest.jsonl" "$USDZ_DIR" ${SCENE_LIST:+"$SCENE_LIST"}; do
+    [ -r "$path" ] || { echo "missing or not readable: $path"; exit 1; }
 done
 [ -f "$(dirname "$CKPT")/config.yaml" ] || [ -f "$(dirname "$(dirname "$CKPT")")/config.yaml" ] \
     || { echo "no config.yaml next to or one level above $CKPT"; exit 1; }
@@ -71,9 +77,11 @@ case "$TOPOLOGY" in
 esac
 ALPASIM_VERSION=$(grep -m1 '^version' "$ALPASIM_ROOT/pyproject.toml" | sed -E 's/.*"(.*)".*/\1/')
 BASE_TAG=alpasim-base:$ALPASIM_VERSION
-ALPASIM_IMAGE_TAR=${ALPASIM_IMAGE_TAR:-/home/bjaeger/docker_images/alpasim-base-$ALPASIM_VERSION.tar.zst}
+ALPASIM_IMAGE_TAR=$ALPASIM_IMAGE_DIR/alpasim-base-$ALPASIM_VERSION.tar.zst
 NRE_TAG=$(grep -m1 -oE 'nvcr.io/nvidia/nre/[^[:space:]"]+' "$ALPASIM_ROOT/src/wizard/configs/base_config.yaml")
 [ -n "$NRE_TAG" ] || { echo "no NRE renderer image in $ALPASIM_ROOT/src/wizard/configs/base_config.yaml"; exit 1; }
+[ -r "$ALPASIM_IMAGE_TAR" ] || docker image inspect "$BASE_TAG" > /dev/null 2>&1 \
+    || { echo "$ALPASIM_IMAGE_TAR is missing or not readable and $BASE_TAG is not on $(hostname)"; exit 1; }
 echo "Evaluating checkpoint: $CKPT"
 
 # drop inherited entries from other PufferDrive checkouts: the teacher would import their pufferlib instead of $PD's
@@ -93,7 +101,13 @@ mapfile -t SCENES < <("$ALPAGYM_PY" - "$BINS/scene_manifest.jsonl" "$N_SCENES" "
 import json, sys
 manifest, n_scenes, scene_list = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 rows = [json.loads(line) for line in open(manifest).read().splitlines()[1:]]
-scenes = [r["alpasim_scene_id"] for r in rows if r["source_parity_pass"] and r["gt_replay_pass"]]
+def passed_checks(row):
+    if "gt_replay_pass" in row:
+        return row["source_parity_pass"] and row["gt_replay_pass"]
+    if "offroad_verdict" in row:  # manifests built before alpasim-training d29bdd9 (2026-08-31)
+        return row["source_parity_pass"] and row["offroad_verdict"] == "both_pass"
+    sys.exit(f"{manifest}: unknown scene row schema, keys: {sorted(row)}")
+scenes = [r["alpasim_scene_id"] for r in rows if passed_checks(r)]
 print(f"{len(scenes)} of {len(rows)} converted scenes passed the conversion checks", file=sys.stderr)
 if scene_list:
     usable = set(scenes)
@@ -106,10 +120,12 @@ EOF
 [ ${#SCENES[@]} -gt 0 ] || { echo "no scenes to evaluate"; exit 1; }
 
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
-OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE}_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE//:/}_r${GOAL_RADIUS_M}$([ "$VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$VRU_SIZE_PAD_M")$([ "$PARTNER_SPLIT_LENGTH_M" = "0" ] || echo "_split$PARTNER_SPLIT_LENGTH_M")_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT"
 {
-    echo "checkpoint $CKPT"; echo "scenes ${#SCENES[@]}"; echo "topology $TOPOLOGY parallel $PARALLEL goal_mode $GOAL_MODE"
+    echo "checkpoint $CKPT"; echo "scenes ${#SCENES[@]}"; echo "topology $TOPOLOGY parallel $PARALLEL goal_mode $GOAL_MODE goal_radius_m $GOAL_RADIUS_M"
+    echo "vru_size_pad_m $VRU_SIZE_PAD_M"
+    echo "partner_split_length_m $PARTNER_SPLIT_LENGTH_M"
     for repo in "$PD" "$ALPAGYM_ROOT" "$ALPASIM_ROOT"; do
         echo "git $repo $(git -C "$repo" rev-parse --short HEAD 2>/dev/null) $(git -C "$repo" diff --quiet 2>/dev/null || echo dirty)"
     done
@@ -134,7 +150,7 @@ cleanup() {
 }
 trap cleanup EXIT
 if ! docker image inspect "$BASE_TAG" > /dev/null 2>&1; then
-    [ -f "$ALPASIM_IMAGE_TAR" ] || { echo "$BASE_TAG is not on $(hostname) and $ALPASIM_IMAGE_TAR is missing"; exit 1; }
+    [ -r "$ALPASIM_IMAGE_TAR" ] || { echo "$BASE_TAG is not on $(hostname) and $ALPASIM_IMAGE_TAR is missing or not readable"; exit 1; }
     echo "Loading $BASE_TAG from $ALPASIM_IMAGE_TAR"
     LOADED_BASE=1
     zstd -dc "$ALPASIM_IMAGE_TAR" | docker load || exit 1
@@ -146,15 +162,24 @@ if ! docker image inspect "$NRE_TAG" > /dev/null 2>&1; then
 fi
 
 # the teacher is an external driver, but the 8gpu topologies re-assert driver.skip=false and abort at startup
-OVERRIDES="wizard.baseport=$BASEPORT runtime.endpoints.driver.skip=true"
-[ "$RENDER_VIDEO" = "1" ] || OVERRIDES="$OVERRIDES eval.video.render_video=false"
-echo "${#SCENES[@]} scenes, $TOPOLOGY with $PARALLEL in flight; full log: $OUT/evaluate.log"
+[ "$PROMETHEUS" = "1" ] && PROMETHEUS_FLAG=true || PROMETHEUS_FLAG=false
+[ "$KEEP_ROLLOUT_LOGS" = "none" ] && SAVE_ROLLOUT_LOG_FLAG=false || SAVE_ROLLOUT_LOG_FLAG=true
+OVERRIDES="wizard.baseport=$BASEPORT runtime.endpoints.driver.skip=true wizard.log_level=$ALPASIM_LOG_LEVEL wizard.prometheus.start_prometheus=$PROMETHEUS_FLAG"
+OVERRIDES="$OVERRIDES runtime.simulation_config.save_rollout_log=$SAVE_ROLLOUT_LOG_FLAG"
+[ "$RENDER_VIDEO" = "1" ] && RENDER_VIDEO_FLAG=true || RENDER_VIDEO_FLAG=false
+[ "$OBS_REPLAY" = "1" ] && OBS_REPLAY_FLAG=true || OBS_REPLAY_FLAG=false
+echo "${#SCENES[@]} scenes, $TOPOLOGY with $PARALLEL in flight; full log: $OUT/evaluate.log (logs/ once the run is tidied)"
 cd "$ALPAGYM_ROOT" || exit 1
 "$ALPAGYM_PY" -m alpagym_host.evaluate \
     --model_kind teacher \
     --teacher_checkpoint "$CKPT" \
     --teacher_bins_dir "$BINS" \
     --teacher_goal_mode "$GOAL_MODE" \
+    --teacher_goal_radius "$GOAL_RADIUS_M" \
+    --teacher_vru_size_pad_m "$VRU_SIZE_PAD_M" \
+    --teacher_partner_split_length_m "$PARTNER_SPLIT_LENGTH_M" \
+    --render_video "$RENDER_VIDEO_FLAG" \
+    --teacher_obs_replay "$OBS_REPLAY_FLAG" \
     --local_scene_dir "$USDZ_DIR" \
     --scene_ids "${SCENES[@]}" \
     --topology "$TOPOLOGY" \
@@ -166,24 +191,55 @@ cd "$ALPAGYM_ROOT" || exit 1
     > "$OUT/evaluate.log" 2>&1
 EVAL_STATUS=$?
 
+# results.txt: the official score, AlpaSim's km between incidents (all and at-fault) and the mean of every per-scene metric
 if [ -f "$OUT/alpagym/evaluation.yaml" ]; then
-    "$ALPAGYM_PY" - "$OUT/alpagym" <<'EOF'
-import sys
+    "$ALPAGYM_PY" - "$OUT/alpagym/evaluation.yaml" "$OUT/alpagym/alpasim/wizard_0/aggregate/results-summary.json" "$OUT/results.txt" <<'EOF'
+import json, statistics, sys
 from pathlib import Path
 import yaml
-run = Path(sys.argv[1])
-summary = yaml.safe_load((run / "evaluation.yaml").read_text())
-print(f"\n{len(summary['scenes'])} scenes evaluated, complete: {summary['complete']}")
-aggregate = run / "metrics" / "aggregate.yaml"
-if aggregate.exists():
-    for name, stats in yaml.safe_load(aggregate.read_text())["metrics"].items():
-        print(f"  {name:34s} mean {stats['mean']:9.4f}  median {stats['median']:9.4f}  n {stats['num_finite']}")
+summary = yaml.safe_load(Path(sys.argv[1]).read_text())
+aggregate_path = Path(sys.argv[2])
+scenes = summary["scenes"]
+official = summary.get("official_score")
+if official is None:
+    lines = [f"official_score n/a  (incomplete: {len(scenes)} scenes finished, {len(summary['failed_scenes'])} failed)"]
+else:
+    lines = [f"official_score {official['score']:.4f}  scenes {official['num_scored']}  failed {official['num_failed']}"]
+rows = []
+runs = json.loads(aggregate_path.read_text())["metrics_results"] if aggregate_path.exists() else []
+for run in runs:
+    prefix = f"{run['run_name']} " if len(runs) > 1 else ""
+    for name in ("avg_dist_between_incidents", "avg_dist_between_incidents_at_fault"):
+        km_per_incident = run.get(name)
+        if km_per_incident is None:
+            rows.append((prefix + name, "n/a  (no incidents)"))
+            continue
+        per_km = f"{1.0 / km_per_incident:.4f} incidents/km" if km_per_incident > 0 else "inf incidents/km"
+        rows.append((prefix + name, f"{km_per_incident:9.4f} km  ({per_km})"))
+for name in sorted({name for scene in scenes for name in scene["metrics"]}):
+    values = [float(scene["metrics"][name]) for scene in scenes if name in scene["metrics"]]
+    rows.append((name, f"mean {statistics.mean(values):9.4f}  n {len(values)}"))
+width = max((len(name) for name, _ in rows), default=0)
+lines += [f"{name:{width}s} {value}" for name, value in rows]
+text = "".join(line + "\n" for line in lines)
+Path(sys.argv[3]).write_text(text)
+sys.stdout.write("\n" + text)
 EOF
 fi
 if [ $EVAL_STATUS -ne 0 ]; then
     echo "AlpaSim evaluation failed (exit $EVAL_STATUS); last host lines of $OUT/evaluate.log:"
     grep -vE '^[a-z0-9_-]+-[0-9]+-[0-9]+ +\|' "$OUT/evaluate.log" | tail -n 30
 fi
-echo "per-scene metrics -> $OUT/alpagym/metrics/per_scene.csv; videos -> $OUT/alpagym/alpasim/wizard_0/rollouts"
+# the stack is done: take it down while docker-compose.yaml exists, the tidy deletes it
+cleanup
+# results.txt, obs_replays/, logs/, alpasim/ (+ videos/); container INFO lines stay in evaluate.log for debugging and failed runs
+TIDY_FLAGS=""
+{ [ "$ALPASIM_LOG_LEVEL" = "INFO" ] || [ $EVAL_STATUS -ne 0 ]; } && TIDY_FLAGS="--keep_container_info"
+"$ALPAGYM_PY" "$PD/scripts/eval/tidy_alpasim_run.py" "$OUT" --keep_rollout_logs "$KEEP_ROLLOUT_LOGS" $TIDY_FLAGS || echo "tidy failed"
+# score-named pages with the AlpaSim score panel + index.html gallery, as 9_nuPlan.sh and 11_carla_longest6_v2.sh
+if [ -d "$OUT/obs_replays" ] && [ -f "$OUT/alpasim/results-summary.json" ]; then
+    "$ALPAGYM_PY" "$PD/scripts/eval/render_alpasim_obs_html.py" "$OUT" --prune || echo "obs replay gallery failed"
+fi
+echo "results -> $OUT/results.txt; obs replays -> $OUT/obs_replays/index.html; logs -> $OUT/logs; per-scene scores + per-step metrics -> $OUT/alpasim"
 echo "Done -> $OUT"
 exit $EVAL_STATUS

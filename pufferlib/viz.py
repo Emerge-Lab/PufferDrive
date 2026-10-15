@@ -79,6 +79,8 @@ METRIC_LABELS = [
 PAYLOAD_CHUNK_SIZE = 4 * 1024 * 1024
 OBS_QUANTIZE_FRAME_CHUNK = 64
 REPLAY_COMPRESSION_LEVEL = 1
+REPLAY_HEADER_PROBE_BYTES = 1 << 16
+REPLAY_INFLATE_MAX_ROUNDS = 1 << 12
 SIMULATOR_FIGSIZE = (20.0, 20.0)
 SIMULATOR_DPI = 100
 SIMULATOR_GOAL_RADIUS_METERS = 2.0
@@ -731,7 +733,7 @@ def plot_observation(
             continue
         count_lane += 1
         rel_x, rel_y = lane_obs[i][0], lane_obs[i][1]
-        length = lane_obs[i][3] * rl2p
+        length = 2 * lane_obs[i][3] * rl2p
         dir_cos, dir_sin = lane_obs[i][4], lane_obs[i][5]
         # idx 7 = goal_dist_abs (0 near goal lane -> 1 far/unreachable); green->red colormap
         color = plt.cm.RdYlGn_r(float(lane_obs[i][7])) if obs_goal_lane_distance else "lightgrey"
@@ -757,7 +759,7 @@ def plot_observation(
             continue
         count_boundary += 1
         rel_x, rel_y = boundary_obs[i][0], boundary_obs[i][1]
-        length = boundary_obs[i][3] * rl2p
+        length = 2 * boundary_obs[i][3] * rl2p
         dir_cos, dir_sin = boundary_obs[i][4], boundary_obs[i][5]
         color = "black"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
@@ -873,6 +875,7 @@ def encode_interactive_replay(scenario, replay):
         elem_type = int(elem.get("type", 0))
         xs = elem.get("x") or []
         ys = elem.get("y") or []
+        zs = elem.get("z") or []
         if not xs or not ys:
             continue
         if 1 <= elem_type <= 3:
@@ -888,7 +891,7 @@ def encode_interactive_replay(scenario, replay):
         road_types.append(draw_type)
         road_ids.append(int(elem.get("id", road_idx)))
         for i in range(count):
-            road_points.append((float(xs[i]), float(ys[i])))
+            road_points.append((float(xs[i]), float(ys[i]), float(zs[i]) if i < len(zs) else 0.0))
 
     traffic_stop_lines = []
     traffic_types = []
@@ -930,7 +933,7 @@ def encode_interactive_replay(scenario, replay):
             np.subtract(agent_quantized[:, 1:], agent_quantized[:, :-1], out=agent_delta[:, 1:])
 
     chunks = {
-        "road_points": np.asarray(road_points or [(0.0, 0.0)], dtype=np.float32),
+        "road_points": np.asarray(road_points or [(0.0, 0.0, 0.0)], dtype=np.float32),
         "road_lengths": np.asarray(road_lengths or [0], dtype=np.int32),
         "road_types": np.asarray(road_types or [0], dtype=np.int16),
         "road_ids": np.asarray(road_ids or [0], dtype=np.int32),
@@ -1100,6 +1103,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         .perturbation-line.blindness { border-color:#6d28d9; border-top-style:dashed; }
         .perturbation-line.phantom-braking { border-color:#b45309; }
         .perturbation-line.human-log { border-color:#ff0000; }
+        .perturbation-line.collision-onset { border-color:currentColor; border-top-style:dashed; }
         /* Agent panel: dark instrument-cluster surface in both themes — scoped variable overrides restyle all children. */
         #hud-telemetry { --border:#4a5468; --muted:#aab3c5; --field:rgba(255,255,255,.07); --accent:#7cbcff; position:absolute; top:14px; right:14px; width:372px; max-height:calc(100vh - 90px); padding:12px 14px; overflow-y:auto; display:none; background:rgba(54,62,77,.95); color:#eef1f6; }
         [data-theme="dark"] #hud-telemetry { background:rgba(48,56,70,.95); }
@@ -1128,6 +1132,11 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         .toggle-header.is-collapsed span:last-child { transform:rotate(-90deg); }
         .toggle-body.is-collapsed { display:none; }
         #controls { position:absolute; left:50%; bottom:16px; transform:translateX(-50%); padding:9px 12px; display:flex; gap:12px; align-items:center; }
+        #view-bar { position:absolute; right:14px; bottom:16px; padding:7px 10px; display:flex; gap:8px; align-items:center; font-size:11px; }
+        #view-bar .btn.on { border-color:var(--accent); color:var(--accent); }
+        #view-bar .zx { display:flex; gap:4px; align-items:center; color:var(--muted); }
+        #view-bar input[type=range] { width:70px; accent-color:var(--accent); }
+        #viewHint { color:var(--muted); max-width:330px; }
         .step-counter { font-size:12px; min-width:90px; text-align:center; }
         #obs-container { position:absolute; left:14px; bottom:16px; width:390px; height:390px; min-width:250px; min-height:250px; max-width:92vw; max-height:86vh; display:none; overflow:hidden; resize:both; border-radius:10px; }
         #obs-title { position:absolute; top:0; left:0; right:0; z-index:2; display:flex; gap:6px; align-items:center; padding:6px 10px; background:var(--surface); border-bottom:1px solid var(--border); color:var(--muted); font-size:10px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; cursor:grab; }
@@ -1150,6 +1159,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
                 <div class="label">Active perturbations</div>
                 <div class="perturbation-key"><span class="perturbation-line blindness"></span><span>Partner blindness</span></div>
                 <div class="perturbation-key"><span class="perturbation-line phantom-braking"></span><span>Phantom braking</span></div>
+                <div class="perturbation-key"><span class="perturbation-line collision-onset"></span><span>Collision: sharp box = sim footprint, dashed = pose one step before the onset</span></div>
                 <div class="perturbation-key" id="ghost-key" style="display:none"><span class="perturbation-line human-log"></span><span>Human driver (log) &middot; G toggles</span></div>
             </div>
             <button type="button" class="toggle-header is-collapsed" id="overrides-header" data-target="overrides-body"><span>Eval overrides</span><span>&#9662;</span></button>
@@ -1194,6 +1204,13 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <select id="speedSel" onchange="changeSpeed()"><option value="0.25">0.25x</option><option value="1">1x</option><option value="2">2x</option><option value="4" selected>4x</option><option value="8">8x</option><option value="16">16x</option></select>
             <input type="number" id="agentSearch" placeholder="agent id" onkeydown="if(event.key==='Enter') searchAgent()">
         </div>
+        <div id="view-bar" class="panel">
+            <button type="button" id="btn3d" class="btn" onclick="toggleView()" title="Toggle 2D / 3D (V)">2D</button>
+            <button type="button" id="btnRotate" class="btn" onclick="toggleRotateMode()" title="Rotate with a plain left-drag (R)">rotate</button>
+            <button type="button" class="btn" onclick="topView()" title="Top view (T)">top</button>
+            <label class="zx">z <input type="range" min="1" max="10" step="1" value="1" oninput="setZExaggeration(this.value)"><span id="zxVal">1x</span></label>
+            <span id="viewHint"></span>
+        </div>
     </div>
     <canvas id="c"></canvas>
 __PAYLOAD_CHUNKS__
@@ -1223,7 +1240,9 @@ __PAYLOAD_CHUNKS__
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
         let step = 0, play = false, speed = 4, lastTick = 0;
-        let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0};
+        let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0,cz:0,yaw:0,pitch:0,zx:1};
+        let viewMode = '2d', rotateMode = false, dragMode = null, lastTarget = null, mapLayer = null, mapLayerKey = '', mapZMean = 0, RP = 2, roadRangesById = new Map();
+        const FOV_DEG = 50, NEAR_FRACTION = 0.05, MAX_PITCH = 80 * Math.PI / 180, DEFAULT_PITCH = 55 * Math.PI / 180, ORBIT_RAD_PER_PX = 0.008, KEY_ROTATE_STEP = 5 * Math.PI / 180, AGENT_PICK_PX = 18;
         let followedId = null, isEgoCam = false, darkMode = false, showGhost = false, ghostPaths = [];
         const OBS_ZOOM_DEFAULT = 2.2, OBS_ZOOM_MIN = .45, OBS_ZOOM_MAX = 8;
         let obsZoom = OBS_ZOOM_DEFAULT, obsExpanded = false, obsMode = 2, obsShowLimits = true;
@@ -1353,21 +1372,25 @@ self.onmessage = async event => {
 
         function buildMapPaths() {
             paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()};
-            roadPathsById = new Map();
-            let p = 0;
+            roadPathsById = new Map(); roadRangesById = new Map();
+            RP = (H.chunks.road_points && H.chunks.road_points.shape && H.chunks.road_points.shape[1]) || 2;
+            let p = 0, zSum = 0, zCount = 0;
             for (let i=0;i<H.road_polyline_count;i++) {
                 const len = C.road_lengths[i], type = C.road_types[i], path = paths[type], roadId = C.road_ids[i];
                 if (len <= 0) continue;
                 const roadPath = new Path2D();
-                path.moveTo(C.road_points[p*2], C.road_points[p*2+1]);
-                roadPath.moveTo(C.road_points[p*2], C.road_points[p*2+1]);
+                path.moveTo(C.road_points[p*RP], C.road_points[p*RP+1]);
+                roadPath.moveTo(C.road_points[p*RP], C.road_points[p*RP+1]);
                 for (let j=1;j<len;j++) {
-                    path.lineTo(C.road_points[(p+j)*2], C.road_points[(p+j)*2+1]);
-                    roadPath.lineTo(C.road_points[(p+j)*2], C.road_points[(p+j)*2+1]);
+                    path.lineTo(C.road_points[(p+j)*RP], C.road_points[(p+j)*RP+1]);
+                    roadPath.lineTo(C.road_points[(p+j)*RP], C.road_points[(p+j)*RP+1]);
                 }
-                roadPathsById.set(roadId, roadPath);
+                if (RP > 2) for (let j=0;j<len;j++) { zSum += C.road_points[(p+j)*RP+2]; zCount++; }
+                roadPathsById.set(roadId, roadPath); roadRangesById.set(roadId, [p, len]);
                 p += len;
             }
+            mapZMean = zCount ? zSum / zCount : 0; mapLayerKey = '';
+            updateViewBar();
         }
         function colorFor(id, isActive, isExpert) {
             if (isActive) return VEHICLE_COLORS[Math.abs(id) % VEHICLE_COLORS.length];
@@ -1422,6 +1445,33 @@ self.onmessage = async event => {
             ctx.stroke();
             ctx.restore();
         }
+        function infractionOnset(frame, idx, metricIdx) {
+            // First frame of the flag's current run ending at `frame`; -1 when the flag is clear.
+            const stride = H.agent_cap * F.mf;
+            let base = (frame * H.agent_cap + idx) * F.mf + metricIdx;
+            if (!(C.metrics_f32[base] > 0)) return -1;
+            let onset = frame;
+            while (onset > 0 && C.metrics_f32[base - stride] > 0) { onset--; base -= stride; }
+            return onset;
+        }
+        function drawCollisionFootprint(a, f, outline) {
+            // Sprites round their corners; the simulator collides on the sharp box drawn here.
+            const onset = infractionOnset(f, a.idx, 0);
+            if (onset < 0) return;
+            ctx.save();
+            ctx.strokeStyle = outline; ctx.lineWidth = 1.5 / cam.z;
+            ctx.strokeRect(-a.l/2, -a.w/2, a.l, a.w);
+            ctx.restore();
+            if (onset !== f || f === 0) return;
+            const prev = agentAt(f - 1, a.idx);
+            if (!prev) return;
+            // The swept test can flag a contact made between frames: show where the car was one step earlier.
+            ctx.save();
+            ctx.rotate(-a.h); ctx.translate(prev.x - a.x, prev.y - a.y); ctx.rotate(prev.h);
+            ctx.strokeStyle = outline; ctx.lineWidth = 1.5 / cam.z; ctx.setLineDash([4 / cam.z, 3 / cam.z]);
+            ctx.strokeRect(-prev.l/2, -prev.w/2, prev.l, prev.w);
+            ctx.restore();
+        }
         function drawPerturbationOutlines(a) {
             if (a.phantomBrakingActive) {
                 drawPerturbationOutline(a, PHANTOM_BRAKING_OUTLINE_COLOR, [], 3);
@@ -1442,7 +1492,7 @@ self.onmessage = async event => {
             const goalRadiusField = H.agent_goal_radius_field;
             const defaultGoalRadius = H.default_goal_radius_meters || DEFAULT_GOAL_RADIUS_METERS;
             const goalRadius = Number.isInteger(goalRadiusField) && goalRadiusField < F.af ? C.agent_f32[fb+goalRadiusField] : defaultGoalRadius;
-            return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], partnerBlindnessActive:C.agent_i32[ib+8] === 1, phantomBrakingActive:C.agent_i32[ib+9] === 1, x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], goalRadius:goalRadius, c:agentColor};
+            return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], partnerBlindnessActive:C.agent_i32[ib+8] === 1, phantomBrakingActive:C.agent_i32[ib+9] === 1, x:C.agent_f32[fb], y:C.agent_f32[fb+1], z:C.agent_f32[fb+2], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], goalRadius:goalRadius, c:agentColor};
         }
         function getFrameAgents(frame) { const out = []; for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a) out.push(a); } return out; }
         function buildGhostPaths() {
@@ -1486,11 +1536,12 @@ self.onmessage = async event => {
         function toggleObsLimits(e){ if(e) e.stopPropagation(); obsShowLimits=!obsShowLimits; document.getElementById('obsLimitBtn').classList.toggle('on', obsShowLimits); draw(true); }
         function toggleObsSize(e){ if(e) e.stopPropagation(); const p=document.getElementById('obs-container'), b=e ? e.currentTarget : null; obsExpanded=!obsExpanded; p.style.width=obsExpanded?'680px':'390px'; p.style.height=obsExpanded?'680px':'390px'; if(b) b.textContent=obsExpanded?'Collapse':'Expand'; resizeObsCanvas(); draw(true); }
         function searchAgent(){ const id=parseInt(document.getElementById('agentSearch').value); if(!isNaN(id)){ followedId=id; play=false; updateBtn(); draw(true); } }
-        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } });
-        c.onwheel = e => { e.preventDefault(); cam.z *= Math.exp(-e.deltaY * .001); draw(true); };
-        c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), wx=(e.clientX-r.left-c.width/2)/cam.z+cam.x, wy=(e.clientY-r.top-c.height/2)/-cam.z+cam.y; let hit=null, agents=getFrameAgents(Math.floor(step)); if(!isEgoCam) for(const a of agents) if(Math.hypot(wx-a.x, wy-a.y) < Math.max(a.l,3)){ hit=a.id; break; } if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; } draw(true); };
-        window.onmouseup = () => cam.drag = false;
-        c.onmousemove = e => { if(cam.drag && !isEgoCam){ cam.x -= (e.clientX-cam.lx)/cam.z; cam.y -= (e.clientY-cam.ly)/-cam.z; cam.lx=e.clientX; cam.ly=e.clientY; draw(true); } };
+        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } if(e.code === 'KeyV'){ toggleView(); } if(e.code === 'KeyR'){ toggleRotateMode(); } if(e.code === 'KeyT'){ topView(); } if(is3D() && (e.code === 'KeyQ' || e.code === 'KeyE')){ cam.yaw += (e.code === 'KeyQ' ? -1 : 1) * KEY_ROTATE_STEP; updateViewBar(); draw(true); } if(is3D() && (e.code === 'KeyW' || e.code === 'KeyS')){ cam.pitch = Math.max(0, Math.min(MAX_PITCH, cam.pitch + (e.code === 'KeyW' ? 1 : -1) * KEY_ROTATE_STEP)); updateViewBar(); draw(true); } });
+        c.addEventListener('contextmenu', e => e.preventDefault());
+        c.onwheel = e => { e.preventDefault(); const factor = Math.exp(-e.deltaY * .001); if (is3D()) { const r=c.getBoundingClientRect(), sx=e.clientX-r.left, sy=e.clientY-r.top; setProjection(lastTarget); const before = groundOffset(sx, sy); cam.z *= factor; const after = groundOffset(sx, sy); if (before && after && followedId === null) { cam.x += before[0]-after[0]; cam.y += before[1]-after[1]; } } else cam.z *= factor; draw(true); };
+        c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), sx=e.clientX-r.left, sy=e.clientY-r.top; const orbit = e.button === 1 || e.button === 2 || e.shiftKey || (rotateMode && e.button === 0); if (orbit) { e.preventDefault(); if (!is3D()) enter3D(); dragMode='orbit'; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; draw(true); return; } if (e.button !== 0) return; const hit = pickAgent(sx, sy); if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; dragMode='pan'; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; if (is3D()) { setProjection(null); cam.g0 = groundOffset(sx, sy); cam.t0 = [cam.x, cam.y]; } } draw(true); };
+        window.onmouseup = () => { cam.drag = false; dragMode = null; };
+        c.onmousemove = e => { if(!cam.drag) return; if (dragMode === 'orbit') { const dx=e.clientX-cam.lx, dy=e.clientY-cam.ly; cam.lx=e.clientX; cam.ly=e.clientY; if (!(isEgoCam && lastTarget)) cam.yaw += dx*ORBIT_RAD_PER_PX; cam.pitch = Math.max(0, Math.min(MAX_PITCH, cam.pitch + dy*ORBIT_RAD_PER_PX)); updateViewBar(); draw(true); return; } if (isEgoCam) return; if (is3D()) { const r=c.getBoundingClientRect(); setProjection(null); const g = groundOffset(e.clientX-r.left, e.clientY-r.top); if (g && cam.g0) { cam.x = cam.t0[0] + cam.g0[0] - g[0]; cam.y = cam.t0[1] + cam.g0[1] - g[1]; } } else { cam.x -= (e.clientX-cam.lx)/cam.z; cam.y -= (e.clientY-cam.ly)/-cam.z; cam.lx=e.clientX; cam.ly=e.clientY; } draw(true); };
         obsC.addEventListener('wheel', e => { e.preventDefault(); obsZoom = Math.max(OBS_ZOOM_MIN, Math.min(OBS_ZOOM_MAX, obsZoom * Math.exp(-e.deltaY * .001))); draw(true); }, {passive:false});
         function dragPanel(handleId, panelId) { const h=document.getElementById(handleId), p=document.getElementById(panelId); let on=false,sx=0,sy=0,sl=0,st=0; h.addEventListener('mousedown', e => { if(e.target.closest('button')) return; on=true; sx=e.clientX; sy=e.clientY; const r=p.getBoundingClientRect(); sl=r.left; st=r.top; p.style.right='auto'; p.style.bottom='auto'; p.style.left=sl+'px'; p.style.top=st+'px'; }); window.addEventListener('mousemove', e => { if(on){ p.style.left=(sl+e.clientX-sx)+'px'; p.style.top=(st+e.clientY-sy)+'px'; }}); window.addEventListener('mouseup', () => on=false); }
         dragPanel('obs-title','obs-container');
@@ -1599,7 +1650,7 @@ self.onmessage = async event => {
             const rot = (x,y) => [-y,x];
             const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
             const limitIdx = H.lane_speed_limit_idx, speedScale = H.scales.speed_to_mps;
-            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(v(o),v(o+1)), cs=rot(v(o+4),v(o+5)); out.push([xy[0],xy[1],v(o+3)*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i),feat===LF?v(o+6)*(H.scales.road_width_to_position||0):0,feat===LF && limitIdx >= 0 ? v(o+limitIdx)*speedScale : null]); } return out; };
+            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(v(o),v(o+1)), cs=rot(v(o+4),v(o+5)); out.push([xy[0],xy[1],2*v(o+3)*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i),feat===LF?v(o+6)*(H.scales.road_width_to_position||0):0,feat===LF && limitIdx >= 0 ? v(o+limitIdx)*speedScale : null]); } return out; };
             const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(v(o),v(o+1)), h=Math.atan2(v(o+6),v(o+5)); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:v(o+3)*H.scales.veh_len_to_position,w:v(o+4)*H.scales.veh_width_to_position,h:h,pool:poolAt("pool_partner",frame,slot,i)}); }
             const gps = []; for(let i=0;i<H.num_goals;i++){ const o=targetStart+i*H.goal_features; if(zero(o,H.goal_features)) continue; let scale=H.scales.goal_to_position, xy=rot(v(o)*scale, v(o+1)*scale); gps.push(xy); }
             const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(v(o),v(o+1)), b=rot(v(o+2),v(o+3)); controls.push({type:Math.round(v(o+5)), state:Math.round(v(o+6)), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
@@ -1766,23 +1817,145 @@ self.onmessage = async event => {
                 for (let i=0;i<refs.coefCells.length;i++) refs.coefCells[i].textContent = formatCoef(C.coefs_f32[cb+i]);
             }
             updatePolicy(f, agent);
-            const warnings = []; if(C.metrics_f32[mb] === 1) warnings.push("COLLISION"); if(C.metrics_f32[mb+1] === 1) warnings.push("OFFROAD"); if(C.metrics_f32[mb+2] === 1) warnings.push("RED LIGHT"); if(C.metrics_f32[mb+3] === 1) warnings.push("STOP SIGN");
+            const warnings = [];
+            ["COLLISION", "OFFROAD", "RED LIGHT", "STOP SIGN"].forEach((name, metricIdx) => {
+                const onset = infractionOnset(f, agent.idx, metricIdx);
+                if (onset < 0) return;
+                warnings.push(onset < f ? `${name} since <a href="#" style="color:inherit" onclick="step=${onset};play=false;updateBtn();draw(true);return false">step ${onset}</a>` : name);
+            });
             const warnKey = warnings.join('|'), warnRow = document.getElementById('warn-row');
             if (warnKey !== lastWarnKey) { lastWarnKey = warnKey; warnRow.style.display = warnings.length ? 'flex' : 'none'; warnRow.innerHTML = warnings.map(w=>`<span class="warn-chip">${w}</span>`).join(''); }
             const obs = decodeObs(f, agent.slot); if (obs) { obsBox.style.display='block'; drawObs(obs, {l:agent.l*H.scales.meters_to_position, w:agent.w*H.scales.meters_to_position}); } else obsBox.style.display='none';
+        }
+        // ── 3D view: perspective orbit camera around (cam.x, cam.y, cam.cz); cam.z stays the px-per-metre scale at the target ──
+        let P_ca = 1, P_sa = 0, P_cb = 1, P_sb = 0, P_D = 1;
+        function is3D() { return viewMode === '3d'; }
+        function camDist() { return (c.height / cam.z) / (2 * Math.tan(FOV_DEG * Math.PI / 360)); }
+        function setProjection(target) { const a = (isEgoCam && target) ? (Math.PI / 2 - target.h) : cam.yaw; P_ca = Math.cos(a); P_sa = Math.sin(a); P_cb = Math.cos(cam.pitch); P_sb = Math.sin(cam.pitch); P_D = camDist(); }
+        function proj(x, y, z) {
+            const rx = x - cam.x, ry = y - cam.y, rz = (z - cam.cz) * cam.zx;
+            const x1 = rx * P_ca - ry * P_sa, y1 = rx * P_sa + ry * P_ca;
+            const depth = P_D + y1 * P_sb - rz * P_cb;
+            if (depth < NEAR_FRACTION * P_D) return null;
+            const f = cam.z * P_D / depth;
+            return [c.width / 2 + f * x1, c.height / 2 - f * (y1 * P_cb + rz * P_sb)];
+        }
+        function unproj(sx, sy, z) {
+            const rz = (z - cam.cz) * cam.zx, u = (sx - c.width / 2) / (cam.z * P_D), w = (c.height / 2 - sy) / (cam.z * P_D);
+            const denom = w * P_sb - P_cb;
+            if (Math.abs(denom) < 1e-9) return null;
+            const y1 = (rz * (P_sb + w * P_cb) - w * P_D) / denom, depth = P_D + y1 * P_sb - rz * P_cb;
+            if (depth <= 0) return null;
+            const x1 = u * depth;
+            return [cam.x + x1 * P_ca + y1 * P_sa, cam.y - x1 * P_sa + y1 * P_ca, z];
+        }
+        function groundOffset(sx, sy) { const g = unproj(sx, sy, cam.cz); return g ? [g[0] - cam.x, g[1] - cam.y] : null; }
+        function projPoint(idx) { const o = idx * RP; return proj(C.road_points[o], C.road_points[o + 1], RP > 2 ? C.road_points[o + 2] : 0); }
+        function tracePolyline(g, points) { let pen = false; for (const s of points) { if (!s) { pen = false; continue; } if (pen) g.lineTo(s[0], s[1]); else g.moveTo(s[0], s[1]); pen = true; } }
+        function traceRoads(g, type) {
+            let p = 0;
+            for (let i = 0; i < H.road_polyline_count; i++) {
+                const len = C.road_lengths[i];
+                if (C.road_types[i] === type) { let pen = false; for (let j = 0; j < len; j++) { const s = projPoint(p + j); if (!s) { pen = false; continue; } if (pen) g.lineTo(s[0], s[1]); else g.moveTo(s[0], s[1]); pen = true; } }
+                p += len;
+            }
+        }
+        function mapLayerFor(colors) {
+            const key = [c.width, c.height, cam.x, cam.y, cam.cz, cam.z, cam.zx, P_ca, P_sa, P_cb, P_sb, darkMode].join(',');
+            if (mapLayer && mapLayerKey === key) return mapLayer;
+            if (!mapLayer || mapLayer.width !== c.width || mapLayer.height !== c.height) { mapLayer = document.createElement('canvas'); mapLayer.width = c.width; mapLayer.height = c.height; }
+            const g = mapLayer.getContext('2d'); g.clearRect(0, 0, c.width, c.height); g.lineCap = 'round';
+            const styles = [[0, colors.road, .5, []], [1, colors.line, .5, [1, 1]], [2, colors.edge, .8, []]];
+            for (const [type, color, widthM, dash] of styles) { g.strokeStyle = color; g.lineWidth = Math.max(1, widthM * cam.z); g.setLineDash(dash.map(d => Math.max(2, d * cam.z))); g.beginPath(); traceRoads(g, type); g.stroke(); }
+            g.setLineDash([]); mapLayerKey = key; return mapLayer;
+        }
+        function strokeRoad3D(roadId, color, widthPx) { const range = roadRangesById.get(roadId); if (!range) return; const pts = []; for (let j = 0; j < range[1]; j++) pts.push(projPoint(range[0] + j)); ctx.strokeStyle = color; ctx.lineWidth = widthPx; ctx.beginPath(); tracePolyline(ctx, pts); ctx.stroke(); }
+        function boxCorners(x, y, z, h, l, w, pad) { const ch = Math.cos(h), sh = Math.sin(h), hl = l / 2 + pad, hw = w / 2 + pad; return [[-hl, -hw], [hl, -hw], [hl, hw], [-hl, hw]].map(([u, v]) => proj(x + u * ch - v * sh, y + u * sh + v * ch, z)); }
+        function circlePoints(x, y, z, r) { const out = []; for (let k = 0; k < 16; k++) { const t = k / 16 * 2 * Math.PI; out.push(proj(x + r * Math.cos(t), y + r * Math.sin(t), z)); } return out; }
+        function tracePolygon(pts) { if (pts.some(s => !s)) return false; ctx.beginPath(); pts.forEach((s, i) => i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1])); ctx.closePath(); return true; }
+        function drawAgent3D(a, f, colors) {
+            const outline = darkMode ? '#fff' : '#111';
+            const body = a.type === 2 ? circlePoints(a.x, a.y, a.z, Math.max(a.w, 0.7) / 2) : boxCorners(a.x, a.y, a.z, a.h, a.l, a.w, 0);
+            if (!tracePolygon(body)) return;
+            ctx.fillStyle = a.c; ctx.fill(); ctx.strokeStyle = outline; ctx.lineWidth = 1; ctx.setLineDash([]); ctx.stroke();
+            const cen = proj(a.x, a.y, a.z);
+            if (a.type !== 2 && cen) { const nose = proj(a.x + Math.cos(a.h) * a.l / 2, a.y + Math.sin(a.h) * a.l / 2, a.z); if (nose) { ctx.beginPath(); ctx.moveTo(cen[0], cen[1]); ctx.lineTo(nose[0], nose[1]); ctx.stroke(); } }
+            if (a.phantomBrakingActive && tracePolygon(boxCorners(a.x, a.y, a.z, a.h, a.l, a.w, 0.5))) { ctx.strokeStyle = PHANTOM_BRAKING_OUTLINE_COLOR; ctx.lineWidth = 2.5; ctx.stroke(); }
+            if (a.partnerBlindnessActive && tracePolygon(boxCorners(a.x, a.y, a.z, a.h, a.l, a.w, a.phantomBrakingActive ? 1 : 0.5))) { ctx.strokeStyle = PARTNER_BLINDNESS_OUTLINE_COLOR; ctx.lineWidth = 2.5; ctx.setLineDash([6, 4]); ctx.stroke(); ctx.setLineDash([]); }
+            const onset = infractionOnset(f, a.idx, 0);
+            if (onset === f && f > 0 && a.type !== 2) { const prev = agentAt(f - 1, a.idx); if (prev && tracePolygon(boxCorners(prev.x, prev.y, a.z, prev.h, prev.l, prev.w, 0))) { ctx.strokeStyle = outline; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]); } }
+            if (cen) { ctx.fillStyle = colors.text; ctx.font = '600 12px system-ui'; ctx.textAlign = 'center'; ctx.fillText(a.id, cen[0], cen[1] - 9); }
+            if (a.id === followedId && tracePolygon(circlePoints(a.x, a.y, a.z, Math.max(a.l, a.w) * 1.2))) { ctx.strokeStyle = colors.accent; ctx.lineWidth = 3; ctx.stroke(); }
+        }
+        function drawGhosts3D(f) {
+            if (!showGhost || !C.ghost_f32) return;
+            const N = H.chunks.ghost_f32.shape[1];
+            ctx.strokeStyle = 'rgba(255,0,0,.55)'; ctx.lineWidth = 1.5; ctx.setLineDash([]);
+            for (let j = 0; j < N; j++) {
+                const live = agentAt(f, j), z = live ? live.z : cam.cz;
+                ctx.beginPath(); let pen = false;
+                for (let k = 0; k < H.frames; k++) { const b = (k * N + j) * 5; if (C.ghost_f32[b + 4] <= 0) { pen = false; continue; } const s = proj(C.ghost_f32[b], C.ghost_f32[b + 1], z); if (!s) { pen = false; continue; } if (pen) ctx.lineTo(s[0], s[1]); else ctx.moveTo(s[0], s[1]); pen = true; }
+                ctx.stroke();
+            }
+            ctx.strokeStyle = '#ff0000'; ctx.fillStyle = 'rgba(255,0,0,.22)'; ctx.lineWidth = 1; ctx.setLineDash([3, 2]);
+            for (let j = 0; j < N; j++) { const b = (f * N + j) * 5, w = C.ghost_f32[b + 4]; if (w <= 0) continue; const live = agentAt(f, j); if (tracePolygon(boxCorners(C.ghost_f32[b], C.ghost_f32[b + 1], live ? live.z : cam.cz, C.ghost_f32[b + 2], C.ghost_f32[b + 3], w, 0))) { ctx.fill(); ctx.stroke(); } }
+            ctx.setLineDash([]);
+        }
+        function draw3D(f, target, colors) {
+            setProjection(target);
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.fillStyle = colors.bg; ctx.fillRect(0, 0, c.width, c.height);
+            ctx.drawImage(mapLayerFor(colors), 0, 0);
+            ctx.lineCap = 'round';
+            if (target && target.cl >= 0) { strokeRoad3D(target.cl, 'rgba(255,255,255,.35)', 5); strokeRoad3D(target.cl, colors.accent, 4); }
+            drawGhosts3D(f);
+            for (const a of getFrameAgents(f)) drawAgent3D(a, f, colors);
+            ctx.lineCap = 'butt';
+            for (let i = 0; i < H.traffic_static_count; i++) {
+                const t = trafficAt(f, i); if (!t) continue;
+                const sl = t.stop_line, s0 = proj(sl[0], sl[1], sl[2]), s1 = proj(sl[3], sl[4], sl[5]); if (!s0 || !s1) continue;
+                if (t.type === 1) { ctx.strokeStyle = trafficColor(t); ctx.lineWidth = 3; ctx.setLineDash([]); } else { ctx.strokeStyle = t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth = 2.5; ctx.setLineDash([6, 4]); }
+                ctx.beginPath(); ctx.moveTo(s0[0], s0[1]); ctx.lineTo(s1[0], s1[1]); ctx.stroke(); ctx.setLineDash([]);
+            }
+            if (target) { for (const g of selectedGoals(f, target)) { if (tracePolygon(circlePoints(g.x, g.y, target.z, g.radius))) { ctx.fillStyle = 'rgba(56,189,248,.22)'; ctx.fill(); ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 2.5; ctx.stroke(); } } }
+        }
+        function pickAgent(sx, sy) {
+            if (isEgoCam) return null;
+            const agents = getFrameAgents(Math.floor(step));
+            if (is3D()) { setProjection(lastTarget); for (const a of agents) { const s = proj(a.x, a.y, a.z); if (s && Math.hypot(sx - s[0], sy - s[1]) < AGENT_PICK_PX) return a.id; } return null; }
+            const wx = (sx - c.width / 2) / cam.z + cam.x, wy = (sy - c.height / 2) / -cam.z + cam.y;
+            for (const a of agents) if (Math.hypot(wx - a.x, wy - a.y) < Math.max(a.l, 3)) return a.id;
+            return null;
+        }
+        function enter3D() { viewMode = '3d'; if (cam.pitch === 0) cam.pitch = DEFAULT_PITCH; cam.cz = lastTarget ? lastTarget.z : mapZMean; updateViewBar(); }
+        function exit3D() { viewMode = '2d'; cam.pitch = 0; cam.yaw = 0; updateViewBar(); }
+        function toggleView() { if (is3D()) exit3D(); else enter3D(); draw(true); }
+        function topView() { if (!is3D()) return; cam.pitch = 0; cam.yaw = 0; updateViewBar(); draw(true); }
+        function toggleRotateMode() { rotateMode = !rotateMode; updateViewBar(); }
+        function setZExaggeration(v) { cam.zx = Math.max(1, Math.min(10, Number(v) || 1)); updateViewBar(); draw(true); }
+        function updateViewBar() {
+            const b3 = document.getElementById('btn3d'), br = document.getElementById('btnRotate'), hint = document.getElementById('viewHint'), zx = document.getElementById('zxVal');
+            if (!b3) return;
+            const deg = r => Math.round(r * 180 / Math.PI);
+            b3.classList.toggle('on', is3D()); b3.textContent = is3D() ? '3D' : '2D';
+            br.classList.toggle('on', rotateMode);
+            zx.textContent = cam.zx + 'x';
+            hint.textContent = is3D() ? `tilt ${deg(cam.pitch)}° yaw ${deg(cam.yaw)}° · rotate: right/middle-drag, R+drag or Q/E W/S · T top · V 2D` : 'V or right-drag: 3D';
         }
         function draw(force=false) {
             if(!H) return;
             const f = Math.max(0, Math.min(frameMax(), Math.floor(step)));
             if(!force && f === lastDrawn) return;
             const target = followedId !== null ? findAgent(f, followedId) : null;
-            if (target) { cam.x = target.x; cam.y = target.y; }
+            lastTarget = target;
+            if (target) { cam.x = target.x; cam.y = target.y; if (is3D()) cam.cz = target.z; }
             updateUI(target);
+            if (is3D()) { draw3D(f, target, getColors()); lastDrawn = f; return; }
             const colors = getColors(); ctx.fillStyle = colors.bg; ctx.fillRect(0,0,c.width,c.height); ctx.save(); ctx.translate(c.width/2,c.height/2); ctx.scale(cam.z,-cam.z); if(isEgoCam && target) ctx.rotate(Math.PI/2 - target.h); ctx.translate(-cam.x,-cam.y);
             ctx.lineCap='round'; ctx.strokeStyle=colors.road; ctx.lineWidth=.5; ctx.stroke(paths[0]); ctx.strokeStyle=colors.line; ctx.setLineDash([1,1]); ctx.stroke(paths[1]); ctx.setLineDash([]); ctx.strokeStyle=colors.edge; ctx.lineWidth=.8; ctx.stroke(paths[2]);
             drawCurrentLane(target, colors);
             drawGhosts(f);
-            for(const a of getFrameAgents(f)){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
+            for(const a of getFrameAgents(f)){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); drawCollisionFootprint(a, f, darkMode?'#fff':'#111'); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
             for(let i=0;i<H.traffic_static_count;i++){ const t=trafficAt(f,i); if(!t) continue; const sl=t.stop_line; ctx.lineCap='butt'; if(t.type === 1){ ctx.strokeStyle=trafficColor(t); ctx.lineWidth=Math.min(1.5,3/cam.z); } else { ctx.strokeStyle=t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth=Math.min(1.2,2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]); } ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke(); ctx.setLineDash([]); }
             if(target){ for(const g of selectedGoals(f,target)){ ctx.strokeStyle='#38bdf8'; ctx.fillStyle='rgba(56,189,248,.22)'; ctx.lineWidth=Math.max(.25,2.5/cam.z); ctx.beginPath(); ctx.arc(g.x,g.y,g.radius,0,7); ctx.fill(); ctx.stroke(); } }
             ctx.restore(); lastDrawn = f;
@@ -1838,15 +2011,49 @@ def render_interactive_replay_zlib(replay_path, filename):
     _render_interactive_replay_payload(compressed_payload, filename)
 
 
-def read_replay_zlib(replay_path):
-    """-> (header dict, chunk name -> ndarray view) of a saved .replay.zlib."""
+def replay_step_link(step, seconds=None):
+    """Link for a panel injected into an interactive replay page: clicking seeks the viewer to `step`."""
+    label = f"step {int(step)}" + ("" if seconds is None else f" ({seconds:.1f} s)")
+    return (
+        f'<a href="#" style="color:inherit;text-decoration:underline dotted" '
+        f'onclick="step={int(step)};play=false;updateBtn();draw(true);return false">{label}</a>'
+    )
+
+
+def _inflate_through(decompressor, raw, needed_bytes):
+    rounds = 0
+    while len(raw) < needed_bytes and decompressor.unconsumed_tail and rounds < REPLAY_INFLATE_MAX_ROUNDS:
+        raw += decompressor.decompress(decompressor.unconsumed_tail, needed_bytes - len(raw))
+        rounds += 1
+    if len(raw) < needed_bytes:
+        raise ValueError(f"truncated replay: {len(raw)} of {needed_bytes} bytes")
+    return raw
+
+
+def _inflate_replay_prefix(compressed, chunk_names):
+    """Inflate a .replay.zlib only through the last of chunk_names (a long route inflates to GBs)."""
+    decompressor = zlib.decompressobj()
+    raw = bytearray(decompressor.decompress(compressed, REPLAY_HEADER_PROBE_BYTES))
+    header_end = 4 + struct.unpack("<I", _inflate_through(decompressor, raw, 4)[:4])[0]
+    chunk_meta = json.loads(_inflate_through(decompressor, raw, header_end)[4:header_end])["chunks"]
+    data_start = header_end + ((-header_end) % 4)
+    chunk_end = data_start + max(chunk_meta[name]["offset"] + chunk_meta[name]["nbytes"] for name in chunk_names)
+    return _inflate_through(decompressor, raw, chunk_end)
+
+
+def read_replay_zlib(replay_path, chunk_names=None):
+    """-> (header dict, chunk name -> ndarray view) of a saved .replay.zlib; chunk_names limits the chunks
+    returned and the inflated prefix of the stream."""
     with open(replay_path, "rb") as replay_file:
-        raw = zlib.decompress(replay_file.read())
+        compressed = replay_file.read()
+    raw = zlib.decompress(compressed) if chunk_names is None else _inflate_replay_prefix(compressed, chunk_names)
     header_len = struct.unpack("<I", raw[:4])[0]
     header = json.loads(raw[4 : 4 + header_len])
     data_start = 4 + header_len + ((-(4 + header_len)) % 4)
     chunks = {}
     for name, meta in header["chunks"].items():
+        if chunk_names is not None and name not in chunk_names:
+            continue
         start = data_start + meta["offset"]
         chunks[name] = np.frombuffer(
             raw, dtype=meta["dtype"], count=meta["nbytes"] // np.dtype(meta["dtype"]).itemsize, offset=start

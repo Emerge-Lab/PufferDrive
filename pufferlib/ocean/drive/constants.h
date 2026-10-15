@@ -157,7 +157,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define LANE_SWITCH_THRESHOLD 0.05f // Hysteresis: new lane must be 5% better to switch
 #define LANE_ALIGN_COS_THRESHOLD 0.5f
 #define LANE_CURVATURE_NORM 0.2f // 1/m; a 5 m turn radius saturates the obs
-#define MAX_CHECKED_LANES 32
+#define LANE_SCAN_GUARD_MARGIN_M 0.01f
 #define LANE_WIDTH 3.7f // fallback when the map carries no per-point widths
 #define MAX_LANE_WIDTH_M 50.0f
 #define LANE_MARGIN 0.2f
@@ -214,7 +214,8 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution)
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 64
-#define ROAD_QUERY_ENTITY_COUNT (MAX_ENTITIES_PER_CELL * 25) // 5x5 cell neighborhood
+#define ROAD_QUERY_CELL_COUNT 25 // 5x5 cell neighborhood
+#define ROAD_QUERY_ENTITY_COUNT (MAX_ENTITIES_PER_CELL * ROAD_QUERY_CELL_COUNT)
 #define OBS_ENTITY_NONE 0                                    // grid entity not sampled for road observations
 #define OBS_ENTITY_LANE 1
 #define OBS_ENTITY_EDGE 2
@@ -274,6 +275,8 @@ static const int ROAD_OFFSETS[25][2]
 #define OBS_VALID_COUNT_FEATURES 4
 // Heading deviation since last kept point that forces a keep when obs stride > 1 (~15 degrees).
 #define OBS_STRIDE_HEADING_THRESHOLD 0.2618f
+// Lateral slack beyond the ego's half width on each side of a blind partner's forward corridor
+#define PARTNER_BLINDNESS_CORRIDOR_MARGIN_M 1.0f
 
 // =====================================================================================
 // 9. REWARDS

@@ -1,9 +1,10 @@
 """Failure analysis + visualizations for CARLA leaderboard runs of the PufferDrive co-sim agent
 (pufferlib/ocean/cosim/carla/leaderboard_agent.py run with COSIM_WORLD_LOG and COSIM_TELEMETRY set).
 Same report shape as analyze_nuplan_cosim.py: score table worst first, failure-category counts,
-per-route diagnosis, six-frame top-down strip + speed plot + chase-cam / top-down video.
+per-route diagnosis, six-frame top-down strip + speed plot + chase-cam video. The matplotlib top-down mp4
+is opt-in (--video): it costs about a minute per 1000 logged steps, the obs replay pages cover the same ground.
 
-usage: python scripts/eval/analyze_carla_cosim.py <run_dir> [<run_dir> ...] <report_dir> [--max-inline N] [--no-video]
+usage: python scripts/eval/analyze_carla_cosim.py <run_dir> [<run_dir> ...] <report_dir> [--max-inline N] [--video]
        [--obs-html-dir D]
 
 <run_dir> holds result.json (leaderboard_evaluator --checkpoint), world_log/*.npz, telemetry/*.csv and
@@ -38,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from render_carla_obs_html import page_name
 
 import data_utils.mirror_map_bin as mbin
+import pufferlib
 from pufferlib.ocean.cosim.carla_cosim import write_mp4
 
 
@@ -97,7 +99,10 @@ class RouteLog:
         self.meta = json.loads(str(d["meta"]))
         self.tick_dt = float(self.meta["tick_dt"])
         self.t = self.ego[:, 0] * self.tick_dt
-        bin_data = mbin.read_bin(Path(self.meta["town_bin"]))
+        town_bin = Path(self.meta["town_bin"])
+        if not town_bin.exists():  # log written on another machine: this checkout's copy of the same town bin
+            town_bin = Path(pufferlib.__file__).resolve().parent / "resources" / "drive" / "binaries" / "carla" / town_bin.name
+        bin_data = mbin.read_bin(town_bin)
         lo = self.ego[:, 1:3].min(axis=0) - MAP_CROP_MARGIN_M
         hi = self.ego[:, 1:3].max(axis=0) + MAP_CROP_MARGIN_M
         self.lanes, self.edges = [], []
@@ -367,7 +372,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("paths", nargs="+", help="run dirs followed by the report dir")
     parser.add_argument("--max-inline", type=int, default=12)
-    parser.add_argument("--no-video", action="store_true")
+    parser.add_argument("--video", action="store_true", help="also render the matplotlib top-down mp4 per route (slow)")
     parser.add_argument("--obs-html-dir", help="the run's obs replay gallery dir, linked per route")
     args = parser.parse_args()
     run_dirs, report_dir = args.paths[:-1], Path(args.paths[-1])
@@ -377,7 +382,7 @@ def main():
     rows = []
     for run_dir in run_dirs:
         for record, log_path, chase_mp4, tag in collect_routes(run_dir):
-            rows.append(render_route(record, RouteLog(log_path), chase_mp4, report_dir, tag, not args.no_video))
+            rows.append(render_route(record, RouteLog(log_path), chase_mp4, report_dir, tag, args.video))
             print(f"{tag}: {rows[-1]['categories']} | {rows[-1]['diagnosis']}")
     df = pd.DataFrame(rows).sort_values("driving_score")
     df.to_csv(report_dir / "routes.csv", index=False)

@@ -1926,6 +1926,7 @@ static int unpack_map_cache_args(PyObject *kwargs, Drive *config, const char ***
     config->use_neighbor_cache = (int) unpack(kwargs, "use_neighbor_cache");
     config->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
     config->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
+    config->obs_stride_merge_segments = (int) unpack(kwargs, "obs_stride_merge_segments");
     config->obs_range_road_front_m = (float) unpack(kwargs, "obs_range_road_front_m");
     config->obs_range_road_behind_m = (float) unpack(kwargs, "obs_range_road_behind_m");
     config->obs_range_road_side_m = (float) unpack(kwargs, "obs_range_road_side_m");
@@ -1933,7 +1934,8 @@ static int unpack_map_cache_args(PyObject *kwargs, Drive *config, const char ***
         return -1;
     }
     if (config->use_neighbor_cache < 0 || config->use_neighbor_cache > 1 || config->obs_lane_stride < 1
-        || config->obs_boundary_stride < 1 || !isfinite(config->obs_range_road_front_m)
+        || config->obs_boundary_stride < 1 || config->obs_stride_merge_segments < 0
+        || config->obs_stride_merge_segments > 1 || !isfinite(config->obs_range_road_front_m)
         || !isfinite(config->obs_range_road_behind_m) || !isfinite(config->obs_range_road_side_m)
         || config->obs_range_road_front_m < 0.0f || config->obs_range_road_behind_m < 0.0f
         || config->obs_range_road_side_m < 0.0f) {
@@ -2063,6 +2065,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->yield_signs_enabled = (bool) unpack(kwargs, "yield_signs_enabled");
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
     env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
+    env->obs_stride_merge_segments = (int) unpack(kwargs, "obs_stride_merge_segments");
     env->dt = (float) unpack(kwargs, "dt");
     env->base_max_speed_mps = (float) unpack(kwargs, "base_max_speed_mps");
     env->max_speed_mps = (float) unpack(kwargs, "max_speed_mps");
@@ -2145,6 +2148,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_norm_road_seg_width_m = (float) unpack(kwargs, "obs_norm_road_seg_width_m");
     env->obs_norm_z_m = (float) unpack(kwargs, "obs_norm_z_m");
     env->eval_perceived_size_margin_m = (float) unpack(kwargs, "eval_perceived_size_margin_m");
+    env->obs_partner_split_length_m = (float) unpack(kwargs, "obs_partner_split_length_m");
+    if (!(env->obs_partner_split_length_m >= 0.0f) || !isfinite(env->obs_partner_split_length_m)) {
+        PyErr_SetString(PyExc_ValueError, "obs_partner_split_length_m must be finite and >= 0");
+        return -1;
+    }
     env->eval_standstill_jerk_deadband_mps3 = (float) unpack(kwargs, "eval_standstill_jerk_deadband_mps3");
     env->obs_range_traffic_control_m = (float) unpack(kwargs, "obs_range_traffic_control_m");
     env->obs_range_partner_m = (float) unpack(kwargs, "obs_range_partner_m");
@@ -2157,6 +2165,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->partner_blindness_trigger_prob = (float) unpack(kwargs, "partner_blindness_trigger_prob");
     env->partner_blindness_duration
         = (int) ceilf((float) unpack(kwargs, "partner_blindness_duration_seconds") / env->dt);
+    env->partner_blindness_corridor = (int) unpack(kwargs, "partner_blindness_corridor");
     env->phantom_braking_prob = (float) unpack(kwargs, "phantom_braking_prob");
     env->phantom_braking_trigger_prob = (float) unpack(kwargs, "phantom_braking_trigger_prob");
     env->phantom_braking_duration = (int) ceilf((float) unpack(kwargs, "phantom_braking_duration_seconds") / env->dt);

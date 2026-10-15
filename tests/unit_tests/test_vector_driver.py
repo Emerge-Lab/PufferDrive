@@ -5,9 +5,11 @@ stay resident for the run.
 """
 
 import multiprocessing
+import time
 
 import gymnasium
 import numpy as np
+import pytest
 
 import pufferlib.vector
 from pufferlib import PufferEnv
@@ -115,3 +117,68 @@ def test_preloaded_resources_are_inherited_when_default_is_forkserver():
 
     assert process.exitcode == 0
     assert queue.get() == ("forkserver", 1, True)
+
+
+def _make_multiprocessing(worker_count, batch_size):
+    return pufferlib.vector.make(
+        [_make_minimal_env] * worker_count,
+        env_args=[[]] * worker_count,
+        env_kwargs=[{}] * worker_count,
+        backend="Multiprocessing",
+        num_envs=worker_count,
+        num_workers=worker_count,
+        batch_size=batch_size,
+    )
+
+
+def test_reset_drains_pending_workers_and_steps_again():
+    """A reset issued right after recv() finds half the workers idle and half
+    mid-step; both halves must be reset without hanging and step afterwards."""
+    worker_count = 4
+    vecenv = _make_multiprocessing(worker_count, batch_size=2)
+    try:
+        obs, _ = vecenv.reset(seed=1)
+        assert obs.shape == (2, OBSERVATION_SIZE)
+        actions = np.zeros(vecenv.action_space.shape, dtype=np.int32)
+        vecenv.send(actions)
+        vecenv.recv()
+        obs, _ = vecenv.reset(seed=2)
+        assert obs.shape == (2, OBSERVATION_SIZE)
+        assert vecenv.pending_result.sum() == 2
+        for _ in range(worker_count):
+            obs, *_ = vecenv.step(actions)
+            assert obs.shape == (2, OBSERVATION_SIZE)
+    finally:
+        vecenv.close()
+
+
+class SlowStepEnv(MinimalEnv):
+    def step(self, actions):
+        time.sleep(30)
+        return super().step(actions)
+
+
+def _make_slow_step_env(**kwargs):
+    return SlowStepEnv(**kwargs)
+
+
+def test_dead_worker_raises_instead_of_hanging(monkeypatch):
+    monkeypatch.setattr(pufferlib.vector, "WORKER_POLL_TIMEOUT_SECONDS", 0.2)
+    vecenv = pufferlib.vector.make(
+        [_make_minimal_env, _make_slow_step_env],
+        env_args=[[]] * 2,
+        env_kwargs=[{}] * 2,
+        backend="Multiprocessing",
+        num_envs=2,
+        num_workers=2,
+        batch_size=2,
+    )
+    try:
+        vecenv.reset(seed=1)
+        vecenv.send(np.zeros(vecenv.action_space.shape, dtype=np.int32))
+        vecenv.processes[1].kill()
+        vecenv.processes[1].join()
+        with pytest.raises((RuntimeError, EOFError)):
+            vecenv.recv()
+    finally:
+        vecenv.close()

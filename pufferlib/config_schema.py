@@ -336,6 +336,7 @@ class DriveEnvConfig:
     obs_dropout_boundary: float = _constrained_field(PROBABILITY_CONSTRAINT)
     obs_lane_stride: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     obs_boundary_stride: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    obs_stride_merge_segments: bool = MISSING
     obs_norm_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     obs_norm_goal_offset_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     obs_norm_xy_offset_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
@@ -345,6 +346,7 @@ class DriveEnvConfig:
     obs_norm_road_seg_width_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     obs_norm_z_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     eval_perceived_size_margin_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    obs_partner_split_length_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     eval_standstill_jerk_deadband_mps3: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     obs_range_road_front_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     obs_range_road_behind_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
@@ -354,6 +356,7 @@ class DriveEnvConfig:
     partner_blindness_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     partner_blindness_trigger_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     partner_blindness_duration_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    partner_blindness_corridor: bool = MISSING
     phantom_braking_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     phantom_braking_trigger_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     phantom_braking_duration_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
@@ -386,6 +389,7 @@ class DrivePolicyConfig:
     critic_num_layers: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     critic_head_layer_norm: bool = MISSING
     fp32_heads: bool = MISSING
+    fused_slot_encoder: bool = False
     shared_network: bool = MISSING
     action_type: ActionType = MISSING
 
@@ -414,7 +418,7 @@ class TrainingConfig:
     tf32: bool = MISSING
     rollout_dtype: RolloutDtype = MISSING
     total_timesteps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
-    learning_rate: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    learning_rate: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     gamma: float = _constrained_field(PROBABILITY_CONSTRAINT)
     gae_lambda: float = _constrained_field(PROBABILITY_CONSTRAINT)
     update_epochs: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
@@ -454,6 +458,8 @@ class TrainingConfig:
     adv_filter_leak_fraction: float = _constrained_field(PROBABILITY_CONSTRAINT)
     render: bool = MISSING
     render_interval: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    render_num_maps: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    stop_after_epochs: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     # Derived by load_config from rnn_name and intentionally absent from YAML.
     use_rnn: bool = MISSING
 
@@ -672,6 +678,8 @@ def _validate_cross_field_constraints(config, context):
         not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip()
     ):
         _raise_config_error(context, "train.evaluation_benchmarks", "must be a non-empty string")
+    if train["render_num_maps"] is not None and train["render_num_maps"] > config["env"]["num_maps"]:
+        _raise_config_error(context, "train.render_num_maps", "must not exceed env.num_maps")
     if not context.startswith("evaluation") and context != "simulation profiling":
         for field_name in ("batch_size", "bptt_horizon"):
             if train[field_name] != "auto":
