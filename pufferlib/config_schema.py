@@ -301,6 +301,7 @@ class DriveEnvConfig:
     goal_speed_randomization: bool = MISSING
     goal_reach_requires_speed: bool = MISSING
     num_goals: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    goal_final_only: bool = MISSING
     min_goal_spacing: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     max_goal_spacing: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     goal_heading_max_deg: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
@@ -621,6 +622,8 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.init_step_spread", "is only supported in replay mode")
     if env["init_step_spread"] and env["init_step_min_horizon"] >= env["scenario_length"]:
         _raise_config_error(context, "env.init_step_min_horizon", "must be smaller than env.scenario_length")
+    if env["goal_final_only"] and env["goal_source"] not in ("gt", "gt_map"):
+        _raise_config_error(context, "env.goal_final_only", "requires env.goal_source gt or gt_map")
     if env["goal_source"] in ("gt", "gt_map") and env["simulation_mode"] != "replay":
         _raise_config_error(context, "env.goal_source", f"'{env['goal_source']}' is only supported in replay mode")
     if env["stagger_first_episode"] and env["init_step"] + env["init_step_min_horizon"] > env["scenario_length"]:

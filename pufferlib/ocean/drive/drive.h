@@ -272,6 +272,7 @@ struct Drive {
     float conditioning_speed_scale; // training C_vel ~ X(a): speed cap = base_max_speed_mps * [1/a, a]; 1.5 = paper
     int goal_reach_requires_speed;  // 1: final goal is consumed only below goal speed (paper semantics)
     int num_goals;
+    int goal_final_only;
     int goal_regen_mode;
     int goal_source;
     int obs_goal_lane_distance;
@@ -1206,7 +1207,7 @@ static void generate_new_goals_from_log(Drive *env, Agent *agent) {
     if (remaining < 1) {
         remaining = 1;
     }
-    int num_wp = env->num_goals;
+    int num_wp = env->goal_final_only ? 1 : env->num_goals;
     for (int g = 0; g < num_wp; g++) {
         int t = start + (g + 1) * remaining / num_wp;
         if (t >= agent->trajectory_size) {

@@ -157,6 +157,8 @@ env:
   goal_reach_requires_speed: false
   # Number of target waypoints in the observation (including goal)
   num_goals: 3
+  # gt / gt_map goal sources: a single goal at the last logged pose instead of num_goals spaced along the log
+  goal_final_only: false
   # Waypoint spacing range in meters when building path
   min_goal_spacing: 20.0
   max_goal_spacing: 200.0

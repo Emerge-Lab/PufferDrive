@@ -318,6 +318,26 @@ static int test_gt_goals_along_trajectory_are_laneless(void) {
     return 0;
 }
 
+static int test_gt_goal_final_only_uses_last_logged_pose(void) {
+    srand(17);
+    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1, 0);
+    env.goal_source = GOAL_SOURCE_GT;
+    env.goal_final_only = 1;
+    allocate(&env);
+    c_reset(&env);
+
+    EXPECT_TRUE(env.active_agent_count > 0);
+    for (int i = 0; i < env.active_agent_count; i++) {
+        Agent *agent = &env.agents[env.active_agent_indices[i]];
+        int last_step = agent->trajectory_size - 1;
+        EXPECT_EQ_INT(agent->goal_count, 1);
+        EXPECT_NEAR(agent->list_goal_x[0], agent->log_trajectory_x[last_step], 0.0f);
+        EXPECT_NEAR(agent->list_goal_y[0], agent->log_trajectory_y[last_step], 0.0f);
+    }
+    free_allocated(&env);
+    return 0;
+}
+
 static int test_gt_map_goals_snap_to_lane_centers(void) {
     // GT_MAP places goals at the GT timesteps but projected onto the nearest co-directional lane: a snapped
     // goal carries a lane idx and moved at most the snap radius; goals farther from any lane keep the raw
@@ -430,5 +450,6 @@ int main(void) {
     RUN_TEST(test_step_observations_follow_goal_updates);
     RUN_TEST(test_gt_goals_along_trajectory_are_laneless);
     RUN_TEST(test_gt_map_goals_snap_to_lane_centers);
+    RUN_TEST(test_gt_goal_final_only_uses_last_logged_pose);
     return test_summary(failures);
 }

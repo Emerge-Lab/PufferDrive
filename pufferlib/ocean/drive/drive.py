@@ -40,6 +40,7 @@ class Drive(pufferlib.PufferEnv):
         max_goal_spacing=60.0,
         goal_heading_max_deg=0.0,
         num_goals=3,
+        goal_final_only=False,
         goal_radius=2.0,
         collision_behavior="ignore",
         offroad_behavior="ignore",
@@ -226,6 +227,7 @@ class Drive(pufferlib.PufferEnv):
         self.max_goal_spacing = max_goal_spacing
         self.goal_heading_max_deg = goal_heading_max_deg
         self.num_goals = num_goals
+        self.goal_final_only = bool(goal_final_only)
         self.goal_regen_mode = {
             "finite": binding.GOAL_REGEN_FINITE,
             "rolling": binding.GOAL_REGEN_ROLLING,
@@ -571,6 +573,7 @@ class Drive(pufferlib.PufferEnv):
             "max_goal_spacing": self.max_goal_spacing,
             "goal_heading_max_deg": self.goal_heading_max_deg,
             "num_goals": self.num_goals,
+            "goal_final_only": int(self.goal_final_only),
             "goal_regen_mode": self.goal_regen_mode,
             "goal_source": self.goal_source,
             "obs_goal_lane_distance": self.obs_goal_lane_distance,

@@ -2044,6 +2044,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         return -1;
     }
     env->num_goals = (int) unpack(kwargs, "num_goals");
+    env->goal_final_only = (int) unpack(kwargs, "goal_final_only");
     if (env->num_goals < 1 || env->num_goals > MAX_GOALS) {
         PyErr_Format(PyExc_ValueError, "num_goals must be in [1, %d]. Got: %d", MAX_GOALS, env->num_goals);
         return -1;
