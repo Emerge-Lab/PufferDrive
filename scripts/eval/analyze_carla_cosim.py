@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from render_carla_obs_html import page_name
 
 import data_utils.mirror_map_bin as mbin
+import pufferlib
 from pufferlib.ocean.cosim.carla_cosim import write_mp4
 
 
@@ -98,7 +99,10 @@ class RouteLog:
         self.meta = json.loads(str(d["meta"]))
         self.tick_dt = float(self.meta["tick_dt"])
         self.t = self.ego[:, 0] * self.tick_dt
-        bin_data = mbin.read_bin(Path(self.meta["town_bin"]))
+        town_bin = Path(self.meta["town_bin"])
+        if not town_bin.exists():  # log written on another machine: this checkout's copy of the same town bin
+            town_bin = Path(pufferlib.__file__).resolve().parent / "resources" / "drive" / "binaries" / "carla" / town_bin.name
+        bin_data = mbin.read_bin(town_bin)
         lo = self.ego[:, 1:3].min(axis=0) - MAP_CROP_MARGIN_M
         hi = self.ego[:, 1:3].max(axis=0) + MAP_CROP_MARGIN_M
         self.lanes, self.edges = [], []

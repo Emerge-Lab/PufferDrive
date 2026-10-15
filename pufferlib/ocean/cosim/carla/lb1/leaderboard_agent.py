@@ -426,6 +426,10 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
         """Deferred init (the ego and world only exist once the route runs)."""
         self.vehicle = CarlaDataProvider.get_hero_actor()
         self.world = self.vehicle.get_world()
+        if not self.sensors():  # no camera anywhere: skip the server's spectator rendering
+            settings = self.world.get_settings()
+            settings.no_rendering_mode = True
+            self.world.apply_settings(settings)
         self.cmap = self.world.get_map()
         town = CarlaDataProvider.get_map().name.split("/")[-1]
         self.tick_dt = float(self.world.get_settings().fixed_delta_seconds)

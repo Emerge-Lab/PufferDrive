@@ -81,7 +81,7 @@ if [ "$CARLA_WINDOW" = "1" ]; then
     "$CARLA_ROOT/CarlaUE4.sh" -opengl -nosound -carla-rpc-port="$CARLA_PORT" -carla-streaming-port=$((CARLA_PORT + 1)) \
         > "$OUT_DIR/carla_server.log" 2>&1 &
 else
-    DISPLAY= "$CARLA_ROOT/CarlaUE4.sh" -opengl -nosound -carla-rpc-port="$CARLA_PORT" -carla-streaming-port=$((CARLA_PORT + 1)) \
+    env -u WAYLAND_DISPLAY DISPLAY= SDL_VIDEODRIVER=offscreen SDL_HINT_CUDA_DEVICE=0 "$CARLA_ROOT/CarlaUE4.sh" -opengl -nosound -carla-rpc-port="$CARLA_PORT" -carla-streaming-port=$((CARLA_PORT + 1)) \
         > "$OUT_DIR/carla_server.log" 2>&1 &
 fi
 SERVER_PID=$!
