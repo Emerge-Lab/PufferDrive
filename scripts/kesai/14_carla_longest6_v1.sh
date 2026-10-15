@@ -14,16 +14,21 @@
 # 11_carla_longest6_v2.sh. The garage evaluator runs in the `garage` conda env (Python 3.7, the CARLA 0.9.10 egg);
 # the agent starts pufferlib/ocean/cosim/carla/lb1/policy_server.py in a PufferDrive python ($SERVER_PY) per route.
 #
-# One CARLA server + one evaluator per GPU (1-8: whatever the allocation holds, e.g. `sbatch --gres gpu:2`);
-# the 36 routes (one split xml each) are dealt round-robin over the GPUs, every route gets its own server
-# (restarted per route), crashed routes are retried, and the per-route result jsons are aggregated at the end
-# with garage's tools/result_parser.py (results.csv) plus the nuPlan-style HTML report ($OUT/report/index.html)
-# and the obs replay gallery of all routes ($OUT/obs_html/index.html, as in 11_carla_longest6_v2.sh).
+# WORKERS parallel workers (default 16), each one CARLA server + one evaluator at a time, spread round-robin over the
+# GPUs of the allocation (1-8, e.g. `sbatch --gres gpu:2`): a server needs ~2 cores and no GPU once the agent has
+# turned the spectator render off, so several share a GPU. The 36 routes (one split xml each) go longest-first to
+# the least loaded worker (route length from the xml), every route gets its own server (restarted per route),
+# worker launches are staggered, a crashed route is retried on the next GPU, and the per-route result jsons are
+# aggregated at the end with garage's tools/result_parser.py (results.csv) plus the nuPlan-style HTML report
+# ($OUT/report/index.html) and the obs replay gallery of all routes ($OUT/obs_html/index.html, as in
+# 11_carla_longest6_v2.sh). Speed: wall and game time of every route go to $OUT/timing.csv, the run totals to
+# run_info.txt and stdout.
 #
 # Overridable env: RUN_DIR, ROUTE_DIR (the split xmls), ROUTES_XML (the combined longest6.xml, for the parser
 # and the gallery), SCENARIOS (1 = eval_scenarios.json, 0 = no_scenarios.json), REPETITIONS, ROUTE_SUBSET
-# ("0 5 17": only these route ids), NUM_GPUS, PORT_BASE (CARLA rpc port of gpu 0; gpu w uses PORT_BASE+50w,
-# TM PORT_BASE+6000+50w), LOGGING (1, default: telemetry, world log and the HTML report per route; 0: scores
+# ("0 5 17": only these route ids), WORKERS, NUM_GPUS, STAGGER_S (15: seconds between worker launches), PORT_BASE
+# (CARLA rpc port of worker 0; worker w uses PORT_BASE+50w, TM PORT_BASE+6000+50w), OMP_NUM_THREADS (policy server
+# threads; 2 from 16 workers on, else 4), LOGGING (1, default: telemetry, world log and the HTML report per route; 0: scores
 # only), CARLA_VIEW (0, default: no chase-cam; 1: chase-cam mp4 per route, needs LOGGING=1), OBS_HTML (1 = also
 # the interactive obs replay per route, rendered into $OUT/obs_html at the end, large; needs LOGGING=1), REPORT
 # (0 = skip the HTML report), MAX_ATTEMPTS, CARLA_ROOT, GARAGE_WORK_DIR, GARAGE_PY, SERVER_PY, PD,
@@ -54,6 +59,8 @@ REPETITIONS=${REPETITIONS:-1}
 ROUTE_SUBSET=${ROUTE_SUBSET:-}
 PORT_BASE=${PORT_BASE:-2000}
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
+WORKERS=${WORKERS:-16}
+STAGGER_S=${STAGGER_S:-15}
 LOGGING=${LOGGING:-1}
 CARLA_VIEW=${CARLA_VIEW:-0}
 [ "$CARLA_VIEW" = "1" ] && [ "$LOGGING" != "1" ] && { echo "CARLA_VIEW=1 needs LOGGING=1"; exit 1; }
@@ -72,9 +79,10 @@ for path in "$GARAGE_PY" "$SERVER_PY" "$CARLA_ROOT/CarlaUE4.sh"; do
 done
 echo "Evaluating checkpoint: $CKPT"
 
-# GPUs of this allocation; one CARLA server + one evaluator per GPU
+# GPUs of this allocation; the workers share them round-robin
 NUM_GPUS=${NUM_GPUS:-$(nvidia-smi -L 2>/dev/null | grep -c "^GPU")}
 if [ "$NUM_GPUS" -lt 1 ] || [ "$NUM_GPUS" -gt 8 ]; then echo "NUM_GPUS=$NUM_GPUS must be 1..8"; exit 1; fi
+if [ "$WORKERS" -lt 1 ] || [ "$WORKERS" -gt 64 ]; then echo "WORKERS=$WORKERS must be 1..64"; exit 1; fi
 
 TAG=longest6_v1$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")
 TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
@@ -113,7 +121,8 @@ export SCENARIO_RUNNER_ROOT=$GARAGE_WORK_DIR/scenario_runner
 export LEADERBOARD_ROOT=$GARAGE_WORK_DIR/leaderboard
 export BENCHMARK=longest6 DATAGEN=0
 cd "$PD" || exit 1
-export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 NUMEXPR_NUM_THREADS=4
+OMP_THREADS=${OMP_NUM_THREADS:-$([ "$WORKERS" -ge 16 ] && echo 2 || echo 4)}
+export OMP_NUM_THREADS=$OMP_THREADS MKL_NUM_THREADS=$OMP_THREADS OPENBLAS_NUM_THREADS=$OMP_THREADS NUMEXPR_NUM_THREADS=$OMP_THREADS
 export COSIM_SERVER_PYTHON=$SERVER_PY
 export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
 export COSIM_DYNAMICS_SOURCE=pufferdrive
@@ -132,10 +141,29 @@ case "$IMPORTED_CORE" in
 esac
 "$GARAGE_PY" -c "import carla, leaderboard.leaderboard_evaluator_local" || { echo "ERROR: the garage python cannot import the evaluator (see traceback above)"; exit 1; }
 
-# route ids = the split files longest_weathers_<id>.xml, dealt round-robin: gpu w runs ids w, w+N, w+2N, ...
+# route ids = the split files longest_weathers_<id>.xml
 mapfile -t ROUTE_IDS < <(ls "$ROUTE_DIR"/longest_weathers_*.xml | sed 's/.*longest_weathers_\([0-9]*\)\.xml/\1/' | sort -n)
 [ -n "$ROUTE_SUBSET" ] && read -r -a ROUTE_IDS <<< "$ROUTE_SUBSET"
-echo "${#ROUTE_IDS[@]} routes over $NUM_GPUS GPUs"
+[ "$WORKERS" -gt "${#ROUTE_IDS[@]}" ] && WORKERS=${#ROUTE_IDS[@]}
+# longest route first to the least loaded worker; length = the xml's waypoint polyline (an earlier run's duration would
+# read a route that failed early as short)
+mapfile -t ASSIGNMENT < <("$SERVER_PY" - "$ROUTE_DIR" "$WORKERS" "${ROUTE_IDS[@]}" <<'EOF'
+import math, sys, xml.etree.ElementTree as ET
+route_dir, workers, ids = sys.argv[1], int(sys.argv[2]), [int(x) for x in sys.argv[3:]]
+SETUP_M = 300.0  # server start + world load per route, in route-length-equivalent metres
+def length(rid):
+    pts = [(float(w.get("x")), float(w.get("y"))) for w in ET.parse(f"{route_dir}/longest_weathers_{rid}.xml").iter("waypoint")]
+    return sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
+loads = [0.0] * workers; assign = [[] for _ in range(workers)]
+for rid in sorted(ids, key=lambda r: -length(r)):
+    w = min(range(workers), key=lambda i: loads[i]); assign[w].append(rid); loads[w] += length(rid) + SETUP_M
+for w in range(workers):
+    print(w, " ".join(map(str, assign[w])), f"# {loads[w] / 1000:.1f} km")
+EOF
+)
+echo "${#ROUTE_IDS[@]} routes over $WORKERS workers on $NUM_GPUS GPUs, policy server threads $OMP_THREADS"
+printf "  worker %s\n" "${ASSIGNMENT[@]}"
+echo "route,worker,gpu,attempt,start,wall_s,game_s,pace,status,driving_score" > "$OUT/timing.csv"
 
 route_done() {  # 0 when the route json holds a record that is not one of the crash states garage resubmits
     "$SERVER_PY" - "$1" <<'EOF'
@@ -149,12 +177,27 @@ sys.exit(0 if records and all(r["status"] not in crashed for r in records) else 
 EOF
 }
 
-run_route() {  # $1 gpu, $2 route id, $3 attempt: one CARLA server + one evaluator run, into $OUT/routes/route_<id>
-    local gpu=$1 route_id=$2 attempt=$3
+log_route_timing() {  # $1 worker, $2 gpu, $3 route id, $4 attempt, $5 start epoch, $6 result json
+    "$SERVER_PY" - "$@" "$(date +%s)" "$OUT/timing.csv" <<'EOF'
+import json, sys, time
+w, gpu, route_id, attempt, t0, path, t1, csv_path = sys.argv[1:9]
+rec = json.load(open(path))["_checkpoint"]["records"][0]
+wall = int(t1) - int(t0); game = float(rec["meta"]["duration_game"]); ds = float(rec["scores"]["score_composed"])
+pace = game / wall if wall > 0 else 0.0
+with open(csv_path, "a") as f:
+    f.write(f"{route_id},{w},{gpu},{attempt},{time.strftime('%H:%M:%S', time.localtime(int(t0)))},{wall},{game:.1f},{pace:.3f},{rec['status']},{ds:.2f}\n")
+print(f"[w{w} gpu{gpu} route{route_id}] done: {wall} s wall, {game:.0f} s game, {pace:.2f}x real time, DS {ds:.1f}, {rec['status']}")
+EOF
+}
+
+run_route() {  # $1 worker, $2 gpu, $3 route id, $4 attempt: one CARLA server + one evaluator run, into $OUT/routes/route_<id>
+    local w=$1 gpu=$2 route_id=$3 attempt=$4
     local route_dir=$OUT/routes/route_$(printf "%02d" "$route_id")
     local routes_xml=$ROUTE_DIR/longest_weathers_$route_id.xml
-    local port=$((PORT_BASE + gpu * 50)) tm_port=$((PORT_BASE + 6000 + gpu * 50))
+    local port=$((PORT_BASE + w * 50)) tm_port=$((PORT_BASE + 6000 + w * 50))
     local server_log=$route_dir/carla_server_attempt$attempt.log evaluator_log=$route_dir/evaluator_attempt$attempt.log
+    local t_start
+    t_start=$(date +%s)
     mkdir -p "$route_dir"
     rm -f "$route_dir/result.json"
     # offscreen OpenGL on the worker's GPU (UE 4.24 has no -RenderOffScreen/-nullrhi/-graphicsadapter)
@@ -163,7 +206,7 @@ run_route() {  # $1 gpu, $2 route id, $3 attempt: one CARLA server + one evaluat
     local server_pid=$! up=1
     echo "$server_pid" >> "$OUT/server_pids"
     for _ in $(seq 1 60); do
-        kill -0 "$server_pid" 2>/dev/null || { echo "[gpu$gpu route$route_id] CARLA server died"; break; }
+        kill -0 "$server_pid" 2>/dev/null || { echo "[w$w gpu$gpu route$route_id] CARLA server died"; break; }
         "$GARAGE_PY" -c "
 import carla, sys
 try:
@@ -174,7 +217,7 @@ except Exception:
     done
     if [ $up -ne 0 ]; then
         pkill -9 -P "$server_pid" 2>/dev/null; kill -9 "$server_pid" 2>/dev/null
-        echo "[gpu$gpu route$route_id] last lines of $server_log:"; tail -n 20 "$server_log"
+        echo "[w$w gpu$gpu route$route_id] last lines of $server_log:"; tail -n 20 "$server_log"
         return 1
     fi
     local log_env=(ROUTES="$routes_xml")
@@ -190,19 +233,24 @@ except Exception:
         > "$evaluator_log" 2>&1
     # children first: killing the wrapper shell first reparents the UE4 binary and leaves it running
     pkill -9 -P "$server_pid" 2>/dev/null; kill -9 "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null
-    route_done "$route_dir/result.json" && return 0
-    echo "[gpu$gpu route$route_id] no valid route record; last lines of $evaluator_log:"; tail -n 20 "$evaluator_log"
-    return 1
+    if ! route_done "$route_dir/result.json"; then
+        echo "[w$w gpu$gpu route$route_id] no valid route record; last lines of $evaluator_log:"; tail -n 20 "$evaluator_log"
+        return 1
+    fi
+    log_route_timing "$w" "$gpu" "$route_id" "$attempt" "$t_start" "$route_dir/result.json"
+    return 0
 }
 
-run_worker() {  # $1 gpu: its share of the routes, sequentially, each retried up to MAX_ATTEMPTS
-    local gpu=$1
-    for ((k = gpu; k < ${#ROUTE_IDS[@]}; k += NUM_GPUS)); do
-        local route_id=${ROUTE_IDS[k]} attempt
+run_worker() {  # $1 worker: its assigned routes, sequentially, each retried up to MAX_ATTEMPTS on the next GPU
+    local w=$1 ids route_id attempt gpu
+    ids=${ASSIGNMENT[w]#* }
+    ids=${ids%%#*}
+    for route_id in $ids; do
         for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
-            echo "[gpu$gpu] route $route_id attempt $attempt $(date +%H:%M:%S)"
-            run_route "$gpu" "$route_id" "$attempt" && break
-            echo "[gpu$gpu] route $route_id attempt $attempt failed"
+            gpu=$(( (w + attempt - 1) % NUM_GPUS ))
+            echo "[w$w] route $route_id attempt $attempt gpu $gpu $(date +%H:%M:%S)"
+            run_route "$w" "$gpu" "$route_id" "$attempt" && break
+            echo "[w$w] route $route_id attempt $attempt failed"
         done
     done
 }
@@ -210,12 +258,28 @@ run_worker() {  # $1 gpu: its share of the routes, sequentially, each retried up
 # only the servers this job started (children first: the UE4 binary outlives its wrapper shell otherwise)
 trap 'for p in $(cat "$OUT/server_pids" 2>/dev/null); do pkill -9 -P "$p" 2>/dev/null; kill -9 "$p" 2>/dev/null; done' EXIT
 WORKER_PIDS=()
-for ((gpu = 0; gpu < NUM_GPUS; gpu++)); do
-    run_worker "$gpu" > "$OUT/worker_gpu$gpu.log" 2>&1 &
+ROUTES_T0=$(date +%s)
+for ((w = 0; w < WORKERS; w++)); do
+    [ "$w" -gt 0 ] && sleep "$STAGGER_S"  # simultaneous engine starts are the one thing the crashed runs shared
+    run_worker "$w" > "$OUT/worker_w$w.log" 2>&1 &
     WORKER_PIDS+=($!)
 done
 wait "${WORKER_PIDS[@]}"
-cat "$OUT"/worker_gpu*.log
+ROUTES_WALL_S=$(( $(date +%s) - ROUTES_T0 ))
+cat "$OUT"/worker_w*.log
+"$SERVER_PY" - "$OUT/timing.csv" "$ROUTES_WALL_S" "$WORKERS" "$NUM_GPUS" "${#ROUTE_IDS[@]}" <<'EOF' | tee -a "$OUT/run_info.txt"
+import csv, sys
+rows = list(csv.DictReader(open(sys.argv[1]))); wall, workers, gpus, n_routes = (int(x) for x in sys.argv[2:6])
+if not rows:
+    print(f"speed: no route finished in {wall / 3600:.2f} h wall ({workers} workers on {gpus} GPUs)"); sys.exit(0)
+game = sum(float(r["game_s"]) for r in rows); route_wall = sum(int(r["wall_s"]) for r in rows)
+per_worker = {}
+for r in rows:
+    per_worker[r["worker"]] = per_worker.get(r["worker"], 0) + int(r["wall_s"])
+print(f"speed: {len(rows)}/{n_routes} routes in {wall / 3600:.2f} h wall, {workers} workers on {gpus} GPUs; game time {game / 3600:.2f} h; "
+      f"per-route pace {game / route_wall:.2f}x real time; busiest worker {max(per_worker.values()) / 3600:.2f} h, "
+      f"idlest {min(per_worker.values()) / 3600:.2f} h; routes/h {len(rows) / (wall / 3600):.1f}")
+EOF
 
 # aggregate: garage's parser over the per-route jsons -> $OUT/aggregate/results.csv, plus a per-route table
 for f in "$OUT"/routes/route_*/result.json; do
