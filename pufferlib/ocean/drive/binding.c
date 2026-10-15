@@ -1867,21 +1867,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
-            for (int j = 0; j < env->num_total_agents; j++) {
-                free_agent(&env->agents[j]);
-            }
-            for (int j = 0; j < env->num_road_elements; j++) {
-                free_road_element(&env->road_elements[j]);
-            }
-            for (int j = 0; j < env->num_traffic_elements; j++) {
-                free_traffic_element(&env->traffic_elements[j]);
-            }
-            free(env->agents);
-            free(env->road_elements);
-            free(env->traffic_elements);
-            free(env->active_agent_indices);
-            free(env->static_agent_indices);
-            free(env->expert_static_agent_indices);
+            c_close(env);
             free(env);
             if (candidate_map_ids != NULL) {
                 candidate_map_ids[candidate_idx] = candidate_map_ids[--candidate_map_count];
@@ -1909,21 +1895,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             total_agent_count += env->active_agent_count;
             env_count++;
         }
-        for (int j = 0; j < env->num_total_agents; j++) {
-            free_agent(&env->agents[j]);
-        }
-        for (int j = 0; j < env->num_road_elements; j++) {
-            free_road_element(&env->road_elements[j]);
-        }
-        for (int j = 0; j < env->num_traffic_elements; j++) {
-            free_traffic_element(&env->traffic_elements[j]);
-        }
-        free(env->agents);
-        free(env->road_elements);
-        free(env->traffic_elements);
-        free(env->active_agent_indices);
-        free(env->static_agent_indices);
-        free(env->expert_static_agent_indices);
+        c_close(env);
         free(env);
         if (!fits) {
             break;
@@ -1939,6 +1911,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     // resize lists
     PyObject *resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
     PyObject *resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
+    Py_DECREF(agent_offsets);
+    Py_DECREF(map_ids);
     PyObject *tuple = PyTuple_New(3);
     PyTuple_SetItem(tuple, 0, resized_agent_offsets);
     PyTuple_SetItem(tuple, 1, resized_map_ids);
