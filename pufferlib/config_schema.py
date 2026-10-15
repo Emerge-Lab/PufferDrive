@@ -353,6 +353,7 @@ class DriveEnvConfig:
     obs_range_traffic_control_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     partner_blindness_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     partner_blindness_rate_randomization: bool = MISSING
+    partner_blindness_hide_oncoming: bool = MISSING
     partner_blindness_trigger_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     partner_blindness_duration_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     phantom_braking_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)

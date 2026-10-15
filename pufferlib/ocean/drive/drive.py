@@ -146,6 +146,7 @@ class Drive(pufferlib.PufferEnv):
         obs_dropout_boundary=0.0,
         partner_blindness_prob=0.0,
         partner_blindness_rate_randomization=True,
+        partner_blindness_hide_oncoming=False,
         partner_blindness_trigger_prob=0.1,
         partner_blindness_duration_seconds=1.0,
         phantom_braking_prob=0.0,
@@ -346,6 +347,7 @@ class Drive(pufferlib.PufferEnv):
         )
         self.partner_blindness_prob = float(partner_blindness_prob)
         self.partner_blindness_rate_randomization = bool(partner_blindness_rate_randomization)
+        self.partner_blindness_hide_oncoming = bool(partner_blindness_hide_oncoming)
         self.partner_blindness_trigger_prob = float(partner_blindness_trigger_prob)
         self.partner_blindness_duration_seconds = float(partner_blindness_duration_seconds)
         self.phantom_braking_prob = float(phantom_braking_prob)
@@ -646,6 +648,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_boundary_kept": self.obs_slots_boundary_kept,
             "partner_blindness_prob": self.partner_blindness_prob,
             "partner_blindness_rate_randomization": int(self.partner_blindness_rate_randomization),
+            "partner_blindness_hide_oncoming": int(self.partner_blindness_hide_oncoming),
             "partner_blindness_trigger_prob": self.partner_blindness_trigger_prob,
             "partner_blindness_duration_seconds": self.partner_blindness_duration_seconds,
             "phantom_braking_prob": self.phantom_braking_prob,
