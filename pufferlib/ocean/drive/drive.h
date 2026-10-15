@@ -101,9 +101,18 @@ struct GridMapEntity {
     int entity_idx;   // Index into the road_elements array
     int geometry_idx; // Index into element's geometry array
     int obs_kind;     // OBS_ENTITY_NONE / LANE / EDGE: how road observations sample this entity
+    int pool_idx;     // Position in entity_pool and segment_pool
 };
 
+// One road-query candidate of a cell's 5x5 window: a road-edge segment, or a drivable lane with its listed segments.
+typedef struct {
+    int entity_idx;
+    int seg_first;
+    int seg_last;
+} LaneQueryEntry;
+
 struct GridMap {
+    int unregistered_segment_count; // segment midpoints outside the grid, never listed in any cell
     float top_left_x;
     float top_left_y;
     float bottom_right_x;
@@ -118,7 +127,11 @@ struct GridMap {
     int num_drivable_grid_cell;
     int total_entities;
     GridMapEntity *entity_pool; // one block; cells[i] point into it
+    RoadObservationSegment *segment_pool; // parallel to entity_pool
     GridMapEntity **cells;
+    LaneQueryEntry *lane_query_pool; // per cell, window order, lanes deduplicated at first appearance
+    int *lane_query_offset;          // cell count + 1
+    int *window_entity_count;        // every grid entity in the cell's 5x5 window
     uint16_t **neighbor_cache_pool_idx; // per cell: entity_pool indices of its spiral neighborhood
 };
 
@@ -421,7 +434,9 @@ static float clip(float value, float min, float max) {
 }
 
 static float normalize_heading(float heading) {
-    heading = fmodf(heading, 2.0f * M_PI);
+    if (!(fabsf(heading) < 2.0f * M_PI)) { // fmodf is the identity below one period
+        heading = fmodf(heading, 2.0f * M_PI);
+    }
     if (heading > M_PI) {
         heading -= 2.0f * M_PI;
     } else if (heading < -M_PI) {
@@ -3807,6 +3822,109 @@ void c_get_global_agent_state(
 // pose. No side effects (no agent_log, no metrics_array, no infraction handling) -- shared by
 // compute_metrics (which owns everything side-effecting: infraction application, goal advancement,
 // eval-stat accumulation) and refresh_lane_association (cosim-only snapshot refresh) below.
+// Squared distance from the agent to lane segment seg_idx; cross_out carries the left/right sign.
+static inline float lane_segment_distance_sq(
+    const RoadMapElement *element,
+    int seg_idx,
+    float agent_x,
+    float agent_y,
+    float *cross_out) {
+    float seg_start_x = element->x[seg_idx];
+    float seg_start_y = element->y[seg_idx];
+    float seg_end_x = element->x[seg_idx + 1];
+    float seg_end_y = element->y[seg_idx + 1];
+    float seg_dx = seg_end_x - seg_start_x;
+    float seg_dy = seg_end_y - seg_start_y;
+    float seg_length_sq = seg_dx * seg_dx + seg_dy * seg_dy;
+    float to_agent_x = agent_x - seg_start_x;
+    float to_agent_y = agent_y - seg_start_y;
+    float cross = seg_dx * to_agent_y - seg_dy * to_agent_x;
+    *cross_out = cross;
+    if (seg_length_sq <= 1e-6f) {
+        return to_agent_x * to_agent_x + to_agent_y * to_agent_y;
+    }
+    float t = (to_agent_x * seg_dx + to_agent_y * seg_dy) / seg_length_sq;
+    if (t <= 0.0f) {
+        return to_agent_x * to_agent_x + to_agent_y * to_agent_y;
+    }
+    if (t >= 1.0f) {
+        float dxe = agent_x - seg_end_x;
+        float dye = agent_y - seg_end_y;
+        return dxe * dxe + dye * dye;
+    }
+    return (cross * cross) / seg_length_sq;
+}
+
+// Closest segment in [seg_first, seg_last], lowest index on ties; min_dist_sq stays 1e18 if none passes the z filter.
+static void scan_lane_segment_range(
+    const RoadMapElement *element,
+    const Agent *agent,
+    int seg_first,
+    int seg_last,
+    int *closest_seg_idx,
+    float *min_dist_sq,
+    float *closest_cross) {
+    *closest_seg_idx = 0;
+    *min_dist_sq = 1e18f;
+    *closest_cross = 0.0f;
+    for (int seg_idx = seg_first; seg_idx <= seg_last; seg_idx++) {
+        if (fabsf(element->z[seg_idx] - agent->sim_z) > Z_BUFFER) {
+            continue;
+        }
+        float cross;
+        float dist_sq = lane_segment_distance_sq(element, seg_idx, agent->sim_x, agent->sim_y, &cross);
+        if (dist_sq < *min_dist_sq) {
+            *min_dist_sq = dist_sq;
+            *closest_seg_idx = seg_idx;
+            *closest_cross = cross;
+        }
+    }
+}
+
+// Distance from the agent to the nearest outer edge of its 5x5 road query window, meters.
+static float road_query_window_margin_m(const Drive *env, const Agent *agent) {
+    float rel_x = agent->sim_x - env->grid_map->top_left_x;
+    float rel_y = agent->sim_y - env->grid_map->bottom_right_y;
+    float cell_x = (float) (int) (rel_x / GRID_CELL_SIZE);
+    float cell_y = (float) (int) (rel_y / GRID_CELL_SIZE);
+    float margin_x = fminf(rel_x - (cell_x - 2.0f) * GRID_CELL_SIZE, (cell_x + 3.0f) * GRID_CELL_SIZE - rel_x);
+    float margin_y = fminf(rel_y - (cell_y - 2.0f) * GRID_CELL_SIZE, (cell_y + 3.0f) * GRID_CELL_SIZE - rel_y);
+    return fminf(margin_x, margin_y);
+}
+
+// Unlisted segments lie beyond window_margin - half_length; returns false when all segments exceed max_distance_m.
+static bool find_closest_lane_segment(
+    const RoadMapElement *element,
+    const Agent *agent,
+    const LaneQueryEntry *entry,
+    bool ranges_exact,
+    float window_margin_m,
+    float max_distance_m,
+    int *closest_seg_idx,
+    float *min_dist_sq,
+    float *closest_cross) {
+    if (ranges_exact) {
+        scan_lane_segment_range(
+            element,
+            agent,
+            entry->seg_first,
+            entry->seg_last,
+            closest_seg_idx,
+            min_dist_sq,
+            closest_cross);
+        float unlisted_reach_m = window_margin_m - element->max_segment_half_length_m - LANE_SCAN_GUARD_MARGIN_M;
+        float listed_dist_m = *min_dist_sq < 1e18f ? sqrtf(*min_dist_sq) : 1e9f;
+        if (listed_dist_m < unlisted_reach_m) {
+            return true;
+        }
+        if (unlisted_reach_m > max_distance_m && listed_dist_m > max_distance_m) {
+            return false;
+        }
+    }
+    scan_lane_segment_range(element, agent, 0, element->segment_size - 2, closest_seg_idx, min_dist_sq, closest_cross);
+    return true;
+}
+
 static void find_lane_and_offroad(
     Drive *env,
     Agent *agent,
@@ -3823,38 +3941,31 @@ static void find_lane_and_offroad(
     int lane_seg_idx = 0;
     float signed_lane_distance = 0.0f, lane_heading = 0.0f;
 
-    GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
-    int list_size = get_neighbors_entities(
-        env,
-        agent->sim_x,
-        agent->sim_y,
-        entity_list,
-        ROAD_QUERY_ENTITY_COUNT,
-        ROAD_OFFSETS,
-        25);
-
-    if (list_size <= 0) {
+    GridMap *grid = env->grid_map;
+    int cell_idx = get_grid_index(env, agent->sim_x, agent->sim_y);
+    const LaneQueryEntry *entries = NULL;
+    int entry_count = 0;
+    float window_margin_m = 0.0f;
+    if (cell_idx == -1 || grid->window_entity_count[cell_idx] <= 0) {
         is_offroad = true;
+    } else {
+        entries = &grid->lane_query_pool[grid->lane_query_offset[cell_idx]];
+        entry_count = grid->lane_query_offset[cell_idx + 1] - grid->lane_query_offset[cell_idx];
+        window_margin_m = road_query_window_margin_m(env, agent);
     }
+    bool ranges_exact = grid->unregistered_segment_count == 0;
 
     // Vehicle-width based distance threshold (3x width)
     float max_distance_threshold = 3.0f * agent->sim_width;
 
-    int checked_lanes[MAX_CHECKED_LANES];
-    int num_checked_lanes = 0;
-
-    // Loop through road entities and compute associated metrics (offroad, lane alignment)
-    for (int i = 0; i < list_size; i++) {
-        if (entity_list[i].entity_idx == -1) {
-            continue;
-        }
-
-        int entity_idx = entity_list[i].entity_idx;
-        int geometry_idx = entity_list[i].geometry_idx;
+    // Window candidates in grid order: road edges (offroad crossing) and drivable lanes (association)
+    for (int i = 0; i < entry_count; i++) {
+        const LaneQueryEntry *entry = &entries[i];
+        int entity_idx = entry->entity_idx;
         RoadMapElement *element = &env->road_elements[entity_idx];
 
-        // Check for offroad crossing with road edges
         if (is_road_edge(element->type)) {
+            int geometry_idx = entry->seg_first;
             float abs_dz = fabsf(element->z[geometry_idx] - agent->sim_z);
             if (abs_dz > Z_BUFFER) {
                 continue;
@@ -3865,28 +3976,10 @@ static void find_lane_and_offroad(
                 element->x[geometry_idx + 1],
                 element->y[geometry_idx + 1],
                 agent);
-        }
-
-        if (is_offroad) {
-            break;
-        }
-
-        if (!is_drivable_road_lane(element->type)) {
-            continue;
-        }
-
-        int already_checked = 0;
-        for (int c = 0; c < num_checked_lanes; c++) {
-            if (checked_lanes[c] == entity_idx) {
-                already_checked = 1;
+            if (is_offroad) {
                 break;
             }
-        }
-        if (already_checked) {
             continue;
-        }
-        if (num_checked_lanes < MAX_CHECKED_LANES) {
-            checked_lanes[num_checked_lanes++] = entity_idx;
         }
 
         // Find closest segment on this lane (signed distance: left = negative, right = positive)
@@ -3894,42 +3987,19 @@ static void find_lane_and_offroad(
         float signed_dist = 1e9f;
         int num_segments = element->segment_size - 1;
         if (num_segments >= 1) {
-            float min_dist_sq = 1e18f;
-            float closest_cross = 0.0f;
-            for (int seg_idx = 0; seg_idx < num_segments; seg_idx++) {
-                if (fabsf(element->z[seg_idx] - agent->sim_z) > Z_BUFFER) {
-                    continue;
-                }
-                float seg_start_x = element->x[seg_idx];
-                float seg_start_y = element->y[seg_idx];
-                float seg_end_x = element->x[seg_idx + 1];
-                float seg_end_y = element->y[seg_idx + 1];
-                float seg_dx = seg_end_x - seg_start_x;
-                float seg_dy = seg_end_y - seg_start_y;
-                float seg_length_sq = seg_dx * seg_dx + seg_dy * seg_dy;
-                float to_agent_x = agent->sim_x - seg_start_x;
-                float to_agent_y = agent->sim_y - seg_start_y;
-                float cross = seg_dx * to_agent_y - seg_dy * to_agent_x;
-                float dist_sq;
-                if (seg_length_sq > 1e-6f) {
-                    float t = (to_agent_x * seg_dx + to_agent_y * seg_dy) / seg_length_sq;
-                    if (t <= 0.0f) {
-                        dist_sq = to_agent_x * to_agent_x + to_agent_y * to_agent_y;
-                    } else if (t >= 1.0f) {
-                        float dxe = agent->sim_x - seg_end_x;
-                        float dye = agent->sim_y - seg_end_y;
-                        dist_sq = dxe * dxe + dye * dye;
-                    } else {
-                        dist_sq = (cross * cross) / seg_length_sq;
-                    }
-                } else {
-                    dist_sq = to_agent_x * to_agent_x + to_agent_y * to_agent_y;
-                }
-                if (dist_sq < min_dist_sq) {
-                    min_dist_sq = dist_sq;
-                    closest_seg_idx = seg_idx;
-                    closest_cross = cross;
-                }
+            float min_dist_sq, closest_cross;
+            bool within_reach = find_closest_lane_segment(
+                element,
+                agent,
+                entry,
+                ranges_exact,
+                window_margin_m,
+                max_distance_threshold,
+                &closest_seg_idx,
+                &min_dist_sq,
+                &closest_cross);
+            if (!within_reach) {
+                continue;
             }
             float abs_dist_val = sqrtf(min_dist_sq);
             signed_dist = (closest_cross >= 0.0f) ? -abs_dist_val : abs_dist_val;
@@ -4341,27 +4411,28 @@ void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *leng
 // Noise & Robustness Functions
 // ========================================
 
-static void subsample_road_observation_rows(
-    Rng *rng_state,
-    float *buffer,
-    int collected_count,
-    int keep_count,
-    int feature_count) {
+// Partial Fisher-Yates over row indices; gathering rows in this order equals swapping the rows themselves.
+static void subsample_road_observation_rows(Rng *rng_state, int *row_order, int collected_count, int keep_count) {
     if (keep_count <= 0 || collected_count <= keep_count) {
         return;
     }
-    float tmp[feature_count];
     for (int sample_idx = 0; sample_idx < keep_count; sample_idx++) {
         int remaining = collected_count - sample_idx;
         int swap_idx = (remaining > 1) ? sample_idx + rng_below(rng_state, remaining) : sample_idx;
-        if (swap_idx == sample_idx) {
-            continue;
-        }
-        float *a = &buffer[sample_idx * feature_count];
-        float *b = &buffer[swap_idx * feature_count];
-        memcpy(tmp, a, sizeof(tmp));
-        memcpy(a, b, sizeof(tmp));
-        memcpy(b, tmp, sizeof(tmp));
+        int sampled_row = row_order[sample_idx];
+        row_order[sample_idx] = row_order[swap_idx];
+        row_order[swap_idx] = sampled_row;
+    }
+}
+
+static void gather_road_observation_rows(
+    float *dest,
+    const float *buffer,
+    const int *row_order,
+    int keep_count,
+    int feature_count) {
+    for (int k = 0; k < keep_count; k++) {
+        memcpy(&dest[k * feature_count], &buffer[row_order[k] * feature_count], feature_count * sizeof(float));
     }
 }
 
@@ -4932,7 +5003,7 @@ static float lane_graph_distance_to_goal_m(Drive *env, int lane_idx, int goal_gr
     if (lane_graph_idx < 0) {
         return -1.0f;
     }
-    float distance_m = env->lane_graph.distances[lane_graph_idx * env->lane_graph.n_lanes + goal_graph_idx];
+    float distance_m = env->lane_graph.distances[goal_graph_idx * env->lane_graph.n_lanes + lane_graph_idx];
     return (isfinite(distance_m) && distance_m >= 0.0f) ? distance_m : INFINITY;
 }
 
@@ -4975,10 +5046,7 @@ static int write_road_obs_rows(
          entity != NULL && rows_written < slot_cap;
          entity = neighbor_cursor_next(env, neighbor_cursor)) {
         int entity_idx = entity->entity_idx;
-        int geometry_idx = entity->geometry_idx;
-        RoadMapElement *road_element = &env->road_elements[entity_idx];
-
-        const RoadObservationSegment *segment = &road_element->observation_segments[geometry_idx];
+        const RoadObservationSegment *segment = &env->grid_map->segment_pool[entity->pool_idx];
         float rel_x, rel_y;
         float rel_z = segment->mid_z_m - ego->sim_z;
         project_point_to_ego_frame(ego, segment->mid_x_m, segment->mid_y_m, &rel_x, &rel_y);
@@ -5064,19 +5132,27 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
             = (boundaries_found < env->obs_slots_boundary_kept) ? boundaries_found : env->obs_slots_boundary_kept;
         *lane_count = lanes_to_copy;
         *boundary_count = boundaries_to_copy;
-        subsample_road_observation_rows(&env->rng_state, lanes_buffer, lanes_found, lanes_to_copy, lane_row_features);
-        subsample_road_observation_rows(
-            &env->rng_state,
-            boundaries_buffer,
-            boundaries_found,
-            boundaries_to_copy,
-            BOUNDARY_FEATURES);
-        memcpy(&obs[lane_obs_idx], lanes_buffer, lanes_to_copy * lane_row_features * sizeof(float));
+        int lane_order[env->obs_slots_lane_n];
+        int boundary_order[env->obs_slots_boundary_n];
+        for (int k = 0; k < lanes_found; k++) {
+            lane_order[k] = k;
+        }
+        for (int k = 0; k < boundaries_found; k++) {
+            boundary_order[k] = k;
+        }
+        subsample_road_observation_rows(&env->rng_state, lane_order, lanes_found, lanes_to_copy);
+        subsample_road_observation_rows(&env->rng_state, boundary_order, boundaries_found, boundaries_to_copy);
+        gather_road_observation_rows(&obs[lane_obs_idx], lanes_buffer, lane_order, lanes_to_copy, lane_row_features);
         memset(
             &obs[lane_obs_idx + lanes_to_copy * lane_row_features],
             0,
             (env->obs_slots_lane_kept - lanes_to_copy) * lane_row_features * sizeof(float));
-        memcpy(&obs[boundary_obs_idx], boundaries_buffer, boundaries_to_copy * BOUNDARY_FEATURES * sizeof(float));
+        gather_road_observation_rows(
+            &obs[boundary_obs_idx],
+            boundaries_buffer,
+            boundary_order,
+            boundaries_to_copy,
+            BOUNDARY_FEATURES);
         memset(
             &obs[boundary_obs_idx + boundaries_to_copy * BOUNDARY_FEATURES],
             0,

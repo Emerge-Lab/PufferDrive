@@ -482,7 +482,7 @@ static int test_lane_graph_distance_to_goal_sentinels(void) {
     EXPECT_TRUE(env.lane_graph.n_lanes >= 2);
     int lane_idx = env.lane_graph.lane_ids[0];
     int goal_graph_idx = 1;
-    float *stored_distance_m = &env.lane_graph.distances[0 * env.lane_graph.n_lanes + goal_graph_idx];
+    float *stored_distance_m = &env.lane_graph.distances[goal_graph_idx * env.lane_graph.n_lanes + 0];
 
     *stored_distance_m = 123.0f;
     EXPECT_NEAR(lane_graph_distance_to_goal_m(&env, lane_idx, goal_graph_idx), 123.0f, 1e-6f);

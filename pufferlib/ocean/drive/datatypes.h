@@ -171,6 +171,7 @@ struct RoadMapElement {
     float *cum_lengths;
     float *widths;      // per-point lane width, meters
     int speed_zone_idx; // lanes sharing one posted limit; -1 = none (junction lane or map without zones)
+    float max_segment_half_length_m;
 };
 
 struct TrafficControlElement {
@@ -189,7 +190,7 @@ struct TrafficControlElement {
 struct LaneGraph {
     int n_lanes;
     int *lane_ids;
-    float *distances;       // n_lanes * n_lanes row-major (row = from, col = to)
+    float *distances;       // n_lanes * n_lanes row-major, goal-major: [to * n_lanes + from]
     int *lane_to_graph_idx; // road-element idx -> graph idx (-1 if lane absent from graph), sized num_road_elements
 };
 

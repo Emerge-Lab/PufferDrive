@@ -50,10 +50,110 @@ static void add_entity_to_grid(
         return;
     }
 
+    int pool_idx = (int) (env->grid_map->cells[grid_index] - env->grid_map->entity_pool) + count;
     env->grid_map->cells[grid_index][count].entity_idx = entity_idx;
     env->grid_map->cells[grid_index][count].geometry_idx = geometry_idx;
     env->grid_map->cells[grid_index][count].obs_kind = obs_kind;
+    env->grid_map->cells[grid_index][count].pool_idx = pool_idx;
+    env->grid_map->segment_pool[pool_idx] = env->road_elements[entity_idx].observation_segments[geometry_idx];
     cell_entities_insert_index[grid_index] = count + 1;
+}
+
+// Appends one window candidate; drivable lanes already present only widen their listed segment range.
+static int append_lane_query_entry(
+    LaneQueryEntry *entries,
+    int count,
+    int first_entry,
+    int entity_idx,
+    int seg_idx,
+    int is_lane) {
+    if (is_lane) {
+        for (int e = first_entry; e < count; e++) {
+            if (entries[e].entity_idx != entity_idx) {
+                continue;
+            }
+            entries[e].seg_first = seg_idx < entries[e].seg_first ? seg_idx : entries[e].seg_first;
+            entries[e].seg_last = seg_idx > entries[e].seg_last ? seg_idx : entries[e].seg_last;
+            return count;
+        }
+    }
+    entries[count] = (LaneQueryEntry) {entity_idx, seg_idx, seg_idx};
+    return count + 1;
+}
+
+static int road_query_window_entity_count(const GridMap *grid, int cell_idx) {
+    int cell_x = cell_idx % grid->grid_cols;
+    int cell_y = cell_idx / grid->grid_cols;
+    int total = 0;
+    for (int o = 0; o < ROAD_QUERY_CELL_COUNT; o++) {
+        int nx = cell_x + ROAD_OFFSETS[o][0];
+        int ny = cell_y + ROAD_OFFSETS[o][1];
+        if (nx < 0 || nx >= grid->grid_cols || ny < 0 || ny >= grid->grid_rows) {
+            continue;
+        }
+        total += grid->cell_entities_count[ny * grid->grid_cols + nx];
+    }
+    return total;
+}
+
+// Appends the cell's window candidates in grid order starting at entries[first_entry]; returns the new count.
+static int append_cell_lane_query_entries(const Drive *env, int cell_idx, LaneQueryEntry *entries, int first_entry) {
+    const GridMap *grid = env->grid_map;
+    int cell_x = cell_idx % grid->grid_cols;
+    int cell_y = cell_idx / grid->grid_cols;
+    int count = first_entry;
+    for (int o = 0; o < ROAD_QUERY_CELL_COUNT; o++) {
+        int nx = cell_x + ROAD_OFFSETS[o][0];
+        int ny = cell_y + ROAD_OFFSETS[o][1];
+        if (nx < 0 || nx >= grid->grid_cols || ny < 0 || ny >= grid->grid_rows) {
+            continue;
+        }
+        int neighbor_idx = ny * grid->grid_cols + nx;
+        for (int e = 0; e < grid->cell_entities_count[neighbor_idx]; e++) {
+            const GridMapEntity *entity = &grid->cells[neighbor_idx][e];
+            int type = env->road_elements[entity->entity_idx].type;
+            if (!is_road_edge(type) && !is_drivable_road_lane(type)) {
+                continue;
+            }
+            count = append_lane_query_entry(
+                entries,
+                count,
+                first_entry,
+                entity->entity_idx,
+                entity->geometry_idx,
+                is_drivable_road_lane(type));
+        }
+    }
+    return count;
+}
+
+// Per cell, the road-query candidates of its 5x5 window in grid order, built once per map.
+static void cache_lane_query_lists(Drive *env) {
+    GridMap *grid = env->grid_map;
+    int cell_count = grid->grid_cols * grid->grid_rows;
+    int capacity = grid->total_entities > 0 ? grid->total_entities : 1;
+    LaneQueryEntry *entries = (LaneQueryEntry *) malloc(capacity * sizeof(LaneQueryEntry));
+    grid->lane_query_offset = (int *) malloc((cell_count + 1) * sizeof(int));
+    grid->window_entity_count = (int *) malloc(cell_count * sizeof(int));
+    if (entries == NULL || grid->lane_query_offset == NULL || grid->window_entity_count == NULL) {
+        raise_error_with_message(ERROR_MEMORY_ALLOCATION, "Failed to allocate the road query cache");
+    }
+    int count = 0;
+    for (int cell_idx = 0; cell_idx < cell_count; cell_idx++) {
+        grid->lane_query_offset[cell_idx] = count;
+        int window_count = road_query_window_entity_count(grid, cell_idx);
+        grid->window_entity_count[cell_idx] = window_count;
+        if (count + window_count > capacity) {
+            capacity = 2 * (count + window_count);
+            entries = (LaneQueryEntry *) realloc(entries, capacity * sizeof(LaneQueryEntry));
+            if (entries == NULL) {
+                raise_error_with_message(ERROR_MEMORY_ALLOCATION, "Failed to grow the road query cache");
+            }
+        }
+        count = append_cell_lane_query_entries(env, cell_idx, entries, count);
+    }
+    grid->lane_query_offset[cell_count] = count;
+    grid->lane_query_pool = entries;
 }
 
 static void set_observation_segment_geometry(
@@ -218,16 +318,23 @@ static int init_grid_map(Drive *env) {
     env->grid_map->cells = (GridMapEntity **) calloc(grid_cell_count, sizeof(GridMapEntity *));
     env->grid_map->cell_entities_count = (int *) calloc(grid_cell_count, sizeof(int));
     // First pass to count entities in each grid cell
+    env->grid_map->unregistered_segment_count = 0;
     for (int i = 0; i < env->num_road_elements; i++) {
         if (!is_road_grid_candidate(env->road_elements[i].type)) {
             continue;
         }
         RoadMapElement *element = &env->road_elements[i];
+        element->max_segment_half_length_m = 0.0f;
         for (int j = 0; j < element->segment_size - 1; j++) {
+            float half_dx = (element->x[j + 1] - element->x[j]) * 0.5f;
+            float half_dy = (element->y[j + 1] - element->y[j]) * 0.5f;
+            float half_length_m = sqrtf(half_dx * half_dx + half_dy * half_dy);
+            element->max_segment_half_length_m = fmaxf(element->max_segment_half_length_m, half_length_m);
             float x_center = (element->x[j] + element->x[j + 1]) / 2;
             float y_center = (element->y[j] + element->y[j + 1]) / 2;
             int grid_index = get_grid_index(env, x_center, y_center);
             if (grid_index == -1) {
+                env->grid_map->unregistered_segment_count++;
                 continue;
             }
             env->grid_map->cell_entities_count[grid_index]++;
@@ -251,6 +358,8 @@ static int init_grid_map(Drive *env) {
         env->grid_map->total_entities += env->grid_map->cell_entities_count[grid_index];
     }
     env->grid_map->entity_pool = (GridMapEntity *) calloc(env->grid_map->total_entities + 1, sizeof(GridMapEntity));
+    env->grid_map->segment_pool
+        = (RoadObservationSegment *) calloc(env->grid_map->total_entities + 1, sizeof(RoadObservationSegment));
     int pool_offset = 0;
     for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
         int count = env->grid_map->cell_entities_count[grid_index];
@@ -293,6 +402,7 @@ static int init_grid_map(Drive *env) {
     }
     free(drivable_grid_seen);
     free(cell_entities_insert_index);
+    cache_lane_query_lists(env);
     return 0;
 }
 
@@ -962,6 +1072,15 @@ int load_map_binary(const char *filename, Drive *drive) {
             fclose(file);
             return -1;
         }
+        // File stores [from][to]; the lane observations read one goal row per ego, so keep [to][from].
+        for (int from = 0; from < n_lanes_graph; from++) {
+            for (int to = from + 1; to < n_lanes_graph; to++) {
+                float from_to = drive->lane_graph.distances[from * n_lanes_graph + to];
+                drive->lane_graph.distances[from * n_lanes_graph + to]
+                    = drive->lane_graph.distances[to * n_lanes_graph + from];
+                drive->lane_graph.distances[to * n_lanes_graph + from] = from_to;
+            }
+        }
 
         // Build reverse lookup road-element idx -> graph idx
         int num_roads = drive->num_road_elements;
@@ -1094,6 +1213,10 @@ static void free_grid_map(GridMap *grid_map) {
     }
     int grid_cell_count = grid_map->grid_cols * grid_map->grid_rows;
     free(grid_map->entity_pool);
+    free(grid_map->segment_pool);
+    free(grid_map->lane_query_pool);
+    free(grid_map->lane_query_offset);
+    free(grid_map->window_entity_count);
     free(grid_map->cells);
     free(grid_map->cell_entities_count);
     free(grid_map->grid_index_drivable);

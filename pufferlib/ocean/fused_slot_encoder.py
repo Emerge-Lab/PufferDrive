@@ -6,11 +6,20 @@ per-slot activations between ops. The forward walks the slots one at a time for 
 max-pool is an elementwise running max with no padded slots.
 """
 
+import os
 from dataclasses import dataclass
 
 import torch
 import triton
 import triton.language as tl
+
+
+def cuda_backend_active():
+    return os.environ.get("PUFFER_SLOT_ENCODER_BACKEND", "triton") == "cuda"
+
+
+if cuda_backend_active():
+    import pufferlib.ocean.cuda_slot_encoder  # noqa: F401  fail at import time, not in the first policy call
 
 
 @dataclass(frozen=True)
@@ -475,6 +484,12 @@ def fused_slot_encoder_bwd(
     tie_count: torch.Tensor,
     grad_pooled: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    if cuda_backend_active():
+        from pufferlib.ocean.cuda_slot_encoder import cuda_slot_encoder_bwd
+
+        return cuda_slot_encoder_bwd(
+            x, counts, w1_padded, b1, gamma, beta, w2, normed_relu, encoded, pooled, tie_count, grad_pooled
+        )
     B, S, F = x.shape
     D, feature_pad = w1_padded.shape
     config = kernel_config(x.device)
@@ -570,6 +585,13 @@ def fused_slot_encoder(
     b1_bf16_values = b1.to(torch.bfloat16).float()
     w2_bf16 = w2.to(torch.bfloat16).contiguous()
     b2_bf16_values = b2.to(torch.bfloat16).float()
+    if cuda_backend_active():
+        from pufferlib.ocean.cuda_slot_encoder import cuda_slot_encoder_fwd
+
+        pooled, tie_count, normed_relu, encoded = cuda_slot_encoder_fwd(
+            x, counts, w1_padded, b1_bf16_values, gamma, beta, w2_bf16, b2_bf16_values, store_acts
+        )
+        return pooled, tie_count, normed_relu, encoded, w1_padded, b1_bf16_values, w2_bf16
     pooled, tie_count, normed_relu, encoded = fused_slot_encoder_fwd(
         x, counts, w1_padded, b1_bf16_values, gamma, beta, w2_bf16.t().contiguous(), b2_bf16_values, store_acts
     )

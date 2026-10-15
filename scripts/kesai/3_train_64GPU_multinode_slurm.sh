@@ -42,6 +42,10 @@ export VECLIB_MAXIMUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
+# Hand-written CUDA slot-encoder kernels instead of the Triton ones (same math); unset to compare
+export PUFFER_SLOT_ENCODER_BACKEND=cuda
+echo "slot encoder backend: ${PUFFER_SLOT_ENCODER_BACKEND}"
+
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 # Blocking env workers allow 2 workers per hardware thread (18 threads per rank); forked workers share the preloaded map cache
