@@ -204,7 +204,6 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define STOP_SIGN_LATERAL_EXTENSION_M 17.5f // Five lane widths beyond each endpoint, cannot be driven around
 
 #define BEHIND_COS_THRESHOLD -0.8660254f // cos(150 degrees)
-#define PARTNER_BLINDNESS_ONCOMING_COS -0.5f // cos(120 degrees): crossing traffic stays visible
 
 // =====================================================================================
 // 5. SPATIAL GRID

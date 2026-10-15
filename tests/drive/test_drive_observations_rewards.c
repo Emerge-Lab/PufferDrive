@@ -297,7 +297,8 @@ static int test_partner_obs_relative_velocity(void) {
 }
 
 static int test_blind_partner_corridor_hides_oncoming(void) {
-    // Blind ego heading +x sees only its forward corridor; with hide_oncoming it also loses cars facing it.
+    // Blind ego heading +x sees only its forward corridor; with hide_oncoming it also loses cars facing it,
+    // where the window half-angle decides how far from head-on a car still counts as oncoming.
     Drive env = {0};
     env.obs_norm_speed_mps = 10.0f;
     env.obs_norm_xy_offset_m = 100.0f;
@@ -305,34 +306,41 @@ static int test_blind_partner_corridor_hides_oncoming(void) {
     env.obs_norm_veh_length_m = 10.0f;
     env.obs_norm_veh_width_m = 5.0f;
     env.obs_range_partner_m = 100.0f;
-    env.obs_slots_partners_n = 6;
-    env.num_agents = 6;
-    env.active_agent_count = 6;
-    int active[6] = {0, 1, 2, 3, 4, 5};
+    env.obs_slots_partners_n = 7;
+    env.num_agents = 7;
+    env.active_agent_count = 7;
+    int active[7] = {0, 1, 2, 3, 4, 5, 6};
     env.active_agent_indices = active;
-    Agent agents[6];
+    Agent agents[7];
     agents[0] = drive_test_agent(0.0f, 0.0f, 0.0f);
     agents[1] = drive_test_agent(20.0f, 0.0f, 0.0f);
     agents[2] = drive_test_agent(20.0f, 0.0f, (float) M_PI);
     agents[3] = drive_test_agent(25.0f, 1.5f, (float) M_PI);
     agents[4] = drive_test_agent(15.0f, 0.0f, (float) M_PI / 2.0f);
     agents[5] = drive_test_agent(-20.0f, 0.0f, 0.0f);
+    agents[6] = drive_test_agent(30.0f, -1.0f, 140.0f * (float) M_PI / 180.0f);
     env.agents = agents;
-    float obs[6 * PARTNER_FEATURES];
+    float obs[7 * PARTNER_FEATURES];
     int partner_count = 0;
 
     agents[0].partner_blindness_counter = 10;
     write_partner_obs(&env, &agents[0], 0, obs, 0, &partner_count);
-    EXPECT_EQ_INT(partner_count, 4);
+    EXPECT_EQ_INT(partner_count, 5);
 
     env.partner_blindness_hide_oncoming = 1;
+    env.partner_blindness_oncoming_cos = -cosf(60.0f * (float) M_PI / 180.0f);
     agents[0].partner_blindness_counter = 10;
     write_partner_obs(&env, &agents[0], 0, obs, 0, &partner_count);
     EXPECT_EQ_INT(partner_count, 2);
 
+    env.partner_blindness_oncoming_cos = -cosf(20.0f * (float) M_PI / 180.0f);
+    agents[0].partner_blindness_counter = 10;
+    write_partner_obs(&env, &agents[0], 0, obs, 0, &partner_count);
+    EXPECT_EQ_INT(partner_count, 3);
+
     agents[0].partner_blindness_counter = 0;
     write_partner_obs(&env, &agents[0], 0, obs, 0, &partner_count);
-    EXPECT_EQ_INT(partner_count, 5);
+    EXPECT_EQ_INT(partner_count, 6);
     return 0;
 }
 

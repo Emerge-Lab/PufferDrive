@@ -236,8 +236,10 @@ env:
   partner_blindness_prob: 0.05
   # false: every episode uses partner_blindness_prob itself as the blind-agent rate
   partner_blindness_rate_randomization: true
-  # true: a triggered blind agent also loses partners heading more than 120 degrees away from it (oncoming traffic)
+  # true: a triggered blind agent also loses oncoming partners, those heading within the window around head-on
   partner_blindness_hide_oncoming: false
+  # Half-angle in degrees of that window around head-on; 60 hides partners more than 120 degrees off the agent's heading
+  partner_blindness_oncoming_half_angle_deg: 60.0
   # Per-step probability that a flagged blind-partner agent restricts its partner observations
   partner_blindness_trigger_prob: 0.03
   # Duration in seconds of partner blindness once triggered

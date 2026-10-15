@@ -355,6 +355,7 @@ class DriveEnvConfig:
     partner_blindness_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     partner_blindness_rate_randomization: bool = MISSING
     partner_blindness_hide_oncoming: bool = MISSING
+    partner_blindness_oncoming_half_angle_deg: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     partner_blindness_trigger_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     partner_blindness_duration_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     phantom_braking_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
@@ -622,6 +623,8 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.init_step_spread", "is only supported in replay mode")
     if env["init_step_spread"] and env["init_step_min_horizon"] >= env["scenario_length"]:
         _raise_config_error(context, "env.init_step_min_horizon", "must be smaller than env.scenario_length")
+    if env["partner_blindness_oncoming_half_angle_deg"] > 180.0:
+        _raise_config_error(context, "env.partner_blindness_oncoming_half_angle_deg", "must be at most 180")
     if env["goal_final_only"] and env["goal_source"] not in ("gt", "gt_map"):
         _raise_config_error(context, "env.goal_final_only", "requires env.goal_source gt or gt_map")
     if env["goal_source"] in ("gt", "gt_map") and env["simulation_mode"] != "replay":

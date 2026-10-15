@@ -312,6 +312,7 @@ struct Drive {
     float partner_blindness_prob;
     int partner_blindness_rate_randomization;
     int partner_blindness_hide_oncoming;
+    float partner_blindness_oncoming_cos; // -cos(window half-angle); partners heading below it are oncoming
     float partner_blindness_trigger_prob;
     int partner_blindness_duration;
     float phantom_braking_prob;
@@ -4782,7 +4783,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
                 = 0.5f * (fabsf(rel_heading_y) * other->sim_length + fabsf(rel_heading_x) * other->sim_width);
             partner_visible = rel_x > 0.0f && fabsf(rel_y) <= lateral_half_extent_m + 0.5f * ego->sim_width;
             // a blind agent that cannot see oncoming cars never yields to one encroaching into its lane
-            if (env->partner_blindness_hide_oncoming && rel_heading_x < PARTNER_BLINDNESS_ONCOMING_COS) {
+            if (env->partner_blindness_hide_oncoming && rel_heading_x < env->partner_blindness_oncoming_cos) {
                 partner_visible = false;
             }
         }

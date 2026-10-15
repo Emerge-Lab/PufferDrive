@@ -2157,6 +2157,12 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->partner_blindness_prob = (float) unpack(kwargs, "partner_blindness_prob");
     env->partner_blindness_rate_randomization = (int) unpack(kwargs, "partner_blindness_rate_randomization");
     env->partner_blindness_hide_oncoming = (int) unpack(kwargs, "partner_blindness_hide_oncoming");
+    float oncoming_half_angle_deg = (float) unpack(kwargs, "partner_blindness_oncoming_half_angle_deg");
+    if (!(oncoming_half_angle_deg > 0.0f && oncoming_half_angle_deg <= 180.0f)) {
+        PyErr_SetString(PyExc_ValueError, "partner_blindness_oncoming_half_angle_deg must be in (0, 180]");
+        return -1;
+    }
+    env->partner_blindness_oncoming_cos = -cosf(oncoming_half_angle_deg * (float) M_PI / 180.0f);
     env->partner_blindness_trigger_prob = (float) unpack(kwargs, "partner_blindness_trigger_prob");
     env->partner_blindness_duration
         = (int) ceilf((float) unpack(kwargs, "partner_blindness_duration_seconds") / env->dt);
