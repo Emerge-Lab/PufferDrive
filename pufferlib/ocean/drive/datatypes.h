@@ -136,6 +136,7 @@ struct Agent {
     int phantom_braking_counter;     // >0 means currently phantom braking
     int partner_blindness_counter;   // >0 means partner visibility is restricted to a forward corridor (ego width +
                                      // margin)
+    float partner_blindness_trigger_prob; // per-step burst start chance, raised by partner_blindness_time_fraction_max
     unsigned char is_blind_partner;  // episode-level flag: agent may restrict partner visibility
     unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
 };

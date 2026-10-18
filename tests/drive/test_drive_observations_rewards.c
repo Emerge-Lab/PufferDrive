@@ -428,6 +428,102 @@ static int test_partner_obs_blindness_corridor_toggle(void) {
     return 0;
 }
 
+static int test_partner_blindness_episode_rate_floor(void) {
+    Drive env = {0};
+    env.init_seed = 7;
+    env.partner_blindness_prob_min = 0.2f;
+    env.partner_blindness_prob = 0.4f;
+    for (int episode = 0; episode < 16; episode++) {
+        begin_episode_rng(&env);
+        EXPECT_TRUE(env.episode_partner_blindness_prob >= 0.2f);
+        EXPECT_TRUE(env.episode_partner_blindness_prob <= 0.4f);
+    }
+    env.partner_blindness_prob_min = 0.4f;
+    begin_episode_rng(&env);
+    EXPECT_NEAR(env.episode_partner_blindness_prob, 0.4f, 1e-6f);
+    return 0;
+}
+
+static int test_partner_blindness_time_fraction_scales_trigger_prob(void) {
+    // 10-step bursts at trigger prob 0.03 leave a blind partner blind 10 / (10 + 0.97 / 0.03) = 23.6% of the time
+    Drive env = {0};
+    rng_seed(&env.rng_state, 7);
+    env.episode_partner_blindness_prob = 1.0f;
+    env.partner_blindness_trigger_prob = 0.03f;
+    env.partner_blindness_duration = 10;
+    Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
+
+    sample_erratic_flags(&env, &agent);
+    EXPECT_EQ_INT(agent.is_blind_partner, 1);
+    EXPECT_NEAR(agent.partner_blindness_trigger_prob, 0.03f, 1e-6f);
+
+    float base_fraction = 10.0f * 0.03f / (10.0f * 0.03f + 1.0f - 0.03f);
+    env.partner_blindness_time_fraction_max = base_fraction;
+    sample_erratic_flags(&env, &agent);
+    EXPECT_NEAR(agent.partner_blindness_trigger_prob, 0.03f, 1e-5f);
+
+    env.partner_blindness_time_fraction_max = 1.0f;
+    for (int draw = 0; draw < 32; draw++) {
+        sample_erratic_flags(&env, &agent);
+        EXPECT_EQ_INT(agent.is_blind_partner, 1);
+        EXPECT_TRUE(agent.partner_blindness_trigger_prob >= 0.03f - 1e-6f);
+        EXPECT_TRUE(agent.partner_blindness_trigger_prob <= 1.0f);
+    }
+
+    env.partner_blindness_trigger_prob = 1.0f;
+    sample_erratic_flags(&env, &agent);
+    EXPECT_NEAR(agent.partner_blindness_trigger_prob, 1.0f, 1e-6f);
+    return 0;
+}
+
+static int test_partner_blindness_full_time_fraction_blinds_every_frame(void) {
+    // Ego heading +x with trigger prob 1: the corridor hides the car on the left in every frame, the first included
+    Drive env = {0};
+    rng_seed(&env.rng_state, 7);
+    env.obs_norm_speed_mps = 10.0f;
+    env.obs_norm_xy_offset_m = 100.0f;
+    env.obs_norm_z_m = 10.0f;
+    env.obs_norm_veh_length_m = 10.0f;
+    env.obs_norm_veh_width_m = 5.0f;
+    env.obs_range_partner_m = 100.0f;
+    env.obs_slots_partners_n = 3;
+    env.num_agents = 3;
+    env.active_agent_count = 3;
+    env.partner_blindness_duration = 1;
+    env.partner_blindness_corridor = 1;
+    int active[3] = {0, 1, 2};
+    env.active_agent_indices = active;
+    Agent agents[3];
+    agents[0] = drive_test_agent(0.0f, 0.0f, 0.0f);
+    agents[1] = drive_test_agent(20.0f, 0.0f, 0.0f);
+    agents[2] = drive_test_agent(0.0f, 20.0f, 0.0f);
+    for (int agent_idx = 0; agent_idx < 3; agent_idx++) {
+        update_agent_speed(&agents[agent_idx]);
+    }
+    env.agents = agents;
+    agents[0].is_blind_partner = 1;
+    agents[0].partner_blindness_trigger_prob = 1.0f;
+    PartnerScanEntry partner_scan[3] = {
+        {agents[0].sim_x, agents[0].sim_y, agents[0].sim_z, 0},
+        {agents[1].sim_x, agents[1].sim_y, agents[1].sim_z, 1},
+        {agents[2].sim_x, agents[2].sim_y, agents[2].sim_z, 2},
+    };
+    float obs[3 * PARTNER_FEATURES];
+    int partner_count = 0;
+    for (int frame = 0; frame < 20; frame++) {
+        memset(obs, 0, sizeof(obs));
+        write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
+        EXPECT_EQ_INT(partner_count, 1);
+    }
+
+    agents[0].partner_blindness_trigger_prob = 0.0f;
+    agents[0].partner_blindness_counter = 0;
+    memset(obs, 0, sizeof(obs));
+    write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
+    EXPECT_EQ_INT(partner_count, 2);
+    return 0;
+}
+
 static int test_reward_lane_align_wrong_way(void) {
     Drive env;
     Agent agent;
@@ -510,6 +606,9 @@ int main(void) {
     RUN_TEST(test_partner_obs_relative_velocity);
     RUN_TEST(test_partner_obs_split_long_partner);
     RUN_TEST(test_partner_obs_blindness_corridor_toggle);
+    RUN_TEST(test_partner_blindness_episode_rate_floor);
+    RUN_TEST(test_partner_blindness_time_fraction_scales_trigger_prob);
+    RUN_TEST(test_partner_blindness_full_time_fraction_blinds_every_frame);
     RUN_TEST(test_reward_lane_align_wrong_way);
     return test_summary(failures);
 }

@@ -147,9 +147,11 @@ class Drive(pufferlib.PufferEnv):
         obs_dropout_lane=0.0,
         obs_dropout_boundary=0.0,
         partner_blindness_prob=0.0,
+        partner_blindness_prob_min=0.0,
         partner_blindness_trigger_prob=0.1,
         partner_blindness_duration_seconds=1.0,
         partner_blindness_corridor=True,
+        partner_blindness_time_fraction_max=0.0,
         phantom_braking_prob=0.0,
         phantom_braking_trigger_prob=0.0,
         phantom_braking_duration_seconds=1.0,
@@ -351,9 +353,11 @@ class Drive(pufferlib.PufferEnv):
             self.obs_dropout_boundary,
         )
         self.partner_blindness_prob = float(partner_blindness_prob)
+        self.partner_blindness_prob_min = float(partner_blindness_prob_min)
         self.partner_blindness_trigger_prob = float(partner_blindness_trigger_prob)
         self.partner_blindness_duration_seconds = float(partner_blindness_duration_seconds)
         self.partner_blindness_corridor = int(bool(partner_blindness_corridor))
+        self.partner_blindness_time_fraction_max = float(partner_blindness_time_fraction_max)
         self.phantom_braking_prob = float(phantom_braking_prob)
         self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
         self.phantom_braking_duration_seconds = float(phantom_braking_duration_seconds)
@@ -654,9 +658,11 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_lane_kept": self.obs_slots_lane_kept,
             "obs_slots_boundary_kept": self.obs_slots_boundary_kept,
             "partner_blindness_prob": self.partner_blindness_prob,
+            "partner_blindness_prob_min": self.partner_blindness_prob_min,
             "partner_blindness_trigger_prob": self.partner_blindness_trigger_prob,
             "partner_blindness_duration_seconds": self.partner_blindness_duration_seconds,
             "partner_blindness_corridor": self.partner_blindness_corridor,
+            "partner_blindness_time_fraction_max": self.partner_blindness_time_fraction_max,
             "phantom_braking_prob": self.phantom_braking_prob,
             "phantom_braking_trigger_prob": self.phantom_braking_trigger_prob,
             "phantom_braking_duration_seconds": self.phantom_braking_duration_seconds,

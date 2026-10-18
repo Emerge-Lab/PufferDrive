@@ -325,9 +325,11 @@ struct Drive {
     float obs_range_road_side_m;
     // Robustness
     float partner_blindness_prob;
+    float partner_blindness_prob_min;
     float partner_blindness_trigger_prob;
     int partner_blindness_duration;
     int partner_blindness_corridor;
+    float partner_blindness_time_fraction_max;
     float phantom_braking_prob;
     float phantom_braking_trigger_prob;
     int phantom_braking_duration;
@@ -500,8 +502,9 @@ static void begin_episode_rng(Drive *env) {
         env->episode_seed = rng_next(&env->seed_stream_rng) >> 1;
     }
     rng_seed(&env->rng_state, env->episode_seed);
-    // Per-episode perturbation rates: uniform in [0, configured max]
-    env->episode_partner_blindness_prob = sample_uniform(&env->rng_state, 0.0f, env->partner_blindness_prob);
+    // Per-episode perturbation rates: uniform in [floor, configured max]; phantom braking has no floor knob
+    env->episode_partner_blindness_prob
+        = sample_uniform(&env->rng_state, env->partner_blindness_prob_min, env->partner_blindness_prob);
     env->episode_phantom_braking_prob = sample_uniform(&env->rng_state, 0.0f, env->phantom_braking_prob);
 }
 
@@ -2563,6 +2566,16 @@ static inline void sample_erratic_flags(Drive *env, Agent *agent) {
                                && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->episode_partner_blindness_prob)
         ? 1
         : 0;
+    agent->partner_blindness_trigger_prob = env->partner_blindness_trigger_prob;
+    if (agent->is_blind_partner && env->partner_blindness_time_fraction_max > 0.0f) {
+        // blind-time fraction of a burst/gap cycle = duration / (duration + mean gap), mean gap = (1 - p) / p
+        float duration_steps = (float) env->partner_blindness_duration;
+        float base_trigger_prob = env->partner_blindness_trigger_prob;
+        float base_fraction
+            = duration_steps * base_trigger_prob / (duration_steps * base_trigger_prob + 1.0f - base_trigger_prob);
+        float fraction = sample_uniform(&env->rng_state, base_fraction, env->partner_blindness_time_fraction_max);
+        agent->partner_blindness_trigger_prob = fraction / (fraction + duration_steps * (1.0f - fraction));
+    }
     agent->is_phantom_braker = (env->episode_phantom_braking_prob > 0.0f
                                 && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->episode_phantom_braking_prob)
         ? 1
@@ -4880,8 +4893,8 @@ static int write_partner_obs(
     if (ego->partner_blindness_counter > 0) {
         ego->partner_blindness_counter--;
     }
-    if (ego->partner_blindness_counter == 0 && ego->is_blind_partner && env->partner_blindness_trigger_prob > 0.0f
-        && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
+    if (ego->partner_blindness_counter == 0 && ego->is_blind_partner && ego->partner_blindness_trigger_prob > 0.0f
+        && sample_uniform(&env->rng_state, 0.0f, 1.0f) < ego->partner_blindness_trigger_prob) {
         ego->partner_blindness_counter = env->partner_blindness_duration;
     }
     int blind = ego->partner_blindness_counter > 0;
