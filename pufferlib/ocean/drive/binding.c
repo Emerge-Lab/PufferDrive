@@ -2171,6 +2171,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             free(env->agents);
             free(env->road_elements);
             free(env->traffic_elements);
+            free_lane_graph(&env->lane_graph);
+            free(env->objects_of_interest);
+            free(env->tracks_to_predict);
             free(env->active_agent_indices);
             free(env->static_agent_indices);
             free(env->expert_static_agent_indices);
@@ -2200,6 +2203,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         free(env->agents);
         free(env->road_elements);
         free(env->traffic_elements);
+        free_lane_graph(&env->lane_graph);
+        free(env->objects_of_interest);
+        free(env->tracks_to_predict);
         free(env->active_agent_indices);
         free(env->static_agent_indices);
         free(env->expert_static_agent_indices);
