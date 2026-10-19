@@ -2,6 +2,8 @@
 C simulation engine + Python/PyTorch training loop.
 Activate Conda before `python`/`puffer`: `conda activate drive`
 
+Before running any command, explain to the user what will run and why.
+
 ## Structure
 - `pufferlib/ocean/drive/`: `drive.h/c` (sim core), `binding.c` (C-ext), `drive.py` (Gym wrapper), `visualize.c`
 - `pufferlib/ocean/`: `env_binding.h` (C env utils), `torch.py` (NN)
