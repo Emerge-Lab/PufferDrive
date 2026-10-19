@@ -2162,10 +2162,20 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_lane_kept = (int) unpack(kwargs, "obs_slots_lane_kept");
     env->obs_slots_boundary_kept = (int) unpack(kwargs, "obs_slots_boundary_kept");
     env->partner_blindness_prob = (float) unpack(kwargs, "partner_blindness_prob");
+    env->partner_blindness_prob_min = (float) unpack(kwargs, "partner_blindness_prob_min");
+    if (!(env->partner_blindness_prob_min >= 0.0f && env->partner_blindness_prob_min <= env->partner_blindness_prob)) {
+        PyErr_SetString(PyExc_ValueError, "partner_blindness_prob_min must be within [0, partner_blindness_prob]");
+        return -1;
+    }
     env->partner_blindness_trigger_prob = (float) unpack(kwargs, "partner_blindness_trigger_prob");
     env->partner_blindness_duration
         = (int) ceilf((float) unpack(kwargs, "partner_blindness_duration_seconds") / env->dt);
     env->partner_blindness_corridor = (int) unpack(kwargs, "partner_blindness_corridor");
+    env->partner_blindness_time_fraction_max = (float) unpack(kwargs, "partner_blindness_time_fraction_max");
+    if (!(env->partner_blindness_time_fraction_max >= 0.0f && env->partner_blindness_time_fraction_max <= 1.0f)) {
+        PyErr_SetString(PyExc_ValueError, "partner_blindness_time_fraction_max must be within [0, 1]");
+        return -1;
+    }
     env->phantom_braking_prob = (float) unpack(kwargs, "phantom_braking_prob");
     env->phantom_braking_trigger_prob = (float) unpack(kwargs, "phantom_braking_trigger_prob");
     env->phantom_braking_duration = (int) ceilf((float) unpack(kwargs, "phantom_braking_duration_seconds") / env->dt);

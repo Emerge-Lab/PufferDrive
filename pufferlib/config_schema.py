@@ -354,9 +354,11 @@ class DriveEnvConfig:
     obs_range_partner_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     obs_range_traffic_control_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     partner_blindness_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
+    partner_blindness_prob_min: float = _constrained_field(PROBABILITY_CONSTRAINT)
     partner_blindness_trigger_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     partner_blindness_duration_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     partner_blindness_corridor: bool = MISSING
+    partner_blindness_time_fraction_max: float = _constrained_field(PROBABILITY_CONSTRAINT)
     phantom_braking_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     phantom_braking_trigger_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     phantom_braking_duration_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
@@ -616,6 +618,8 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.spawn_initial_speed", "must not exceed env.base_max_speed_mps")
     if env["min_goal_spacing"] > env["max_goal_spacing"]:
         _raise_config_error(context, "env.min_goal_spacing", "must not exceed env.max_goal_spacing")
+    if env["partner_blindness_prob_min"] > env["partner_blindness_prob"]:
+        _raise_config_error(context, "env.partner_blindness_prob_min", "must not exceed env.partner_blindness_prob")
     if env["preload_map_cache"] and not env["use_map_cache"]:
         _raise_config_error(context, "env.preload_map_cache", "requires env.use_map_cache to be true")
 
