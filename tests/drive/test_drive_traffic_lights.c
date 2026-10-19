@@ -160,6 +160,41 @@ static int test_eval_never_removes_lights(void) {
     return 0;
 }
 
+// Gigaflow schedules include the terminal step, so the bootstrap observation reads a real light state
+static int test_schedule_covers_terminal_observation(void) {
+    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
+    env.eval_mode = 1; // default CARLA cycles: no light is removed, so the terminal state is never OFF
+    allocate(&env);
+    c_reset(&env);
+    int light_count = 0;
+    TrafficControlElement *probe_light = NULL;
+    for (int i = 0; i < env.num_traffic_elements; i++) {
+        TrafficControlElement *tc = &env.traffic_elements[i];
+        if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
+            continue;
+        }
+        EXPECT_EQ_INT(tc->state_size, env.scenario_length + 1);
+        EXPECT_TRUE(tc->states[env.scenario_length] != TRAFFIC_CONTROL_STATE_OFF);
+        probe_light = tc;
+        light_count++;
+    }
+    EXPECT_TRUE(light_count > 0);
+    Agent *agent = &env.agents[env.active_agent_indices[0]];
+    agent->sim_x = (probe_light->stop_line[0] + probe_light->stop_line[3]) * 0.5f;
+    agent->sim_y = (probe_light->stop_line[1] + probe_light->stop_line[4]) * 0.5f;
+    agent->sim_z = (probe_light->stop_line[2] + probe_light->stop_line[5]) * 0.5f;
+    copy_pose_to_prev(agent);
+    env.timestep = env.scenario_length;
+    compute_observations(&env);
+    int valid_base = compute_observation_size(&env) - OBS_VALID_COUNT_FEATURES;
+    int traffic_base = valid_base - env.obs_slots_traffic_controls_n * TRAFFIC_CONTROL_FEATURES;
+    EXPECT_TRUE(env.observations[valid_base + 3] >= 1.0f);
+    int observed_state = (int) env.observations[traffic_base + TRAFFIC_CONTROL_FEATURES - 1];
+    EXPECT_EQ_INT(observed_state, probe_light->states[env.scenario_length]);
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_junction_lights_never_green_together);
@@ -169,5 +204,6 @@ int main(void) {
     RUN_TEST(test_training_lights_stay_exclusive_unless_removed);
     RUN_TEST(test_training_group_removal_turns_off_whole_junction);
     RUN_TEST(test_eval_never_removes_lights);
+    RUN_TEST(test_schedule_covers_terminal_observation);
     return test_summary(failures);
 }

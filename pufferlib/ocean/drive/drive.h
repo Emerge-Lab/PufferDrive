@@ -2792,7 +2792,6 @@ static void sample_zone_speed_limits(Drive *env) {
 }
 
 static void generate_traffic_light_states(Drive *env) {
-    int steps = env->scenario_length;
     int training_mode = !env->eval_mode || env->eval_training_render;
 
     // 20% chance: disable ALL lights for this episode
@@ -2808,10 +2807,7 @@ static void generate_traffic_light_states(Drive *env) {
             continue;
         }
 
-        int fill_steps = steps;
-        if (tc->state_size < fill_steps) {
-            fill_steps = tc->state_size;
-        }
+        int fill_steps = tc->state_size;
 
         if (disable_all) {
             for (int t = 0; t < fill_steps; t++) {
@@ -3677,7 +3673,7 @@ void init(Drive *env) {
     begin_episode_rng(env);
     sample_zone_speed_limits(env);
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
-        int steps = env->scenario_length;
+        int steps = env->scenario_length + 1; // the terminal step's obs and red-light check read states[scenario_length]
         if (steps > 0) {
             for (int i = 0; i < env->num_traffic_elements; i++) {
                 TrafficControlElement *traffic = &env->traffic_elements[i];
@@ -5445,6 +5441,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         } else {
             a_long_new = clip(a_long_new, ACCEL_LONG_LIMIT[0], ACCEL_LONG_LIMIT[1] * c_acc);
         }
+        // Comfort scores the driver's jerk, so take it before the stop resets below zero the stored acceleration
+        float jerk_long_before_stop_reset = (a_long_new - agent->accel_long) / env->dt;
 
         // Calculate new lateral acceleration from jerk (Eq. 2 in paper)
         float a_lat_new = agent->accel_lat + c_steer * j_lat * env->dt;
@@ -5532,7 +5530,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
         update_agent_speed(agent);
         // Update jerk and acceleration
-        agent->jerk_long = (a_long_new - agent->accel_long) / env->dt;
+        agent->jerk_long = jerk_long_before_stop_reset;
         agent->jerk_lat = (a_lat_new - agent->accel_lat) / env->dt;
         agent->accel_long = a_long_new;
         agent->accel_lat = a_lat_new;
