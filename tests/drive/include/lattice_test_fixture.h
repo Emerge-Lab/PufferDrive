@@ -32,6 +32,7 @@ static inline void lattice_test_default_menu(struct LatticeConfig *cfg, float de
     cfg->low_speed_mps = 3.0f;
     cfg->decision_period_s = decision_period_s;
     cfg->exit_mode = LATTICE_EXIT_MODE_POLICY;
+    cfg->trail_keep_m = LATTICE_TRAIL_KEEP_M;
 }
 
 // hybrid menu (puffer_drive_spline_werling_hybrid.yaml without overtake/turnaround): MultiDiscrete([2, 28, 2, 77, 5])

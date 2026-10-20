@@ -238,7 +238,12 @@ def build_obs_layout(counts):
     layout["boundary_start"] = layout["lane_start"] + layout["lane_count"] * layout["lane_features"]
     layout["traffic_start"] = layout["boundary_start"] + layout["boundary_count"] * layout["boundary_features"]
     layout["valid_count_start"] = layout["traffic_start"] + layout["traffic_count"] * layout["traffic_features"]
-    layout["obs_dim"] = layout["valid_count_start"] + layout["valid_count_features"] + layout["lattice_mask_features"]
+    # replays captured before the rail block have no rail_features entry
+    layout["rail_features"] = int(counts.get("rail_features", 0))
+    if layout["rail_features"] < 0:
+        raise ValueError(f"Observation layout has negative rail_features {layout['rail_features']}")
+    layout["rail_start"] = layout["valid_count_start"] + layout["valid_count_features"]
+    layout["obs_dim"] = layout["rail_start"] + layout["rail_features"] + layout["lattice_mask_features"]
     return layout
 
 

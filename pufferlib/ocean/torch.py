@@ -278,27 +278,40 @@ class DriveBackbone(nn.Module):
         self.mask_padded_features = mask_padded_features
         # Context size (reward coefficients + target info)
         self.context_dim = env.num_reward_coefs + env.goal_dim
+        # rail block (between the valid counts and the masks): each object's rail columns join its car-frame row
+        self.rail_obs_features = getattr(env, "rail_obs_features", 0)
+        self.rail_partner_features = getattr(env, "rail_partner_features", 0)
+        self.rail_road_features = getattr(env, "rail_road_features", 0)
+        self.rail_point_features = getattr(env, "rail_point_features", 0)
+        self.rail_preview_features = getattr(env, "rail_preview_features", 0)
+        self.rail_goal_features = env.num_goals * self.rail_point_features if self.rail_obs_features > 0 else 0
 
         # 1. observations Encoders
         # Each encoder projects raw features into its own embedding space
-        self.ego_encoder = self._create_encoder(ego_dim, ego_input_size)
+        self.ego_encoder = self._create_encoder(ego_dim + self.rail_preview_features, ego_input_size)
         encoders_out = ego_input_size
         if self.obs_slots_lane_kept > 0:
-            self.lane_encoder = self._create_encoder(self.lane_features_count, lane_input_size)
+            self.lane_encoder = self._create_encoder(
+                self.lane_features_count + self.rail_road_features, lane_input_size
+            )
             encoders_out += lane_input_size
         if self.obs_slots_boundary_kept > 0:
-            self.boundary_encoder = self._create_encoder(self.boundary_features_count, boundary_input_size)
+            self.boundary_encoder = self._create_encoder(
+                self.boundary_features_count + self.rail_road_features, boundary_input_size
+            )
             encoders_out += boundary_input_size
         if self.obs_slots_partners_n > 0:
-            self.partner_encoder = self._create_encoder(self.partner_features_count, partner_input_size)
+            self.partner_encoder = self._create_encoder(
+                self.partner_features_count + self.rail_partner_features, partner_input_size
+            )
             encoders_out += partner_input_size
         if self.obs_slots_traffic_controls_n > 0:
             self.traffic_control_encoder = self._create_encoder(
-                self.traffic_control_features_after_onehot, traffic_control_input_size
+                self.traffic_control_features_after_onehot + self.rail_point_features, traffic_control_input_size
             )
             encoders_out += traffic_control_input_size
         if self.context_dim > 0:
-            self.context_encoder = self._create_encoder(self.context_dim, context_input_size)
+            self.context_encoder = self._create_encoder(self.context_dim + self.rail_goal_features, context_input_size)
             encoders_out += context_input_size
         # Lattice action masks are appended after every other feature and also feed the encoder
         self.lattice_mask_features = getattr(env, "lattice_mask_features", 0)
@@ -321,32 +334,34 @@ class DriveBackbone(nn.Module):
         self.backbone = nn.Sequential(*backbone_layers)
         self.out_dim = backbone_hidden_size if backbone_num_layers > 0 else encoders_out
 
-    def forward(self, observations, ego_dim):
-        # Extract and slice observations from the flat buffer
+    def _observation_blocks(self, observations, ego_dim):
+        """Flat C layout -> ego and context inputs, per-type object rows (traffic one-hots expanded) and slot counts."""
         partner_dim = self.obs_slots_partners_n * self.partner_features_count
         lane_dim = self.obs_slots_lane_kept * self.lane_features_count
         boundary_dim = self.obs_slots_boundary_kept * self.boundary_features_count
         traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
+        block_dims = [ego_dim, self.context_dim, partner_dim, lane_dim, boundary_dim, traffic_control_dim]
+        block_dims.append(self.obs_valid_count_features)
+        if self.rail_obs_features > 0:
+            block_dims += [
+                self.obs_slots_partners_n * self.rail_partner_features,
+                self.obs_slots_lane_kept * self.rail_road_features,
+                self.obs_slots_boundary_kept * self.rail_road_features,
+                self.obs_slots_traffic_controls_n * self.rail_point_features,
+                self.rail_goal_features,
+                self.rail_preview_features,
+            ]
+        bounds = [0]
+        for dim in block_dims:
+            bounds.append(bounds[-1] + dim)
+        blocks = [observations[:, begin:end] for begin, end in zip(bounds, bounds[1:])]
+        ego_observations, context_observations = blocks[0], blocks[1]
+        count_observations = blocks[6]
+        rail_blocks = blocks[7:]
+        if rail_blocks:
+            ego_observations = torch.cat([ego_observations, rail_blocks[5]], dim=1)
+            context_observations = torch.cat([context_observations, rail_blocks[4]], dim=1)
 
-        slide_idx = ego_dim
-        ego_observations = observations[:, :slide_idx]
-
-        context_observations = observations[:, slide_idx : slide_idx + self.context_dim]
-        slide_idx += self.context_dim
-
-        partner_observations = observations[:, slide_idx : slide_idx + partner_dim]
-        slide_idx += partner_dim
-
-        lane_observations = observations[:, slide_idx : slide_idx + lane_dim]
-        slide_idx += lane_dim
-
-        boundary_observations = observations[:, slide_idx : slide_idx + boundary_dim]
-        slide_idx += boundary_dim
-
-        traffic_control_observations = observations[:, slide_idx : slide_idx + traffic_control_dim]
-        count_observations = observations[
-            :, slide_idx + traffic_control_dim : slide_idx + traffic_control_dim + self.obs_valid_count_features
-        ]
         lane_counts, boundary_counts, partner_counts, traffic_control_counts = [
             count_observations[:, i].long().clamp_(0, capacity)
             for i, capacity in enumerate(
@@ -358,43 +373,21 @@ class DriveBackbone(nn.Module):
                 )
             )
         ]
-
-        # Encode Ego State
-        ego_features = self.ego_encoder(ego_observations)
-
-        feature_list = [ego_features]
-
-        # Encode Lanes and Boundaries separately
-        if self.obs_slots_lane_kept > 0:
-            lane_objects = lane_observations.view(-1, self.obs_slots_lane_kept, self.lane_features_count)
-            lane_features = self._encode_and_pool(lane_objects, lane_counts, self.lane_encoder, self.lane_input_size)
-            feature_list.append(lane_features)
-        if self.obs_slots_boundary_kept > 0:
-            boundary_objects = boundary_observations.view(
-                -1, self.obs_slots_boundary_kept, self.boundary_features_count
-            )
-            boundary_features = self._encode_and_pool(
-                boundary_objects,
-                boundary_counts,
-                self.boundary_encoder,
-                self.boundary_input_size,
-            )
-            feature_list.append(boundary_features)
-
-        # Encode Partners
-        if self.obs_slots_partners_n > 0:
-            partner_objects = partner_observations.view(-1, self.obs_slots_partners_n, self.partner_features_count)
-            partner_features = self._encode_and_pool(
-                partner_objects,
-                partner_counts,
-                self.partner_encoder,
-                self.partner_input_size,
-            )
-            feature_list.append(partner_features)
-
-        # Encode Traffic Controls
+        objects = {}
+        object_kinds = (
+            ("partner", self.obs_slots_partners_n, self.partner_features_count, 2, 0, self.rail_partner_features),
+            ("lane", self.obs_slots_lane_kept, self.lane_features_count, 3, 1, self.rail_road_features),
+            ("boundary", self.obs_slots_boundary_kept, self.boundary_features_count, 4, 2, self.rail_road_features),
+        )
+        for name, slots, features, block_idx, rail_idx, rail_features in object_kinds:
+            if slots == 0:
+                continue
+            rows = blocks[block_idx].view(-1, slots, features)
+            if rail_blocks:
+                rows = torch.cat([rows, rail_blocks[rail_idx].view(-1, slots, rail_features)], dim=2)
+            objects[name] = rows
         if self.obs_slots_traffic_controls_n > 0:
-            traffic_control_objects = traffic_control_observations.view(
+            traffic_control_objects = blocks[5].view(
                 -1, self.obs_slots_traffic_controls_n, self.traffic_control_features_count
             )
             traffic_control_continuous = traffic_control_objects[:, :, : self.traffic_control_continuous_features]
@@ -408,13 +401,56 @@ class DriveBackbone(nn.Module):
                 traffic_control_state.long(),
                 num_classes=binding.NUM_TRAFFIC_CONTROL_STATES,
             ).to(traffic_control_continuous.dtype)
-            traffic_control_objects = torch.cat(
+            # one-hots stay last: the rail columns join the continuous features
+            if rail_blocks:
+                rail_traffic = rail_blocks[3].view(-1, self.obs_slots_traffic_controls_n, self.rail_point_features)
+                traffic_control_continuous = torch.cat([traffic_control_continuous, rail_traffic], dim=2)
+            objects["traffic_control"] = torch.cat(
                 [traffic_control_continuous, traffic_control_type_onehot, traffic_control_state_onehot],
                 dim=2,
             )
+        counts = {
+            "partner": partner_counts,
+            "lane": lane_counts,
+            "boundary": boundary_counts,
+            "traffic_control": traffic_control_counts,
+        }
+        return ego_observations, context_observations, objects, counts
+
+    def forward(self, observations, ego_dim):
+        ego_observations, context_observations, objects, counts = self._observation_blocks(observations, ego_dim)
+
+        # Encode Ego State
+        ego_features = self.ego_encoder(ego_observations)
+
+        feature_list = [ego_features]
+
+        # Encode Lanes, Boundaries, Partners and Traffic Controls
+        if self.obs_slots_lane_kept > 0:
+            lane_features = self._encode_and_pool(
+                objects["lane"], counts["lane"], self.lane_encoder, self.lane_input_size
+            )
+            feature_list.append(lane_features)
+        if self.obs_slots_boundary_kept > 0:
+            boundary_features = self._encode_and_pool(
+                objects["boundary"],
+                counts["boundary"],
+                self.boundary_encoder,
+                self.boundary_input_size,
+            )
+            feature_list.append(boundary_features)
+        if self.obs_slots_partners_n > 0:
+            partner_features = self._encode_and_pool(
+                objects["partner"],
+                counts["partner"],
+                self.partner_encoder,
+                self.partner_input_size,
+            )
+            feature_list.append(partner_features)
+        if self.obs_slots_traffic_controls_n > 0:
             traffic_control_features = self._encode_and_pool(
-                traffic_control_objects,
-                traffic_control_counts,
+                objects["traffic_control"],
+                counts["traffic_control"],
                 self.traffic_control_encoder,
                 self.traffic_control_input_size,
             )
@@ -432,72 +468,22 @@ class DriveBackbone(nn.Module):
         return self.backbone(concat_features)
 
     def pool_slot_counts(self, observations, ego_dim):
-        partner_dim = self.obs_slots_partners_n * self.partner_features_count
-        lane_dim = self.obs_slots_lane_kept * self.lane_features_count
-        boundary_dim = self.obs_slots_boundary_kept * self.boundary_features_count
-        traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
-
-        slide_idx = ego_dim + self.context_dim
-        partner_observations = observations[:, slide_idx : slide_idx + partner_dim]
-        slide_idx += partner_dim
-        lane_observations = observations[:, slide_idx : slide_idx + lane_dim]
-        slide_idx += lane_dim
-        boundary_observations = observations[:, slide_idx : slide_idx + boundary_dim]
-        slide_idx += boundary_dim
-        traffic_control_observations = observations[:, slide_idx : slide_idx + traffic_control_dim]
-
+        _, _, objects, _ = self._observation_blocks(observations, ego_dim)
+        encoders = (
+            ("lane", "pool_lane", getattr(self, "lane_encoder", None)),
+            ("boundary", "pool_boundary", getattr(self, "boundary_encoder", None)),
+            ("partner", "pool_partner", getattr(self, "partner_encoder", None)),
+            ("traffic_control", "pool_traffic", getattr(self, "traffic_control_encoder", None)),
+        )
         counts = {}
-        if self.obs_slots_lane_kept > 0:
-            lane_objects = lane_observations.view(-1, self.obs_slots_lane_kept, self.lane_features_count)
-            lane_winners = self.lane_encoder(lane_objects).max(dim=1).indices
-            lane_counts = torch.zeros(
-                observations.shape[0], self.obs_slots_lane_kept, device=observations.device, dtype=torch.int64
+        for name, pool_name, encoder in encoders:
+            if name not in objects:
+                continue
+            winners = encoder(objects[name]).max(dim=1).indices
+            slot_counts = torch.zeros(
+                observations.shape[0], objects[name].shape[1], device=observations.device, dtype=torch.int64
             )
-            counts["pool_lane"] = lane_counts.scatter_add(1, lane_winners, torch.ones_like(lane_winners))
-        if self.obs_slots_boundary_kept > 0:
-            boundary_objects = boundary_observations.view(
-                -1, self.obs_slots_boundary_kept, self.boundary_features_count
-            )
-            boundary_winners = self.boundary_encoder(boundary_objects).max(dim=1).indices
-            boundary_counts = torch.zeros(
-                observations.shape[0], self.obs_slots_boundary_kept, device=observations.device, dtype=torch.int64
-            )
-            counts["pool_boundary"] = boundary_counts.scatter_add(
-                1, boundary_winners, torch.ones_like(boundary_winners)
-            )
-        if self.obs_slots_partners_n > 0:
-            partner_objects = partner_observations.view(-1, self.obs_slots_partners_n, self.partner_features_count)
-            partner_winners = self.partner_encoder(partner_objects).max(dim=1).indices
-            partner_counts = torch.zeros(
-                observations.shape[0], self.obs_slots_partners_n, device=observations.device, dtype=torch.int64
-            )
-            counts["pool_partner"] = partner_counts.scatter_add(1, partner_winners, torch.ones_like(partner_winners))
-        if self.obs_slots_traffic_controls_n > 0:
-            traffic_control_objects = traffic_control_observations.view(
-                -1, self.obs_slots_traffic_controls_n, self.traffic_control_features_count
-            )
-            traffic_control_continuous = traffic_control_objects[:, :, : self.traffic_control_continuous_features]
-            traffic_control_type = traffic_control_objects[:, :, self.traffic_control_continuous_features]
-            traffic_control_state = traffic_control_objects[:, :, self.traffic_control_continuous_features + 1]
-            traffic_control_type_onehot = F.one_hot(
-                traffic_control_type.long(),
-                num_classes=binding.NUM_TRAFFIC_CONTROL_TYPES,
-            ).to(traffic_control_continuous.dtype)
-            traffic_control_state_onehot = F.one_hot(
-                traffic_control_state.long(),
-                num_classes=binding.NUM_TRAFFIC_CONTROL_STATES,
-            ).to(traffic_control_continuous.dtype)
-            traffic_control_objects = torch.cat(
-                [traffic_control_continuous, traffic_control_type_onehot, traffic_control_state_onehot],
-                dim=2,
-            )
-            traffic_control_winners = self.traffic_control_encoder(traffic_control_objects).max(dim=1).indices
-            traffic_control_counts = torch.zeros(
-                observations.shape[0], self.obs_slots_traffic_controls_n, device=observations.device, dtype=torch.int64
-            )
-            counts["pool_traffic"] = traffic_control_counts.scatter_add(
-                1, traffic_control_winners, torch.ones_like(traffic_control_winners)
-            )
+            counts[pool_name] = slot_counts.scatter_add(1, winners, torch.ones_like(winners))
         return counts
 
 

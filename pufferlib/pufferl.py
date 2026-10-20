@@ -1470,6 +1470,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "lattice_turnaround",
             "lattice_light_in_view",
             "obs_light_facing_only",
+            "obs_rail_frame",
+            "obs_car_frame",
+            "lattice_trail_keep_m",
+            "lattice_exit_goal_refresh",
         }
         if os.path.exists(config_yaml_path):
             print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")

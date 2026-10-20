@@ -949,7 +949,8 @@ static int find_light_approach(const Drive *env, float min_approach_m, int *appr
 static float light_slot_state(Drive *env, Agent *ego, const TrafficControlElement *light) {
     float slots[16 * TRAFFIC_CONTROL_FEATURES] = {0};
     int count = 0;
-    write_traffic_control_obs(env, ego, slots, 0, &count);
+    int control_idx[16];
+    write_traffic_control_obs(env, ego, slots, 0, &count, control_idx);
     float rel_x, rel_y;
     project_point_to_ego_frame(ego, light->stop_line[0], light->stop_line[1], &rel_x, &rel_y);
     for (int slot = 0; slot < count; slot++) {
@@ -2422,6 +2423,517 @@ static int test_hybrid_determinism_and_rollouts(void) {
     return 0;
 }
 
+// ========================================
+// Rail-frame observations, longer trail, goal-exit refresh
+// ========================================
+
+// configured but not yet allocated hybrid lattice env with training-like observation ranges and road dropout
+static Drive begin_rail_obs_env(const char *map_file, int num_agents) {
+    Drive env = drive_test_env_config(map_file, SIMULATION_MODE_GIGAFLOW, num_agents, 0);
+    env.dynamics_model = DYNAMICS_MODEL_SPLINE_WERLING;
+    env.action_type = ACTION_TYPE_LATTICE;
+    env.dt = 0.3f;
+    env.scenario_length = 5000;
+    lattice_test_default_menu(&env.lattice, 0.3f);
+    lattice_test_hybrid_menu(&env.lattice);
+    env.obs_slots_lane_n = 40;
+    env.obs_slots_lane_kept = 28;
+    env.obs_slots_boundary_n = 40;
+    env.obs_slots_boundary_kept = 24;
+    env.obs_norm_xy_offset_m = 200.0f;
+    env.obs_norm_goal_offset_m = 200.0f;
+    env.obs_range_road_front_m = 200.0f;
+    env.obs_range_road_behind_m = 60.0f;
+    env.obs_range_road_side_m = 50.0f;
+    env.obs_range_partner_m = 200.0f;
+    env.obs_range_traffic_control_m = 200.0f;
+    return env;
+}
+
+static void finish_rail_obs_env(Drive *env) {
+    allocate(env);
+    c_reset(env);
+}
+
+static int rail_block_start(const Drive *env) {
+    return compute_observation_size((Drive *) env) - env->lattice.mask_feature_count - rail_obs_feature_count(env);
+}
+
+// lane-free rail through samples spaced LATTICE_RAIL_SPACING_M apart; the car's z is its level
+static void fill_synthetic_rail(struct LatticeRail *rail, const float *x, const float *y, int count) {
+    memset(rail, 0, sizeof *rail);
+    rail->sample_count = count;
+    rail->is_straight_fallback = 1;
+    memcpy(rail->x, x, count * sizeof(float));
+    memcpy(rail->y, y, count * sizeof(float));
+    lattice_finish_rail_geometry(rail);
+}
+
+// straight, arc and hairpin rails: feet, ends, level, tight-bend and second-branch rejections
+static int test_rail_obs_projection_synthetic(void) {
+    static struct LatticeRail rail;
+    static float x[LATTICE_RAIL_SAMPLES], y[LATTICE_RAIL_SAMPLES];
+    Drive env = {0};
+    LatticeRailObsFrame frame;
+    LatticeRailFoot foot;
+    for (int sample = 0; sample < LATTICE_NOMINAL_RAIL_SAMPLES; sample++) {
+        x[sample] = sample * LATTICE_RAIL_SPACING_M;
+        y[sample] = 0.0f;
+    }
+    fill_synthetic_rail(&rail, x, y, LATTICE_NOMINAL_RAIL_SAMPLES);
+    build_lattice_rail_obs_frame(&rail, 0.0f, -1e9f, 1e9f, &frame);
+    EXPECT_TRUE(lattice_rail_obs_foot(&env, &frame, 50.0f, 3.0f, 0.0f, &foot));
+    EXPECT_NEAR(foot.s_m, 50.0f, 1e-3f);
+    EXPECT_NEAR(foot.d_m, 3.0f, 1e-3f);
+    EXPECT_NEAR(foot.cos_heading, 1.0f, 1e-5f);
+    EXPECT_NEAR(foot.sin_heading, 0.0f, 1e-5f);
+    EXPECT_TRUE(lattice_rail_obs_foot(&env, &frame, 120.25f, -2.0f, 0.0f, &foot));
+    EXPECT_NEAR(foot.s_m, 120.25f, 1e-3f);
+    EXPECT_NEAR(foot.d_m, -2.0f, 1e-3f);
+    EXPECT_TRUE(!lattice_rail_obs_foot(&env, &frame, 0.4f, 1.0f, 0.0f, &foot));
+    EXPECT_TRUE(!lattice_rail_obs_foot(&env, &frame, -5.0f, 0.0f, 0.0f, &foot));
+    EXPECT_TRUE(!lattice_rail_obs_foot(&env, &frame, 255.0f, 0.0f, 0.0f, &foot));
+    EXPECT_TRUE(!lattice_rail_obs_foot(&env, &frame, 50.0f, 3.0f, 4.5f, &foot));
+    EXPECT_TRUE(lattice_rail_obs_foot(&env, &frame, 50.0f, 3.0f, 3.9f, &foot));
+
+    float radius_m = 20.0f;
+    int arc_count = 120;
+    for (int sample = 0; sample < arc_count; sample++) {
+        float angle = sample * LATTICE_RAIL_SPACING_M / radius_m;
+        x[sample] = radius_m * sinf(angle);
+        y[sample] = radius_m * (1.0f - cosf(angle));
+    }
+    fill_synthetic_rail(&rail, x, y, arc_count);
+    build_lattice_rail_obs_frame(&rail, 0.0f, -1e9f, 1e9f, &frame);
+    float probe_angle = 1.5f;
+    const float arc_offsets_m[] = {10.0f, -10.0f, -17.0f, 17.0f};
+    for (int case_idx = 0; case_idx < 4; case_idx++) {
+        float d_m = arc_offsets_m[case_idx];
+        float px = (radius_m - d_m) * sinf(probe_angle);
+        float py = radius_m - (radius_m - d_m) * cosf(probe_angle);
+        int valid = lattice_rail_obs_foot(&env, &frame, px, py, 0.0f, &foot);
+        EXPECT_EQ_INT(valid, case_idx < 3);
+        if (valid) {
+            // a point off a chord polyline projects up to |d| * (spacing / R) / 2 away from the arc's own foot
+            EXPECT_NEAR(
+                foot.s_m,
+                radius_m * probe_angle,
+                0.5f * fabsf(d_m) * LATTICE_RAIL_SPACING_M / radius_m + 0.01f);
+            EXPECT_NEAR(foot.d_m, d_m, 0.02f);
+            EXPECT_NEAR(foot.cos_heading, cosf(probe_angle), 0.02f);
+            EXPECT_NEAR(foot.sin_heading, sinf(probe_angle), 0.02f);
+        }
+    }
+
+    float turn_radius_m = 4.0f;
+    float leg_m = 50.0f;
+    float bend_m = (float) M_PI * turn_radius_m;
+    int hairpin_count = (int) ((2.0f * leg_m + bend_m) / LATTICE_RAIL_SPACING_M);
+    for (int sample = 0; sample < hairpin_count; sample++) {
+        float s_m = sample * LATTICE_RAIL_SPACING_M;
+        float angle = (s_m - leg_m) / turn_radius_m;
+        x[sample] = s_m <= leg_m
+            ? s_m
+            : (s_m <= leg_m + bend_m ? leg_m + turn_radius_m * sinf(angle) : leg_m - (s_m - leg_m - bend_m));
+        y[sample] = s_m <= leg_m
+            ? 0.0f
+            : (s_m <= leg_m + bend_m ? turn_radius_m * (1.0f - cosf(angle)) : 2.0f * turn_radius_m);
+    }
+    fill_synthetic_rail(&rail, x, y, hairpin_count);
+    build_lattice_rail_obs_frame(&rail, 0.0f, -1e9f, 1e9f, &frame);
+    EXPECT_TRUE(lattice_rail_obs_foot(&env, &frame, 25.0f, 1.0f, 0.0f, &foot));
+    EXPECT_NEAR(foot.s_m, 25.0f, 0.05f);
+    EXPECT_NEAR(foot.d_m, 1.0f, 0.02f);
+    EXPECT_TRUE(!lattice_rail_obs_foot(&env, &frame, 25.0f, 3.0f, 0.0f, &foot));
+    EXPECT_TRUE(lattice_rail_obs_foot(&env, &frame, 25.0f, -3.0f, 0.0f, &foot));
+    EXPECT_NEAR(foot.d_m, -3.0f, 0.02f);
+    EXPECT_TRUE(lattice_rail_obs_foot(&env, &frame, 25.0f, 7.0f, 0.0f, &foot));
+    EXPECT_NEAR(foot.s_m, leg_m + bend_m + 25.0f, 0.05f);
+    EXPECT_NEAR(foot.d_m, 1.0f, 0.02f);
+    build_lattice_rail_obs_frame(&rail, 0.0f, 30.0f, 1e9f, &frame);
+    EXPECT_TRUE(!lattice_rail_obs_foot(&env, &frame, 25.0f, -3.0f, 0.0f, &foot));
+    build_lattice_rail_obs_frame(&rail, 0.0f, -1e9f, 20.0f, &frame);
+    EXPECT_TRUE(!lattice_rail_obs_foot(&env, &frame, 25.0f, -3.0f, 0.0f, &foot));
+    return 0;
+}
+
+// a neighbour-lane rail shifts every d by the lane spacing and keeps d - d_ego (ds scales with the curve radius)
+static int test_rail_obs_lane_change_invariance(void) {
+    Drive env = begin_rail_obs_env(TOWN06, 2);
+    env.obs_rail_frame = 1;
+    finish_rail_obs_env(&env);
+    place_lattice_agent(&env, 1, LEFT_NEIGHBOUR_TOWN06, 40.0f, 4.5f);
+    place_lattice_agent(&env, 0, CURVED_LANE_TOWN06, 20.0f, 4.5f);
+    int obs_size = compute_observation_size(&env);
+    int rail_start = rail_block_start(&env);
+    float before[RAIL_PARTNER_FEATURES] = {0};
+    for (int slot = 0; slot < env.obs_slots_partners_n; slot++) {
+        const float *row = &env.observations[rail_start + slot * RAIL_PARTNER_FEATURES];
+        if (row[0] == 1.0f) {
+            memcpy(before, row, sizeof before);
+        }
+    }
+    EXPECT_NEAR(before[0], 1.0f, 0.0f);
+    struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+    lattice_neighbours_at(&env, lattice_agent);
+    EXPECT_EQ_INT(lattice_agent->neighbour_lane[1], LEFT_NEIGHBOUR_TOWN06);
+    int sample_idx = build_lattice_fresh_rail(
+        &env,
+        &lattice_agent->rail,
+        slot0_agent(&env),
+        LEFT_NEIGHBOUR_TOWN06,
+        lattice_agent->neighbour_arc_m[1]);
+    EXPECT_TRUE(sample_idx >= 0);
+    lattice_agent->projection_hint = sample_idx;
+    compute_observations(&env);
+    float after[RAIL_PARTNER_FEATURES] = {0};
+    for (int slot = 0; slot < env.obs_slots_partners_n; slot++) {
+        const float *row = &env.observations[rail_start + slot * RAIL_PARTNER_FEATURES];
+        if (row[0] == 1.0f) {
+            memcpy(after, row, sizeof after);
+        }
+    }
+    printf(
+        "  partner on the left lane: d %.3f -> %.3f lanes, d - d_ego %.3f -> %.3f lanes, ds %.2f -> %.2f m\n",
+        before[2],
+        after[2],
+        before[4],
+        after[4],
+        before[1] * RAIL_OBS_DS_NORM_M,
+        after[1] * RAIL_OBS_DS_NORM_M);
+    EXPECT_NEAR(after[0], 1.0f, 0.0f);
+    EXPECT_NEAR(after[4], before[4], 0.02f);
+    EXPECT_TRUE(before[2] - after[2] > 0.7f);
+    EXPECT_NEAR(after[5], before[5], 1e-3f);
+    (void) obs_size;
+    free_allocated(&env);
+    return 0;
+}
+
+// hiding the car frame zeroes exactly the planar car-frame columns; the rest, the rail block and the trajectories match
+static int test_rail_obs_hide_car_frame_and_layout(void) {
+    Drive shown = begin_rail_obs_env(TOWN06, 6);
+    Drive hidden = begin_rail_obs_env(TOWN06, 6);
+    Drive plain = begin_rail_obs_env(TOWN06, 6);
+    shown.obs_rail_frame = 1;
+    hidden.obs_rail_frame = 1;
+    hidden.obs_hide_car_frame = 1;
+    finish_rail_obs_env(&shown);
+    finish_rail_obs_env(&hidden);
+    finish_rail_obs_env(&plain);
+    int obs_size = compute_observation_size(&shown);
+    int rail_features = rail_obs_feature_count(&shown);
+    EXPECT_EQ_INT(rail_features, 16 * 9 + (28 + 24) * 6 + 4 * 4 + 3 * 4 + 6 * 2);
+    EXPECT_EQ_INT(obs_size, compute_observation_size(&plain) + rail_features);
+    int plan_start = EGO_FEATURES;
+    int partner_start = plan_start + lattice_plan_feature_count(&shown.lattice) + shown.num_goals * GOAL_FEATURES;
+    int lane_start = partner_start + shown.obs_slots_partners_n * PARTNER_FEATURES;
+    int boundary_start = lane_start + shown.obs_slots_lane_kept * LANE_FEATURES;
+    int traffic_start = boundary_start + shown.obs_slots_boundary_kept * BOUNDARY_FEATURES;
+    int count_start = traffic_start + shown.obs_slots_traffic_controls_n * TRAFFIC_CONTROL_FEATURES;
+    int rail_start = rail_block_start(&shown);
+    EXPECT_EQ_INT(rail_start, count_start + OBS_VALID_COUNT_FEATURES);
+    unsigned long long rng_shown = 23, rng_hidden = 23, rng_plain = 23;
+    float expected[obs_size];
+    int valid_rows = 0, listed_rows = 0;
+    for (int step = 0; step < 60; step++) {
+        random_valid_actions(&shown, &rng_shown);
+        random_valid_actions(&hidden, &rng_hidden);
+        random_valid_actions(&plain, &rng_plain);
+        c_step(&shown);
+        c_step(&hidden);
+        c_step(&plain);
+        for (int active_idx = 0; active_idx < shown.active_agent_count; active_idx++) {
+            const float *row = &shown.observations[active_idx * obs_size];
+            const float *plain_row = &plain.observations[active_idx * compute_observation_size(&plain)];
+            EXPECT_TRUE(memcmp(row, plain_row, count_start * sizeof(float)) == 0);
+            memcpy(expected, row, sizeof expected);
+            for (int point = 0; point < LATTICE_PREVIEW_POINTS; point++) {
+                expected[plan_start + 42 + 3 * point] = 0.0f;
+                expected[plan_start + 42 + 3 * point + 1] = 0.0f;
+            }
+            const int planar[4] = {0, 1, 5, 6};
+            for (int slot = 0; slot < shown.obs_slots_partners_n; slot++) {
+                for (int col = 0; col < 4; col++) {
+                    expected[partner_start + slot * PARTNER_FEATURES + planar[col]] = 0.0f;
+                }
+            }
+            for (int slot = 0; slot < shown.obs_slots_lane_kept + shown.obs_slots_boundary_kept; slot++) {
+                for (int col = 0; col < 4; col++) {
+                    expected[lane_start + slot * LANE_FEATURES + planar[col]] = 0.0f;
+                }
+            }
+            for (int slot = 0; slot < shown.obs_slots_traffic_controls_n; slot++) {
+                for (int col = 0; col < 4; col++) {
+                    expected[traffic_start + slot * TRAFFIC_CONTROL_FEATURES + col] = 0.0f;
+                }
+            }
+            const float *hidden_row = &hidden.observations[active_idx * obs_size];
+            for (int value = 0; value < obs_size; value++) {
+                EXPECT_TRUE(hidden_row[value] == expected[value]);
+            }
+            int counts[4]
+                = {(int) row[count_start],
+                   (int) row[count_start + 1],
+                   (int) row[count_start + 2],
+                   (int) row[count_start + 3]};
+            for (int slot = 0; slot < shown.obs_slots_partners_n; slot++) {
+                const float *rail_row = &row[rail_start + slot * RAIL_PARTNER_FEATURES];
+                EXPECT_TRUE(rail_row[0] == 0.0f || (rail_row[0] == 1.0f && slot < counts[2]));
+                valid_rows += rail_row[0] == 1.0f;
+                listed_rows += slot < counts[2];
+            }
+            int road_rail_start = rail_start + shown.obs_slots_partners_n * RAIL_PARTNER_FEATURES;
+            for (int slot = 0; slot < shown.obs_slots_lane_kept + shown.obs_slots_boundary_kept; slot++) {
+                int is_lane = slot < shown.obs_slots_lane_kept;
+                int listed = is_lane ? slot < counts[0] : slot - shown.obs_slots_lane_kept < counts[1];
+                const float *rail_row = &row[road_rail_start + slot * RAIL_ROAD_FEATURES];
+                EXPECT_TRUE(rail_row[0] == 0.0f || (rail_row[0] == 1.0f && listed));
+                EXPECT_TRUE(rail_row[4] * rail_row[4] + rail_row[5] * rail_row[5] <= rail_row[0] + 1e-4f);
+            }
+        }
+    }
+    printf("  rail partner rows valid %d of %d listed\n", valid_rows, listed_rows);
+    EXPECT_TRUE(valid_rows > 0);
+    free_allocated(&shown);
+    free_allocated(&hidden);
+    free_allocated(&plain);
+    return 0;
+}
+
+// a 60 m trail adds 60 samples behind the car and keeps the reach ahead; bad trails and refresh pairings are rejected
+static int test_rail_trail_keep(void) {
+    char path[512];
+    carla_town_path(path, sizeof path, "Town03");
+    Drive short_trail = begin_rail_obs_env(path, 1);
+    Drive long_trail = begin_rail_obs_env(path, 1);
+    // the greedy driver picks speed cells of the duration menu
+    lattice_test_default_menu(&short_trail.lattice, 0.3f);
+    lattice_test_default_menu(&long_trail.lattice, 0.3f);
+    long_trail.lattice.trail_keep_m = 60.0f;
+    finish_rail_obs_env(&short_trail);
+    finish_rail_obs_env(&long_trail);
+    int checked_lanes = 0;
+    int full_trail_lane = -1;
+    for (int lane = 0; lane < short_trail.num_road_elements && checked_lanes < 20; lane++) {
+        if (!is_drivable_road_lane(short_trail.road_elements[lane].type)
+            || short_trail.lattice_lanes[lane].length_m < 40.0f || short_trail.lattice_lanes[lane].is_connector) {
+            continue;
+        }
+        place_lattice_agent(&short_trail, 0, lane, 5.0f, 5.0f);
+        place_lattice_agent(&long_trail, 0, lane, 5.0f, 5.0f);
+        const struct LatticeRail *rail_30 = &short_trail.lattice_agents[0].rail;
+        const struct LatticeRail *rail_60 = &long_trail.lattice_agents[0].rail;
+        float car_s_30
+            = lattice_frenet_state(rail_30, slot0_agent(&short_trail), short_trail.lattice_agents[0].projection_hint).s;
+        float car_s_60
+            = lattice_frenet_state(rail_60, slot0_agent(&long_trail), long_trail.lattice_agents[0].projection_hint).s;
+        if (car_s_60 - rail_60->s_start_m < 59.0f || lattice_rail_end_s(rail_30) - car_s_30 < 225.0f) {
+            continue;
+        }
+        EXPECT_NEAR(car_s_30 - rail_30->s_start_m, 30.0f, 0.6f);
+        EXPECT_NEAR(car_s_60 - rail_60->s_start_m, 60.0f, 0.6f);
+        EXPECT_EQ_INT(rail_30->sample_count, LATTICE_NOMINAL_RAIL_SAMPLES);
+        EXPECT_EQ_INT(rail_60->sample_count, LATTICE_NOMINAL_RAIL_SAMPLES + 60);
+        EXPECT_NEAR(lattice_rail_end_s(rail_60) - car_s_60, lattice_rail_end_s(rail_30) - car_s_30, 0.6f);
+        full_trail_lane = full_trail_lane < 0 ? lane : full_trail_lane;
+        checked_lanes++;
+    }
+    printf("  lanes with a full 60 m trail and 225 m ahead: %d\n", checked_lanes);
+    EXPECT_TRUE(checked_lanes >= 5);
+    place_lattice_agent(&long_trail, 0, full_trail_lane, 5.0f, 0.0f);
+    float min_trail_m = 1e9f, max_trail_m = 0.0f;
+    int max_samples = 0;
+    for (int step = 0; step < 900; step++) {
+        step_greedy(&long_trail, 10.0f);
+        struct LatticeAgent *lattice_agent = &long_trail.lattice_agents[0];
+        float car_s
+            = lattice_frenet_state(&lattice_agent->rail, slot0_agent(&long_trail), lattice_agent->projection_hint).s;
+        float trail_m = car_s - lattice_agent->rail.s_start_m;
+        max_samples = lattice_agent->rail.sample_count > max_samples ? lattice_agent->rail.sample_count : max_samples;
+        max_trail_m = fmaxf(max_trail_m, trail_m);
+        if (lattice_agent->counters.rail_regens > 0.0f) {
+            min_trail_m = fminf(min_trail_m, trail_m);
+        }
+    }
+    printf(
+        "  900 greedy steps with a 60 m trail: regenerations %.0f, trail %.1f..%.1f m, most samples %d\n",
+        long_trail.lattice_agents[0].counters.rail_regens,
+        min_trail_m,
+        max_trail_m,
+        max_samples);
+    EXPECT_TRUE(long_trail.lattice_agents[0].counters.rail_regens > 5.0f);
+    EXPECT_TRUE(min_trail_m > 55.0f);
+    EXPECT_TRUE(max_samples <= LATTICE_NOMINAL_RAIL_SAMPLES + 60);
+    free_allocated(&short_trail);
+    free_allocated(&long_trail);
+
+    const float trails[] = {29.5f, 94.5f, 60.25f, 60.0f, 94.0f};
+    for (int case_idx = 0; case_idx < 5; case_idx++) {
+        Drive env = begin_rail_obs_env(TOWN06, 1);
+        env.lattice.trail_keep_m = trails[case_idx];
+        EXPECT_EQ_INT(init_lattice_config(&env), case_idx < 3 ? -1 : 0);
+    }
+    for (int exit_mode = 0; exit_mode < 2; exit_mode++) {
+        Drive env = begin_rail_obs_env(TOWN06, 1);
+        env.lattice.exit_mode = exit_mode == 0 ? LATTICE_EXIT_MODE_POLICY : LATTICE_EXIT_MODE_GOAL;
+        env.lattice.exit_goal_refresh = 1;
+        EXPECT_EQ_INT(init_lattice_config(&env), exit_mode == 0 ? -1 : 0);
+    }
+    return 0;
+}
+
+static void set_single_goal(Drive *env, Agent *agent, int goal_lane) {
+    float goal_x, goal_y, goal_heading;
+    lattice_lane_point_at_arc(
+        env,
+        goal_lane,
+        0.5f * env->lattice_lanes[goal_lane].length_m,
+        &goal_x,
+        &goal_y,
+        &goal_heading);
+    agent->list_goal_x[0] = goal_x;
+    agent->list_goal_y[0] = goal_y;
+    agent->list_goal_z[0] = agent->sim_z;
+    agent->list_goal_lane[0] = goal_lane;
+    agent->goal_count = 1;
+    agent->current_goal_idx = 0;
+    agent->current_goal_x = goal_x;
+    agent->current_goal_y = goal_y;
+    agent->current_goal_z = agent->sim_z;
+}
+
+// goal exits: a new goal switches a decided split ahead only with the refresh on
+static int test_exit_goal_refresh(void) {
+    char path[512];
+    carla_town_path(path, sizeof path, "Town03");
+    int switches[2] = {0, 0};
+    int took_new_exit[2] = {0, 0};
+    for (int refresh = 0; refresh < 2; refresh++) {
+        Drive env = begin_rail_obs_env(path, 1);
+        env.lattice.exit_mode = LATTICE_EXIT_MODE_GOAL;
+        env.lattice.exit_goal_refresh = refresh;
+        finish_rail_obs_env(&env);
+        int split_lane = -1;
+        for (int lane = 0; lane < env.num_road_elements && split_lane < 0; lane++) {
+            const struct LatticeLaneInfo *info = &env.lattice_lanes[lane];
+            int exits_reach_themselves = info->exit_count >= 2
+                && isfinite(lattice_goal_distance_m(&env, info->exit_slots[0], info->exit_slots[0]))
+                && isfinite(lattice_goal_distance_m(&env, info->exit_slots[1], info->exit_slots[1]));
+            if (exits_reach_themselves && info->length_m > 30.0f && !info->is_connector) {
+                split_lane = lane;
+            }
+        }
+        EXPECT_TRUE(split_lane >= 0);
+        int straight_exit = env.lattice_lanes[split_lane].exit_slots[0];
+        int turn_exit = env.lattice_lanes[split_lane].exit_slots[1];
+        float split_arc_m = env.lattice_lanes[split_lane].length_m - 25.0f;
+        place_lattice_agent(&env, 0, split_lane, split_arc_m, 3.0f);
+        Agent *agent = slot0_agent(&env);
+        struct LatticeAgent *lattice_agent = &env.lattice_agents[0];
+        set_single_goal(&env, agent, turn_exit);
+        place_lattice_agent(&env, 0, split_lane, split_arc_m, 3.0f);
+        EXPECT_TRUE(lattice_slot_after(&lattice_agent->rail, split_lane, turn_exit) >= 0);
+        set_single_goal(&env, agent, straight_exit);
+        step_keep(&env, 1);
+        switches[refresh] = (int) lattice_agent->counters.exit_switches;
+        took_new_exit[refresh] = lattice_slot_after(&lattice_agent->rail, split_lane, straight_exit) >= 0;
+        free_allocated(&env);
+    }
+    printf(
+        "  goal changed after the split was decided: switches without / with refresh %d / %d\n",
+        switches[0],
+        switches[1]);
+    EXPECT_EQ_INT(switches[0], 0);
+    EXPECT_EQ_INT(took_new_exit[0], 0);
+    EXPECT_EQ_INT(switches[1], 1);
+    EXPECT_EQ_INT(took_new_exit[1], 1);
+    return 0;
+}
+
+// the run configurations on several towns: twins match bit for bit, observations stay finite; prints valid fractions
+static int test_rail_obs_random_rollouts(void) {
+    const char *towns[] = {"Town01", "Town03", "Town06", "Town10HD"};
+    int valid[4] = {0}, listed[4] = {0};
+    for (int town_idx = 0; town_idx < 4; town_idx++) {
+        char path[512];
+        carla_town_path(path, sizeof path, towns[town_idx]);
+        Drive env = begin_rail_obs_env(path, 12);
+        Drive twin = begin_rail_obs_env(path, 12);
+        Drive *pair[2] = {&env, &twin};
+        for (int copy = 0; copy < 2; copy++) {
+            pair[copy]->obs_rail_frame = 1;
+            pair[copy]->obs_hide_car_frame = town_idx % 2;
+            pair[copy]->lattice.trail_keep_m = 60.0f;
+            pair[copy]->lattice.exit_mode = town_idx < 2 ? LATTICE_EXIT_MODE_GOAL : LATTICE_EXIT_MODE_POLICY;
+            pair[copy]->lattice.exit_goal_refresh = town_idx < 2;
+            pair[copy]->lattice.oncoming_overtake = 1;
+            pair[copy]->lattice.turnaround = 1;
+            pair[copy]->goal_source = GOAL_SOURCE_MAP;
+            finish_rail_obs_env(pair[copy]);
+        }
+        int obs_size = compute_observation_size(&env);
+        int rail_start = rail_block_start(&env);
+        int count_start = rail_start - OBS_VALID_COUNT_FEATURES;
+        unsigned long long rng_state = 31 + town_idx, twin_rng = 31 + town_idx;
+        for (int step = 0; step < 250; step++) {
+            random_valid_actions(&env, &rng_state);
+            random_valid_actions(&twin, &twin_rng);
+            c_step(&env);
+            c_step(&twin);
+            EXPECT_TRUE(
+                memcmp(env.observations, twin.observations, env.active_agent_count * obs_size * sizeof(float)) == 0);
+            for (int active_idx = 0; active_idx < env.active_agent_count; active_idx++) {
+                const float *row = &env.observations[active_idx * obs_size];
+                for (int value = 0; value < obs_size; value++) {
+                    EXPECT_FINITE(row[value]);
+                }
+                int partner_count = (int) row[count_start + 2];
+                int road_listed[2] = {(int) row[count_start], (int) row[count_start + 1]};
+                int traffic_count = (int) row[count_start + 3];
+                const float *rail = &row[rail_start];
+                for (int slot = 0; slot < partner_count; slot++) {
+                    valid[0] += rail[slot * RAIL_PARTNER_FEATURES] == 1.0f;
+                }
+                listed[0] += partner_count;
+                rail += env.obs_slots_partners_n * RAIL_PARTNER_FEATURES;
+                for (int slot = 0; slot < env.obs_slots_lane_kept + env.obs_slots_boundary_kept; slot++) {
+                    int is_lane = slot < env.obs_slots_lane_kept;
+                    int listed_row = is_lane ? slot < road_listed[0] : slot - env.obs_slots_lane_kept < road_listed[1];
+                    valid[1] += listed_row && rail[slot * RAIL_ROAD_FEATURES] == 1.0f;
+                    listed[1] += listed_row;
+                }
+                rail += (env.obs_slots_lane_kept + env.obs_slots_boundary_kept) * RAIL_ROAD_FEATURES;
+                for (int slot = 0; slot < traffic_count; slot++) {
+                    valid[2] += rail[slot * RAIL_POINT_FEATURES] == 1.0f;
+                }
+                listed[2] += traffic_count;
+                rail += env.obs_slots_traffic_controls_n * RAIL_POINT_FEATURES;
+                const Agent *agent = &env.agents[env.active_agent_indices[active_idx]];
+                for (int goal_idx = 0; goal_idx < env.num_goals; goal_idx++) {
+                    int present = goal_idx >= agent->current_goal_idx && goal_idx < agent->goal_count;
+                    valid[3] += present && rail[goal_idx * RAIL_POINT_FEATURES] == 1.0f;
+                    listed[3] += present;
+                }
+            }
+        }
+        free_allocated(&env);
+        free_allocated(&twin);
+    }
+    const char *names[] = {"partners", "road segments", "stop lines", "goals"};
+    for (int kind = 0; kind < 4; kind++) {
+        printf(
+            "  rail-valid %s: %d of %d (%.1f%%)\n",
+            names[kind],
+            valid[kind],
+            listed[kind],
+            100.0f * valid[kind] / fmaxf(1.0f, (float) listed[kind]));
+    }
+    EXPECT_TRUE(valid[0] > 0.3f * listed[0]);
+    EXPECT_TRUE(valid[1] > 0.3f * listed[1]);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_polynomials_and_bellman);
@@ -2477,5 +2989,11 @@ int main(void) {
     RUN_TEST(test_turn_aborts_when_stopped);
     RUN_TEST(test_turn_offer_rules);
     RUN_TEST(test_turn_random_rollouts);
+    RUN_TEST(test_rail_obs_projection_synthetic);
+    RUN_TEST(test_rail_obs_lane_change_invariance);
+    RUN_TEST(test_rail_obs_hide_car_frame_and_layout);
+    RUN_TEST(test_rail_trail_keep);
+    RUN_TEST(test_exit_goal_refresh);
+    RUN_TEST(test_rail_obs_random_rollouts);
     return test_summary(failures);
 }

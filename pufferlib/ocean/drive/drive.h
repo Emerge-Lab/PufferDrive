@@ -317,6 +317,8 @@ struct Drive {
     int obs_slots_traffic_controls_n;
     int traffic_lights_enabled;
     int obs_light_facing_only; // light states only for lights whose face points at the car
+    int obs_rail_frame;        // append the rail block: objects in the frame of the ego's lattice rail
+    int obs_hide_car_frame;    // zero the car-frame planar features of partners, road, stop lines and preview
     int stop_signs_enabled;
     int yield_signs_enabled;
     int obs_lane_stride;
@@ -3383,6 +3385,13 @@ void c_close(Drive *env) {
     free_loaded_map_data(env);
 }
 
+static int rail_obs_feature_count(const Drive *env) {
+    return RAIL_PARTNER_FEATURES * env->obs_slots_partners_n
+        + RAIL_ROAD_FEATURES * (env->obs_slots_lane_kept + env->obs_slots_boundary_kept)
+        + RAIL_POINT_FEATURES * (env->obs_slots_traffic_controls_n + env->num_goals)
+        + RAIL_PREVIEW_FEATURES * LATTICE_PREVIEW_POINTS;
+}
+
 static int compute_observation_size(Drive *env) {
     return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n + LANE_FEATURES * env->obs_slots_lane_kept
         + BOUNDARY_FEATURES * env->obs_slots_boundary_kept
@@ -3390,7 +3399,8 @@ static int compute_observation_size(Drive *env) {
         + env->reward_conditioning * NUM_REWARD_COEFS + env->num_goals * GOAL_FEATURES
         + (env->action_type == ACTION_TYPE_SPLINE) * SPLINE_INTENT_FEATURES
         + (env->action_type == ACTION_TYPE_LATTICE)
-        * (lattice_plan_feature_count(&env->lattice) + env->lattice.mask_feature_count);
+        * (lattice_plan_feature_count(&env->lattice) + env->lattice.mask_feature_count)
+        + env->obs_rail_frame * rail_obs_feature_count(env);
 }
 
 void allocate(Drive *env) {
@@ -3517,16 +3527,20 @@ void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *leng
 // Noise & Robustness Functions
 // ========================================
 
+// paired_buffer rows (paired_feature_count wide) are permuted with the buffer rows
 static void subsample_road_observation_rows(
     Rng *rng_state,
     float *buffer,
     int collected_count,
     int keep_count,
-    int feature_count) {
+    int feature_count,
+    float *paired_buffer,
+    int paired_feature_count) {
     if (keep_count <= 0 || collected_count <= keep_count) {
         return;
     }
     float tmp[feature_count];
+    float paired_row_copy[paired_feature_count];
     for (int sample_idx = 0; sample_idx < keep_count; sample_idx++) {
         int remaining = collected_count - sample_idx;
         int swap_idx = (remaining > 1) ? sample_idx + rng_below(rng_state, remaining) : sample_idx;
@@ -3538,6 +3552,11 @@ static void subsample_road_observation_rows(
         memcpy(tmp, a, sizeof(tmp));
         memcpy(a, b, sizeof(tmp));
         memcpy(b, tmp, sizeof(tmp));
+        float *paired_a = &paired_buffer[sample_idx * paired_feature_count];
+        float *paired_b = &paired_buffer[swap_idx * paired_feature_count];
+        memcpy(paired_row_copy, paired_a, sizeof(paired_row_copy));
+        memcpy(paired_a, paired_b, sizeof(paired_row_copy));
+        memcpy(paired_b, paired_row_copy, sizeof(paired_row_copy));
     }
 }
 
@@ -4356,7 +4375,14 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
     return obs_idx;
 }
 
-static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
+static int write_partner_obs(
+    Drive *env,
+    Agent *ego,
+    int agent_idx,
+    float *obs,
+    int obs_idx,
+    int *partner_count,
+    int *partner_agent_idx) {
     // Partner blindness: zero partner obs for the configured duration once triggered
     if (ego->partner_blindness_counter > 0) {
         ego->partner_blindness_counter--;
@@ -4419,8 +4445,10 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         }
     }
 
+    float car_frame_scale = env->obs_hide_car_frame ? 0.0f : 1.0f;
     for (int j = 0; j < partners_to_write; j++) {
         Agent *other = &env->agents[nearby_agents[j].index];
+        partner_agent_idx[j] = nearby_agents[j].index;
         float rel_x, rel_y, rel_heading_x, rel_heading_y, rel_vx, rel_vy;
         project_point_to_ego_frame(ego, other->sim_x, other->sim_y, &rel_x, &rel_y);
         project_point_to_local(
@@ -4433,13 +4461,13 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
             &rel_vx,
             &rel_vy);
         project_vector_to_ego_frame(ego, other->cos_heading, other->sin_heading, &rel_heading_x, &rel_heading_y);
-        obs[obs_idx++] = rel_x / env->obs_norm_xy_offset_m;
-        obs[obs_idx++] = rel_y / env->obs_norm_xy_offset_m;
+        obs[obs_idx++] = car_frame_scale * rel_x / env->obs_norm_xy_offset_m;
+        obs[obs_idx++] = car_frame_scale * rel_y / env->obs_norm_xy_offset_m;
         obs[obs_idx++] = nearby_agents[j].dz / env->obs_norm_z_m;
         obs[obs_idx++] = other->sim_length / env->obs_norm_veh_length_m;
         obs[obs_idx++] = other->sim_width / env->obs_norm_veh_width_m;
-        obs[obs_idx++] = rel_heading_x;
-        obs[obs_idx++] = rel_heading_y;
+        obs[obs_idx++] = car_frame_scale * rel_heading_x;
+        obs[obs_idx++] = car_frame_scale * rel_heading_y;
         obs[obs_idx++] = other->sim_speed_signed / env->obs_norm_speed_mps;
         // TODO(hack): partner seconds_stopped is a temporary feature; remove later.
         obs[obs_idx++] = fminf(1.0f, other->seconds_stopped / MAX_STOPPED_SECONDS);
@@ -4450,7 +4478,15 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
     return obs_idx + (env->obs_slots_partners_n - partners_written) * PARTNER_FEATURES;
 }
 
-static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *lane_count, int *boundary_count) {
+// road_world_rows receives the kept rows' world geometry: lanes first, boundaries from row obs_slots_lane_kept
+static int write_road_obs(
+    Drive *env,
+    Agent *ego,
+    float *obs,
+    int obs_idx,
+    int *lane_count,
+    int *boundary_count,
+    float *road_world_rows) {
     int grid_idx = get_grid_index(env, ego->sim_x, ego->sim_y);
     int neighbor_count = 0;
     const GridMapEntity *neighbor_entities = NULL;
@@ -4503,6 +4539,9 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     float boundaries_buffer[env->obs_slots_boundary_n * BOUNDARY_FEATURES];
     float *lane_obs_dest = env->road_dropout_enabled ? lanes_buffer : &obs[lane_obs_idx];
     float *boundary_obs_dest = env->road_dropout_enabled ? boundaries_buffer : &obs[boundary_obs_idx];
+    float lanes_world[env->obs_slots_lane_n * ROAD_WORLD_ROW_FEATURES];
+    float boundaries_world[env->obs_slots_boundary_n * ROAD_WORLD_ROW_FEATURES];
+    float car_frame_scale = env->obs_hide_car_frame ? 0.0f : 1.0f;
     int lanes_found = 0;
     int boundaries_found = 0;
 
@@ -4556,14 +4595,21 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         if (*segment_count >= segment_cap) {
             continue;
         }
-        int feature_base = (*segment_count)++ * segment_features;
-        segment_dest[feature_base] = rel_x / env->obs_norm_xy_offset_m;
-        segment_dest[feature_base + 1] = rel_y / env->obs_norm_xy_offset_m;
+        int row_idx = (*segment_count)++;
+        int feature_base = row_idx * segment_features;
+        segment_dest[feature_base] = car_frame_scale * rel_x / env->obs_norm_xy_offset_m;
+        segment_dest[feature_base + 1] = car_frame_scale * rel_y / env->obs_norm_xy_offset_m;
         segment_dest[feature_base + 2] = rel_z / env->obs_norm_z_m;
         segment_dest[feature_base + 3] = seg_half_len / env->obs_norm_road_seg_length_m;
         segment_dest[feature_base + 4] = LANE_WIDTH / env->obs_norm_road_seg_width_m;
-        segment_dest[feature_base + 5] = rel_seg_dir_x;
-        segment_dest[feature_base + 6] = rel_seg_dir_y;
+        segment_dest[feature_base + 5] = car_frame_scale * rel_seg_dir_x;
+        segment_dest[feature_base + 6] = car_frame_scale * rel_seg_dir_y;
+        float *world_row = &(is_lane ? lanes_world : boundaries_world)[row_idx * ROAD_WORLD_ROW_FEATURES];
+        world_row[0] = mid_x;
+        world_row[1] = mid_y;
+        world_row[2] = mid_z;
+        world_row[3] = seg_dir_x;
+        world_row[4] = seg_dir_y;
         // Goal-distance features: absolute and relative to ego's lane->goal distance.
         if (is_lane) {
             float goal_dist_abs = 0.0f, goal_dist_rel = 0.0f; // 0 when flag off / unresolved
@@ -4593,13 +4639,22 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
             = (boundaries_found < env->obs_slots_boundary_kept) ? boundaries_found : env->obs_slots_boundary_kept;
         *lane_count = lanes_to_copy;
         *boundary_count = boundaries_to_copy;
-        subsample_road_observation_rows(&env->rng_state, lanes_buffer, lanes_found, lanes_to_copy, LANE_FEATURES);
+        subsample_road_observation_rows(
+            &env->rng_state,
+            lanes_buffer,
+            lanes_found,
+            lanes_to_copy,
+            LANE_FEATURES,
+            lanes_world,
+            ROAD_WORLD_ROW_FEATURES);
         subsample_road_observation_rows(
             &env->rng_state,
             boundaries_buffer,
             boundaries_found,
             boundaries_to_copy,
-            BOUNDARY_FEATURES);
+            BOUNDARY_FEATURES,
+            boundaries_world,
+            ROAD_WORLD_ROW_FEATURES);
         memcpy(&obs[lane_obs_idx], lanes_buffer, lanes_to_copy * LANE_FEATURES * sizeof(float));
         memset(
             &obs[lane_obs_idx + lanes_to_copy * LANE_FEATURES],
@@ -4610,6 +4665,11 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
             &obs[boundary_obs_idx + boundaries_to_copy * BOUNDARY_FEATURES],
             0,
             (env->obs_slots_boundary_kept - boundaries_to_copy) * BOUNDARY_FEATURES * sizeof(float));
+        memcpy(road_world_rows, lanes_world, lanes_to_copy * ROAD_WORLD_ROW_FEATURES * sizeof(float));
+        memcpy(
+            &road_world_rows[env->obs_slots_lane_kept * ROAD_WORLD_ROW_FEATURES],
+            boundaries_world,
+            boundaries_to_copy * ROAD_WORLD_ROW_FEATURES * sizeof(float));
         return obs_idx;
     }
 
@@ -4623,10 +4683,21 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         &obs[boundary_obs_idx + boundaries_found * BOUNDARY_FEATURES],
         0,
         (env->obs_slots_boundary_kept - boundaries_found) * BOUNDARY_FEATURES * sizeof(float));
+    memcpy(road_world_rows, lanes_world, lanes_found * ROAD_WORLD_ROW_FEATURES * sizeof(float));
+    memcpy(
+        &road_world_rows[env->obs_slots_lane_kept * ROAD_WORLD_ROW_FEATURES],
+        boundaries_world,
+        boundaries_found * ROAD_WORLD_ROW_FEATURES * sizeof(float));
     return obs_idx;
 }
 
-static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *traffic_control_count) {
+static int write_traffic_control_obs(
+    Drive *env,
+    Agent *ego,
+    float *obs,
+    int obs_idx,
+    int *traffic_control_count,
+    int *traffic_control_idx) {
     typedef struct {
         int idx;
         int hidden;
@@ -4670,8 +4741,10 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
     }
 
     int controls_written = 0;
+    float car_frame_scale = env->obs_hide_car_frame ? 0.0f : 1.0f;
     for (int j = 0; j < controls_to_observe && controls_written < env->obs_slots_traffic_controls_n; j++) {
         TrafficControlElement *tc = &env->traffic_elements[visible_controls[j].idx];
+        traffic_control_idx[controls_written] = visible_controls[j].idx;
         int state_hidden = visible_controls[j].hidden;
         float rel_x1, rel_y1, rel_x2, rel_y2;
         project_point_to_ego_frame(ego, tc->stop_line[0], tc->stop_line[1], &rel_x1, &rel_y1);
@@ -4684,10 +4757,10 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
                 : TRAFFIC_CONTROL_STATE_OFF;
         }
 
-        obs[obs_idx++] = rel_x1 / env->obs_norm_xy_offset_m;
-        obs[obs_idx++] = rel_y1 / env->obs_norm_xy_offset_m;
-        obs[obs_idx++] = rel_x2 / env->obs_norm_xy_offset_m;
-        obs[obs_idx++] = rel_y2 / env->obs_norm_xy_offset_m;
+        obs[obs_idx++] = car_frame_scale * rel_x1 / env->obs_norm_xy_offset_m;
+        obs[obs_idx++] = car_frame_scale * rel_y1 / env->obs_norm_xy_offset_m;
+        obs[obs_idx++] = car_frame_scale * rel_x2 / env->obs_norm_xy_offset_m;
+        obs[obs_idx++] = car_frame_scale * rel_y2 / env->obs_norm_xy_offset_m;
         obs[obs_idx++] = rel_z / env->obs_norm_z_m;
         obs[obs_idx++] = tc->type;
         obs[obs_idx++] = light_state;
@@ -4696,6 +4769,98 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
 
     *traffic_control_count = controls_written;
     return obs_idx + (env->obs_slots_traffic_controls_n - controls_written) * TRAFFIC_CONTROL_FEATURES;
+}
+
+// objects the car-frame blocks listed, in slot order; the rail block describes the same objects
+typedef struct {
+    const int *partner_agent_idx;
+    int partner_count;
+    const float *road_world_rows;
+    int lane_count;
+    int boundary_count;
+    const int *traffic_control_idx;
+    int traffic_control_count;
+} ObservedObjects;
+
+static void write_rail_point_obs(float *row, const LatticeRailFoot *foot, float car_s_m) {
+    row[0] = 1.0f;
+    row[1] = (foot->s_m - car_s_m) / RAIL_OBS_DS_NORM_M;
+    row[2] = clip(foot->d_m / LANE_WIDTH, -RAIL_OBS_D_LANES_CLIP, RAIL_OBS_D_LANES_CLIP);
+    row[3] = foot->d_m / RAIL_OBS_D_NORM_M;
+}
+
+// rail block: the listed objects in the frame of the ego's lattice rail; rows stay zero where the foot is ambiguous
+static int write_rail_obs(Drive *env, int active_idx, const ObservedObjects *objects, float *obs, int obs_idx) {
+    int end_idx = obs_idx + rail_obs_feature_count(env);
+    const struct LatticeAgent *lattice_agent = &env->lattice_agents[active_idx];
+    Agent *ego = &env->agents[env->active_agent_indices[active_idx]];
+    if (!lattice_is_policy_agent(ego) || lattice_agent->rail.sample_count < 2) {
+        return end_idx;
+    }
+    const struct LatticeRail *rail = &lattice_agent->rail;
+    LatticeFrenet car = lattice_frenet_state(rail, ego, lattice_agent->projection_hint);
+    // a window every regeneration phase covers, so validity does not flicker with the rail's extent
+    float s_min_m = car.s - env->lattice.trail_keep_m + RAIL_OBS_END_MARGIN_M;
+    float s_max_m = car.s + lattice_required_lookahead_m(env) - RAIL_OBS_END_MARGIN_M;
+    LatticeRailObsFrame frame;
+    build_lattice_rail_obs_frame(rail, ego->sim_z, s_min_m, s_max_m, &frame);
+    LatticeRailFoot foot;
+    for (int slot = 0; slot < objects->partner_count; slot++) {
+        const Agent *other = &env->agents[objects->partner_agent_idx[slot]];
+        if (!lattice_rail_obs_foot(env, &frame, other->sim_x, other->sim_y, other->sim_z, &foot)) {
+            continue;
+        }
+        float *row = &obs[obs_idx + slot * RAIL_PARTNER_FEATURES];
+        write_rail_point_obs(row, &foot, car.s);
+        row[4] = clip((foot.d_m - car.d) / LANE_WIDTH, -RAIL_OBS_D_LANES_CLIP, RAIL_OBS_D_LANES_CLIP);
+        row[5] = other->cos_heading * foot.cos_heading + other->sin_heading * foot.sin_heading;
+        row[6] = other->sin_heading * foot.cos_heading - other->cos_heading * foot.sin_heading;
+        row[7] = (other->sim_vx * foot.cos_heading + other->sim_vy * foot.sin_heading) / RAIL_OBS_SPEED_NORM_MPS;
+        row[8] = (other->sim_vy * foot.cos_heading - other->sim_vx * foot.sin_heading) / RAIL_OBS_SPEED_NORM_MPS;
+    }
+    obs_idx += env->obs_slots_partners_n * RAIL_PARTNER_FEATURES;
+    int road_rows = env->obs_slots_lane_kept + env->obs_slots_boundary_kept;
+    for (int row_idx = 0; row_idx < road_rows; row_idx++) {
+        int is_lane = row_idx < env->obs_slots_lane_kept;
+        int slot = is_lane ? row_idx : row_idx - env->obs_slots_lane_kept;
+        const float *world = &objects->road_world_rows[row_idx * ROAD_WORLD_ROW_FEATURES];
+        if (slot >= (is_lane ? objects->lane_count : objects->boundary_count)
+            || !lattice_rail_obs_foot(env, &frame, world[0], world[1], world[2], &foot)) {
+            continue;
+        }
+        float *row = &obs[obs_idx + row_idx * RAIL_ROAD_FEATURES];
+        write_rail_point_obs(row, &foot, car.s);
+        row[4] = world[3] * foot.cos_heading + world[4] * foot.sin_heading;
+        row[5] = world[4] * foot.cos_heading - world[3] * foot.sin_heading;
+    }
+    obs_idx += road_rows * RAIL_ROAD_FEATURES;
+    for (int slot = 0; slot < objects->traffic_control_count; slot++) {
+        const float *stop_line = env->traffic_elements[objects->traffic_control_idx[slot]].stop_line;
+        float mid_x = 0.5f * (stop_line[0] + stop_line[3]);
+        float mid_y = 0.5f * (stop_line[1] + stop_line[4]);
+        float mid_z = 0.5f * (stop_line[2] + stop_line[5]);
+        if (lattice_rail_obs_foot(env, &frame, mid_x, mid_y, mid_z, &foot)) {
+            write_rail_point_obs(&obs[obs_idx + slot * RAIL_POINT_FEATURES], &foot, car.s);
+        }
+    }
+    obs_idx += env->obs_slots_traffic_controls_n * RAIL_POINT_FEATURES;
+    for (int goal_idx = 0; goal_idx < env->num_goals; goal_idx++) {
+        if (goal_idx < ego->current_goal_idx || goal_idx >= ego->goal_count) {
+            continue;
+        }
+        float goal_x = ego->list_goal_x[goal_idx];
+        float goal_y = ego->list_goal_y[goal_idx];
+        if (lattice_rail_obs_foot(env, &frame, goal_x, goal_y, ego->list_goal_z[goal_idx], &foot)) {
+            write_rail_point_obs(&obs[obs_idx + goal_idx * RAIL_POINT_FEATURES], &foot, car.s);
+        }
+    }
+    obs_idx += env->num_goals * RAIL_POINT_FEATURES;
+    for (int point_idx = 0; point_idx < LATTICE_PREVIEW_POINTS; point_idx++) {
+        obs[obs_idx++] = lattice_agent->preview_rail_ds_m[point_idx] / RAIL_OBS_PREVIEW_DS_NORM_M;
+        obs[obs_idx++] = lattice_agent->preview_rail_d_m[point_idx] / LANE_WIDTH;
+    }
+    assert(obs_idx == end_idx);
+    return obs_idx;
 }
 
 static void compute_observations(Drive *env) {
@@ -4711,6 +4876,9 @@ static void compute_observations(Drive *env) {
         int boundary_count = 0;
         int traffic_control_count = 0;
         int obs_idx = 0;
+        int partner_agent_idx[env->obs_slots_partners_n + 1];
+        float road_world_rows[(env->obs_slots_lane_kept + env->obs_slots_boundary_kept + 1) * ROAD_WORLD_ROW_FEATURES];
+        int traffic_control_idx[env->obs_slots_traffic_controls_n + 1];
 
         obs_idx = write_ego_obs(env, ego, obs, obs_idx);
         obs_idx = write_spline_intent_obs(env, ego, obs, obs_idx);
@@ -4718,13 +4886,24 @@ static void compute_observations(Drive *env) {
             obs_idx = write_lattice_plan_obs(env, i, obs, obs_idx);
         }
         obs_idx = write_reward_target_obs(env, ego, obs, obs_idx);
-        obs_idx = write_partner_obs(env, ego, i, obs, obs_idx, &partner_count);
-        obs_idx = write_road_obs(env, ego, obs, obs_idx, &lane_count, &boundary_count);
-        obs_idx = write_traffic_control_obs(env, ego, obs, obs_idx, &traffic_control_count);
+        obs_idx = write_partner_obs(env, ego, i, obs, obs_idx, &partner_count, partner_agent_idx);
+        obs_idx = write_road_obs(env, ego, obs, obs_idx, &lane_count, &boundary_count, road_world_rows);
+        obs_idx = write_traffic_control_obs(env, ego, obs, obs_idx, &traffic_control_count, traffic_control_idx);
         obs[obs_idx++] = (float) lane_count;
         obs[obs_idx++] = (float) boundary_count;
         obs[obs_idx++] = (float) partner_count;
         obs[obs_idx++] = (float) traffic_control_count;
+        if (env->obs_rail_frame) {
+            ObservedObjects objects
+                = {partner_agent_idx,
+                   partner_count,
+                   road_world_rows,
+                   lane_count,
+                   boundary_count,
+                   traffic_control_idx,
+                   traffic_control_count};
+            obs_idx = write_rail_obs(env, i, &objects, obs, obs_idx);
+        }
         if (env->action_type == ACTION_TYPE_LATTICE) {
             obs_idx = write_lattice_mask_obs(env, i, obs, obs_idx);
         }

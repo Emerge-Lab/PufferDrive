@@ -91,6 +91,10 @@ env:
   lattice_turnaround: false
   # A started overtake keeps its lateral plan until its car is passed or a car in the oncoming lane is near (needs lattice_oncoming_overtake)
   lattice_overtake_commit: false
+  # Rail kept behind the car (m; multiple of 0.5 in [30, 94]); the rail block sees objects only within the rail's span
+  lattice_trail_keep_m: 30.0
+  # Goal exits (lattice_exit_mode goal) pick among the exits the policy mask offers, and re-decide on a goal change
+  lattice_exit_goal_refresh: false
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap
@@ -108,6 +112,10 @@ env:
   traffic_lights_enabled: true
   # Observe a light's state only from within 60 deg of the way its face points (its controlled lane's approach)
   obs_light_facing_only: false
+  # Rail block (lattice only): partners, road segments, stop lines, goals and plan preview in the frame of the ego's rail
+  obs_rail_frame: false
+  # false zeroes the car-frame x/y and heading features of partners, road, stop lines and preview (goals keep them)
+  obs_car_frame: true
   stop_signs_enabled: false
   yield_signs_enabled: false
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map

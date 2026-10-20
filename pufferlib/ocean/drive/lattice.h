@@ -178,6 +178,19 @@ static int init_lattice_config(Drive *env) {
             "lattice_overtake_commit must be 0 or 1 and needs lattice_oncoming_overtake",
             (float) cfg->overtake_commit);
     }
+    float extra_trail_samples = (cfg->trail_keep_m - LATTICE_TRAIL_KEEP_M) / LATTICE_RAIL_SPACING_M;
+    if (!(cfg->trail_keep_m >= LATTICE_TRAIL_KEEP_M) || !(cfg->trail_keep_m <= LATTICE_TRAIL_KEEP_MAX_M)
+        || extra_trail_samples != floorf(extra_trail_samples)) {
+        return lattice_config_error(
+            "lattice_trail_keep_m must be a multiple of 0.5 m in [30, 94] m",
+            cfg->trail_keep_m);
+    }
+    if ((cfg->exit_goal_refresh != 0 && cfg->exit_goal_refresh != 1)
+        || (cfg->exit_goal_refresh && cfg->exit_mode != LATTICE_EXIT_MODE_GOAL)) {
+        return lattice_config_error(
+            "lattice_exit_goal_refresh must be 0 or 1 and needs lattice_exit_mode goal",
+            (float) cfg->exit_goal_refresh);
+    }
     if (cfg->oncoming_overtake && !(cfg->lat_offsets_m[cfg->lat_offset_count - 1] < LATTICE_BORROW_MIN_D_M)) {
         return lattice_config_error("lattice_oncoming_overtake needs every lattice_lat_offsets_m below 1.25 m", cfg->lat_offsets_m[cfg->lat_offset_count - 1]);
     }
@@ -1050,7 +1063,13 @@ static void lattice_finish_rail_geometry(struct LatticeRail *rail) {
 }
 
 // resample the filtered polyline at exactly LATTICE_RAIL_SPACING_M, starting at filtered sample first_idx
-static void lattice_resample_rail(const Drive *env, struct LatticeRail *rail, struct LatticeBuildScratch *scratch, int filtered_count, int first_idx) {
+static void lattice_resample_rail(
+    const Drive *env,
+    struct LatticeRail *rail,
+    struct LatticeBuildScratch *scratch,
+    int filtered_count,
+    int first_idx,
+    int max_samples) {
     int count = 0;
     rail->x[0] = scratch->filtered_x[first_idx];
     rail->y[0] = scratch->filtered_y[first_idx];
@@ -1058,7 +1077,7 @@ static void lattice_resample_rail(const Drive *env, struct LatticeRail *rail, st
     rail->lane_arc_m[0] = scratch->raw_lane_arc_m[first_idx];
     count = 1;
     float carry_m = 0.0f;
-    for (int seg_idx = first_idx; seg_idx + 1 < filtered_count && count < LATTICE_RAIL_SAMPLES; seg_idx++) {
+    for (int seg_idx = first_idx; seg_idx + 1 < filtered_count && count < max_samples; seg_idx++) {
         float seg_x = scratch->filtered_x[seg_idx + 1] - scratch->filtered_x[seg_idx];
         float seg_y = scratch->filtered_y[seg_idx + 1] - scratch->filtered_y[seg_idx];
         float seg_len = sqrtf(seg_x * seg_x + seg_y * seg_y);
@@ -1066,7 +1085,7 @@ static void lattice_resample_rail(const Drive *env, struct LatticeRail *rail, st
             continue;
         }
         float position_m = LATTICE_RAIL_SPACING_M - carry_m;
-        while (position_m <= seg_len && count < LATTICE_RAIL_SAMPLES) {
+        while (position_m <= seg_len && count < max_samples) {
             float t = position_m / seg_len;
             rail->x[count] = scratch->filtered_x[seg_idx] + t * seg_x;
             rail->y[count] = scratch->filtered_y[seg_idx] + t * seg_y;
@@ -1123,7 +1142,13 @@ static void lattice_rail_lane_bounds(const Drive *env, struct LatticeRail *rail)
 }
 
 // builds rail samples covering [anchor - behind_m, anchor + ahead_m] of chain arc; returns sample count (0 on failure)
-static int build_lattice_rail(Drive *env, struct LatticeRail *rail, float anchor_chain_arc_m, float behind_m, float ahead_m) {
+static int build_lattice_rail(
+    Drive *env,
+    struct LatticeRail *rail,
+    float anchor_chain_arc_m,
+    float behind_m,
+    float ahead_m,
+    int max_samples) {
     struct LatticeBuildScratch *scratch = env->lattice_build_scratch;
     float begin_arc_m = fmaxf_inline(0.0f, anchor_chain_arc_m - behind_m);
     float end_arc_m = fminf_inline(lattice_chain_total_arc(env, rail), anchor_chain_arc_m + ahead_m);
@@ -1145,7 +1170,7 @@ static int build_lattice_rail(Drive *env, struct LatticeRail *rail, float anchor
     float target_offset_m = begin_arc_m - first_vertex_arc_m;
     first_idx = (int) floorf(target_offset_m / LATTICE_RAIL_SPACING_M);
     first_idx = first_idx < 0 ? 0 : (first_idx > raw_count - 2 ? raw_count - 2 : first_idx);
-    lattice_resample_rail(env, rail, scratch, raw_count, first_idx);
+    lattice_resample_rail(env, rail, scratch, raw_count, first_idx, max_samples);
     rail->chain_start_arc_m = first_vertex_arc_m + first_idx * LATTICE_RAIL_SPACING_M;
     return rail->sample_count;
 }
@@ -1158,11 +1183,11 @@ static void build_lattice_straight_rail(struct LatticeRail *rail, const Agent *a
     rail->is_straight_fallback = 1;
     rail->chain_is_dead_end = 0;
     rail->chain_is_complete = 1;
-    rail->sample_count = LATTICE_RAIL_SAMPLES;
+    rail->sample_count = LATTICE_NOMINAL_RAIL_SAMPLES;
     rail->s_start_m = 0.0f;
     float start_x = agent->sim_x - LATTICE_TRAIL_KEEP_M * agent->cos_heading;
     float start_y = agent->sim_y - LATTICE_TRAIL_KEEP_M * agent->sin_heading;
-    for (int sample_idx = 0; sample_idx < LATTICE_RAIL_SAMPLES; sample_idx++) {
+    for (int sample_idx = 0; sample_idx < LATTICE_NOMINAL_RAIL_SAMPLES; sample_idx++) {
         rail->x[sample_idx] = start_x + sample_idx * LATTICE_RAIL_SPACING_M * agent->cos_heading;
         rail->y[sample_idx] = start_y + sample_idx * LATTICE_RAIL_SPACING_M * agent->sin_heading;
         rail->heading[sample_idx] = agent->sim_heading;
@@ -1298,6 +1323,150 @@ static LatticeFrenet lattice_frenet_state(const struct LatticeRail *rail, const 
     return frenet;
 }
 
+static float lattice_lane_z_at_arc(const Drive *env, int lane_idx, float arc_m) {
+    const RoadMapElement *lane = &env->road_elements[lane_idx];
+    const float *cum = &env->lattice_lane_cum_m[env->lattice_lanes[lane_idx].cum_offset];
+    int low = 0;
+    int high = lane->segment_size - 2;
+    for (int iteration = 0; iteration < RAIL_OBS_Z_SEARCH_ITERATIONS && low < high; iteration++) {
+        int mid = (low + high + 1) / 2;
+        if (cum[mid] <= arc_m) {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    float seg_len = cum[low + 1] - cum[low];
+    float t = seg_len > LATTICE_MIN_SEGMENT_M ? clip((arc_m - cum[low]) / seg_len, 0.0f, 1.0f) : 0.0f;
+    return lane->z[low] + t * (lane->z[low + 1] - lane->z[low]);
+}
+
+typedef struct {
+    float s_m;
+    float d_m;
+    float cos_heading;
+    float sin_heading;
+} LatticeRailFoot;
+
+// the ego rail's coarse samples and the s window observed objects must fall in; built once per observed car
+typedef struct {
+    const struct LatticeRail *rail;
+    int coarse_count;
+    float coarse_x[LATTICE_RAIL_SAMPLES / RAIL_OBS_COARSE_STRIDE + 1];
+    float coarse_y[LATTICE_RAIL_SAMPLES / RAIL_OBS_COARSE_STRIDE + 1];
+    float s_low_m;
+    float s_high_m;
+    float car_z; // level of rails without lanes
+} LatticeRailObsFrame;
+
+static void build_lattice_rail_obs_frame(
+    const struct LatticeRail *rail,
+    float car_z,
+    float s_min_m,
+    float s_max_m,
+    LatticeRailObsFrame *frame) {
+    frame->rail = rail;
+    frame->coarse_count = 0;
+    for (int sample_idx = 0; sample_idx < rail->sample_count; sample_idx += RAIL_OBS_COARSE_STRIDE) {
+        frame->coarse_x[frame->coarse_count] = rail->x[sample_idx];
+        frame->coarse_y[frame->coarse_count] = rail->y[sample_idx];
+        frame->coarse_count++;
+    }
+    frame->s_low_m = fmaxf_inline(rail->s_start_m + RAIL_OBS_END_MARGIN_M, s_min_m);
+    frame->s_high_m = fminf_inline(lattice_rail_end_s(rail) - RAIL_OBS_END_MARGIN_M, s_max_m);
+    frame->car_z = car_z;
+}
+
+static float lattice_segment_dist_sq(const struct LatticeRail *rail, int seg_idx, float x, float y) {
+    float seg_x = rail->x[seg_idx + 1] - rail->x[seg_idx];
+    float seg_y = rail->y[seg_idx + 1] - rail->y[seg_idx];
+    float rel_x = x - rail->x[seg_idx];
+    float rel_y = y - rail->y[seg_idx];
+    float seg_len_sq = seg_x * seg_x + seg_y * seg_y;
+    float t = seg_len_sq > 1e-9f ? clip((rel_x * seg_x + rel_y * seg_y) / seg_len_sq, 0.0f, 1.0f) : 0.0f;
+    float dx = rel_x - t * seg_x;
+    float dy = rel_y - t * seg_y;
+    return dx * dx + dy * dy;
+}
+
+// foot of (x, y, z) inside the frame's s window; 0 when ambiguous (tight bend, second branch) or off the rail's level
+static int lattice_rail_obs_foot(
+    const Drive *env,
+    const LatticeRailObsFrame *frame,
+    float x,
+    float y,
+    float z,
+    LatticeRailFoot *foot) {
+    const struct LatticeRail *rail = frame->rail;
+    float coarse_dist_sq[LATTICE_RAIL_SAMPLES / RAIL_OBS_COARSE_STRIDE + 1];
+    int nearest_coarse_idx = 0;
+    for (int coarse_idx = 0; coarse_idx < frame->coarse_count; coarse_idx++) {
+        float dx = frame->coarse_x[coarse_idx] - x;
+        float dy = frame->coarse_y[coarse_idx] - y;
+        coarse_dist_sq[coarse_idx] = dx * dx + dy * dy;
+        nearest_coarse_idx
+            = coarse_dist_sq[coarse_idx] < coarse_dist_sq[nearest_coarse_idx] ? coarse_idx : nearest_coarse_idx;
+    }
+    int coarse_sample_idx = nearest_coarse_idx * RAIL_OBS_COARSE_STRIDE;
+    int first_idx = coarse_sample_idx - RAIL_OBS_COARSE_STRIDE < 0 ? 0 : coarse_sample_idx - RAIL_OBS_COARSE_STRIDE;
+    int last_idx = coarse_sample_idx + RAIL_OBS_COARSE_STRIDE > rail->sample_count - 1
+        ? rail->sample_count - 1
+        : coarse_sample_idx + RAIL_OBS_COARSE_STRIDE;
+    int nearest_idx = coarse_sample_idx;
+    float nearest_dist_sq = coarse_dist_sq[nearest_coarse_idx];
+    for (int sample_idx = first_idx; sample_idx <= last_idx; sample_idx++) {
+        float dx = rail->x[sample_idx] - x;
+        float dy = rail->y[sample_idx] - y;
+        float dist_sq = dx * dx + dy * dy;
+        nearest_idx = dist_sq < nearest_dist_sq ? sample_idx : nearest_idx;
+        nearest_dist_sq = dist_sq < nearest_dist_sq ? dist_sq : nearest_dist_sq;
+    }
+    // the foot lies on one of the two segments meeting at the nearest sample
+    int seg_idx = nearest_idx < rail->sample_count - 1 ? nearest_idx : nearest_idx - 1;
+    if (nearest_idx > 0
+        && lattice_segment_dist_sq(rail, nearest_idx - 1, x, y) < lattice_segment_dist_sq(rail, seg_idx, x, y)) {
+        seg_idx = nearest_idx - 1;
+    }
+    float seg_x = rail->x[seg_idx + 1] - rail->x[seg_idx];
+    float seg_y = rail->y[seg_idx + 1] - rail->y[seg_idx];
+    float seg_len = fmaxf_inline(sqrtf(seg_x * seg_x + seg_y * seg_y), LATTICE_GEOMETRY_EPS);
+    float rel_x = x - rail->x[seg_idx];
+    float rel_y = y - rail->y[seg_idx];
+    float foot_s = rail->s_start_m + seg_idx * LATTICE_RAIL_SPACING_M
+        + (rel_x * seg_x + rel_y * seg_y) / seg_len * LATTICE_RAIL_SPACING_M / seg_len;
+    float foot_d = (seg_x * rel_y - seg_y * rel_x) / seg_len;
+    if (foot_s < frame->s_low_m || foot_s > frame->s_high_m) {
+        return 0;
+    }
+    LatticeRailPoint point = lattice_rail_at(rail, foot_s);
+    if (foot_d * point.curvature >= RAIL_OBS_MAX_D_CURVATURE) {
+        return 0;
+    }
+    float abs_d = fabsf(foot_d);
+    float clear_sq = (abs_d + RAIL_OBS_UNIQUE_SLACK_M) * (abs_d + RAIL_OBS_UNIQUE_SLACK_M);
+    float separation_m = fmaxf_inline(
+        RAIL_OBS_UNIQUE_MIN_SEPARATION_M,
+        RAIL_OBS_UNIQUE_D_SEPARATION * abs_d + RAIL_OBS_UNIQUE_SLACK_M);
+    for (int coarse_idx = 0; coarse_idx < frame->coarse_count; coarse_idx++) {
+        float sample_s_m = rail->s_start_m + coarse_idx * RAIL_OBS_COARSE_STRIDE * LATTICE_RAIL_SPACING_M;
+        if (coarse_dist_sq[coarse_idx] < clear_sq && fabsf(sample_s_m - foot_s) > separation_m) {
+            return 0;
+        }
+    }
+    float rail_z = frame->car_z;
+    if (rail->lane_count > 0 && !rail->is_straight_fallback) {
+        rail_z = lattice_lane_z_at_arc(env, rail->lanes[rail->chain_slot[nearest_idx]], rail->lane_arc_m[nearest_idx]);
+    }
+    if (fabsf(z - rail_z) > Z_BUFFER) {
+        return 0;
+    }
+    foot->s_m = foot_s;
+    foot->d_m = foot_d;
+    foot->cos_heading = cosf(point.heading);
+    foot->sin_heading = sinf(point.heading);
+    return 1;
+}
+
 // ========================================
 // Per-agent rail management
 // ========================================
@@ -1353,7 +1522,15 @@ static float lattice_car_chain_arc(const Drive *env, const struct LatticeRail *r
 }
 
 // fills samples over [car - behind_m, car + ahead_m] and sets s_start so the car keeps s_keep_m (fresh rails pass s_keep_m < 0)
-static int lattice_sample_rail_span(Drive *env, struct LatticeRail *rail, const Agent *agent, float car_chain_arc_m, float s_keep_m, float behind_m, float ahead_m) {
+static int lattice_sample_rail_span(
+    Drive *env,
+    struct LatticeRail *rail,
+    const Agent *agent,
+    float car_chain_arc_m,
+    float s_keep_m,
+    float behind_m,
+    float ahead_m,
+    int max_samples) {
     float drop_before_m = car_chain_arc_m - behind_m - LATTICE_BUILD_PAD_M;
     while (rail->lane_count > 1 && lattice_chain_arc_before(env, rail, 1) < drop_before_m) {
         float dropped_m = env->lattice_lanes[rail->lanes[0]].length_m;
@@ -1371,7 +1548,7 @@ static int lattice_sample_rail_span(Drive *env, struct LatticeRail *rail, const 
         + LATTICE_BUILD_PAD_M;
     lattice_chain_extend_forward(env, rail, target_arc_m);
     float chain_total_m = lattice_chain_total_arc(env, rail);
-    if (build_lattice_rail(env, rail, car_chain_arc_m, behind_m, ahead_m) < 2) {
+    if (build_lattice_rail(env, rail, car_chain_arc_m, behind_m, ahead_m, max_samples) < 2) {
         return -1;
     }
     float rail_span_m = (rail->sample_count - 1) * LATTICE_RAIL_SPACING_M;
@@ -1388,9 +1565,13 @@ static int lattice_sample_rail_span(Drive *env, struct LatticeRail *rail, const 
     return frenet.sample_idx;
 }
 
+// the reach ahead stays that of the nominal rail; a longer trail only adds samples behind the car
 static int lattice_sample_rail_around(Drive *env, struct LatticeRail *rail, const Agent *agent, float car_chain_arc_m, float s_keep_m) {
-    float ahead_m = (LATTICE_RAIL_SAMPLES - 1) * LATTICE_RAIL_SPACING_M - LATTICE_TRAIL_KEEP_M;
-    return lattice_sample_rail_span(env, rail, agent, car_chain_arc_m, s_keep_m, LATTICE_TRAIL_KEEP_M, ahead_m);
+    float trail_keep_m = env->lattice.trail_keep_m;
+    float ahead_m = (LATTICE_NOMINAL_RAIL_SAMPLES - 1) * LATTICE_RAIL_SPACING_M - LATTICE_TRAIL_KEEP_M;
+    int max_samples
+        = LATTICE_NOMINAL_RAIL_SAMPLES + (int) lroundf((trail_keep_m - LATTICE_TRAIL_KEEP_M) / LATTICE_RAIL_SPACING_M);
+    return lattice_sample_rail_span(env, rail, agent, car_chain_arc_m, s_keep_m, trail_keep_m, ahead_m, max_samples);
 }
 
 // nearest drivable lane to (x, y) within LATTICE_BASE_LANE_RANGE_M whose heading has cos >= LATTICE_BASE_LANE_COS
@@ -1815,8 +1996,18 @@ static int build_lattice_check_rail(Drive *env, struct LatticeRail *rail, const 
     rail->chain_is_dead_end = 0;
     rail->chain_is_complete = 0;
     float ahead_m = fabsf(agent->sim_speed) * LATTICE_KEEP_CHECK_S + LATTICE_CHECK_RAIL_PAD_M;
-    ahead_m = fminf_inline(ahead_m, (LATTICE_RAIL_SAMPLES - 1) * LATTICE_RAIL_SPACING_M - LATTICE_CHECK_RAIL_BEHIND_M);
-    return lattice_sample_rail_span(env, rail, agent, arc_m, -1.0f, LATTICE_CHECK_RAIL_BEHIND_M, ahead_m);
+    ahead_m = fminf_inline(
+        ahead_m,
+        (LATTICE_NOMINAL_RAIL_SAMPLES - 1) * LATTICE_RAIL_SPACING_M - LATTICE_CHECK_RAIL_BEHIND_M);
+    return lattice_sample_rail_span(
+        env,
+        rail,
+        agent,
+        arc_m,
+        -1.0f,
+        LATTICE_CHECK_RAIL_BEHIND_M,
+        ahead_m,
+        LATTICE_NOMINAL_RAIL_SAMPLES);
 }
 
 // new rail on lane_idx at lane arc arc_m (spawn, rail change, lost); returns the car's sample or -1
@@ -2801,6 +2992,7 @@ static void reset_lattice_slot(Drive *env, int active_idx) {
     lattice_agent->late_exit_pending = 1;
     lattice_agent->context_step = -1;
     lattice_agent->live_split_slot = -1;
+    lattice_agent->exit_goal_lane = -1;
     lattice_agent->phantom_was_active = 0;
     lattice_agent->has_reference = 0;
     lattice_agent->projection_hint = 0;
@@ -4009,6 +4201,77 @@ static int lattice_exit_slot_feasible(const Drive *env, const Agent *agent, int 
         <= sqrtf(exit_speed * exit_speed + 2.0f * LATTICE_EXIT_SWITCH_BRAKE_MPS2 * braking_m);
 }
 
+// an exit the policy may pick at a live split: the straightest, the committed one, or a feasible switch
+static int lattice_exit_offered(
+    const Drive *env,
+    const Agent *agent,
+    int slot_idx,
+    int exit_lane,
+    int committed_lane,
+    float distance_m) {
+    return slot_idx == 0 || exit_lane == committed_lane
+        || lattice_exit_slot_feasible(env, agent, exit_lane, distance_m);
+}
+
+// the exit nearest the goal among those the policy's exit mask would offer (straightest, committed, feasible)
+static int lattice_feasible_goal_exit_slot(
+    const Drive *env,
+    const Agent *agent,
+    const struct LatticeRail *rail,
+    int lane_slot,
+    float distance_m) {
+    const struct LatticeLaneInfo *info = &env->lattice_lanes[rail->lanes[lane_slot]];
+    int goal_lane = lattice_agent_goal_lane(agent);
+    int committed_lane = lane_slot + 1 < rail->lane_count ? rail->lanes[lane_slot + 1] : -1;
+    int best_slot = 0;
+    float best_distance_m = 1e30f;
+    for (int slot_idx = 0; slot_idx < info->exit_count; slot_idx++) {
+        int exit_lane = info->exit_slots[slot_idx];
+        int offered = lattice_exit_offered(env, agent, slot_idx, exit_lane, committed_lane, distance_m);
+        float goal_distance_m = lattice_goal_distance_m(env, exit_lane, goal_lane);
+        if (offered && goal_distance_m < best_distance_m) {
+            best_distance_m = goal_distance_m;
+            best_slot = slot_idx;
+        }
+    }
+    return best_slot;
+}
+
+// goal exits after a goal change: the first decided split ahead whose best offered exit changed is switched
+static void refresh_lattice_goal_exits(
+    Drive *env,
+    struct LatticeAgent *lattice_agent,
+    const Agent *agent,
+    float car_s_m) {
+    int goal_lane = lattice_agent_goal_lane(agent);
+    if (goal_lane == lattice_agent->exit_goal_lane) {
+        return;
+    }
+    lattice_agent->exit_goal_lane = goal_lane;
+    const struct LatticeRail *rail = &lattice_agent->rail;
+    // a split the car's front reaches within one decision keeps its exit
+    float min_switch_m = 0.5f * agent->sim_length + fabsf(agent->sim_speed_signed) * env->lattice.decision_period_s;
+    for (int lane_slot = rail->chain_slot[lattice_agent->projection_hint];
+         goal_lane >= 0 && lane_slot + 1 < rail->lane_count;
+         lane_slot++) {
+        float split_distance_m = rail->lane_end_s_m[lane_slot] - car_s_m;
+        if (split_distance_m > LATTICE_EXIT_FREEZE_M) {
+            return;
+        }
+        const struct LatticeLaneInfo *info = &env->lattice_lanes[rail->lanes[lane_slot]];
+        if (info->exit_count < 2 || !rail->exit_decided[lane_slot] || split_distance_m < min_switch_m) {
+            continue;
+        }
+        int exit_slot = lattice_feasible_goal_exit_slot(env, agent, rail, lane_slot, split_distance_m);
+        int exit_lane = info->exit_slots[exit_slot];
+        if (exit_lane == rail->lanes[lane_slot + 1] || !isfinite(lattice_goal_distance_m(env, exit_lane, goal_lane))) {
+            continue;
+        }
+        apply_lattice_exit(env, lattice_agent, agent, lane_slot, exit_slot);
+        return;
+    }
+}
+
 // all per-factor masks for one decision, in one context
 static void compute_lattice_masks(Drive *env, int active_idx, int now_step) {
     struct LatticeAgent *lattice_agent = &env->lattice_agents[active_idx];
@@ -4154,8 +4417,7 @@ static void compute_lattice_masks(Drive *env, int active_idx, int now_step) {
         for (int slot_idx = 1; slot_idx < info->exit_count; slot_idx++) {
             int exit_lane = info->exit_slots[slot_idx];
             mask[exit_offset + slot_idx]
-                = (unsigned char) (exit_lane == committed_lane
-                                   || lattice_exit_slot_feasible(env, agent, exit_lane, distance_m));
+                = (unsigned char) lattice_exit_offered(env, agent, slot_idx, exit_lane, committed_lane, distance_m);
         }
     }
 }
@@ -4216,9 +4478,16 @@ static void run_lattice_context(Drive *env, int active_idx) {
     }
     if (lattice_agent->has_reference && lattice_agent->gear > 0 && !lattice_is_reversing(lattice_agent, agent)) {
         int policy_exits = cfg->exit_mode == LATTICE_EXIT_MODE_POLICY;
+        if (cfg->exit_goal_refresh) {
+            refresh_lattice_goal_exits(env, lattice_agent, agent, frenet.s);
+        }
         int split_slot = lattice_next_split(env, lattice_agent, frenet.s, LATTICE_EXIT_FREEZE_M, policy_exits);
         if (split_slot >= 0 && !policy_exits) {
-            apply_lattice_exit(env, lattice_agent, agent, split_slot, lattice_goal_exit_slot(env, agent, lattice_agent->rail.lanes[split_slot]));
+            float split_distance_m = lattice_agent->rail.lane_end_s_m[split_slot] - frenet.s;
+            int exit_slot = cfg->exit_goal_refresh
+                ? lattice_feasible_goal_exit_slot(env, agent, &lattice_agent->rail, split_slot, split_distance_m)
+                : lattice_goal_exit_slot(env, agent, lattice_agent->rail.lanes[split_slot]);
+            apply_lattice_exit(env, lattice_agent, agent, split_slot, exit_slot);
         } else {
             lattice_agent->live_split_slot = split_slot;
         }
@@ -4418,6 +4687,8 @@ typedef struct {
     float x[LATTICE_PREVIEW_SUBSTEPS + 1];
     float y[LATTICE_PREVIEW_SUBSTEPS + 1];
     float speed[LATTICE_PREVIEW_SUBSTEPS + 1];
+    float s_m[LATTICE_PREVIEW_SUBSTEPS + 1];
+    float d_m[LATTICE_PREVIEW_SUBSTEPS + 1];
 } LatticePreview;
 
 static LatticePreview compute_lattice_preview(
@@ -4604,6 +4875,8 @@ static LatticePreview compute_lattice_preview(
         preview.x[substep_idx] = point.x - d_m * sinf(point.heading);
         preview.y[substep_idx] = point.y + d_m * cosf(point.heading);
         preview.speed[substep_idx] = speed;
+        preview.s_m[substep_idx] = s_m;
+        preview.d_m[substep_idx] = d_m;
         sigma_prev = sigma_m;
         speed_prev = speed;
     }
@@ -4738,13 +5011,16 @@ static int write_lattice_plan_obs(Drive *env, int active_idx, float *obs, int ob
     obs[obs_idx++] = (float) lattice_agent->rail_changed_flag;
     LatticePreview preview = compute_lattice_preview(env, lattice_agent, agent, frenet.s, now_step);
     lattice_store_render_path(lattice_agent, &preview);
+    float car_frame_scale = env->obs_hide_car_frame ? 0.0f : 1.0f;
     for (int point_idx = 1; point_idx <= LATTICE_PREVIEW_POINTS; point_idx++) {
         int substep_idx = point_idx * LATTICE_PREVIEW_OBS_STRIDE;
         float local_x, local_y;
         project_point_to_ego_frame(agent, preview.x[substep_idx], preview.y[substep_idx], &local_x, &local_y);
-        obs[obs_idx++] = local_x / LATTICE_OBS_PREVIEW_NORM_M;
-        obs[obs_idx++] = local_y / LATTICE_OBS_PREVIEW_NORM_M;
+        obs[obs_idx++] = car_frame_scale * local_x / LATTICE_OBS_PREVIEW_NORM_M;
+        obs[obs_idx++] = car_frame_scale * local_y / LATTICE_OBS_PREVIEW_NORM_M;
         obs[obs_idx++] = preview.speed[substep_idx] / LATTICE_OBS_SPEED_NORM_MPS;
+        lattice_agent->preview_rail_ds_m[point_idx - 1] = preview.s_m[substep_idx] - frenet.s;
+        lattice_agent->preview_rail_d_m[point_idx - 1] = preview.d_m[substep_idx];
     }
     if (env->lattice.oncoming_overtake) {
         obs[obs_idx++] = (float) lattice_is_borrowing(env, lattice_agent, &frenet);

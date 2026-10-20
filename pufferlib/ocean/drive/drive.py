@@ -109,6 +109,8 @@ class Drive(pufferlib.PufferEnv):
         obs_slots_traffic_controls_n=4,
         traffic_lights_enabled=True,
         obs_light_facing_only=False,
+        obs_rail_frame=False,
+        obs_car_frame=True,
         stop_signs_enabled=False,
         yield_signs_enabled=False,
         starting_map=0,
@@ -150,6 +152,8 @@ class Drive(pufferlib.PufferEnv):
         lattice_oncoming_overtake=False,
         lattice_turnaround=False,
         lattice_overtake_commit=False,
+        lattice_trail_keep_m=30.0,
+        lattice_exit_goal_refresh=False,
     ):
         self.dt = dt
         self.base_max_speed_mps = float(base_max_speed_mps)
@@ -259,6 +263,8 @@ class Drive(pufferlib.PufferEnv):
         self.lattice_oncoming_overtake = bool(lattice_oncoming_overtake)
         self.lattice_turnaround = bool(lattice_turnaround)
         self.lattice_overtake_commit = bool(lattice_overtake_commit)
+        self.lattice_trail_keep_m = float(lattice_trail_keep_m)
+        self.lattice_exit_goal_refresh = bool(lattice_exit_goal_refresh)
         # [lat gate, lat cell, lon gate, lon cell, exit slot]; must match init_lattice_config in lattice.h
         self.lattice_nvec = [
             binding.LATTICE_GATE_COUNT,
@@ -312,6 +318,12 @@ class Drive(pufferlib.PufferEnv):
         self.obs_slots_partners_n = obs_slots_partners_n
         self.traffic_lights_enabled = traffic_lights_enabled
         self.obs_light_facing_only = obs_light_facing_only
+        self.obs_rail_frame = bool(obs_rail_frame)
+        self.obs_car_frame = bool(obs_car_frame)
+        if self.obs_rail_frame and action_type != "lattice":
+            raise ValueError(f"obs_rail_frame requires action_type 'lattice', got {action_type!r}")
+        if not self.obs_car_frame and not self.obs_rail_frame:
+            raise ValueError("obs_car_frame=False requires obs_rail_frame")
         self.stop_signs_enabled = stop_signs_enabled
         self.yield_signs_enabled = yield_signs_enabled
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
@@ -360,10 +372,23 @@ class Drive(pufferlib.PufferEnv):
             else 0
         )
         self.lattice_mask_features = sum(self.lattice_nvec) if action_type == "lattice" else 0
+        # rail block (after the valid counts): per object a valid flag then its rail-frame values
+        self.rail_partner_features = binding.RAIL_PARTNER_FEATURES if self.obs_rail_frame else 0
+        self.rail_road_features = binding.RAIL_ROAD_FEATURES if self.obs_rail_frame else 0
+        self.rail_point_features = binding.RAIL_POINT_FEATURES if self.obs_rail_frame else 0
+        self.rail_preview_features = (
+            binding.RAIL_PREVIEW_FEATURES * binding.LATTICE_PREVIEW_POINTS if self.obs_rail_frame else 0
+        )
 
         # One uniform target representation (ego-frame x, y, z) regardless of goal_regen_mode.
         self.goal_features = binding.GOAL_FEATURES
         self.goal_dim = self.num_goals * self.goal_features
+        self.rail_obs_features = (
+            self.obs_slots_partners_n * self.rail_partner_features
+            + (self.obs_slots_lane_kept + self.obs_slots_boundary_kept) * self.rail_road_features
+            + (self.obs_slots_traffic_controls_n + self.num_goals) * self.rail_point_features
+            + self.rail_preview_features
+        )
 
         # GPS goal-distance (abs + rel) columns are lane-only (LANE_FEATURES); zero-filled when flag off.
         self.num_obs = (
@@ -377,6 +402,7 @@ class Drive(pufferlib.PufferEnv):
             + self.obs_slots_traffic_controls_n * self.traffic_control_features
             + self.obs_valid_count_features
             + self.lattice_plan_features
+            + self.rail_obs_features
             + self.lattice_mask_features
         )
 
@@ -584,6 +610,8 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_lights_enabled": self.traffic_lights_enabled,
             "obs_light_facing_only": self.obs_light_facing_only,
+            "obs_rail_frame": self.obs_rail_frame,
+            "obs_car_frame": self.obs_car_frame,
             "stop_signs_enabled": self.stop_signs_enabled,
             "yield_signs_enabled": self.yield_signs_enabled,
             "dt": self.dt,
@@ -649,7 +677,10 @@ class Drive(pufferlib.PufferEnv):
             "lattice_oncoming_overtake": self.lattice_oncoming_overtake,
             "lattice_turnaround": self.lattice_turnaround,
             "lattice_overtake_commit": self.lattice_overtake_commit,
+            "lattice_trail_keep_m": self.lattice_trail_keep_m,
+            "lattice_exit_goal_refresh": self.lattice_exit_goal_refresh,
             "lattice_mask_feature_count": sum(self.lattice_nvec),
+            "rail_obs_feature_count": self.rail_obs_features,
         }
 
     def _sample_init_step(self):
@@ -894,6 +925,7 @@ class Drive(pufferlib.PufferEnv):
             "traffic_count": self.obs_slots_traffic_controls_n,
             "traffic_features": self.traffic_control_features,
             "valid_count_features": self.obs_valid_count_features,
+            "rail_features": self.rail_obs_features,
             "lattice_mask_features": self.lattice_mask_features,
         }
 

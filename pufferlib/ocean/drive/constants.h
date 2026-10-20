@@ -253,6 +253,24 @@ static const int ROAD_OFFSETS[25][2]
 #define TRAFFIC_CONTROL_FEATURES 7
 #define GOAL_FEATURES 3
 #define OBS_VALID_COUNT_FEATURES 4
+// rail block (obs_rail_frame): per object a valid flag then rail-frame values; s along the ego's rail, d left of it
+#define RAIL_PARTNER_FEATURES 9
+#define RAIL_ROAD_FEATURES 6
+#define RAIL_POINT_FEATURES 4
+#define RAIL_PREVIEW_FEATURES 2
+#define ROAD_WORLD_ROW_FEATURES 5 // world mid x, y, z and unit direction x, y of an observed road segment
+#define RAIL_OBS_DS_NORM_M 200.0f
+#define RAIL_OBS_D_LANES_CLIP 4.0f
+#define RAIL_OBS_D_NORM_M 50.0f
+#define RAIL_OBS_SPEED_NORM_MPS 20.0f
+#define RAIL_OBS_PREVIEW_DS_NORM_M 100.0f
+#define RAIL_OBS_COARSE_STRIDE 8
+#define RAIL_OBS_END_MARGIN_M 1.0f
+#define RAIL_OBS_MAX_D_CURVATURE 0.8f // signed d * kappa at the foot: inside a bend, nearer 1 the normals cross
+#define RAIL_OBS_UNIQUE_MIN_SEPARATION_M 10.0f
+#define RAIL_OBS_UNIQUE_D_SEPARATION 1.5f // a competing foot lies beyond this many |d| (plus the slack) along s
+#define RAIL_OBS_UNIQUE_SLACK_M 4.0f
+#define RAIL_OBS_Z_SEARCH_ITERATIONS 32
 // (p, v, a) x (fwd, left) of the spline target the policy last committed to; spline mode only.
 #define SPLINE_INTENT_FEATURES 6
 // Heading deviation since last kept point that forces a keep when obs stride > 1 (~15 degrees).
@@ -452,12 +470,15 @@ static const int ROAD_OFFSETS[25][2]
 #define LATTICE_EXIT_SWITCH_BRAKE_MPS2 1.5f  // switching onto an exit must leave room to brake this gently to its speed
 
 // -- Rail (per agent): samples at LATTICE_RAIL_SPACING_M, heading box filter over +-half window
-#define LATTICE_RAIL_SAMPLES 512
+#define LATTICE_RAIL_SAMPLES 640 // capacity; rails other than a longer-trail main rail keep the nominal count
+#define LATTICE_NOMINAL_RAIL_SAMPLES 512
 #define LATTICE_RAIL_SPACING_M 0.5f
 #define LATTICE_SMOOTH_HALF_WINDOW 4
 #define LATTICE_CHAIN_MAX_LANES 24
 #define LATTICE_TRAIL_BEHIND_M 20.0f
 #define LATTICE_TRAIL_KEEP_M 30.0f
+#define LATTICE_TRAIL_KEEP_MAX_M                                                                                       \
+    (LATTICE_TRAIL_KEEP_M + (LATTICE_RAIL_SAMPLES - LATTICE_NOMINAL_RAIL_SAMPLES) * LATTICE_RAIL_SPACING_M)
 #define LATTICE_EXIT_FREEZE_M 160.0f
 #define LATTICE_LOOKAHEAD_FREEZE_PAD_M 40.0f
 #define LATTICE_LOOKAHEAD_MIN_M 60.0f

@@ -50,6 +50,9 @@ LATTICE_DURATION_TOLERANCE = 1e-4
 LATTICE_MAX_PLAN_STEPS = 400
 LATTICE_BACKUP_MAX_M = 20.0 - 0.2 - 2.93 - 3.5
 LATTICE_STOP_T_MAX_S = 12.0
+LATTICE_RAIL_SPACING_M = 0.5
+LATTICE_TRAIL_KEEP_M = 30.0  # mirrors lattice.h: the default trail and the extra capacity of the main rail
+LATTICE_TRAIL_KEEP_MAX_M = 94.0
 LATTICE_URGENCY_MIN_FRAC = 1e-6  # comfort fractions lie in (0, 1]; mirrors lattice.h's LATTICE_CHECK_EPS lower bound
 # Must match constants.h LATTICE_BORROW_MIN_D_M = LATTICE_BORROW_FRACTION * LATTICE_NEIGHBOUR_MIN_M.
 LATTICE_BORROW_MIN_D_M = 0.5 * 2.5
@@ -287,6 +290,8 @@ class DriveEnvConfig:
     stop_sign_behavior: InfractionBehavior = MISSING
     traffic_lights_enabled: bool = MISSING
     obs_light_facing_only: bool = MISSING
+    obs_rail_frame: bool = MISSING
+    obs_car_frame: bool = MISSING
     stop_signs_enabled: bool = MISSING
     yield_signs_enabled: bool = MISSING
     use_map_cache: bool = MISSING
@@ -358,6 +363,8 @@ class DriveEnvConfig:
     lattice_oncoming_overtake: bool = MISSING
     lattice_turnaround: bool = MISSING
     lattice_overtake_commit: bool = MISSING
+    lattice_trail_keep_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    lattice_exit_goal_refresh: bool = MISSING
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
@@ -652,6 +659,10 @@ def _validate_lattice_config(config, context):
         )
     if policy["lattice_structured_head"] and not uses_lattice:
         _raise_config_error(context, "policy.lattice_structured_head", "needs env.dynamics_model 'spline_werling'")
+    if env["obs_rail_frame"] and not uses_lattice:
+        _raise_config_error(context, "env.obs_rail_frame", "needs env.dynamics_model 'spline_werling'")
+    if not env["obs_car_frame"] and not env["obs_rail_frame"]:
+        _raise_config_error(context, "env.obs_car_frame", "false needs env.obs_rail_frame")
     if not uses_lattice:
         return
     from pufferlib.ocean.drive import binding
@@ -682,6 +693,18 @@ def _validate_lattice_config(config, context):
         )
     if env["lattice_overtake_commit"] and not env["lattice_oncoming_overtake"]:
         _raise_config_error(context, "env.lattice_overtake_commit", "needs env.lattice_oncoming_overtake")
+    trail_keep_m = env["lattice_trail_keep_m"]
+    extra_trail_samples = (trail_keep_m - LATTICE_TRAIL_KEEP_M) / LATTICE_RAIL_SPACING_M
+    if not LATTICE_TRAIL_KEEP_M <= trail_keep_m <= LATTICE_TRAIL_KEEP_MAX_M or extra_trail_samples != int(
+        extra_trail_samples
+    ):
+        _raise_config_error(
+            context,
+            "env.lattice_trail_keep_m",
+            f"must be a multiple of {LATTICE_RAIL_SPACING_M} m in [{LATTICE_TRAIL_KEEP_M}, {LATTICE_TRAIL_KEEP_MAX_M}]",
+        )
+    if env["lattice_exit_goal_refresh"] and env["lattice_exit_mode"] != "goal":
+        _raise_config_error(context, "env.lattice_exit_goal_refresh", "needs env.lattice_exit_mode 'goal'")
     if env["reward_oncoming_penalty_frac"] > 0.0 and not env["lattice_oncoming_overtake"]:
         _raise_config_error(context, "env.reward_oncoming_penalty_frac", "needs env.lattice_oncoming_overtake")
     standstill_borrowing_cost = (

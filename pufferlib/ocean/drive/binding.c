@@ -2112,6 +2112,23 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
     env->traffic_lights_enabled = (bool) unpack(kwargs, "traffic_lights_enabled");
     env->obs_light_facing_only = (bool) unpack(kwargs, "obs_light_facing_only");
+    env->obs_rail_frame = (int) unpack(kwargs, "obs_rail_frame");
+    env->obs_hide_car_frame = !(int) unpack(kwargs, "obs_car_frame");
+    if (PyErr_Occurred()) {
+        return -1;
+    }
+    if ((env->obs_rail_frame != 0 && env->obs_rail_frame != 1)
+        || (env->obs_rail_frame && env->action_type != ACTION_TYPE_LATTICE)) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "obs_rail_frame must be 0 or 1 and needs action_type lattice. Got: %d",
+            env->obs_rail_frame);
+        return -1;
+    }
+    if (env->obs_hide_car_frame && !env->obs_rail_frame) {
+        PyErr_SetString(PyExc_ValueError, "obs_car_frame false needs obs_rail_frame");
+        return -1;
+    }
     env->stop_signs_enabled = (bool) unpack(kwargs, "stop_signs_enabled");
     env->yield_signs_enabled = (bool) unpack(kwargs, "yield_signs_enabled");
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
@@ -2245,6 +2262,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         lattice->turnaround = (int) unpack(kwargs, "lattice_turnaround");
         lattice->lon_urgency = (int) unpack(kwargs, "lattice_lon_urgency");
         lattice->overtake_commit = (int) unpack(kwargs, "lattice_overtake_commit");
+        lattice->trail_keep_m = (float) unpack(kwargs, "lattice_trail_keep_m");
+        lattice->exit_goal_refresh = (int) unpack(kwargs, "lattice_exit_goal_refresh");
         if (PyErr_Occurred()) {
             return -1;
         }
@@ -2273,6 +2292,17 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
                 "lattice mask features: drive.py expects %d, C built %d",
                 python_mask_features,
                 env->lattice.mask_feature_count);
+            c_close(env);
+            return -1;
+        }
+        int python_rail_features = (int) unpack(kwargs, "rail_obs_feature_count");
+        int c_rail_features = env->obs_rail_frame * rail_obs_feature_count(env);
+        if (PyErr_Occurred() || python_rail_features != c_rail_features) {
+            PyErr_Format(
+                PyExc_ValueError,
+                "rail obs features: drive.py expects %d, C writes %d",
+                python_rail_features,
+                c_rail_features);
             c_close(env);
             return -1;
         }

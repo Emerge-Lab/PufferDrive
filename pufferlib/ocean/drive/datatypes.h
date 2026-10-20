@@ -206,6 +206,8 @@ struct LatticeConfig {
     int oncoming_overtake; // extra lateral choice: borrow the oncoming lane on one-lane-per-direction roads
     int overtake_commit;   // a started overtake keeps its lateral plan until it has passed its car
     int turnaround;        // extra longitudinal cell: turn around (one-shot or multi-point) from rest
+    float trail_keep_m;    // main rail kept behind the car at each regeneration
+    int exit_goal_refresh; // goal exits: chosen among the exits the policy could pick; a new goal re-decides them
     int decision_period_steps;
     int lat_duration_steps[LATTICE_MAX_LAT_DURATIONS];
     int lon_duration_steps[LATTICE_MAX_LON_DURATIONS];
@@ -470,6 +472,9 @@ struct LatticeAgent {
     short lon_cell_steps[LATTICE_MAX_LON_CELLS];
     float stop_line_distance_m;
     float preview_world_xy[AGENT_F32_PATH_SAMPLES][2];
+    float preview_rail_ds_m[LATTICE_PREVIEW_POINTS]; // observed preview points relative to the car on its rail
+    float preview_rail_d_m[LATTICE_PREVIEW_POINTS];
+    int exit_goal_lane; // goal lane the goal-mode exits ahead were decided for
     float plan_change_rms_m;
     struct LatticeRouteProgress route_progress;
     struct LatticeTurnState turn;
