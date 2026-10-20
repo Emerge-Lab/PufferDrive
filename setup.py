@@ -62,10 +62,11 @@ if DEBUG and not PROFILE:
 else:
     extra_compile_args += [
         "-O2",
-        "-flto=auto" if PROFILE else "-flto",
+        "-flto=auto",
     ]
     extra_link_args += [
         "-O2",
+        "-flto=auto",
     ]
     cxx_args += [
         "-O3",
@@ -84,7 +85,6 @@ if PROFILE:
     ]
     extra_link_args += [
         "-g",
-        "-flto=auto",
         "-fno-inline",
         "-fno-builtin",
     ]
@@ -244,7 +244,7 @@ setup(
     ext_modules=c_extensions + torch_extensions,
     cmdclass={
         "build_ext": BuildExt,
-        "build_torch": TorchBuildExt,
+        "build_torch": TorchBuildExt.with_options(use_ninja=cpp_extension.is_ninja_available()),
         "build_c": CBuildExt,
     },
     include_dirs=[numpy.get_include()],
