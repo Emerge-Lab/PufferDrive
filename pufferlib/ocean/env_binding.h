@@ -987,8 +987,8 @@ static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
 // ── Co-simulation external-state setters (mirror vec_get_global_agent_state) ──
 // Co-sim runs a single env (num_envs == 1); these operate on vec->envs[0].
 static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 11) {
-        PyErr_SetString(PyExc_TypeError, "vec_set_agent_states requires 11 arguments");
+    if (PyTuple_Size(args) != 12) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_agent_states requires 12 arguments");
         return NULL;
     }
     VecEnv *vec = unpack_vecenv(args);
@@ -1005,6 +1005,7 @@ static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
     PyObject *yaw_rate_arr = PyTuple_GetItem(args, 8);
     PyObject *accel_long_arr = PyTuple_GetItem(args, 9);
     PyObject *seconds_stopped_arr = PyTuple_GetItem(args, 10); // None keeps c_step's accumulation
+    PyObject *steering_arr = PyTuple_GetItem(args, 11);        // None derives steering from yaw_rate
     if (!PyArray_Check(idx_arr) || !PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(z_arr)
         || !PyArray_Check(heading_arr) || !PyArray_Check(vx_arr) || !PyArray_Check(vy_arr)
         || !PyArray_Check(yaw_rate_arr) || !PyArray_Check(accel_long_arr)) {
@@ -1013,6 +1014,10 @@ static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
     }
     if (seconds_stopped_arr != Py_None && !PyArray_Check(seconds_stopped_arr)) {
         PyErr_SetString(PyExc_TypeError, "seconds_stopped must be a NumPy array or None");
+        return NULL;
+    }
+    if (steering_arr != Py_None && !PyArray_Check(steering_arr)) {
+        PyErr_SetString(PyExc_TypeError, "steering must be a NumPy array or None");
         return NULL;
     }
     int *idx = (int *) PyArray_DATA((PyArrayObject *) idx_arr);
@@ -1026,10 +1031,20 @@ static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
     float *accel_long = (float *) PyArray_DATA((PyArrayObject *) accel_long_arr);
     float *seconds_stopped
         = seconds_stopped_arr == Py_None ? NULL : (float *) PyArray_DATA((PyArrayObject *) seconds_stopped_arr);
+    float *steering = steering_arr == Py_None ? NULL : (float *) PyArray_DATA((PyArrayObject *) steering_arr);
     int count = (int) PyArray_SIZE((PyArrayObject *) idx_arr);
-    PyObject *value_arrs[9]
-        = {x_arr, y_arr, z_arr, heading_arr, vx_arr, vy_arr, yaw_rate_arr, accel_long_arr, seconds_stopped_arr};
-    for (int k = 0; k < 9; k++) {
+    PyObject *value_arrs[10]
+        = {x_arr,
+           y_arr,
+           z_arr,
+           heading_arr,
+           vx_arr,
+           vy_arr,
+           yaw_rate_arr,
+           accel_long_arr,
+           seconds_stopped_arr,
+           steering_arr};
+    for (int k = 0; k < 10; k++) {
         if (value_arrs[k] == Py_None) {
             continue;
         }
@@ -1050,11 +1065,13 @@ static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
             vy,
             yaw_rate,
             accel_long,
-            seconds_stopped)
+            seconds_stopped,
+            steering)
         != 0) {
         PyErr_SetString(
             PyExc_ValueError,
-            "vec_set_agent_states: agent index out of range, non-finite state or negative seconds_stopped");
+            "vec_set_agent_states: agent index out of range, non-finite state, negative seconds_stopped or "
+            "non-finite steering");
         return NULL;
     }
     Py_RETURN_NONE;
@@ -1164,6 +1181,38 @@ static PyObject *vec_set_stop_signs(PyObject *self, PyObject *args) {
         return NULL;
     }
     return PyLong_FromLong(drive->num_traffic_elements);
+}
+
+static PyObject *vec_set_traffic_light_lines(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_traffic_light_lines requires 3 arguments (vec_env, indices, lines)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    PyObject *indices_arr = PyTuple_GetItem(args, 1);
+    PyObject *lines_arr = PyTuple_GetItem(args, 2);
+    if (!PyArray_Check(indices_arr) || !PyArray_Check(lines_arr)) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_traffic_light_lines: indices and lines must be NumPy arrays");
+        return NULL;
+    }
+    int count = (int) PyArray_SIZE((PyArrayObject *) indices_arr);
+    if ((int) PyArray_SIZE((PyArrayObject *) lines_arr) != count * 6) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_traffic_light_lines: lines must hold 6 floats per index");
+        return NULL;
+    }
+    Drive *drive = (Drive *) vec->envs[0];
+    const int *indices = (const int *) PyArray_DATA((PyArrayObject *) indices_arr);
+    const float *lines = (const float *) PyArray_DATA((PyArrayObject *) lines_arr);
+    if (c_set_traffic_light_lines(drive, count, indices, lines) != 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "vec_set_traffic_light_lines: index is not a traffic light, non-finite value or zero-length line");
+        return NULL;
+    }
+    Py_RETURN_NONE;
 }
 
 static PyObject *vec_get_agent_goal_progress(PyObject *self, PyObject *args) {
@@ -1513,6 +1562,10 @@ static PyMethodDef methods[]
         vec_set_stop_signs,
         METH_VARARGS,
         "Replace the stop signs with the external sim's own (co-sim)"},
+       {"vec_set_traffic_light_lines",
+        vec_set_traffic_light_lines,
+        METH_VARARGS,
+        "Move traffic-light stop lines onto the external sim's own (co-sim)"},
        {"vec_set_agent_goals", vec_set_agent_goals, METH_VARARGS, "Set an agent's goal waypoints (co-sim)"},
        {"vec_get_agent_goal_progress",
         vec_get_agent_goal_progress,

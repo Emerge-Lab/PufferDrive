@@ -33,7 +33,7 @@ class Drive(pufferlib.PufferEnv):
         reward_reverse=0.005,
         reward_stop_line=1.0,
         reward_timestep=0.000025,
-        reward_overspeed=0.05,
+        reward_overspeed=0.005,
         overspeed_tolerance_mps=0.0,
         reward_ade=0.0,
         min_goal_spacing=20.0,
@@ -118,6 +118,7 @@ class Drive(pufferlib.PufferEnv):
         obs_slots_boundary_n=32,
         obs_lane_stride=1,
         obs_boundary_stride=1,
+        obs_stride_merge_segments=False,
         obs_slots_partners_n=16,
         obs_partner_relative_velocity=False,
         obs_lane_heading_signed=False,
@@ -136,6 +137,7 @@ class Drive(pufferlib.PufferEnv):
         obs_norm_road_seg_width_m=5.0,
         obs_norm_z_m=10.0,
         eval_perceived_size_margin_m=0.1,
+        obs_partner_split_length_m=0.0,
         eval_standstill_jerk_deadband_mps3=0.0,
         obs_range_traffic_control_m=100.0,
         obs_range_partner_m=100.0,
@@ -145,8 +147,11 @@ class Drive(pufferlib.PufferEnv):
         obs_dropout_lane=0.0,
         obs_dropout_boundary=0.0,
         partner_blindness_prob=0.0,
+        partner_blindness_prob_min=0.0,
         partner_blindness_trigger_prob=0.1,
         partner_blindness_duration_seconds=1.0,
+        partner_blindness_corridor=True,
+        partner_blindness_time_fraction_max=0.0,
         phantom_braking_prob=0.0,
         phantom_braking_trigger_prob=0.0,
         phantom_braking_duration_seconds=1.0,
@@ -304,6 +309,7 @@ class Drive(pufferlib.PufferEnv):
         self.obs_slots_boundary_n = obs_slots_boundary_n
         self.obs_lane_stride = obs_lane_stride
         self.obs_boundary_stride = obs_boundary_stride
+        self.obs_stride_merge_segments = int(bool(obs_stride_merge_segments))
         self.obs_slots_partners_n = obs_slots_partners_n
         self.obs_partner_relative_velocity = int(bool(obs_partner_relative_velocity))
         self.obs_lane_heading_signed = int(bool(obs_lane_heading_signed))
@@ -323,6 +329,9 @@ class Drive(pufferlib.PufferEnv):
         self.obs_norm_road_seg_width_m = float(obs_norm_road_seg_width_m)
         self.obs_norm_z_m = float(obs_norm_z_m)
         self.eval_perceived_size_margin_m = float(eval_perceived_size_margin_m)
+        self.obs_partner_split_length_m = float(obs_partner_split_length_m)
+        if not np.isfinite(self.obs_partner_split_length_m) or self.obs_partner_split_length_m < 0.0:
+            raise ValueError(f"obs_partner_split_length_m must be finite and >= 0. Got: {obs_partner_split_length_m}")
         self.eval_standstill_jerk_deadband_mps3 = float(eval_standstill_jerk_deadband_mps3)
         if self.eval_standstill_jerk_deadband_mps3 < 0:
             raise ValueError(
@@ -344,8 +353,11 @@ class Drive(pufferlib.PufferEnv):
             self.obs_dropout_boundary,
         )
         self.partner_blindness_prob = float(partner_blindness_prob)
+        self.partner_blindness_prob_min = float(partner_blindness_prob_min)
         self.partner_blindness_trigger_prob = float(partner_blindness_trigger_prob)
         self.partner_blindness_duration_seconds = float(partner_blindness_duration_seconds)
+        self.partner_blindness_corridor = int(bool(partner_blindness_corridor))
+        self.partner_blindness_time_fraction_max = float(partner_blindness_time_fraction_max)
         self.phantom_braking_prob = float(phantom_braking_prob)
         self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
         self.phantom_braking_duration_seconds = float(phantom_braking_duration_seconds)
@@ -524,6 +536,7 @@ class Drive(pufferlib.PufferEnv):
             "use_neighbor_cache": self.use_neighbor_cache,
             "obs_lane_stride": self.obs_lane_stride,
             "obs_boundary_stride": self.obs_boundary_stride,
+            "obs_stride_merge_segments": self.obs_stride_merge_segments,
             "obs_range_road_front_m": self.obs_range_road_front_m,
             "obs_range_road_behind_m": self.obs_range_road_behind_m,
             "obs_range_road_side_m": self.obs_range_road_side_m,
@@ -574,6 +587,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_boundary_n": self.obs_slots_boundary_n,
             "obs_lane_stride": self.obs_lane_stride,
             "obs_boundary_stride": self.obs_boundary_stride,
+            "obs_stride_merge_segments": self.obs_stride_merge_segments,
             "obs_slots_partners_n": self.obs_slots_partners_n,
             "obs_partner_relative_velocity": self.obs_partner_relative_velocity,
             "obs_lane_heading_signed": self.obs_lane_heading_signed,
@@ -634,6 +648,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_norm_road_seg_width_m": self.obs_norm_road_seg_width_m,
             "obs_norm_z_m": self.obs_norm_z_m,
             "eval_perceived_size_margin_m": self.eval_perceived_size_margin_m,
+            "obs_partner_split_length_m": self.obs_partner_split_length_m,
             "eval_standstill_jerk_deadband_mps3": self.eval_standstill_jerk_deadband_mps3,
             "obs_range_traffic_control_m": self.obs_range_traffic_control_m,
             "obs_range_partner_m": self.obs_range_partner_m,
@@ -643,8 +658,11 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_lane_kept": self.obs_slots_lane_kept,
             "obs_slots_boundary_kept": self.obs_slots_boundary_kept,
             "partner_blindness_prob": self.partner_blindness_prob,
+            "partner_blindness_prob_min": self.partner_blindness_prob_min,
             "partner_blindness_trigger_prob": self.partner_blindness_trigger_prob,
             "partner_blindness_duration_seconds": self.partner_blindness_duration_seconds,
+            "partner_blindness_corridor": self.partner_blindness_corridor,
+            "partner_blindness_time_fraction_max": self.partner_blindness_time_fraction_max,
             "phantom_braking_prob": self.phantom_braking_prob,
             "phantom_braking_trigger_prob": self.phantom_braking_trigger_prob,
             "phantom_braking_duration_seconds": self.phantom_braking_duration_seconds,
@@ -832,7 +850,9 @@ class Drive(pufferlib.PufferEnv):
 
         return states
 
-    def set_agent_states(self, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long, seconds_stopped=None):
+    def set_agent_states(
+        self, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long, seconds_stopped=None, steering=None
+    ):
         """Co-sim: overwrite the sim state of agents at global indices `idx`
         (e.g. CARLA background) with world-frame pose/velocity. The C side
         subtracts world_mean, recaches heading trig and recomputes speed.
@@ -858,6 +878,7 @@ class Drive(pufferlib.PufferEnv):
             np.ascontiguousarray(yaw_rate, dtype=np.float32),
             np.ascontiguousarray(accel_long, dtype=np.float32),
             None if seconds_stopped is None else np.ascontiguousarray(seconds_stopped, dtype=np.float32),
+            None if steering is None else np.ascontiguousarray(steering, dtype=np.float32),
         )
 
     # ── Co-simulation external-state setters ─────────────────────────────────────
@@ -892,6 +913,14 @@ class Drive(pufferlib.PufferEnv):
         lines = np.ascontiguousarray(np.asarray(lines, dtype=np.float32).reshape(-1, 6))
         headings = np.ascontiguousarray(np.asarray(headings, dtype=np.float32).reshape(-1))
         return int(binding.vec_set_stop_signs(self.c_envs, lines, headings))
+
+    def set_traffic_light_lines(self, indices, lines):
+        """move traffic-light elements' stop lines onto the external sim's own
+        (co-sim): indices (K,) element indices, lines (K, 6) world-frame
+        endpoints [x1, y1, z1, x2, y2, z2]."""
+        indices = np.ascontiguousarray(np.asarray(indices, dtype=np.int32).reshape(-1))
+        lines = np.ascontiguousarray(np.asarray(lines, dtype=np.float32).reshape(-1, 6))
+        binding.vec_set_traffic_light_lines(self.c_envs, indices, lines)
 
     def set_agent_goals(self, agent_idx, gx, gy, gz, gdir_x=None, gdir_y=None):
         """set an agent's goal waypoints (e.g. the ego's route) in world

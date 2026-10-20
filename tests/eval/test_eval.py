@@ -102,6 +102,7 @@ def _write_benchmark_config(
                     "termination_mode": False,
                     "obs_dropout_lane": 0.0,
                     "obs_dropout_boundary": 0.0,
+                    "speed_limit_random_prob": 0.0,
                 },
                 "benchmarks": [
                     {
@@ -381,6 +382,7 @@ def _replay_render_args():
             "goal_source": "gt",
             "num_goals": 3,
             "compute_eval_metrics": True,
+            "speed_limit_random_prob": 0.0,
         }
     )
     _set_small_observation_config(args)

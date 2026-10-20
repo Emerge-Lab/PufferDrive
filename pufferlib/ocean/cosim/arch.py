@@ -23,7 +23,9 @@ CLEAN_EVAL_OVERRIDES = {
     "obs_dropout_lane": 0.0,
     "obs_dropout_boundary": 0.0,
     "partner_blindness_prob": 0.0,
+    "partner_blindness_prob_min": 0.0,
     "partner_blindness_trigger_prob": 0.0,
+    "partner_blindness_time_fraction_max": 0.0,
     "phantom_braking_prob": 0.0,
     "phantom_braking_trigger_prob": 0.0,
     "traffic_light_behavior": "stop",
@@ -35,7 +37,7 @@ CLEAN_EVAL_OVERRIDES = {
     "reward_stop_line": 1.0,
     "reward_ade": 0.0,
     "reward_goal": 1.0,
-    "reward_overspeed": 0.05,
+    "reward_overspeed": 0.1,  # training-range max (REWARD_BOUNDS)
     "reward_comfort": 0.05,
     "reward_velocity": 0.0025,
     "reward_lane_align": 0.025,

@@ -6,6 +6,7 @@ import numpy as np
 import time
 import psutil
 from multiprocessing import get_all_start_methods, get_context
+from multiprocessing.connection import wait
 
 from pufferlib import PufferEnv, set_buffers
 import pufferlib.spaces
@@ -15,8 +16,7 @@ STEP = 1
 SEND = 2
 RECV = 3
 CLOSE = 4
-MAIN = 5
-INFO = 6
+WORKER_POLL_TIMEOUT_SECONDS = 5.0
 
 
 def recv_precheck(vecenv):
@@ -253,36 +253,24 @@ def _worker_process(
     else:
         envs = Serial(env_creators, env_args, env_kwargs, num_envs, buf=buf, seed=seed)
 
-    semaphores = np.ndarray(num_workers, dtype=np.uint8, buffer=shm["semaphores"])
     notify = np.ndarray(num_workers, dtype=bool, buffer=shm["notify"])
-    start = time.time()
     while True:
+        command = recv_pipe.recv()
         if notify[worker_idx]:
             envs.notify()
             notify[worker_idx] = False
 
-        sem = semaphores[worker_idx]
-        if sem >= MAIN:
-            if time.time() - start > 0.5:
-                time.sleep(0.01)
-            continue
-
-        start = time.time()
-        if sem == RESET:
+        if command == RESET:
             seed = recv_pipe.recv()
             _, infos = envs.reset(seed=seed)
-        elif sem == STEP:
+        elif command == STEP:
             _, _, _, _, infos = envs.step(atn_arr)
-        elif sem == CLOSE:
+        elif command == CLOSE:
             envs.close()
             send_pipe.send(None)
             break
 
-        if infos:
-            semaphores[worker_idx] = INFO
-            send_pipe.send(infos)
-        else:
-            semaphores[worker_idx] = MAIN
+        send_pipe.send(infos)
 
 
 class Multiprocessing:
@@ -319,14 +307,14 @@ class Multiprocessing:
 
         import psutil
 
-        cpu_cores = psutil.cpu_count(logical=False)
-        if num_workers > cpu_cores and not overwork:
+        cpu_threads = psutil.cpu_count(logical=True)
+        if num_workers > cpu_threads and not overwork:
             raise pufferlib.APIUsageError(
                 " ".join(
                     [
-                        f"num_workers ({num_workers}) > hardware cores ({cpu_cores}) is disallowed by default.",
-                        "PufferLib multiprocessing is heavily optimized for 1 process per hardware core.",
-                        "If you really want to do this, set overwork=True (--vec-overwork in our demo.py).",
+                        f"num_workers ({num_workers}) > hardware threads ({cpu_threads}) is disallowed by default.",
+                        "Idle workers block instead of spinning, so one process per hardware thread is the limit.",
+                        "If you really want to do this, set overwork=True.",
                     ]
                 )
             )
@@ -391,7 +379,6 @@ class Multiprocessing:
             terminals=process_context.RawArray("b", num_agents),
             truncateds=process_context.RawArray("b", num_agents),
             masks=process_context.RawArray("b", num_agents),
-            semaphores=process_context.RawArray("c", num_workers),
             notify=process_context.RawArray("b", num_workers),
         )
         shape = (num_workers, agents_per_worker)
@@ -404,10 +391,8 @@ class Multiprocessing:
             terminals=np.ndarray(shape, dtype=bool, buffer=self.shm["terminals"]),
             truncations=np.ndarray(shape, dtype=bool, buffer=self.shm["truncateds"]),
             masks=np.ndarray(shape, dtype=bool, buffer=self.shm["masks"]),
-            semaphores=np.ndarray(num_workers, dtype=np.uint8, buffer=self.shm["semaphores"]),
             notify=np.ndarray(num_workers, dtype=bool, buffer=self.shm["notify"]),
         )
-        self.buf["semaphores"][:] = MAIN
 
         self.send_pipes, w_recv_pipes = zip(*[process_context.Pipe() for _ in range(num_workers)])
         w_send_pipes, self.recv_pipes = zip(*[process_context.Pipe() for _ in range(num_workers)])
@@ -452,28 +437,49 @@ class Multiprocessing:
 
         self.ready_workers = []
         self.waiting_workers = []
+        self.batch_workers = []
+        self.pending_result = np.zeros(num_workers, dtype=bool)
+
+    def _check_worker_alive(self, worker):
+        process = self.processes[worker]
+        if not process.is_alive():
+            raise RuntimeError(f"Vectorization worker {worker} exited with code {process.exitcode}")
+
+    def _recv_worker_result(self, worker):
+        pipe = self.recv_pipes[worker]
+        while not pipe.poll(WORKER_POLL_TIMEOUT_SECONDS):
+            self._check_worker_alive(worker)
+
+        self.pending_result[worker] = False
+        infos = pipe.recv()
+        if infos:
+            self.infos[worker] = infos
+
+    def _collect_ready_workers(self):
+        # sync_traj consumes workers in send order so batches stay aligned with the experience buffer
+        if self.sync_traj:
+            worker = self.waiting_workers.pop(0)
+            self._recv_worker_result(worker)
+            self.ready_workers.append(worker)
+            return
+
+        pipes = [self.recv_pipes[worker] for worker in self.waiting_workers]
+        ready_pipes = wait(pipes, WORKER_POLL_TIMEOUT_SECONDS)
+        if not ready_pipes:
+            for worker in self.waiting_workers:
+                self._check_worker_alive(worker)
+            return
+
+        for pipe in ready_pipes:
+            worker = self.recv_pipe_dict[pipe]
+            self._recv_worker_result(worker)
+            self.waiting_workers.remove(worker)
+            self.ready_workers.append(worker)
 
     def recv(self):
         recv_precheck(self)
         while True:
-            # Bandaid patch for new experience buffer desync
-            if self.sync_traj:
-                worker = self.waiting_workers[0]
-                sem = self.buf["semaphores"][worker]
-                if sem >= MAIN:
-                    self.waiting_workers.pop(0)
-                    self.ready_workers.append(worker)
-            else:
-                worker = self.waiting_workers.pop(0)
-                sem = self.buf["semaphores"][worker]
-                if sem >= MAIN:
-                    self.ready_workers.append(worker)
-                else:
-                    self.waiting_workers.append(worker)
-
-            if sem == INFO:
-                self.infos[worker] = self.recv_pipes[worker].recv()
-
+            self._collect_ready_workers()
             if not self.ready_workers:
                 continue
 
@@ -523,6 +529,7 @@ class Multiprocessing:
                 break
 
         self.w_slice = w_slice
+        self.batch_workers = s_range
         buf = self.buf
 
         o = buf["observations"][w_slice].reshape(self.obs_batch_shape)
@@ -546,21 +553,14 @@ class Multiprocessing:
         actions = send_precheck(self, actions).reshape(self.atn_batch_shape)
         # TODO: What shape?
 
-        idxs = self.w_slice
-        self.actions[idxs] = actions
-        self.buf["semaphores"][idxs] = STEP
+        self.actions[self.w_slice] = actions
+        for worker in self.batch_workers:
+            self.send_pipes[worker].send(STEP)
+        self.pending_result[self.batch_workers] = True
 
     def async_reset(self, seed=0):
-        # Flush any waiting workers
-        while self.waiting_workers:
-            worker = self.waiting_workers.pop(0)
-            sem = self.buf["semaphores"][worker]
-            if sem >= MAIN:
-                self.ready_workers.append(worker)
-                if sem == INFO:
-                    self.recv_pipes[worker].recv()
-            else:
-                self.waiting_workers.append(worker)
+        for worker in np.flatnonzero(self.pending_result):
+            self._recv_worker_result(worker)
 
         self.flag = RECV
         self.prev_env_id = []
@@ -571,13 +571,14 @@ class Multiprocessing:
         self.waiting_workers = list(range(self.num_workers))
         self.infos = [[] for _ in range(self.num_workers)]
 
-        self.buf["semaphores"][:] = RESET
         worker_ss = (
             np.random.SeedSequence(seed).spawn(self.num_workers) if seed is not None else [None] * self.num_workers
         )
         for i in range(self.num_workers):
             s = int(worker_ss[i].generate_state(1)[0]) & 0x7FFFFFFF if worker_ss[i] is not None else None
+            self.send_pipes[i].send(RESET)
             self.send_pipes[i].send(s)
+        self.pending_result[:] = True
 
     def notify(self):
         self.buf["notify"][:] = True

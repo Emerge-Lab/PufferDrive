@@ -62,3 +62,15 @@ nuplan_val:
     CC BY-NC-SA 4.0 (nuPlan, Motional) — non-commercial use only, attribution
     required, share-alike. Redistribute only under this same license and keep
     this notice with any copy.
+
+carla_128_affine_zones_stop:
+  s3_uri: s3://pufferdrive-bins/carla/0.3.2/128_affine_zones_stop/
+  size: ~106 MB, 128 bins
+  public: true
+  description: >-
+    CARLA Towns 01-07/10HD as PufferDrive bins with 16 affine augmentations
+    each (flips, shears, scales), per-lane speed zones, stop signs and the
+    0.1 polyline tolerance (123Drive mapforge at v0.3.2-19). The training set
+    behind the k_scaled_004x runs.
+  license: >-
+    CARLA assets are CC BY 4.0 — attribution required.

@@ -65,9 +65,10 @@ static TrafficControlElement make_traffic_element(int type, int state_size, int 
     return element;
 }
 
-static int test_set_traffic_light_states_writes_current_timestep_for_lights_only(void) {
-    // Only TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT elements are written, only at env->timestep, and every
-    // other timestep slot must be left alone.
+static int test_set_traffic_light_states_writes_current_and_next_timestep_for_lights_only(void) {
+    // Only TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT elements are written, at env->timestep and the step after
+    // it (c_step increments the timestep before its metrics and obs read the state, and the next sync
+    // only arrives after that step); every other timestep slot must be left alone.
     int light_states[5] = {99, 99, 99, 99, 99};
     int stop_sign_states[5] = {99, 99, 99, 99, 99};
     TrafficControlElement elements[2];
@@ -83,9 +84,9 @@ static int test_set_traffic_light_states_writes_current_timestep_for_lights_only
     EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states), 0);
 
     EXPECT_EQ_INT(light_states[2], 3); // written at the current timestep
+    EXPECT_EQ_INT(light_states[3], 3); // and at the one c_step reads next
     EXPECT_EQ_INT(light_states[0], 99);
     EXPECT_EQ_INT(light_states[1], 99);
-    EXPECT_EQ_INT(light_states[3], 99);
     EXPECT_EQ_INT(light_states[4], 99);
     for (int t = 0; t < 5; t++) {
         EXPECT_EQ_INT(stop_sign_states[t], 99); // non-light element untouched
@@ -118,6 +119,12 @@ static int test_set_traffic_light_states_rejects_out_of_range_timestep_and_state
     EXPECT_EQ_INT(light_states[1], 99);
     EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states), 0);
     EXPECT_EQ_INT(light_states[1], 1);
+    EXPECT_EQ_INT(light_states[2], 1);
+
+    env.timestep = 2; // last slot of the schedule: no next timestep to fill, still a success
+    int last_states[2] = {3, 3};
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, last_states), 0);
+    EXPECT_EQ_INT(light_states[2], 3);
     return 0;
 }
 
@@ -141,7 +148,7 @@ static int test_set_agent_states_teleport_resets_prev_pose(void) {
     int idx[1] = {0};
     float x[1] = {10.0f}, y[1] = {20.0f}, z[1] = {0.0f}, h[1] = {0.5f};
     float vx[1] = {1.0f}, vy[1] = {0.0f}, yr[1] = {0.0f}, al[1] = {0.0f};
-    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, NULL), 0);
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, NULL, NULL), 0);
 
     EXPECT_NEAR(agent.prev_x, agent.sim_x, 1e-6f);
     EXPECT_NEAR(agent.prev_y, agent.sim_y, 1e-6f);
@@ -163,16 +170,48 @@ static int test_set_agent_states_seconds_stopped_injects_or_preserves(void) {
     float x[1] = {1.0f}, y[1] = {2.0f}, z[1] = {0.0f}, h[1] = {0.0f};
     float vx[1] = {0.0f}, vy[1] = {0.0f}, yr[1] = {0.0f}, al[1] = {0.0f};
 
-    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, NULL), 0);
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, NULL, NULL), 0);
     EXPECT_NEAR(agent.seconds_stopped, 12.5f, 1e-6f);
 
     float seconds_stopped[1] = {3.0f};
-    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, seconds_stopped), 0);
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, seconds_stopped, NULL), 0);
     EXPECT_NEAR(agent.seconds_stopped, 3.0f, 1e-6f);
 
     float negative_seconds_stopped[1] = {-1.0f};
-    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, negative_seconds_stopped), -1);
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, negative_seconds_stopped, NULL), -1);
     EXPECT_NEAR(agent.seconds_stopped, 3.0f, 1e-6f);
+    return 0;
+}
+
+static int test_set_agent_states_steering_is_state_below_1mps(void) {
+    // A co-sim that tracks steering as state can hand it over exactly: the angle is kept and the
+    // lateral acceleration follows from it as in c_step (v^2 tan(steering) / wheelbase). Without it,
+    // steering is derived from yaw_rate with the speed floored at 1 m/s, so a stopped car that still
+    // holds its wheels turned reads 0 -- the case the steering input exists for.
+    Drive env = {0};
+    Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
+    env.agents = &agent;
+    env.num_total_agents = 1;
+
+    int idx[1] = {0};
+    float x[1] = {1.0f}, y[1] = {2.0f}, z[1] = {0.0f}, h[1] = {0.0f};
+    float vy[1] = {0.0f}, yr[1] = {0.0f}, al[1] = {0.0f};
+
+    float stopped[1] = {0.0f}, steering[1] = {0.14f};
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, stopped, vy, yr, al, NULL, steering), 0);
+    EXPECT_NEAR(agent.steering_angle, 0.14f, 1e-6f);
+    EXPECT_NEAR(agent.accel_lat, 0.0f, 1e-6f);
+
+    float crawling[1] = {0.5f};
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, crawling, vy, yr, al, NULL, steering), 0);
+    EXPECT_NEAR(agent.steering_angle, 0.14f, 1e-6f);
+    EXPECT_NEAR(agent.accel_lat, 0.25f * tanf(0.14f) / agent.wheelbase, 1e-6f);
+
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, stopped, vy, yr, al, NULL, NULL), 0);
+    EXPECT_NEAR(agent.steering_angle, 0.0f, 1e-6f);
+
+    float not_finite[1] = {NAN};
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, stopped, vy, yr, al, NULL, not_finite), -1);
     return 0;
 }
 
@@ -327,16 +366,60 @@ static int test_set_stop_signs_rejects_bad_input_untouched(void) {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// c_set_traffic_light_lines
+// ---------------------------------------------------------------------------
+
+static int test_set_traffic_light_lines_moves_lights_only_and_rejects_bad_input(void) {
+    // Only the addressed light elements move (world_mean subtracted like every setter input), their state
+    // schedule stays; a stop-sign index, an out-of-range index, a non-finite coordinate or a zero-length
+    // line fails the whole call (-1) with every line untouched.
+    int light_states[2] = {1, 1};
+    TrafficControlElement elements[2];
+    elements[0] = make_traffic_element(TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT, 2, light_states);
+    elements[1] = make_traffic_element(TRAFFIC_CONTROL_TYPE_STOP_SIGN, 0, NULL);
+    Drive env = {0};
+    env.traffic_elements = elements;
+    env.num_traffic_elements = 2;
+    env.world_mean_x = 100.0f;
+    env.world_mean_y = -50.0f;
+
+    int idx[1] = {0};
+    float line[6] = {110.0f, -52.0f, 0.5f, 110.0f, -48.0f, 0.5f};
+    EXPECT_EQ_INT(c_set_traffic_light_lines(&env, 1, idx, line), 0);
+    EXPECT_NEAR(elements[0].stop_line[0], 10.0f, 1e-6f);
+    EXPECT_NEAR(elements[0].stop_line[1], -2.0f, 1e-6f);
+    EXPECT_NEAR(elements[0].stop_line[2], 0.5f, 1e-6f);
+    EXPECT_NEAR(elements[0].stop_line[3], 10.0f, 1e-6f);
+    EXPECT_NEAR(elements[0].stop_line[4], 2.0f, 1e-6f);
+    EXPECT_EQ_INT(elements[0].states[0], 1);
+
+    int stop_sign_idx[1] = {1};
+    EXPECT_EQ_INT(c_set_traffic_light_lines(&env, 1, stop_sign_idx, line), -1);
+    EXPECT_NEAR(elements[1].stop_line[0], 0.0f, 1e-6f);
+    int bad_idx[1] = {7};
+    EXPECT_EQ_INT(c_set_traffic_light_lines(&env, 1, bad_idx, line), -1);
+    float degenerate[6] = {1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f};
+    EXPECT_EQ_INT(c_set_traffic_light_lines(&env, 1, idx, degenerate), -1);
+    float nan_line[6] = {0.0f, NAN, 0.0f, 0.0f, 4.0f, 0.0f};
+    EXPECT_EQ_INT(c_set_traffic_light_lines(&env, 1, idx, nan_line), -1);
+    EXPECT_NEAR(elements[0].stop_line[0], 10.0f, 1e-6f);
+    EXPECT_EQ_INT(c_set_traffic_light_lines(&env, 0, NULL, NULL), 0);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_set_agent_sizes_updates_dimensions_radius_and_wheelbase);
     RUN_TEST(test_set_agent_sizes_rejects_out_of_range_index_and_bad_size);
-    RUN_TEST(test_set_traffic_light_states_writes_current_timestep_for_lights_only);
+    RUN_TEST(test_set_traffic_light_states_writes_current_and_next_timestep_for_lights_only);
     RUN_TEST(test_set_traffic_light_states_rejects_out_of_range_timestep_and_state);
     RUN_TEST(test_set_stop_signs_retires_map_signs_and_appends_external_ones);
     RUN_TEST(test_set_stop_signs_rejects_bad_input_untouched);
+    RUN_TEST(test_set_traffic_light_lines_moves_lights_only_and_rejects_bad_input);
     RUN_TEST(test_set_agent_states_teleport_resets_prev_pose);
     RUN_TEST(test_set_agent_states_seconds_stopped_injects_or_preserves);
+    RUN_TEST(test_set_agent_states_steering_is_state_below_1mps);
     RUN_TEST(test_set_agent_goals_sets_positions_lane_and_count);
     RUN_TEST(test_set_agent_goals_rejects_more_than_max_goals);
     RUN_TEST(test_set_agent_goals_rejects_out_of_range_agent_idx);
