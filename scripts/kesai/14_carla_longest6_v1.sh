@@ -37,6 +37,14 @@
 # strictly larger than the smallest training vehicle; 0 = true boxes), LIBTIFF5_COMPAT (1: when `import carla` fails for
 # the egg's missing libtiff.so.5, try the garage env's lib dir (`conda install -n garage "libtiff<4.5"`), then link the
 # system libtiff.so.6 under that name; 0: never link).
+#
+# Completing a partial run (routes lost to CARLA crashes or the job time limit): COMPLETE_RUN=<existing $OUT folder>
+# reruns, in place, only its routes without a valid record (no result.json, or a crash status the leaderboard would
+# resubmit; ROUTE_SUBSET narrows the candidates, deleting a route's result.json forces it). SCENARIOS, REPETITIONS and
+# COSIM_VRU_SIZE_PAD_M default to the run's own values from run_info.txt, CKPT must be the run's checkpoint. The replaced
+# route folders and worker logs move to $OUT/pre_completion_<stamp>/, timing.csv grows, run_info.txt gets a completion
+# line, and results.csv, the report and the gallery are rebuilt over all routes.
+# scripts/kesai/17_carla_longest6_v1_complete_local.sh does this on a desktop for a run folder synced from the cluster.
 set -u
 
 export PD=${PD:-/home/bjaeger/PufferDrive}
@@ -46,9 +54,19 @@ export CARLA_ROOT=${CARLA_ROOT:-/home/bjaeger/CARLA_0.9.10}
 export GARAGE_WORK_DIR=${GARAGE_WORK_DIR:-/home/bjaeger/carla_garage_1}
 RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
 # the agent finds config.yaml next to final_model.pt (or one level above a models/*.pt)
-export CKPT=$RUN_DIR/final_model.pt
+export CKPT=${CKPT:-$RUN_DIR/final_model.pt}
 ROUTE_DIR=${ROUTE_DIR:-$GARAGE_WORK_DIR/leaderboard/data/longest6_split}
 ROUTES_XML=${ROUTES_XML:-$GARAGE_WORK_DIR/leaderboard/data/longest6.xml}
+COMPLETE_RUN=${COMPLETE_RUN:-}
+if [ -n "$COMPLETE_RUN" ]; then
+    [ -d "$COMPLETE_RUN/routes" ] && [ -f "$COMPLETE_RUN/run_info.txt" ] || { echo "COMPLETE_RUN=$COMPLETE_RUN is not a run folder (needs routes/ and run_info.txt)"; exit 1; }
+    run_info_value() { awk -v key="$1" '$1 == key {print $2; exit}' "$COMPLETE_RUN/run_info.txt"; }
+    # the run's own settings, so the completed routes are scored like the rest
+    PREVIOUS_SCENARIO_FILE=$(run_info_value scenarios)
+    [ -n "$PREVIOUS_SCENARIO_FILE" ] && SCENARIOS=${SCENARIOS:-$([ "$(basename "$PREVIOUS_SCENARIO_FILE")" = "no_scenarios.json" ] && echo 0 || echo 1)}
+    REPETITIONS=${REPETITIONS:-$(run_info_value repetitions)}
+    COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-$(run_info_value vru_size_pad_m)}
+fi
 SCENARIOS=${SCENARIOS:-1}
 if [ "$SCENARIOS" = "1" ]; then
     SCENARIO_FILE=$GARAGE_WORK_DIR/leaderboard/data/scenarios/eval_scenarios.json
@@ -87,13 +105,24 @@ if [ "$WORKERS" -lt 1 ] || [ "$WORKERS" -gt 64 ]; then echo "WORKERS=$WORKERS mu
 TAG=longest6_v1$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")
 TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
-OUT=$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+OUT=${COMPLETE_RUN:-$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
-{
-    echo "checkpoint $CKPT"; echo "routes $ROUTE_DIR ($ROUTES_XML)"; echo "scenarios $SCENARIO_FILE"
-    echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"; echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
-    echo "git $(git -C "$PD" rev-parse --short HEAD 2>/dev/null) $(git -C "$PD" diff --quiet 2>/dev/null || echo dirty)"
-} > "$OUT/run_info.txt"
+: > "$OUT/server_pids"
+GIT_STATE=$(git -C "$PD" rev-parse --short HEAD 2>/dev/null)$(git -C "$PD" diff --quiet 2>/dev/null || echo " dirty")
+if [ -z "$COMPLETE_RUN" ]; then
+    {
+        echo "checkpoint $CKPT"; echo "routes $ROUTE_DIR ($ROUTES_XML)"; echo "scenarios $SCENARIO_FILE"
+        echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"; echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
+        echo "git $GIT_STATE"
+    } > "$OUT/run_info.txt"
+else
+    PREVIOUS_CKPT=$(run_info_value checkpoint)
+    PREVIOUS_GIT=$(awk '$1 == "git" {$1 = ""; print substr($0, 2); exit}' "$COMPLETE_RUN/run_info.txt")
+    [ "$(basename "$(dirname "$PREVIOUS_CKPT")")" = "$(basename "$(dirname "$CKPT")")" ] \
+        || echo "WARNING: the run was driven with $PREVIOUS_CKPT, this completion uses $CKPT"
+    [ "$PREVIOUS_GIT" = "$GIT_STATE" ] \
+        || echo "WARNING: the run used git '$PREVIOUS_GIT', this checkout is '$GIT_STATE' (PD=<checkout of that commit> keeps the routes comparable)"
+fi
 echo "Results -> $OUT"
 
 carla_imports() { PYTHONPATH="$CARLA_EGG" "$GARAGE_PY" -c "import carla" >/dev/null 2>&1; }
@@ -141,9 +170,42 @@ case "$IMPORTED_CORE" in
 esac
 "$GARAGE_PY" -c "import carla, leaderboard.leaderboard_evaluator_local" || { echo "ERROR: the garage python cannot import the evaluator (see traceback above)"; exit 1; }
 
+route_done() {  # 0 when the route json holds a record that is not one of the crash states garage resubmits
+    "$SERVER_PY" - "$1" <<'EOF'
+import json, sys
+try:
+    records = json.load(open(sys.argv[1]))["_checkpoint"]["records"]
+except Exception:
+    sys.exit(1)
+crashed = ("Failed - Agent couldn't be set up", "Failed - Simulation crashed", "Failed - Agent crashed")
+sys.exit(0 if records and all(r["status"] not in crashed for r in records) else 1)
+EOF
+}
+
 # route ids = the split files longest_weathers_<id>.xml
 mapfile -t ROUTE_IDS < <(ls "$ROUTE_DIR"/longest_weathers_*.xml | sed 's/.*longest_weathers_\([0-9]*\)\.xml/\1/' | sort -n)
+TOTAL_ROUTES=${#ROUTE_IDS[@]}
 [ -n "$ROUTE_SUBSET" ] && read -r -a ROUTE_IDS <<< "$ROUTE_SUBSET"
+if [ -n "$COMPLETE_RUN" ]; then
+    PENDING=()
+    for route_id in "${ROUTE_IDS[@]}"; do
+        route_done "$OUT/routes/route_$(printf "%02d" "$route_id")/result.json" || PENDING+=("$route_id")
+    done
+    [ "${#PENDING[@]}" -gt 0 ] || { echo "nothing to complete: every route of $OUT has a valid record"; exit 0; }
+    echo "completing $OUT: ${#PENDING[@]} of $TOTAL_ROUTES routes without a valid record: ${PENDING[*]}"
+    ROUTE_IDS=("${PENDING[@]}")
+    # what the completion replaces stays readable next to the live results
+    COMPLETION_STAMP=$(date +%Y%m%d_%H%M%S)
+    PREVIOUS=$OUT/pre_completion_$COMPLETION_STAMP
+    mkdir -p "$PREVIOUS/routes"
+    for route_id in "${ROUTE_IDS[@]}"; do
+        route_name=route_$(printf "%02d" "$route_id")
+        [ -d "$OUT/routes/$route_name" ] && mv "$OUT/routes/$route_name" "$PREVIOUS/routes/"
+        rm -f "$OUT/aggregate/longest_weathers_$route_id.json"
+    done
+    for f in "$OUT"/worker_w*.log; do [ -e "$f" ] && mv "$f" "$PREVIOUS/"; done
+    echo "completion $COMPLETION_STAMP on $(hostname): routes ${ROUTE_IDS[*]}; checkpoint $CKPT; scenarios $SCENARIO_FILE; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
+fi
 [ "$WORKERS" -gt "${#ROUTE_IDS[@]}" ] && WORKERS=${#ROUTE_IDS[@]}
 # longest route first to the least loaded worker; length = the xml's waypoint polyline (an earlier run's duration would
 # read a route that failed early as short)
@@ -163,19 +225,8 @@ EOF
 )
 echo "${#ROUTE_IDS[@]} routes over $WORKERS workers on $NUM_GPUS GPUs, policy server threads $OMP_THREADS"
 printf "  worker %s\n" "${ASSIGNMENT[@]}"
-echo "route,worker,gpu,attempt,start,wall_s,game_s,pace,status,driving_score" > "$OUT/timing.csv"
-
-route_done() {  # 0 when the route json holds a record that is not one of the crash states garage resubmits
-    "$SERVER_PY" - "$1" <<'EOF'
-import json, sys
-try:
-    records = json.load(open(sys.argv[1]))["_checkpoint"]["records"]
-except Exception:
-    sys.exit(1)
-crashed = ("Failed - Agent couldn't be set up", "Failed - Simulation crashed", "Failed - Agent crashed")
-sys.exit(0 if records and all(r["status"] not in crashed for r in records) else 1)
-EOF
-}
+[ -f "$OUT/timing.csv" ] || echo "route,worker,gpu,attempt,start,wall_s,game_s,pace,status,driving_score" > "$OUT/timing.csv"
+TIMING_ROWS_BEFORE=$(($(wc -l < "$OUT/timing.csv") - 1))
 
 log_route_timing() {  # $1 worker, $2 gpu, $3 route id, $4 attempt, $5 start epoch, $6 result json
     "$SERVER_PY" - "$@" "$(date +%s)" "$OUT/timing.csv" <<'EOF'
@@ -230,7 +281,13 @@ except Exception:
         "$GARAGE_PY" -u "$EVALUATOR" --routes "$routes_xml" --scenarios "$SCENARIO_FILE" --repetitions "$REPETITIONS" \
         --agent "$AGENT" --agent-config "$CKPT" --checkpoint "$route_dir/result.json" --track MAP \
         --port "$port" --trafficManagerPort "$tm_port" --timeout 600 \
-        > "$evaluator_log" 2>&1
+        > "$evaluator_log" 2>&1 &
+    local evaluator_pid=$!
+    wait -n 2>/dev/null  # the evaluator, or the server when it dies first (render-thread crash a minute in)
+    if kill -0 "$evaluator_pid" 2>/dev/null; then
+        echo "[w$w gpu$gpu route$route_id] CARLA server died mid-route; stopping the evaluator (600 s client timeouts otherwise)"
+        pkill -9 -P "$evaluator_pid" 2>/dev/null; kill -9 "$evaluator_pid" 2>/dev/null; wait "$evaluator_pid" 2>/dev/null
+    fi
     # children first: killing the wrapper shell first reparents the UE4 binary and leaves it running
     pkill -9 -P "$server_pid" 2>/dev/null; kill -9 "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null
     if ! route_done "$route_dir/result.json"; then
@@ -255,6 +312,14 @@ run_worker() {  # $1 worker: its assigned routes, sequentially, each retried up 
     done
 }
 
+# never attach to a server that is not ours (a peer's test server, a leftover of an earlier job)
+if command -v ss >/dev/null 2>&1; then
+    for ((w = 0; w < WORKERS; w++)); do
+        for port in $((PORT_BASE + w * 50)) $((PORT_BASE + w * 50 + 1)) $((PORT_BASE + 6000 + w * 50)); do
+            [ -z "$(ss -Hltn "sport = :$port")" ] || { echo "port $port is already in use (ss -ltn); pick another PORT_BASE"; exit 1; }
+        done
+    done
+fi
 # only the servers this job started (children first: the UE4 binary outlives its wrapper shell otherwise)
 trap 'for p in $(cat "$OUT/server_pids" 2>/dev/null); do pkill -9 -P "$p" 2>/dev/null; kill -9 "$p" 2>/dev/null; done' EXIT
 WORKER_PIDS=()
@@ -267,9 +332,10 @@ done
 wait "${WORKER_PIDS[@]}"
 ROUTES_WALL_S=$(( $(date +%s) - ROUTES_T0 ))
 cat "$OUT"/worker_w*.log
-"$SERVER_PY" - "$OUT/timing.csv" "$ROUTES_WALL_S" "$WORKERS" "$NUM_GPUS" "${#ROUTE_IDS[@]}" <<'EOF' | tee -a "$OUT/run_info.txt"
+"$SERVER_PY" - "$OUT/timing.csv" "$ROUTES_WALL_S" "$WORKERS" "$NUM_GPUS" "${#ROUTE_IDS[@]}" "$TIMING_ROWS_BEFORE" <<'EOF' | tee -a "$OUT/run_info.txt"
 import csv, sys
-rows = list(csv.DictReader(open(sys.argv[1]))); wall, workers, gpus, n_routes = (int(x) for x in sys.argv[2:6])
+rows = list(csv.DictReader(open(sys.argv[1]))); wall, workers, gpus, n_routes, rows_before = (int(x) for x in sys.argv[2:7])
+rows = rows[rows_before:]  # a completion appends to the previous run's timing.csv
 if not rows:
     print(f"speed: no route finished in {wall / 3600:.2f} h wall ({workers} workers on {gpus} GPUs)"); sys.exit(0)
 game = sum(float(r["game_s"]) for r in rows); route_wall = sum(int(r["wall_s"]) for r in rows)
@@ -281,18 +347,20 @@ print(f"speed: {len(rows)}/{n_routes} routes in {wall / 3600:.2f} h wall, {worke
       f"idlest {min(per_worker.values()) / 3600:.2f} h; routes/h {len(rows) / (wall / 3600):.1f}")
 EOF
 
-# aggregate: garage's parser over the per-route jsons -> $OUT/aggregate/results.csv, plus a per-route table
+# aggregate: garage's parser over the per-route jsons -> $OUT/aggregate/results.csv, plus a per-route table; a crash
+# record has no global_record and would abort the parser
 for f in "$OUT"/routes/route_*/result.json; do
     route_id=$(basename "$(dirname "$f")" | sed 's/route_0*//; s/^$/0/')
-    cp "$f" "$OUT/aggregate/longest_weathers_$route_id.json"
+    route_done "$f" && cp "$f" "$OUT/aggregate/longest_weathers_$route_id.json" && continue
+    echo "route $route_id has no valid record (all attempts crashed): left out of results.csv"
 done
-# garage's parser imports torch/pygame; the garage env's torch may not load everywhere, so the server python is the fallback
-for parser_py in "$GARAGE_PY" "$SERVER_PY"; do
-    env -u PYTHONPATH "$parser_py" "$GARAGE_WORK_DIR/tools/result_parser.py" --xml "$ROUTES_XML" --results "$OUT/aggregate" --log_dir "$OUT/aggregate" \
-        && break
-    echo "result_parser.py failed with $parser_py (per-route jsons in $OUT/aggregate are unaffected)"
-done
-"$SERVER_PY" - "$OUT/aggregate" "${#ROUTE_IDS[@]}" <<'EOF'
+# garage's parser imports torch/pygame and carla: the garage python gets the egg; the server python (the fallback where
+# the garage env's torch does not load) has its own carla and must not see the py3.7 egg
+PARSER_ARGS=(--xml "$ROUTES_XML" --results "$OUT/aggregate" --log_dir "$OUT/aggregate")
+env PYTHONPATH="$CARLA_EGG" "$GARAGE_PY" "$GARAGE_WORK_DIR/tools/result_parser.py" "${PARSER_ARGS[@]}" \
+    || env -u PYTHONPATH "$SERVER_PY" "$GARAGE_WORK_DIR/tools/result_parser.py" "${PARSER_ARGS[@]}" \
+    || echo "result_parser.py failed with $GARAGE_PY and $SERVER_PY (per-route jsons in $OUT/aggregate are unaffected)"
+"$SERVER_PY" - "$OUT/aggregate" "$TOTAL_ROUTES" <<'EOF'
 import glob, json, sys
 rows = []
 for f in sorted(glob.glob(sys.argv[1] + "/longest_weathers_*.json"), key=lambda p: int(p.rsplit("_", 1)[1][:-5])):
