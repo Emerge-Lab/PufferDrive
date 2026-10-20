@@ -218,6 +218,7 @@ if not NO_TRAIN:
         "hydra-core",
         "omegaconf",
         "pandas",
+        "pyarrow",
         "tqdm",
         "matplotlib==3.11.0",
         "imageio",
