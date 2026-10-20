@@ -42,15 +42,16 @@ export VECLIB_MAXIMUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
-# Hand-written CUDA slot-encoder kernels instead of the Triton ones (same math); unset to compare
-export PUFFER_SLOT_ENCODER_BACKEND=cuda
-echo "slot encoder backend: ${PUFFER_SLOT_ENCODER_BACKEND}"
+# Hand-written CUDA slot-encoder kernels instead of the Triton ones (same math); triton to compare. Passed per command,
+# never exported: sbatch copies this shell's environment into the eval jobs below, whose interpreters lack cuda-bindings.
+SLOT_ENCODER_BACKEND=cuda
+echo "slot encoder backend: ${SLOT_ENCODER_BACKEND}"
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 # Blocking env workers allow 2 workers per hardware thread (18 threads per rank); forked workers share the preloaded map cache
 # Execute torchrun across all nodes using srun
-srun torchrun \
+PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
     --nproc-per-node=8 \
     --rdzv_id=${SLURM_JOB_ID} \
@@ -107,7 +108,7 @@ RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
 # parallel_eval places one shard per allocated node via srun, so each shard's 128
 # env workers get a full node's cores instead of sharing the batch host.
 echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
-.venv/bin/python scripts/parallel_eval.py carla \
+PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 40000 \
     --num-nodes 4 \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
