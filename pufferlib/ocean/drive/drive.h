@@ -126,12 +126,12 @@ struct GridMap {
     int *grid_index_drivable;
     int num_drivable_grid_cell;
     int total_entities;
-    GridMapEntity *entity_pool; // one block; cells[i] point into it
+    GridMapEntity *entity_pool;           // one block; cells[i] point into it
     RoadObservationSegment *segment_pool; // parallel to entity_pool
     GridMapEntity **cells;
-    LaneQueryEntry *lane_query_pool; // per cell, window order, lanes deduplicated at first appearance
-    int *lane_query_offset;          // cell count + 1
-    int *window_entity_count;        // every grid entity in the cell's 5x5 window
+    LaneQueryEntry *lane_query_pool;    // per cell, window order, lanes deduplicated at first appearance
+    int *lane_query_offset;             // cell count + 1
+    int *window_entity_count;           // every grid entity in the cell's 5x5 window
     uint16_t **neighbor_cache_pool_idx; // per cell: entity_pool indices of its spiral neighborhood
 };
 
@@ -3686,7 +3686,8 @@ void init(Drive *env) {
     begin_episode_rng(env);
     sample_zone_speed_limits(env);
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
-        int steps = env->scenario_length + 1; // the terminal step's obs and red-light check read states[scenario_length]
+        int steps
+            = env->scenario_length + 1; // the terminal step's obs and red-light check read states[scenario_length]
         if (steps > 0) {
             for (int i = 0; i < env->num_traffic_elements; i++) {
                 TrafficControlElement *traffic = &env->traffic_elements[i];

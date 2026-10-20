@@ -5,6 +5,7 @@ instructions, smem-staged LayerNorm and cp.async weight streaming. Selected with
 Measured on an RTX 5090 at 65536 rows (2026-10-15): forward 1.08-1.14x faster than Triton with activation stores
 (training), 1.24-1.35x without (rollout); backward on par (0.98-1.00x, bandwidth-bound dataflow).
 """
+
 import functools
 
 import numpy as np
@@ -21,7 +22,7 @@ except ImportError:  # cuda-python < 12.6 kept the modules at the package root
             "install it or unset the variable to use the Triton kernels"
         ) from import_error
 
-CUDA_SRC_FWD = r'''
+CUDA_SRC_FWD = r"""
 typedef unsigned char uint8_t;
 typedef unsigned short uint16_t;
 typedef unsigned int uint32_t;
@@ -362,7 +363,7 @@ fused_slot_encoder_fwd_cuda(
             }
         }
 }
-'''
+"""
 
 
 def _check(res):
@@ -382,7 +383,12 @@ def _compile(D, F_PAD, store, device_index):
     name = _instantiate_name(D, F_PAD, store)
     prog = _check(nvrtc.nvrtcCreateProgram(CUDA_SRC_FWD.encode(), b"fused_slot_encoder.cu", 0, [], []))
     _check(nvrtc.nvrtcAddNameExpression(prog, name.encode()))
-    opts = [f"--gpu-architecture=sm_{major}{minor}".encode(), b"--std=c++17", b"-default-device", b"--extra-device-vectorization"]
+    opts = [
+        f"--gpu-architecture=sm_{major}{minor}".encode(),
+        b"--std=c++17",
+        b"-default-device",
+        b"--extra-device-vectorization",
+    ]
     (err,) = nvrtc.nvrtcCompileProgram(prog, len(opts), opts)
     log_size = _check(nvrtc.nvrtcGetProgramLogSize(prog))
     log = b" " * log_size
@@ -424,14 +430,24 @@ def cuda_slot_encoder_fwd(x, counts, w1_padded, b1, gamma, beta, w2, b2, store_a
     counts = counts.contiguous()
     assert counts.dtype == torch.int64
     args = [
-        np.array([x.data_ptr()], dtype=np.uint64), np.array([counts.data_ptr()], dtype=np.uint64),
-        np.array([w1_padded.data_ptr()], dtype=np.uint64), np.array([b1.data_ptr()], dtype=np.uint64),
-        np.array([gamma.data_ptr()], dtype=np.uint64), np.array([beta.data_ptr()], dtype=np.uint64),
-        np.array([w2.data_ptr()], dtype=np.uint64), np.array([b2.data_ptr()], dtype=np.uint64),
-        np.array([normed.data_ptr()], dtype=np.uint64), np.array([encoded.data_ptr()], dtype=np.uint64),
-        np.array([pooled.data_ptr()], dtype=np.uint64), np.array([ties.data_ptr()], dtype=np.uint64),
-        np.array([B], dtype=np.int32), np.array([S], dtype=np.int32), np.array([F], dtype=np.int32),
-        np.array([x.stride(0)], dtype=np.int64), np.array([x.stride(1)], dtype=np.int64), np.array([x.stride(2)], dtype=np.int64),
+        np.array([x.data_ptr()], dtype=np.uint64),
+        np.array([counts.data_ptr()], dtype=np.uint64),
+        np.array([w1_padded.data_ptr()], dtype=np.uint64),
+        np.array([b1.data_ptr()], dtype=np.uint64),
+        np.array([gamma.data_ptr()], dtype=np.uint64),
+        np.array([beta.data_ptr()], dtype=np.uint64),
+        np.array([w2.data_ptr()], dtype=np.uint64),
+        np.array([b2.data_ptr()], dtype=np.uint64),
+        np.array([normed.data_ptr()], dtype=np.uint64),
+        np.array([encoded.data_ptr()], dtype=np.uint64),
+        np.array([pooled.data_ptr()], dtype=np.uint64),
+        np.array([ties.data_ptr()], dtype=np.uint64),
+        np.array([B], dtype=np.int32),
+        np.array([S], dtype=np.int32),
+        np.array([F], dtype=np.int32),
+        np.array([x.stride(0)], dtype=np.int64),
+        np.array([x.stride(1)], dtype=np.int64),
+        np.array([x.stride(2)], dtype=np.int64),
     ]
     arg_ptrs = np.array([a.ctypes.data for a in args], dtype=np.uint64)
     grid = (B + 63) // 64
@@ -442,7 +458,7 @@ def cuda_slot_encoder_fwd(x, counts, w1_padded, b1, gamma, beta, w2, b2, store_a
 
 ROWS_PER_BLOCK = 256
 
-CUDA_SRC_BWD = r'''
+CUDA_SRC_BWD = r"""
 typedef unsigned char uint8_t;
 typedef unsigned short uint16_t;
 typedef unsigned int uint32_t;
@@ -844,7 +860,7 @@ fused_slot_encoder_bwd_cuda(
         grad_b2_partial[(int64_t) blockIdx.x * D + col] = s;
     }
 }
-'''
+"""
 
 
 @functools.lru_cache(maxsize=None)
@@ -853,7 +869,12 @@ def _compile_bwd(D, F_PAD, device_index):
     name = f"fused_slot_encoder_bwd_cuda<{D},{F_PAD}>"
     prog = _check(nvrtc.nvrtcCreateProgram(CUDA_SRC_BWD.encode(), b"fused_slot_encoder_bwd.cu", 0, [], []))
     _check(nvrtc.nvrtcAddNameExpression(prog, name.encode()))
-    opts = [f"--gpu-architecture=sm_{major}{minor}".encode(), b"--std=c++17", b"-default-device", b"--extra-device-vectorization"]
+    opts = [
+        f"--gpu-architecture=sm_{major}{minor}".encode(),
+        b"--std=c++17",
+        b"-default-device",
+        b"--extra-device-vectorization",
+    ]
     (err,) = nvrtc.nvrtcCompileProgram(prog, len(opts), opts)
     log_size = _check(nvrtc.nvrtcGetProgramLogSize(prog))
     log = b" " * log_size
@@ -871,14 +892,18 @@ def _compile_bwd(D, F_PAD, device_index):
     nwarps_n = D // 64
     threads = 32 * 2 * nwarps_n
     rows_per_pass = threads // (D // 8)
-    smem = (64 * (F_PAD + 8) + D * (F_PAD + 8) + 2 * 32 * (D + 8) + 64 * (D + 8)) * 2 + (nwarps_n * 64 + max(4, rows_per_pass) * D) * 4
+    smem = (64 * (F_PAD + 8) + D * (F_PAD + 8) + 2 * 32 * (D + 8) + 64 * (D + 8)) * 2 + (
+        nwarps_n * 64 + max(4, rows_per_pass) * D
+    ) * 4
     _check(cu.cuFuncSetAttribute(func, cu.CUfunction_attribute.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, smem))
     regs = _check(cu.cuFuncGetAttribute(cu.CUfunction_attribute.CU_FUNC_ATTRIBUTE_NUM_REGS, func))
     local = _check(cu.cuFuncGetAttribute(cu.CUfunction_attribute.CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, func))
     return func, threads, smem, regs, local
 
 
-def cuda_slot_encoder_bwd(x, counts, w1_padded, b1, gamma, beta, w2, normed_relu, encoded, pooled, tie_count, grad_pooled):
+def cuda_slot_encoder_bwd(
+    x, counts, w1_padded, b1, gamma, beta, w2, normed_relu, encoded, pooled, tie_count, grad_pooled
+):
     """Mirror of fused_slot_encoder_bwd: returns grad_w1, grad_b1, grad_gamma, grad_beta, grad_w2, grad_b2."""
     B, S, F = x.shape
     D, F_PAD = w1_padded.shape
@@ -892,11 +917,33 @@ def cuda_slot_encoder_bwd(x, counts, w1_padded, b1, gamma, beta, w2, normed_relu
     grad_pre_norm = torch.empty(rows, D, dtype=torch.bfloat16, device=x.device)
     partials = torch.empty(4, blocks, D, dtype=torch.float32, device=x.device)
     p = lambda t: np.array([t.data_ptr()], dtype=np.uint64)
-    args = [p(x), p(counts), p(w1_padded), p(b1), p(gamma), p(beta), p(w2), p(encoded), p(pooled), p(tie_count), p(grad_pooled),
-            p(grad_encoded), p(grad_pre_norm), p(partials[0]), p(partials[1]), p(partials[2]), p(partials[3]),
-            np.array([B], dtype=np.int32), np.array([S], dtype=np.int32), np.array([F], dtype=np.int32),
-            np.array([x.stride(0)], dtype=np.int64), np.array([x.stride(1)], dtype=np.int64), np.array([x.stride(2)], dtype=np.int64),
-            np.array([grad_pooled.stride(0)], dtype=np.int64), np.array([ROWS_PER_BLOCK], dtype=np.int32)]
+    args = [
+        p(x),
+        p(counts),
+        p(w1_padded),
+        p(b1),
+        p(gamma),
+        p(beta),
+        p(w2),
+        p(encoded),
+        p(pooled),
+        p(tie_count),
+        p(grad_pooled),
+        p(grad_encoded),
+        p(grad_pre_norm),
+        p(partials[0]),
+        p(partials[1]),
+        p(partials[2]),
+        p(partials[3]),
+        np.array([B], dtype=np.int32),
+        np.array([S], dtype=np.int32),
+        np.array([F], dtype=np.int32),
+        np.array([x.stride(0)], dtype=np.int64),
+        np.array([x.stride(1)], dtype=np.int64),
+        np.array([x.stride(2)], dtype=np.int64),
+        np.array([grad_pooled.stride(0)], dtype=np.int64),
+        np.array([ROWS_PER_BLOCK], dtype=np.int32),
+    ]
     arg_ptrs = np.array([a.ctypes.data for a in args], dtype=np.uint64)
     stream = torch.cuda.current_stream(x.device).cuda_stream
     _check(cu.cuLaunchKernel(func, blocks, 1, 1, threads, 1, 1, smem, stream, arg_ptrs.ctypes.data, 0))

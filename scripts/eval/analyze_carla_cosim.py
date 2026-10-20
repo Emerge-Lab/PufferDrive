@@ -101,7 +101,9 @@ class RouteLog:
         self.t = self.ego[:, 0] * self.tick_dt
         town_bin = Path(self.meta["town_bin"])
         if not town_bin.exists():  # log written on another machine: this checkout's copy of the same town bin
-            town_bin = Path(pufferlib.__file__).resolve().parent / "resources" / "drive" / "binaries" / "carla" / town_bin.name
+            town_bin = (
+                Path(pufferlib.__file__).resolve().parent / "resources" / "drive" / "binaries" / "carla" / town_bin.name
+            )
         bin_data = mbin.read_bin(town_bin)
         lo = self.ego[:, 1:3].min(axis=0) - MAP_CROP_MARGIN_M
         hi = self.ego[:, 1:3].max(axis=0) + MAP_CROP_MARGIN_M

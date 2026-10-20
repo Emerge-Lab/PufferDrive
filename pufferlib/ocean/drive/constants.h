@@ -216,7 +216,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define MAX_ENTITIES_PER_CELL 64
 #define ROAD_QUERY_CELL_COUNT 25 // 5x5 cell neighborhood
 #define ROAD_QUERY_ENTITY_COUNT (MAX_ENTITIES_PER_CELL * ROAD_QUERY_CELL_COUNT)
-#define OBS_ENTITY_NONE 0                                    // grid entity not sampled for road observations
+#define OBS_ENTITY_NONE 0 // grid entity not sampled for road observations
 #define OBS_ENTITY_LANE 1
 #define OBS_ENTITY_EDGE 2
 
