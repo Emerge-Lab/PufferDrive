@@ -33,8 +33,12 @@ jobs:
           PIP_NO_CACHE_DIR: 1
         run: |
           sudo apt-get update && sudo apt-get install -y build-essential cmake
-          python -m pip install -U pip pytest
-          pip install -e . --no-cache-dir
+          python -m pip install -U pip "setuptools<81" wheel numpy pytest
+          # CPU-only torch: the CUDA stack no longer fits the runner's disk
+          # quota. --no-build-isolation then reuses it for the build instead
+          # of resolving a second copy. See tests/smoke_tests/Dockerfile.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -e . --no-build-isolation --no-cache-dir
           python setup.py build_ext --inplace --force
 
       - name: Unit tests
@@ -70,8 +74,12 @@ jobs:
           PIP_NO_CACHE_DIR: 1
         run: |
           sudo apt-get update && sudo apt-get install -y build-essential cmake xvfb libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev
-          python -m pip install -U pip
-          pip install -e . --no-cache-dir
+          python -m pip install -U pip "setuptools<81" wheel numpy
+          # CPU-only torch: the CUDA stack no longer fits the runner's disk
+          # quota. --no-build-isolation then reuses it for the build instead
+          # of resolving a second copy. See tests/smoke_tests/Dockerfile.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -e . --no-build-isolation --no-cache-dir
           python setup.py build_ext --inplace --force
 
       - name: C drive tests
@@ -103,8 +111,12 @@ jobs:
           PIP_NO_CACHE_DIR: 1
         run: |
           sudo apt-get update && sudo apt-get install -y build-essential cmake
-          python -m pip install -U pip pytest jupytext nbclient ipykernel
-          pip install -e . --no-cache-dir
+          python -m pip install -U pip "setuptools<81" wheel numpy pytest jupytext nbclient ipykernel
+          # CPU-only torch: the CUDA stack no longer fits the runner's disk
+          # quota. --no-build-isolation then reuses it for the build instead
+          # of resolving a second copy. See tests/smoke_tests/Dockerfile.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -e . --no-build-isolation --no-cache-dir
           python setup.py build_ext --inplace --force
 
       - name: Run notebooks
@@ -151,8 +163,12 @@ jobs:
           PIP_NO_CACHE_DIR: 1
         run: |
           sudo apt-get update && sudo apt-get install -y build-essential cmake libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev
-          python -m pip install -U pip
-          pip install -e . --no-cache-dir
+          python -m pip install -U pip "setuptools<81" wheel numpy
+          # CPU-only torch: the CUDA stack no longer fits the runner's disk
+          # quota. --no-build-isolation then reuses it for the build instead
+          # of resolving a second copy. See tests/smoke_tests/Dockerfile.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -e . --no-build-isolation --no-cache-dir
           python setup.py build_ext --inplace --force
 
       - name: Test simulator performance

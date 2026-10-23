@@ -38,7 +38,19 @@ jobs:
           sudo apt-get clean
           sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
 
-      - name: Install pufferlib
+      - name: Install pufferlib (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install -U pip "setuptools<81" wheel numpy
+          # CPU-only torch. The CUDA stack is ~3 GB of wheels and no longer
+          # fits the runner's disk quota; see the Install steps in ci.yml.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -e . --no-build-isolation
+
+      - name: Install pufferlib (macOS)
+        if: runner.os != 'Linux'
         run: |
           python -m pip install -U pip
+          # Deliberately a plain install: macOS wheels are already CPU-only, so
+          # this keeps the default PEP 517 build-isolation path under test.
           pip install -e .
