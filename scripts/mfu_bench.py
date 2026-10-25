@@ -20,7 +20,7 @@ from collections import defaultdict
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import torch
 import torch._dynamo
-from profile_policy_step import PEAK_BF16_TFLOPS_BY_CAPABILITY
+from profile_policy_step import peak_bf16_tflops
 from torch import nn
 
 
@@ -132,12 +132,12 @@ def main():
     pufferl._ppo_loss = counting_ppo_loss
     properties = torch.cuda.get_device_properties(0)
     capability = torch.cuda.get_device_capability(0)
-    peak_tflops = PEAK_BF16_TFLOPS_BY_CAPABILITY.get(capability)
+    peak_tflops = peak_bf16_tflops(properties.name)
     agent_steps = train_config["batch_size"]
     print(
         f"{properties.name} capability {capability}, {args.num_envs} envs, {vecenv.num_agents} agents, "
         f"minibatch {pufferl.minibatch_size}, fused_slot_encoder={args.fused}, "
-        f"model FLOP per transition: forward {forward_flops / 1e6:.2f} MFLOP, update {train_flops / 1e6:.2f} MFLOP",
+        f"model FLOP per transition: forward {forward_flops / 1e6:.2f} MFLOP, update {train_flops / 1e6:.2f} MFLOP, dense bf16 peak {peak_tflops} TFLOP/s",
         flush=True,
     )
 

@@ -25,9 +25,15 @@ TRAIN_FLOP_PER_TRANSITION = 112145920.0
 ROLLOUT_FLOP_PER_TRANSITION = 37654113.0
 CALIBRATE_N = 8192
 CALIBRATE_FLOPS = 2.0 * CALIBRATE_N**3
-PEAK_BF16_TFLOPS = 209.5
-# dense bf16 tensor peak with fp32 accumulation, by compute capability
-PEAK_BF16_TFLOPS_BY_CAPABILITY = {(12, 0): 209.5, (9, 0): 989.0, (10, 0): 2250.0, (10, 3): 2250.0}
+# dense bf16 tensor peak with fp32 accumulation, by device-name prefix; the compute capability does not
+# identify the GPU: (12, 0) is the RTX 5090 (GeForce, half rate with fp32 accumulation) and the RTX PRO 6000
+PEAK_BF16_TFLOPS_BY_DEVICE_NAME = {
+    "NVIDIA GeForce RTX 5090": 209.5,
+    "NVIDIA RTX PRO 6000 Blackwell Server Edition": 471.0,
+    "NVIDIA H100 80GB HBM3": 989.0,
+    "NVIDIA B200": 2250.0,
+    "NVIDIA B300": 2250.0,
+}
 ROLLOUT_ROWS = 16384
 WARMUP_STEPS = 4
 TIMED_STEPS = 5
@@ -45,6 +51,14 @@ TRAIN_OVERRIDES = [
     "tb=False",
     "neptune=False",
 ]
+
+
+def peak_bf16_tflops(device_name):
+    for name_prefix, peak in PEAK_BF16_TFLOPS_BY_DEVICE_NAME.items():
+        if device_name.startswith(name_prefix):
+            return peak
+    print(f"no bf16 peak known for {device_name}, MFU not reported; add it to PEAK_BF16_TFLOPS_BY_DEVICE_NAME")
+    return None
 
 
 def build_policy_and_obs(rows, fused):
@@ -135,7 +149,7 @@ def run_phases(rows, fused):
     print(
         f"unprofiled wall time (median of {TIMED_STEPS}): update {wall_ms['update']:.2f} ms, rollout {wall_ms['rollout']:.2f} ms"
     )
-    peak = PEAK_BF16_TFLOPS_BY_CAPABILITY.get(torch.cuda.get_device_capability(0))
+    peak = peak_bf16_tflops(torch.cuda.get_device_name(0))
     update_rate = rows * TRAIN_FLOP_PER_TRANSITION / (wall_ms["update"] * 1e-3) / 1e12
     rollout_rate = ROLLOUT_ROWS * ROLLOUT_FLOP_PER_TRANSITION / (wall_ms["rollout"] * 1e-3) / 1e12
     mfu = f" update_mfu={100 * update_rate / peak:.1f}% rollout_mfu={100 * rollout_rate / peak:.1f}%" if peak else ""
@@ -210,7 +224,7 @@ def parse(path, rows):
         "calibrate": CALIBRATE_FLOPS,
     }
     model_fp32 = {"update": rows * HEAD_FLOP_PER_TRANSITION, "rollout": ROLLOUT_ROWS * ROLLOUT_HEAD_FLOP_PER_TRANSITION}
-    peak = PEAK_BF16_TFLOPS * 1e12
+    peak = peak_bf16_tflops(torch.cuda.get_device_name(0)) if torch.cuda.is_available() else None
     for phase, m in sums.items():
         seconds = m["time"] * 1e-9
         tensor = m["bf16"] + m.get("fp16", 0.0) + m.get("tf32", 0.0)
@@ -220,8 +234,12 @@ def parse(path, rows):
             f"   tensor FLOP counted {tensor:.4e} (bf16 {m['bf16']:.3e}, tf32 {m.get('tf32', 0.0):.2e}) vs model GEMM FLOP {model_tensor.get(phase, 0.0):.4e}"
         )
         print(f"   fp32 CUDA-core FLOP counted {fp32:.4e} vs model fp32 head FLOP {model_fp32.get(phase, 0.0):.3e}")
+        tensor_rate = tensor / seconds / 1e12
+        model_rate = model_tensor.get(phase, 0.0) / seconds / 1e12
+        tensor_share = f" = {100 * tensor_rate / peak:.1f}% of bf16 peak" if peak else ""
+        model_share = f" = {100 * model_rate / peak:.1f}%" if peak else ""
         print(
-            f"   tensor-FLOP rate over kernel time {tensor / seconds / 1e12:.1f} TFLOP/s = {100 * tensor / seconds / peak:.1f}% of bf16 peak; model-FLOP rate {model_tensor.get(phase, 0.0) / seconds / 1e12:.1f} TFLOP/s = {100 * model_tensor.get(phase, 0.0) / seconds / peak:.1f}%"
+            f"   tensor-FLOP rate over kernel time {tensor_rate:.1f} TFLOP/s{tensor_share}; model-FLOP rate {model_rate:.1f} TFLOP/s{model_share}"
         )
         print(
             f"   DRAM {m['dram'] / 1e9:.2f} GB -> {m['dram'] / seconds / 1e9:.0f} GB/s; local (spill) ld/st instructions {m.get('local_ld', 0.0):.3e} / {m.get('local_st', 0.0):.3e}"
