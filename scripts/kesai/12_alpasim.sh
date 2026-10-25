@@ -4,10 +4,10 @@
 #SBATCH --nodes 1
 #SBATCH --time 1-00:00
 #SBATCH --gres gpu:8
-#SBATCH --mem=1007G
-#SBATCH --cpus-per-task 144
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%j.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%j.err
+#SBATCH --mem=0
+#SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
+#SBATCH --output experiments/logs/log_%j.out
+#SBATCH --error experiments/logs/log_%j.err
 #SBATCH --partition dev
 # AlpaSim closed-loop evaluation of a PufferDrive checkpoint on NuRec scenes, the AlpaSim counterpart of 9_nuPlan.sh:
 # alpasim-training's teacher driver runs the policy in a shadow env of this checkout (PUFFERDRIVE_ROOT=$PD) on the
@@ -21,11 +21,13 @@
 # Settings are the plain assignments below. Only RUN_DIR is also read from the environment: 3_train and 7_eval chain this
 # eval after their own by exporting it.
 set -u
+source scripts/kesai/cluster_env.sh || exit 1
+[ "$CLUSTER" != kesai ] || { echo "AlpaSim eval needs Docker, which kesai does not provide; run it on scaleway"; exit 1; }
 
 # quick check: TOPOLOGY=1gpu N_SCENES=2; full run: TOPOLOGY=8gpu_64rollouts (whole node) N_SCENES=0 (the whole SCENE_LIST)
 TOPOLOGY=8gpu_64rollouts
 N_SCENES=0
-RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
+RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0045_1000}
 CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || CKPT=$(ls "$RUN_DIR"/models/model_*.pt 2>/dev/null | sort | tail -n 1)
 GOAL_MODE=gt_time:5  # gt_time:<s> | gt | route
@@ -40,15 +42,14 @@ SIM_TIMEOUT_S=3600   # per batch of PARALLEL scenes
 ALPASIM_LOG_LEVEL=WARNING  # AlpaSim services; INFO also keeps the per-event INFO lines runtime workers and renderer print anyway (~110 MB per 400 scenes)
 PROMETHEUS=0         # AlpaSim performance telemetry (~80 MB per run); only alpagym_runtime.perf reads it
 KEEP_ROLLOUT_LOGS=none  # rollout.asl (~36 MB per scene, offline re-scoring/failure analysis only): all | imperfect (score < 1) | failed | none (never written)
-export PD=/home/bjaeger/PufferDrive
-ALPAGYM_ROOT=/home/bjaeger/alpasim-training
+ALPAGYM_ROOT=$HOME/alpasim-training
 # held-out split Damiano evaluates on; empty = every converted scene that passed the checks (2149 on the cluster, 1584 of them train)
 SCENE_LIST=$ALPAGYM_ROOT/scene_splits/eval_405.txt
-export ALPASIM_ROOT=/home/bjaeger/alpasim
+export ALPASIM_ROOT=$HOME/alpasim
 # shoulder lanes off-road (py123d 1_bernhard_dev); USDZ_DIR stays Damiano's, the shared all-usdzs symlinks dangle inside the containers
-BINS=/home/shared/data/nurec/bins/eval405_130kmh_ndshoulders
-USDZ_DIR=/home/ddacol/code/alpasim-training/data/distill/usdz
-ALPASIM_IMAGE_DIR=/home/ddacol/code/alpasim-training/data/images
+BINS=$SHARED_DATA/nurec/bins/eval405_130kmh_ndshoulders
+USDZ_DIR=$HOME_BASE/ddacol/code/alpasim-training/data/distill/usdz
+ALPASIM_IMAGE_DIR=$HOME_BASE/ddacol/code/alpasim-training/data/images
 case "$TOPOLOGY" in
     8gpu*) PARALLEL=32 ;;  # scenes in flight
     *) PARALLEL=4 ;;

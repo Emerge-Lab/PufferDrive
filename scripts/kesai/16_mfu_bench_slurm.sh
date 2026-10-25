@@ -6,9 +6,11 @@
 #SBATCH --gres gpu:1
 #SBATCH --mem=125G
 #SBATCH --cpus-per-task 18
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/mfu_bench_%j.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/mfu_bench_%j.err
+#SBATCH --output experiments/logs/mfu_bench_%j.out
+#SBATCH --error experiments/logs/mfu_bench_%j.err
 #SBATCH --partition dev
+
+source scripts/kesai/cluster_env.sh || exit 1
 
 # Measures MFU of the real PPO loop (rollout, update, whole epoch) and SPS on this node's GPU: reference encoders,
 # policy.fused_slot_encoder with the Triton kernels, and the same with the CUDA kernels (PUFFER_SLOT_ENCODER_BACKEND=cuda),
@@ -17,14 +19,14 @@
 
 echo "START TIME: $(date)"
 start=$(date +%s)
-cd /home/bjaeger/PufferDrive || exit 1
+cd $PD || exit 1
 nvidia-smi --query-gpu=name,compute_cap,memory.total --format=csv
 
 export OMP_NUM_THREADS=1
 source .venv/bin/activate
-bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
+bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 
-RESULT_FILE=/home/bjaeger/PufferDrive/experiments/logs/mfu_bench_${SLURM_JOB_ID}_result.txt
+RESULT_FILE=$PD/experiments/logs/mfu_bench_${SLURM_JOB_ID}_result.txt
 NUM_ENVS=${NUM_ENVS:-32}      # override: NUM_ENVS=48 sbatch scripts/kesai/16_mfu_bench_slurm.sh
 MINIBATCH=${MINIBATCH:-131072}
 echo "=== MFU result (paste this block back) ===" | tee ${RESULT_FILE}
@@ -43,7 +45,7 @@ if [ -n "${NCU}" ]; then
     for variant in reference fused fused_cuda; do
         FLAG=""; [ ${variant} != reference ] && FLAG="--fused"
         BACKEND=triton; [ ${variant} = fused_cuda ] && BACKEND=cuda
-        CSV=/home/bjaeger/PufferDrive/experiments/logs/mfu_bench_${SLURM_JOB_ID}_${variant}.csv
+        CSV=$PD/experiments/logs/mfu_bench_${SLURM_JOB_ID}_${variant}.csv
         ( export PUFFER_SLOT_ENCODER_BACKEND=${BACKEND}; timeout 600 ${NCU} --replay-mode range --target-processes application-only --clock-control none --nvtx \
             --nvtx-include "update" --nvtx-include "rollout" --nvtx-include "calibrate" --print-nvtx-rename kernel \
             --metrics ${METRICS} --csv --page raw --print-units base \

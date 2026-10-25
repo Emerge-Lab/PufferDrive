@@ -3,12 +3,14 @@
 #SBATCH --nodes 2
 #SBATCH --ntasks-per-node 1
 #SBATCH --gres gpu:8
-#SBATCH --cpus-per-task 144
-#SBATCH --mem=1007G
+#SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
+#SBATCH --mem=0
 #SBATCH --time 1-00:00
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/eval_%a_%A.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/eval_%a_%A.err
+#SBATCH --output experiments/logs/eval_%a_%A.out
+#SBATCH --error experiments/logs/eval_%a_%A.err
 #SBATCH --partition dev
+
+source scripts/kesai/cluster_env.sh || exit 1
 
 # Eval-only twin of the post-training eval in 3_train_64GPU_multinode_slurm.sh: same CARLA
 # self-play benchmark and follow-up co-sim jobs, on 2 nodes (16 GPUs) instead of 4.
@@ -20,7 +22,7 @@ export SEED=1000
 export RUN_NAME=k_scaled_0045_${SEED}
 echo ${RUN_NAME}
 
-export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
+export DATA_DIR=$PD/experiments/${RUN_NAME}
 echo ${DATA_DIR}
 
 export FINAL_MODEL_NAME=final_model.pt
@@ -35,7 +37,7 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
 source .venv/bin/activate
-bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
+bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 
 if [ ! -f ${MODEL_PATH} ]; then
     echo "${MODEL_PATH} is missing; nothing to evaluate."
@@ -48,7 +50,7 @@ echo "Evaluating ${MODEL_PATH}"
 .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 40000 \
     --num-nodes 2 \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
+    env.map_dir=$PD/pufferlib/resources/drive/binaries/carla \
     vec.num_envs=128 \
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
@@ -75,9 +77,13 @@ RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh \
 echo "Submitting longest6 v2 eval for ${MODEL_PATH}"
 RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6_v2.sh \
     || echo "longest6 v2 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6_v2.sh"
-echo "Submitting AlpaSim eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
-    || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
+if [ "$CLUSTER" = kesai ]; then
+    echo "AlpaSim eval skipped: it needs Docker, which kesai does not provide"
+else
+    echo "Submitting AlpaSim eval for ${MODEL_PATH}"
+    RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
+        || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
+fi
 
 end=$(date +%s)
 runtime=$((end-start))

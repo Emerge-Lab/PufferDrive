@@ -4,10 +4,10 @@
 #SBATCH --nodes 1
 #SBATCH --time 1-00:00
 #SBATCH --gres gpu:8
-#SBATCH --mem=1007G
-#SBATCH --cpus-per-task 144
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%j.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%j.err
+#SBATCH --mem=0
+#SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
+#SBATCH --output experiments/logs/log_%j.out
+#SBATCH --error experiments/logs/log_%j.err
 #SBATCH --partition dev
 # CARLA longest6 v1 evaluation of a PufferDrive checkpoint through carla_garage's unmodified Leaderboard 1.0
 # (CARLA 0.9.10.1, pufferlib/ocean/cosim/carla/lb1/leaderboard_agent.py), the Leaderboard 1.0 counterpart of
@@ -46,13 +46,13 @@
 # line, and results.csv, the report and the gallery are rebuilt over all routes.
 # scripts/kesai/17_carla_longest6_v1_complete_local.sh does this on a desktop for a run folder synced from the cluster.
 set -u
+source scripts/kesai/cluster_env.sh || exit 1
 
-export PD=${PD:-/home/bjaeger/PufferDrive}
-export GARAGE_PY=${GARAGE_PY:-/home/bjaeger/miniconda3/envs/garage/bin/python}   # cp37: the CARLA 0.9.10 egg
-export SERVER_PY=${SERVER_PY:-/home/bjaeger/miniconda3/envs/carl/bin/python}     # any PufferDrive-capable python
-export CARLA_ROOT=${CARLA_ROOT:-/home/bjaeger/CARLA_0.9.10}
-export GARAGE_WORK_DIR=${GARAGE_WORK_DIR:-/home/bjaeger/carla_garage_1}
-RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
+export GARAGE_PY=${GARAGE_PY:-$HOME/miniconda3/envs/garage/bin/python}   # cp37: the CARLA 0.9.10 egg
+export SERVER_PY=${SERVER_PY:-$HOME/miniconda3/envs/carl/bin/python}     # any PufferDrive-capable python
+export CARLA_ROOT=${CARLA_ROOT:-$HOME/CARLA_0.9.10}
+export GARAGE_WORK_DIR=${GARAGE_WORK_DIR:-$HOME/carla_garage_1}
+RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0045_1000}
 # the agent finds config.yaml next to final_model.pt (or one level above a models/*.pt)
 export CKPT=${CKPT:-$RUN_DIR/final_model.pt}
 ROUTE_DIR=${ROUTE_DIR:-$GARAGE_WORK_DIR/leaderboard/data/longest6_split}

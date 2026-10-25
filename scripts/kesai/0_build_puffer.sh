@@ -6,9 +6,11 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=24
-#SBATCH --output=/home/bjaeger/logs/eval_server_%a_%A.out
-#SBATCH --error=/home/bjaeger/logs/eval_server_%a_%A.err
+#SBATCH --output=experiments/logs/build_puffer_%j.out
+#SBATCH --error=experiments/logs/build_puffer_%j.err
 #SBATCH --partition=dev
+
+source scripts/kesai/cluster_env.sh || exit 1
 
 # print info about current job
 echo "START TIME: $(date)"

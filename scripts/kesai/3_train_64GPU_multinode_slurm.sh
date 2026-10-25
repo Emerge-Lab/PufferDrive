@@ -3,12 +3,14 @@
 #SBATCH --nodes 4                        # Number of nodes requested
 #SBATCH --ntasks-per-node 1              # Run 1 srun task per node (which fires up torchrun)
 #SBATCH --gres gpu:8                     # GPUs per node
-#SBATCH --cpus-per-task 144
-#SBATCH --mem=1007G
+#SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
+#SBATCH --mem=0
 #SBATCH --time 6-00:00
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.err
+#SBATCH --output experiments/logs/log_%a_%A.out
+#SBATCH --error experiments/logs/log_%a_%A.err
 #SBATCH --partition dev
+
+source scripts/kesai/cluster_env.sh || exit 1
 
 # Set up PyTorch Distributed Rendezvous parameters from Slurm variables
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
@@ -25,7 +27,7 @@ export SEED=1000
 export RUN_NAME=k_scaled_0050_${SEED}
 echo ${RUN_NAME}
 
-export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
+export DATA_DIR=$PD/experiments/${RUN_NAME}
 echo ${DATA_DIR}
 
 # Name the training run writes its final model under, so the eval steps below can
@@ -48,10 +50,11 @@ SLOT_ENCODER_BACKEND=cuda
 echo "slot encoder backend: ${SLOT_ENCODER_BACKEND}"
 
 source .venv/bin/activate
-bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
+bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # Blocking env workers allow 2 workers per hardware thread (18 threads per rank); forked workers share the preloaded map cache
+# kesai nodes give 60 threads per rank (--exclusive): VEC_NUM_ENVS=120 sbatch ... keeps that ratio but also changes the rollout batch
 # Execute torchrun across all nodes using srun
-PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun torchrun \
+PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
     --nproc-per-node=8 \
     --rdzv_id=${SLURM_JOB_ID} \
@@ -64,7 +67,7 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun torchrun \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v19 \
+    env.map_dir=$PD/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v19 \
     env.num_maps=128 \
     env.obs_stride_merge_segments=true \
     env.partner_blindness_corridor=false \
@@ -74,7 +77,7 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun torchrun \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
-    vec.num_envs=32 \
+    vec.num_envs=${VEC_NUM_ENVS:-32} \
     env.preload_map_cache=True \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
@@ -101,9 +104,13 @@ RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6_v2.sh \
 echo "Submitting longest6 v1 eval for ${MODEL_PATH}"
 RUN_DIR=${DATA_DIR} sbatch scripts/kesai/14_carla_longest6_v1.sh \
     || echo "longest6 v1 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/14_carla_longest6_v1.sh"
-echo "Submitting AlpaSim eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
-    || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
+if [ "$CLUSTER" = kesai ]; then
+    echo "AlpaSim eval skipped: it needs Docker, which kesai does not provide"
+else
+    echo "Submitting AlpaSim eval for ${MODEL_PATH}"
+    RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
+        || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
+fi
 
 # parallel_eval places one shard per allocated node via srun, so each shard's 128
 # env workers get a full node's cores instead of sharing the batch host.
@@ -111,7 +118,7 @@ echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 40000 \
     --num-nodes 4 \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
+    env.map_dir=$PD/pufferlib/resources/drive/binaries/carla \
     vec.num_envs=128 \
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \

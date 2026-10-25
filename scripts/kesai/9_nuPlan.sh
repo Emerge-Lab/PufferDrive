@@ -4,17 +4,17 @@
 #SBATCH --nodes 1
 #SBATCH --time 1-00:00
 #SBATCH --gres gpu:8
-#SBATCH --mem=1007G
-#SBATCH --cpus-per-task 144
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%j.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%j.err
+#SBATCH --mem=0
+#SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
+#SBATCH --output experiments/logs/log_%j.out
+#SBATCH --error experiments/logs/log_%j.err
 #SBATCH --partition dev
 set -u
+source scripts/kesai/cluster_env.sh || exit 1
 
-export PD=/home/bjaeger/PufferDrive
 export PY=$(conda info --base)/envs/carl_nuplan/bin/python
 # Overridable env: RUN_DIR (3_train_64GPU_multinode_slurm.sh submits this job with RUN_DIR=<its run dir>), CHALLENGES
-RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
+RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0045_1000}
 # the planner finds config.yaml next to final_model.pt (or one level above a models/*.pt)
 export CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || { echo "missing $CKPT"; exit 1; }
@@ -26,12 +26,12 @@ case "$CHALLENGES" in
     *) echo "CHALLENGES must be closed_loop_reactive_agents_pufferdrive or closed_loop_nonreactive_agents_pufferdrive"; exit 1 ;;
 esac
 echo "Evaluating checkpoint: $CKPT"
-export CITY_BIN_DIR=/home/shared/data/nuplan/PufferDrive
+export CITY_BIN_DIR=$SHARED_DATA/nuplan/PufferDrive
 # shell env still exports the pre-rename nuPlan casing; pin the renamed paths here
-export NUPLAN_DATA_ROOT=/home/shared/data/nuplan
-export NUPLAN_MAPS_ROOT=/home/shared/data/nuplan/maps
+export NUPLAN_DATA_ROOT=$SHARED_DATA/nuplan
+export NUPLAN_MAPS_ROOT=$SHARED_DATA/nuplan/maps
 # PD first, and drop inherited entries from other PufferDrive checkouts (the login shell still exports
-# /home/bjaeger/cosim_Puffer): Python would otherwise import that checkout's pufferlib package.
+# $HOME/cosim_Puffer): Python would otherwise import that checkout's pufferlib package.
 INHERITED_PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
 export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${INHERITED_PYTHONPATH:+:$INHERITED_PYTHONPATH}
 cd "$PD" || exit 1

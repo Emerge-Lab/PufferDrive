@@ -4,10 +4,10 @@
 #SBATCH --nodes 1
 #SBATCH --time 1-00:00
 #SBATCH --gres gpu:8
-#SBATCH --mem=1007G
-#SBATCH --cpus-per-task 144
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%j.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%j.err
+#SBATCH --mem=0
+#SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
+#SBATCH --output experiments/logs/log_%j.out
+#SBATCH --error experiments/logs/log_%j.err
 #SBATCH --partition dev
 # CARLA longest6 evaluation of a PufferDrive checkpoint through CaRL's unmodified original_leaderboard
 # (pufferlib/ocean/cosim/carla/leaderboard_agent.py), the CARLA counterpart of 9_nuPlan.sh.
@@ -34,12 +34,12 @@
 # COSIM_VRU_SIZE_PAD_M (default 0.8: added to the length and width of every walker and two-wheeler box, so they
 # read strictly larger than the smallest training vehicle; 0 = true CARLA boxes).
 set -u
+source scripts/kesai/cluster_env.sh || exit 1
 
-export PD=${PD:-/home/bjaeger/PufferDrive}
-export PY=${PY:-/home/bjaeger/miniconda3/envs/carl/bin/python}   # cp310: CARLA 0.9.15 ships no newer wheel
-export CARLA_ROOT=${CARLA_ROOT:-/home/bjaeger/CARLA_0.9.15}
-export CARL_WORK_DIR=${CARL_WORK_DIR:-/home/bjaeger/CaRL/CARLA}
-RUN_DIR=${RUN_DIR:-/home/bjaeger/PufferDrive/experiments/k_scaled_0045_1000}
+export PY=${PY:-$HOME/miniconda3/envs/carl/bin/python}   # cp310: CARLA 0.9.15 ships no newer wheel
+export CARLA_ROOT=${CARLA_ROOT:-$HOME/CARLA_0.9.15}
+export CARL_WORK_DIR=${CARL_WORK_DIR:-$HOME/CaRL/CARLA}
+RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0045_1000}
 # the agent finds config.yaml next to final_model.pt (or one level above a models/*.pt)
 export CKPT=$RUN_DIR/final_model.pt
 SCENARIOS=${SCENARIOS:-1}

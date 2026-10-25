@@ -4,12 +4,14 @@
 #SBATCH --nodes 1
 #SBATCH --time 2-00:00
 #SBATCH --gres gpu:8
-#SBATCH --mem=1007G
-#SBATCH --cpus-per-task 144
-#SBATCH --output /home/bjaeger/nightly_PufferDrive/experiments/logs/log_%a_%A.out
-#SBATCH --error /home/bjaeger/nightly_PufferDrive/experiments/logs/log_%a_%A.err
+#SBATCH --mem=0
+#SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
+#SBATCH --output experiments/logs/log_%a_%A.out
+#SBATCH --error experiments/logs/log_%a_%A.err
 #SBATCH --partition dev
 #SBATCH --array=0-2
+
+source scripts/kesai/cluster_env.sh || exit 1
 
 # print info about current job
 echo "START TIME: $(date)"
@@ -22,7 +24,7 @@ echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 export RUN_NAME=k_nightly_"$(date +%Y-%m-%d)"_${SEED}
 echo ${RUN_NAME}
 
-export DATA_DIR=/home/bjaeger/nightly_PufferDrive/experiments/${RUN_NAME}
+export DATA_DIR=$PD/experiments/${RUN_NAME}
 echo ${DATA_DIR}
 
 export FINAL_MODEL_NAME=final_model.pt
@@ -37,14 +39,14 @@ export VECLIB_MAXIMUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
-REPO_DIR=/home/bjaeger/nightly_PufferDrive
+REPO_DIR=$PD
 cd ${REPO_DIR} || exit 1
 source .venv/bin/activate
 
 # Only task 0 builds; concurrent in-place builds race on shared NFS build files.
-BUILD_STATUS_FILE=/home/bjaeger/nightly_PufferDrive/experiments/logs/build_status_${SLURM_ARRAY_JOB_ID}
+BUILD_STATUS_FILE=$PD/experiments/logs/build_status_${SLURM_ARRAY_JOB_ID}
 if [ "${SLURM_ARRAY_TASK_ID}" -eq 0 ]; then
-    bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/nightly_PufferDrive
+    bash scripts/kesai/build_ext_if_changed.sh $PD
     BUILD_STATUS=$?
     echo ${BUILD_STATUS} > ${BUILD_STATUS_FILE}
 else
@@ -71,7 +73,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     wandb_project=nightly-multi-long \
     wandb_group="$(date +%Y-%m-%d)" \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=/home/bjaeger/nightly_PufferDrive/pufferlib/resources/drive/binaries/carla \
+    env.map_dir=$PD/pufferlib/resources/drive/binaries/carla \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=100000000000 \
@@ -97,7 +99,7 @@ python -m pufferlib.pufferl eval puffer_drive carla \
     wandb=True
 
 python -m pufferlib.pufferl eval puffer_drive nuplan_single \
-    eval.map_dir=/home/shared/data/nuplan/PufferDrive \
+    eval.map_dir=$SHARED_DATA/nuplan/PufferDrive \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
