@@ -24,7 +24,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0052_${SEED}
+export RUN_NAME=${RUN_NAME:-k_scaled_0052_${SEED}}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -52,7 +52,9 @@ echo "slot encoder backend: ${SLOT_ENCODER_BACKEND}"
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # Blocking env workers allow 2 workers per hardware thread (18 threads per rank); forked workers share the preloaded map cache
-# kesai nodes give 60 threads per rank (--exclusive): VEC_NUM_ENVS=120 sbatch ... keeps that ratio but also changes the rollout batch
+# kesai nodes give 60 threads per rank (--exclusive): VEC_NUM_ENVS=60 is one worker per thread, 120 the scaleway ratio;
+# both enlarge the rollout batch (= workers x env.num_agents x horizon). ROLLOUT_DTYPE=float16 halves the obs buffer on the GPU.
+# A second instance needs its own RUN_NAME: RUN_NAME=k_scaled_0053_1000 VEC_NUM_ENVS=60 sbatch -p high scripts/kesai/3_train_64GPU_multinode_slurm.sh
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -78,6 +80,7 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
     vec.num_envs=${VEC_NUM_ENVS:-32} \
+    ${ROLLOUT_DTYPE:+train.rollout_dtype=$ROLLOUT_DTYPE} \
     env.preload_map_cache=True \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
