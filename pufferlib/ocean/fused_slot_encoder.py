@@ -36,14 +36,18 @@ class KernelConfig:
     pool_num_warps: int
 
 
-# Timed on an RTX 5090 (GB202, compute capability 12.0); the RTX PRO 6000 Blackwell is the same chip.
+# Timed on an RTX 5090 (GB202, compute capability 12.0).
 GB202_CONFIG = KernelConfig(32, 32, 4, 2, 64, 64, 8, 2, 32, 4)
+# Timed on an RTX PRO 6000 Blackwell Server at 131072 rows (scripts/kesai/15_tune_fused_slot_encoder_slurm.sh, kesai job 34).
+RTX_PRO_6000_CONFIG = KernelConfig(32, 32, 4, 2, 64, 64, 8, 3, 64, 8)
 # Timed on an H100 80GB HBM3 at 131072 rows (scripts/kesai/15_tune_fused_slot_encoder_slurm.sh, job 30133).
 H100_CONFIG = KernelConfig(32, 32, 4, 3, 32, 64, 4, 3, 32, 4)
 # Untimed placeholder: replace with the KernelConfig printed by scripts/tune_fused_slot_encoder.py on that GPU.
 B200_CONFIG = GB202_CONFIG
 B300_CONFIG = B200_CONFIG  # Blackwell Ultra shares the B200 SM design
 CONFIGS_BY_CAPABILITY = {(12, 0): GB202_CONFIG, (9, 0): H100_CONFIG, (10, 0): B200_CONFIG, (10, 3): B300_CONFIG}
+# Same capability, different chip speeds: a device-name prefix wins over the capability table.
+CONFIGS_BY_DEVICE_NAME = {"NVIDIA RTX PRO 6000 Blackwell": RTX_PRO_6000_CONFIG}
 CONFIG_OVERRIDE = None
 ROWS_PER_PARTIAL_SUM = 256
 MIN_FEATURE_PAD = 16
@@ -55,6 +59,10 @@ LAYER_NORM_EPS = tl.constexpr(LAYER_NORM_EPS_VALUE)
 def kernel_config(device):
     if CONFIG_OVERRIDE is not None:
         return CONFIG_OVERRIDE
+    device_name = torch.cuda.get_device_name(device)
+    for name_prefix, config in CONFIGS_BY_DEVICE_NAME.items():
+        if device_name.startswith(name_prefix):
+            return config
     return CONFIGS_BY_CAPABILITY.get(torch.cuda.get_device_capability(device), GB202_CONFIG)
 
 
