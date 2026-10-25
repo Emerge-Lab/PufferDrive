@@ -12,6 +12,8 @@ if [ -d /cephfs/data ]; then
     # the nodes also carry the BMC's USB NIC (169.254.x.x): pin NCCL and Gloo to the cluster network
     CLUSTER_IFACE=$(ip -o -4 addr show to 192.168.20.0/24 2>/dev/null | head -n 1 | cut -d' ' -f2)
     [ -n "$CLUSTER_IFACE" ] && export NCCL_SOCKET_IFNAME=$CLUSTER_IFACE GLOO_SOCKET_IFNAME=$CLUSTER_IFACE
+    # the 400G NICs have no working fabric yet: NCCL must not try RoCE over them (remove with the fabric)
+    export NCCL_IB_DISABLE=1
 elif [ -d /home/shared/data ]; then
     CLUSTER=scaleway
     HOME_BASE=/home

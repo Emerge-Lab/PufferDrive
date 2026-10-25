@@ -9,7 +9,7 @@
 #SBATCH --output experiments/logs/log_%a_%A.out
 #SBATCH --error experiments/logs/log_%a_%A.err
 #SBATCH --partition dev
-# kesai: 64 GPUs exceed the 32-GPU per-user cap of dev and high -> submit with -p low (preemptible, requeued)
+# kesai: 64 GPUs exceed the 32-GPU per-user cap of dev -> submit with -p high (uncapped, internal approval) or -p low (preemptible)
 
 source scripts/kesai/cluster_env.sh || exit 1
 
