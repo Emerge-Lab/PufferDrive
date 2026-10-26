@@ -30,6 +30,8 @@ export CITY_BIN_DIR=$SHARED_DATA/nuplan/PufferDrive
 # shell env still exports the pre-rename nuPlan casing; pin the renamed paths here
 export NUPLAN_DATA_ROOT=$SHARED_DATA/nuplan
 export NUPLAN_MAPS_ROOT=$SHARED_DATA/nuplan/maps
+# the runner's default would mkdir a /scratch path of the old cluster (harmless, but a Permission denied line in every kesai log)
+export NUPLAN_EXP_ROOT=${NUPLAN_EXP_ROOT:-$HOME/nuplan_exp}
 # PD first, and drop inherited entries from other PufferDrive checkouts (the login shell still exports
 # $HOME/cosim_Puffer): Python would otherwise import that checkout's pufferlib package.
 INHERITED_PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
@@ -69,7 +71,9 @@ ABLATION_TAG=""
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}_${GOAL_SOURCE}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
-PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
+# NO_TRAIN skips the training-only CUDA extension (_C, never imported by the planner): the cp39 nuPlan env builds only
+# the C binding, so nvcc 13.4 on kesai never meets this env's cu128 torch (script 12 builds the same way)
+NO_TRAIN=1 PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
 
 # The planner must come from this checkout (needs the freshly built C extension above).
 IMPORTED_PLANNER=$("$PY" -c "import pufferlib.ocean.cosim.nuplan.planner as p; print(p.__file__)") || { echo "ERROR: planner import failed (see traceback above)"; exit 1; }
