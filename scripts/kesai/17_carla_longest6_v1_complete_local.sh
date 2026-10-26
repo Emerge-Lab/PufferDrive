@@ -10,8 +10,8 @@
 #
 # Overridable env: CKPT (default: the model folder the run sits in, else the model named in its run_info.txt under
 # $PD/experiments), WORKERS (8: ~2 cores and 2.5-5 GB each, the GPU stays idle), PORT_BASE (2200; never 2000, the
-# interactive server), STAGGER_S, ROUTE_SUBSET, and every other variable of script 14 (SCENARIOS, REPETITIONS and
-# COSIM_VRU_SIZE_PAD_M default to the run's own values). Expect ~1 h of wall time per hour of game time per worker.
+# interactive server), STAGGER_S, ROUTE_SUBSET, and every other variable of script 14 (SCENARIOS, SEEDS, REPETITIONS and
+# COSIM_VRU_SIZE_PAD_M default to the run's own values; a run from before the seeds layout keeps its single seed). Expect ~1 h of wall time per hour of game time per worker.
 set -u
 
 RUN=${1:?usage: $0 <synced longest6 v1 run folder (holds routes/ and run_info.txt)>}

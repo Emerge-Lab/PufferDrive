@@ -16,17 +16,22 @@
 #
 # WORKERS parallel workers (default 16), each one CARLA server + one evaluator at a time, spread round-robin over the
 # GPUs of the allocation (1-8, e.g. `sbatch --gres gpu:2`): a server needs ~2 cores and no GPU once the agent has
-# turned the spectator render off, so several share a GPU. The 36 routes (one split xml each) go longest-first to
-# the least loaded worker (route length from the xml), every route gets its own server (restarted per route),
-# worker launches are staggered, a crashed route is retried on the next GPU, and the per-route result jsons are
-# aggregated at the end with garage's tools/result_parser.py (results.csv) plus the nuPlan-style HTML report
+# turned the spectator render off, so several share a GPU. The 36 routes (one split xml each) x SEEDS passes (route
+# runs, $OUT/routes/route_<id>_s<seed>/) go longest-first to the least loaded worker (route length from the xml), every
+# route run gets its own server (restarted per route), worker launches are staggered, a crashed route run is retried on
+# the next GPU, and the result jsons are aggregated at the end with garage's tools/result_parser.py over
+# $OUT/aggregate/s<seed>/ (results.csv) plus the nuPlan-style HTML report
 # ($OUT/report/index.html) and the obs replay gallery of all routes ($OUT/obs_html/index.html, as in
 # 11_carla_longest6_v2.sh). Speed: wall and game time of every route go to $OUT/timing.csv, the run totals to
 # run_info.txt and stdout.
 #
 # Overridable env: RUN_DIR, ROUTE_DIR (the split xmls), ROUTES_XML (the combined longest6.xml, for the parser
-# and the gallery), SCENARIOS (1 = eval_scenarios.json, 0 = no_scenarios.json), REPETITIONS, ROUTE_SUBSET
-# ("0 5 17": only these route ids), WORKERS, NUM_GPUS, STAGGER_S (15: seconds between worker launches), PORT_BASE
+# and the gallery), SCENARIOS (1 = eval_scenarios.json, 0 = no_scenarios.json), SEEDS ("0 1 2" by default: traffic-manager
+# seeds, one full pass over the routes per seed, the protocol of carla_garage's and CaRL's evaluate_routes_slurm.py with
+# --num_repetitions 3; results.csv then carries mean and std over the seeds per route and per town, the stdout summary the
+# DS of every seed and mean +- std over the seeds; SEEDS= (empty) = one pass with the evaluator's default seed 100 and the
+# folder layout of the runs before 26 Oct 2026), REPETITIONS (leaderboard-internal repetitions within a pass, 1),
+# ROUTE_SUBSET ("0 5 17": only these route ids), WORKERS, NUM_GPUS, STAGGER_S (15: seconds between worker launches), PORT_BASE
 # (CARLA rpc port of worker 0; worker w uses PORT_BASE+50w, TM PORT_BASE+6000+50w), OMP_NUM_THREADS (policy server
 # threads; 2 from 16 workers on, else 4), LOGGING (1, default: telemetry, world log and the HTML report per route; 0: scores
 # only), CARLA_VIEW (0, default: no chase-cam; 1: chase-cam mp4 per route, needs LOGGING=1), OBS_HTML (1 = also
@@ -40,8 +45,9 @@
 #
 # Completing a partial run (routes lost to CARLA crashes or the job time limit): COMPLETE_RUN=<existing $OUT folder>
 # reruns, in place, only its routes without a valid record (no result.json, or a crash status the leaderboard would
-# resubmit; ROUTE_SUBSET narrows the candidates, deleting a route's result.json forces it). SCENARIOS, REPETITIONS and
-# COSIM_VRU_SIZE_PAD_M default to the run's own values from run_info.txt, CKPT must be the run's checkpoint. The replaced
+# resubmit; ROUTE_SUBSET narrows the candidates, deleting a route run's result.json forces it). SCENARIOS, SEEDS, REPETITIONS
+# and COSIM_VRU_SIZE_PAD_M default to the run's own values from run_info.txt (a run from before the seeds layout has no
+# seeds line and is completed as it was driven: single default seed, route_<id> folders), CKPT must be the run's checkpoint. The replaced
 # route folders and worker logs move to $OUT/pre_completion_<stamp>/, timing.csv grows, run_info.txt gets a completion
 # line, and results.csv, the report and the gallery are rebuilt over all routes.
 # scripts/kesai/17_carla_longest6_v1_complete_local.sh does this on a desktop for a run folder synced from the cluster.
@@ -65,6 +71,8 @@ if [ -n "$COMPLETE_RUN" ]; then
     PREVIOUS_SCENARIO_FILE=$(run_info_value scenarios)
     [ -n "$PREVIOUS_SCENARIO_FILE" ] && SCENARIOS=${SCENARIOS:-$([ "$(basename "$PREVIOUS_SCENARIO_FILE")" = "no_scenarios.json" ] && echo 0 || echo 1)}
     REPETITIONS=${REPETITIONS:-$(run_info_value repetitions)}
+    # the rest of the line: several seeds; a run from before the seeds layout has no such line -> SEEDS stays empty
+    SEEDS=${SEEDS-$(awk '$1 == "seeds" {$1 = ""; print substr($0, 2); exit}' "$COMPLETE_RUN/run_info.txt")}
     COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-$(run_info_value vru_size_pad_m)}
 fi
 SCENARIOS=${SCENARIOS:-1}
@@ -74,6 +82,11 @@ else
     SCENARIO_FILE=$GARAGE_WORK_DIR/leaderboard/data/scenarios/no_scenarios.json
 fi
 REPETITIONS=${REPETITIONS:-1}
+SEEDS=${SEEDS-0 1 2}   # traffic-manager seeds, one pass over the routes each (the carla_garage / CaRL protocol); empty = legacy
+for seed in $SEEDS; do [[ "$seed" =~ ^[0-9]+$ ]] || { echo "SEEDS=\"$SEEDS\" must be integers"; exit 1; }; done
+if [ -n "$SEEDS" ]; then read -r -a SEED_LIST <<< "$SEEDS"; else SEED_LIST=(""); fi   # "" = the evaluator's default seed, route_<id> folders
+unit_dir() { printf "route_%02d%s" "$1" "${2:+_s$2}"; }                                      # $1 route id, $2 seed
+unit_json() { printf "%s%s/longest_weathers_%s.json" "$OUT/aggregate" "${2:+/s$2}" "$1"; }   # the parser's copy of the record
 ROUTE_SUBSET=${ROUTE_SUBSET:-}
 PORT_BASE=${PORT_BASE:-2000}
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
@@ -102,7 +115,7 @@ NUM_GPUS=${NUM_GPUS:-$(nvidia-smi -L 2>/dev/null | grep -c "^GPU")}
 if [ "$NUM_GPUS" -lt 1 ] || [ "$NUM_GPUS" -gt 8 ]; then echo "NUM_GPUS=$NUM_GPUS must be 1..8"; exit 1; fi
 if [ "$WORKERS" -lt 1 ] || [ "$WORKERS" -gt 64 ]; then echo "WORKERS=$WORKERS must be 1..64"; exit 1; fi
 
-TAG=longest6_v1$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")
+TAG=longest6_v1$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")${SEEDS:+_seeds$(echo "$SEEDS" | tr ' ' '-')}
 TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 OUT=${COMPLETE_RUN:-$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}}
@@ -112,7 +125,7 @@ GIT_STATE=$(git -C "$PD" rev-parse --short HEAD 2>/dev/null)$(git -C "$PD" diff 
 if [ -z "$COMPLETE_RUN" ]; then
     {
         echo "checkpoint $CKPT"; echo "routes $ROUTE_DIR ($ROUTES_XML)"; echo "scenarios $SCENARIO_FILE"
-        echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"; echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
+        echo "seeds $SEEDS"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"; echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
         echo "git $GIT_STATE"
     } > "$OUT/run_info.txt"
 else
@@ -186,64 +199,71 @@ EOF
 mapfile -t ROUTE_IDS < <(ls "$ROUTE_DIR"/longest_weathers_*.xml | sed 's/.*longest_weathers_\([0-9]*\)\.xml/\1/' | sort -n)
 TOTAL_ROUTES=${#ROUTE_IDS[@]}
 [ -n "$ROUTE_SUBSET" ] && read -r -a ROUTE_IDS <<< "$ROUTE_SUBSET"
+# work units = route x seed ("<route id>:<seed>"), each its own server run and result folder
+UNITS=()
+for seed in "${SEED_LIST[@]}"; do for route_id in "${ROUTE_IDS[@]}"; do UNITS+=("$route_id:$seed"); done; done
+TOTAL_UNITS=$((TOTAL_ROUTES * ${#SEED_LIST[@]}))
 if [ -n "$COMPLETE_RUN" ]; then
     PENDING=()
-    for route_id in "${ROUTE_IDS[@]}"; do
-        route_done "$OUT/routes/route_$(printf "%02d" "$route_id")/result.json" || PENDING+=("$route_id")
+    for unit in "${UNITS[@]}"; do
+        route_done "$OUT/routes/$(unit_dir "${unit%%:*}" "${unit##*:}")/result.json" || PENDING+=("$unit")
     done
-    [ "${#PENDING[@]}" -gt 0 ] || { echo "nothing to complete: every route of $OUT has a valid record"; exit 0; }
-    echo "completing $OUT: ${#PENDING[@]} of $TOTAL_ROUTES routes without a valid record: ${PENDING[*]}"
-    ROUTE_IDS=("${PENDING[@]}")
+    [ "${#PENDING[@]}" -gt 0 ] || { echo "nothing to complete: every route run of $OUT has a valid record"; exit 0; }
+    echo "completing $OUT: ${#PENDING[@]} of $TOTAL_UNITS route runs without a valid record: ${PENDING[*]}"
+    UNITS=("${PENDING[@]}")
     # what the completion replaces stays readable next to the live results
     COMPLETION_STAMP=$(date +%Y%m%d_%H%M%S)
     PREVIOUS=$OUT/pre_completion_$COMPLETION_STAMP
     mkdir -p "$PREVIOUS/routes"
-    for route_id in "${ROUTE_IDS[@]}"; do
-        route_name=route_$(printf "%02d" "$route_id")
+    for unit in "${UNITS[@]}"; do
+        route_name=$(unit_dir "${unit%%:*}" "${unit##*:}")
         [ -d "$OUT/routes/$route_name" ] && mv "$OUT/routes/$route_name" "$PREVIOUS/routes/"
-        rm -f "$OUT/aggregate/longest_weathers_$route_id.json"
+        rm -f "$(unit_json "${unit%%:*}" "${unit##*:}")"
     done
     for f in "$OUT"/worker_w*.log; do [ -e "$f" ] && mv "$f" "$PREVIOUS/"; done
-    echo "completion $COMPLETION_STAMP on $(hostname): routes ${ROUTE_IDS[*]}; checkpoint $CKPT; scenarios $SCENARIO_FILE; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
+    echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
 fi
-[ "$WORKERS" -gt "${#ROUTE_IDS[@]}" ] && WORKERS=${#ROUTE_IDS[@]}
+[ "$WORKERS" -gt "${#UNITS[@]}" ] && WORKERS=${#UNITS[@]}
 # longest route first to the least loaded worker; length = the xml's waypoint polyline (an earlier run's duration would
 # read a route that failed early as short)
-mapfile -t ASSIGNMENT < <("$SERVER_PY" - "$ROUTE_DIR" "$WORKERS" "${ROUTE_IDS[@]}" <<'EOF'
+mapfile -t ASSIGNMENT < <("$SERVER_PY" - "$ROUTE_DIR" "$WORKERS" "${UNITS[@]}" <<'EOF'
 import math, sys, xml.etree.ElementTree as ET
-route_dir, workers, ids = sys.argv[1], int(sys.argv[2]), [int(x) for x in sys.argv[3:]]
+route_dir, workers, units = sys.argv[1], int(sys.argv[2]), sys.argv[3:]  # unit = "<route id>:<seed>"
 SETUP_M = 300.0  # server start + world load per route, in route-length-equivalent metres
 def length(rid):
     pts = [(float(w.get("x")), float(w.get("y"))) for w in ET.parse(f"{route_dir}/longest_weathers_{rid}.xml").iter("waypoint")]
     return sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
+lengths = {u.split(":")[0]: length(int(u.split(":")[0])) for u in units}
 loads = [0.0] * workers; assign = [[] for _ in range(workers)]
-for rid in sorted(ids, key=lambda r: -length(r)):
-    w = min(range(workers), key=lambda i: loads[i]); assign[w].append(rid); loads[w] += length(rid) + SETUP_M
+for unit in sorted(units, key=lambda u: -lengths[u.split(":")[0]]):
+    w = min(range(workers), key=lambda i: loads[i]); assign[w].append(unit); loads[w] += lengths[unit.split(":")[0]] + SETUP_M
 for w in range(workers):
-    print(w, " ".join(map(str, assign[w])), f"# {loads[w] / 1000:.1f} km")
+    print(w, " ".join(assign[w]), f"# {loads[w] / 1000:.1f} km")
 EOF
 )
-echo "${#ROUTE_IDS[@]} routes over $WORKERS workers on $NUM_GPUS GPUs, policy server threads $OMP_THREADS"
+echo "${#ROUTE_IDS[@]} routes x ${#SEED_LIST[@]} seeds = ${#UNITS[@]} route runs over $WORKERS workers on $NUM_GPUS GPUs, policy server threads $OMP_THREADS"
 printf "  worker %s\n" "${ASSIGNMENT[@]}"
-[ -f "$OUT/timing.csv" ] || echo "route,worker,gpu,attempt,start,wall_s,game_s,pace,status,driving_score" > "$OUT/timing.csv"
+[ -f "$OUT/timing.csv" ] || echo "route,worker,gpu,attempt,start,wall_s,game_s,pace,status,driving_score,seed" > "$OUT/timing.csv"
 TIMING_ROWS_BEFORE=$(($(wc -l < "$OUT/timing.csv") - 1))
 
-log_route_timing() {  # $1 worker, $2 gpu, $3 route id, $4 attempt, $5 start epoch, $6 result json
+log_route_timing() {  # $1 worker, $2 gpu, $3 route id, $4 attempt, $5 start epoch, $6 result json, $7 seed
     "$SERVER_PY" - "$@" "$(date +%s)" "$OUT/timing.csv" <<'EOF'
 import json, sys, time
-w, gpu, route_id, attempt, t0, path, t1, csv_path = sys.argv[1:9]
+w, gpu, route_id, attempt, t0, path, seed, t1, csv_path = sys.argv[1:10]
 rec = json.load(open(path))["_checkpoint"]["records"][0]
 wall = int(t1) - int(t0); game = float(rec["meta"]["duration_game"]); ds = float(rec["scores"]["score_composed"])
 pace = game / wall if wall > 0 else 0.0
 with open(csv_path, "a") as f:
-    f.write(f"{route_id},{w},{gpu},{attempt},{time.strftime('%H:%M:%S', time.localtime(int(t0)))},{wall},{game:.1f},{pace:.3f},{rec['status']},{ds:.2f}\n")
-print(f"[w{w} gpu{gpu} route{route_id}] done: {wall} s wall, {game:.0f} s game, {pace:.2f}x real time, DS {ds:.1f}, {rec['status']}")
+    f.write(f"{route_id},{w},{gpu},{attempt},{time.strftime('%H:%M:%S', time.localtime(int(t0)))},{wall},{game:.1f},{pace:.3f},{rec['status']},{ds:.2f},{seed}\n")
+print(f"[w{w} gpu{gpu} route{route_id}{' s' + seed if seed else ''}] done: {wall} s wall, {game:.0f} s game, {pace:.2f}x real time, DS {ds:.1f}, {rec['status']}")
 EOF
 }
 
-run_route() {  # $1 worker, $2 gpu, $3 route id, $4 attempt: one CARLA server + one evaluator run, into $OUT/routes/route_<id>
-    local w=$1 gpu=$2 route_id=$3 attempt=$4
-    local route_dir=$OUT/routes/route_$(printf "%02d" "$route_id")
+run_route() {  # $1 worker, $2 gpu, $3 route id, $4 attempt, $5 seed: one CARLA server + one evaluator run, into $OUT/routes/route_<id>_s<seed>
+    local w=$1 gpu=$2 route_id=$3 attempt=$4 seed=$5
+    local route_dir=$OUT/routes/$(unit_dir "$route_id" "$seed")
+    local seed_args=()
+    [ -n "$seed" ] && seed_args=(--traffic-manager-seed "$seed")   # empty seed = the evaluator's default (runs before the seeds layout)
     local routes_xml=$ROUTE_DIR/longest_weathers_$route_id.xml
     local port=$((PORT_BASE + w * 50)) tm_port=$((PORT_BASE + 6000 + w * 50))
     local server_log=$route_dir/carla_server_attempt$attempt.log evaluator_log=$route_dir/evaluator_attempt$attempt.log
@@ -257,7 +277,7 @@ run_route() {  # $1 worker, $2 gpu, $3 route id, $4 attempt: one CARLA server + 
     local server_pid=$! up=1
     echo "$server_pid" >> "$OUT/server_pids"
     for _ in $(seq 1 60); do
-        kill -0 "$server_pid" 2>/dev/null || { echo "[w$w gpu$gpu route$route_id] CARLA server died"; break; }
+        kill -0 "$server_pid" 2>/dev/null || { echo "[w$w gpu$gpu route$route_id${seed:+ s$seed}] CARLA server died"; break; }
         "$GARAGE_PY" -c "
 import carla, sys
 try:
@@ -268,7 +288,7 @@ except Exception:
     done
     if [ $up -ne 0 ]; then
         pkill -9 -P "$server_pid" 2>/dev/null; kill -9 "$server_pid" 2>/dev/null
-        echo "[w$w gpu$gpu route$route_id] last lines of $server_log:"; tail -n 20 "$server_log"
+        echo "[w$w gpu$gpu route$route_id${seed:+ s$seed}] last lines of $server_log:"; tail -n 20 "$server_log"
         return 1
     fi
     local log_env=(ROUTES="$routes_xml")
@@ -280,34 +300,35 @@ except Exception:
     env CUDA_VISIBLE_DEVICES="$gpu" "${log_env[@]}" \
         "$GARAGE_PY" -u "$EVALUATOR" --routes "$routes_xml" --scenarios "$SCENARIO_FILE" --repetitions "$REPETITIONS" \
         --agent "$AGENT" --agent-config "$CKPT" --checkpoint "$route_dir/result.json" --track MAP \
-        --port "$port" --trafficManagerPort "$tm_port" --timeout 600 \
+        --port "$port" --trafficManagerPort "$tm_port" --timeout 600 "${seed_args[@]}" \
         > "$evaluator_log" 2>&1 &
     local evaluator_pid=$!
     wait -n 2>/dev/null  # the evaluator, or the server when it dies first (render-thread crash a minute in)
     if kill -0 "$evaluator_pid" 2>/dev/null; then
-        echo "[w$w gpu$gpu route$route_id] CARLA server died mid-route; stopping the evaluator (600 s client timeouts otherwise)"
+        echo "[w$w gpu$gpu route$route_id${seed:+ s$seed}] CARLA server died mid-route; stopping the evaluator (600 s client timeouts otherwise)"
         pkill -9 -P "$evaluator_pid" 2>/dev/null; kill -9 "$evaluator_pid" 2>/dev/null; wait "$evaluator_pid" 2>/dev/null
     fi
     # children first: killing the wrapper shell first reparents the UE4 binary and leaves it running
     pkill -9 -P "$server_pid" 2>/dev/null; kill -9 "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null
     if ! route_done "$route_dir/result.json"; then
-        echo "[w$w gpu$gpu route$route_id] no valid route record; last lines of $evaluator_log:"; tail -n 20 "$evaluator_log"
+        echo "[w$w gpu$gpu route$route_id${seed:+ s$seed}] no valid route record; last lines of $evaluator_log:"; tail -n 20 "$evaluator_log"
         return 1
     fi
-    log_route_timing "$w" "$gpu" "$route_id" "$attempt" "$t_start" "$route_dir/result.json"
+    log_route_timing "$w" "$gpu" "$route_id" "$attempt" "$t_start" "$route_dir/result.json" "$seed"
     return 0
 }
 
-run_worker() {  # $1 worker: its assigned routes, sequentially, each retried up to MAX_ATTEMPTS on the next GPU
-    local w=$1 ids route_id attempt gpu
-    ids=${ASSIGNMENT[w]#* }
-    ids=${ids%%#*}
-    for route_id in $ids; do
+run_worker() {  # $1 worker: its assigned route runs, sequentially, each retried up to MAX_ATTEMPTS on the next GPU
+    local w=$1 units unit route_id seed attempt gpu
+    units=${ASSIGNMENT[w]#* }
+    units=${units%%#*}
+    for unit in $units; do
+        route_id=${unit%%:*}; seed=${unit##*:}
         for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
             gpu=$(( (w + attempt - 1) % NUM_GPUS ))
-            echo "[w$w] route $route_id attempt $attempt gpu $gpu $(date +%H:%M:%S)"
-            run_route "$w" "$gpu" "$route_id" "$attempt" && break
-            echo "[w$w] route $route_id attempt $attempt failed"
+            echo "[w$w] route $route_id${seed:+ seed $seed} attempt $attempt gpu $gpu $(date +%H:%M:%S)"
+            run_route "$w" "$gpu" "$route_id" "$attempt" "$seed" && break
+            echo "[w$w] route $route_id${seed:+ seed $seed} attempt $attempt failed"
         done
     done
 }
@@ -332,7 +353,7 @@ done
 wait "${WORKER_PIDS[@]}"
 ROUTES_WALL_S=$(( $(date +%s) - ROUTES_T0 ))
 cat "$OUT"/worker_w*.log
-"$SERVER_PY" - "$OUT/timing.csv" "$ROUTES_WALL_S" "$WORKERS" "$NUM_GPUS" "${#ROUTE_IDS[@]}" "$TIMING_ROWS_BEFORE" <<'EOF' | tee -a "$OUT/run_info.txt"
+"$SERVER_PY" - "$OUT/timing.csv" "$ROUTES_WALL_S" "$WORKERS" "$NUM_GPUS" "${#UNITS[@]}" "$TIMING_ROWS_BEFORE" <<'EOF' | tee -a "$OUT/run_info.txt"
 import csv, sys
 rows = list(csv.DictReader(open(sys.argv[1]))); wall, workers, gpus, n_routes, rows_before = (int(x) for x in sys.argv[2:7])
 rows = rows[rows_before:]  # a completion appends to the previous run's timing.csv
@@ -342,17 +363,21 @@ game = sum(float(r["game_s"]) for r in rows); route_wall = sum(int(r["wall_s"]) 
 per_worker = {}
 for r in rows:
     per_worker[r["worker"]] = per_worker.get(r["worker"], 0) + int(r["wall_s"])
-print(f"speed: {len(rows)}/{n_routes} routes in {wall / 3600:.2f} h wall, {workers} workers on {gpus} GPUs; game time {game / 3600:.2f} h; "
+print(f"speed: {len(rows)}/{n_routes} route runs in {wall / 3600:.2f} h wall, {workers} workers on {gpus} GPUs; game time {game / 3600:.2f} h; "
       f"per-route pace {game / route_wall:.2f}x real time; busiest worker {max(per_worker.values()) / 3600:.2f} h, "
-      f"idlest {min(per_worker.values()) / 3600:.2f} h; routes/h {len(rows) / (wall / 3600):.1f}")
+      f"idlest {min(per_worker.values()) / 3600:.2f} h; route runs/h {len(rows) / (wall / 3600):.1f}")
 EOF
 
-# aggregate: garage's parser over the per-route jsons -> $OUT/aggregate/results.csv, plus a per-route table; a crash
+# aggregate: garage's parser over the per-route jsons, one subfolder per seed (the parser walks $OUT/aggregate and
+# reports mean/std over the seeds per route and town) -> $OUT/aggregate/results.csv, plus a per-route table; a crash
 # record has no global_record and would abort the parser
 for f in "$OUT"/routes/route_*/result.json; do
-    route_id=$(basename "$(dirname "$f")" | sed 's/route_0*//; s/^$/0/')
-    route_done "$f" && cp "$f" "$OUT/aggregate/longest_weathers_$route_id.json" && continue
-    echo "route $route_id has no valid record (all attempts crashed): left out of results.csv"
+    name=$(basename "$(dirname "$f")")
+    case $name in *_s*) seed=${name##*_s}; name=${name%_s*} ;; *) seed= ;; esac
+    route_id=$(echo "$name" | sed 's/route_0*//; s/^$/0/')
+    dest=$(unit_json "$route_id" "$seed"); mkdir -p "$(dirname "$dest")"
+    route_done "$f" && cp "$f" "$dest" && continue
+    echo "route $route_id${seed:+ seed $seed} has no valid record (all attempts crashed): left out of results.csv"
 done
 # garage's parser imports torch/pygame and carla: the garage python gets the egg; the server python (the fallback where
 # the garage env's torch does not load) has its own carla and must not see the py3.7 egg
@@ -360,18 +385,34 @@ PARSER_ARGS=(--xml "$ROUTES_XML" --results "$OUT/aggregate" --log_dir "$OUT/aggr
 env PYTHONPATH="$CARLA_EGG" "$GARAGE_PY" "$GARAGE_WORK_DIR/tools/result_parser.py" "${PARSER_ARGS[@]}" \
     || env -u PYTHONPATH "$SERVER_PY" "$GARAGE_WORK_DIR/tools/result_parser.py" "${PARSER_ARGS[@]}" \
     || echo "result_parser.py failed with $GARAGE_PY and $SERVER_PY (per-route jsons in $OUT/aggregate are unaffected)"
-"$SERVER_PY" - "$OUT/aggregate" "$TOTAL_ROUTES" <<'EOF'
-import glob, json, sys
-rows = []
-for f in sorted(glob.glob(sys.argv[1] + "/longest_weathers_*.json"), key=lambda p: int(p.rsplit("_", 1)[1][:-5])):
+"$SERVER_PY" - "$OUT/aggregate" "$TOTAL_UNITS" "**/longest_weathers_*.json" <<'EOF'
+import glob, json, os, re, statistics, sys
+rows = []  # (seed, route_id, status, DS, RC, IP); seed "" = a run from before the seeds layout
+for f in glob.glob(os.path.join(sys.argv[1], sys.argv[3]), recursive=True):
+    parent = os.path.basename(os.path.dirname(f))
+    seed = parent[1:] if parent.startswith("s") and parent[1:].isdigit() else ""
     for r in json.load(open(f))["_checkpoint"]["records"]:
-        rows.append((r["route_id"], r["status"], r["scores"]["score_composed"], r["scores"]["score_route"], r["scores"]["score_penalty"]))
-print(f"\n{len(rows)} route records of {sys.argv[2]} routes")
-for route_id, status, ds, rc, ip in rows:
-    print(f"  {route_id:22s} {status:34s} DS {ds:6.2f} RC {rc:6.2f} IP {ip:5.3f}")
+        rows.append((seed, r["route_id"], r["status"], r["scores"]["score_composed"], r["scores"]["score_route"], r["scores"]["score_penalty"]))
+def route_index(route_id):
+    m = re.search(r"_(\d+)", route_id)
+    return int(m.group(1)) if m else 0
+rows.sort(key=lambda r: (int(r[0]) if r[0] else -1, route_index(r[1])))
+print(f"\n{len(rows)} route records of {sys.argv[2]} route runs")
+for seed, route_id, status, ds, rc, ip in rows:
+    print(f"  {('s' + seed) if seed else '-':>3s} {route_id:22s} {status:34s} DS {ds:6.2f} RC {rc:6.2f} IP {ip:5.3f}")
 if rows:
     n = len(rows)
-    print(f"mean DS {sum(r[2] for r in rows)/n:.2f}  RC {sum(r[3] for r in rows)/n:.2f}  IP {sum(r[4] for r in rows)/n:.3f}")
+    print(f"mean DS {sum(r[3] for r in rows)/n:.2f}  RC {sum(r[4] for r in rows)/n:.2f}  IP {sum(r[5] for r in rows)/n:.3f}  (all {n} route runs)")
+    by_seed = {}
+    for r in rows:
+        by_seed.setdefault(r[0], []).append(r)
+    if len(by_seed) > 1:  # the paper-style number: the benchmark DS per seed, mean +- std over the seeds
+        ds = {s: sum(r[3] for r in v) / len(v) for s, v in by_seed.items()}
+        rc = {s: sum(r[4] for r in v) / len(v) for s, v in by_seed.items()}
+        for s in sorted(by_seed, key=lambda s: int(s) if s else -1):
+            print(f"seed {s}: DS {ds[s]:.2f}  RC {rc[s]:.2f}  ({len(by_seed[s])} routes)")
+        print(f"over seeds: DS {statistics.mean(ds.values()):.2f} +- {statistics.pstdev(ds.values()):.2f}  "
+              f"RC {statistics.mean(rc.values()):.2f} +- {statistics.pstdev(rc.values()):.2f}  (population std over {len(by_seed)} seeds, as in results.csv)")
 EOF
 
 REPORT_ARGS=()
