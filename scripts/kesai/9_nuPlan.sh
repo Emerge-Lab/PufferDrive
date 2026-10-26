@@ -43,7 +43,9 @@ export COSIM_OBS_HTML=infractions  # obs replays (what the policy saw) only for 
 export CALLBACKS="[simulation_log_callback, carl_visualization_callback]"
 export WORKER=ray_distributed
 # Per-worker memory is small now (1 policy agent + partner slots, light buffers sized to the scenario), so this is CPU-bound.
-export THREADS_PER_NODE=128
+# 128 fits the 144-CPU scaleway nodes. A kesai RTX node gives the job 480 CPUs and a worker needs ~1.9 GB: 256 doubles the
+# throughput (128 workers used 29 % of the CPUs there, 26 Oct) and leaves half the memory to the page cache of the logs.
+export THREADS_PER_NODE=${THREADS_PER_NODE:-$([ "$CLUSTER" = kesai ] && echo 256 || echo 128)}
 # route: lane-graph route goals; roadblock: route roadblock centroids; roadblock_lane: roadblock goals on the lane continuing the ego lane
 export GOAL_SOURCE=roadblock
 # Ablations (see run_nuplan_planner.sh): refill the goal window after every consumed goal; cap the ego's

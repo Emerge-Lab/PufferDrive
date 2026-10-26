@@ -24,7 +24,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=${RUN_NAME:-k_scaled_0052_${SEED}}
+export RUN_NAME=${RUN_NAME:-k_scaled_0054_${SEED}}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -51,10 +51,12 @@ echo "slot encoder backend: ${SLOT_ENCODER_BACKEND}"
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
-# Blocking env workers allow 2 workers per hardware thread (18 threads per rank); forked workers share the preloaded map cache
-# kesai nodes give 60 threads per rank (--exclusive): VEC_NUM_ENVS=60 is one worker per thread, 120 the scaleway ratio;
-# both enlarge the rollout batch (= workers x env.num_agents x horizon). ROLLOUT_DTYPE=float16 halves the obs buffer on the GPU.
-# A second instance needs its own RUN_NAME: RUN_NAME=k_scaled_0053_1000 VEC_NUM_ENVS=60 sbatch -p high scripts/kesai/3_train_64GPU_multinode_slurm.sh
+# Blocking env workers: kesai nodes give 60 threads per rank (--exclusive), vec.num_envs=60 is one worker per thread (run 0053,
+# ~25 M SPS vs ~21.5 M with 32); scaleway nodes have 18 threads per rank, 32 there. More workers enlarge the rollout batch
+# (= workers x env.num_agents x horizon); forked workers share the preloaded map cache. ROLLOUT_DTYPE=float16 halves the obs buffer on the GPU.
+# A second instance needs its own RUN_NAME: RUN_NAME=k_scaled_0055_1000 sbatch -p high scripts/kesai/3_train_64GPU_multinode_slurm.sh
+# PPO update epochs: puffer_drive.yaml defaults to 3 (runs up to 0053). With this batch the GPU update took ~3/4 of an
+# iteration, so 0054 trains 1 epoch per rollout.
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -79,11 +81,12 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
-    vec.num_envs=${VEC_NUM_ENVS:-32} \
+    vec.num_envs=60 \
     ${ROLLOUT_DTYPE:+train.rollout_dtype=$ROLLOUT_DTYPE} \
     env.preload_map_cache=True \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
+    train.update_epochs=1 \
     policy.fused_slot_encoder=true \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
