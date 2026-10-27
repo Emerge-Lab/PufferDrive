@@ -268,6 +268,8 @@ fi
 [ "$RENDER_VIDEO" = "1" ] && RENDER_VIDEO_FLAG=true || RENDER_VIDEO_FLAG=false
 [ "$OBS_REPLAY" = "1" ] && OBS_REPLAY_FLAG=true || OBS_REPLAY_FLAG=false
 echo "${#SCENES[@]} scenes, $TOPOLOGY with $PARALLEL in flight on $CONTAINER_RUNTIME; full log: $OUT/evaluate.log (logs/ once the run is tidied)"
+# the teacher serves 2 x PARALLEL sessions from one process: one BLAS/OpenMP thread each, or torch spins every core of the node
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 cd "$ALPAGYM_ROOT" || exit 1
 "$ALPAGYM_PY" -m alpagym_host.evaluate \
     --model_kind teacher \
