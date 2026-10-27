@@ -28,14 +28,15 @@
 #       python scripts/kesai/docker_archive_to_sqsh.py alpasim-base-<version>.tar.zst $SQSH_DIR/alpasim_base_<version>.sqsh
 #     the archive being build_alpasim_image.sbatch's, copied over from a docker host (~100 GB of scratch, see the script).
 #
-# Settings are the plain assignments below. Only RUN_DIR is also read from the environment: 3_train and 7_eval chain this
-# eval after their own by exporting it.
+# Settings are the plain assignments below. Only RUN_DIR, TOPOLOGY and N_SCENES are also read from the environment: 3_train
+# and 7_eval chain this eval after their own by exporting RUN_DIR; a smoke test on a shared node is
+#   TOPOLOGY=1gpu N_SCENES=2 sbatch --oversubscribe --gres gpu:1 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
 
-# quick check: TOPOLOGY=1gpu N_SCENES=2; full run: TOPOLOGY=8gpu_64rollouts (whole node) N_SCENES=0 (the whole SCENE_LIST)
-TOPOLOGY=8gpu_64rollouts
-N_SCENES=0
+# full run: TOPOLOGY=8gpu_64rollouts (whole node) N_SCENES=0 (the whole SCENE_LIST); quick check: see the header
+TOPOLOGY=${TOPOLOGY:-8gpu_64rollouts}
+N_SCENES=${N_SCENES:-0}
 RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0045_1000}
 CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || CKPT=$(ls "$RUN_DIR"/models/model_*.pt 2>/dev/null | sort | tail -n 1)
