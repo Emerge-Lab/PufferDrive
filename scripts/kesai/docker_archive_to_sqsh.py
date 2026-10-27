@@ -191,7 +191,8 @@ def main():
         with tarfile.open(layer, "r:*") as layer_tar:
             removed_count = apply_whiteouts(layer_tar.getmembers(), rootfs)
             written_count, skipped_count = extract_layer(layer_tar, rootfs, dir_modes)
-        layer.unlink()
+        if layer not in layers[layer_idx + 1:]:  # identical layers share one blob
+            layer.unlink()
         print(
             f"[docker_archive_to_sqsh] layer {layer_idx + 1}/{len(layers)}: {written_count} entries, "
             f"{removed_count} whiteout removals, {skipped_count} device/fifo entries skipped",
