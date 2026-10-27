@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name train_puffer
-#SBATCH --nodes 2                        # Number of nodes requested
+#SBATCH --nodes 1                        # Number of nodes requested
 #SBATCH --ntasks-per-node 1              # Run 1 srun task per node (which fires up torchrun)
 #SBATCH --gres gpu:8                     # GPUs per node
 #SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
@@ -24,7 +24,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=${RUN_NAME:-k_scaled_0055_${SEED}}
+export RUN_NAME=${RUN_NAME:-k_scaled_0057_${SEED}}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -51,10 +51,14 @@ echo "slot encoder backend: ${SLOT_ENCODER_BACKEND}"
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
-# GigaFlow (arXiv 2502.03349, Table A3) match on 16 GPUs: 32768 rows per GPU per gradient update (16 x 32768 = 524k vs the
-# paper's 8 x 32000 = 256k), 3 PPO epochs, 1200-step episodes, cosine LR 5e-4. vec.num_envs=60 is one blocking worker per
-# kesai thread; env.num_agents=4096 per worker gives 31.5 M transitions per GPU per rollout (paper: ~41.6 M) and a 52 GB
-# float16 obs buffer. The control run differs only in the minibatch: MINIBATCH=131072 RUN_NAME=k_scaled_0056_1000 sbatch scripts/kesai/18_train_16GPU_gigaflow_slurm.sh
+# GigaFlow (arXiv 2502.03349, Table A3) match on one node: 8 x 32768 = 262k rows per gradient update (paper: 8 x 32000),
+# 3 PPO epochs, 1200-step episodes, cosine LR 5e-4. One node because the gradient all-reduce over the 10 GbE link costs
+# ~35 ms per update whatever the node count (run 0055, 2 nodes: 66 ms per 32k update vs ~32 ms of compute); inside a node it
+# goes over PCIe. vec.num_envs=60 is one blocking worker per kesai thread; env.num_agents=4096 per worker gives 31.5 M
+# transitions per GPU per rollout (paper: ~41.6 M) and a 52 GB float16 obs buffer (60 GB total per GPU).
+# Minibatch ablation, two jobs from this file:
+#   sbatch scripts/kesai/18_train_16GPU_gigaflow_slurm.sh                                              # k_scaled_0057, 32768
+#   MINIBATCH=131072 RUN_NAME=k_scaled_0058_1000 sbatch scripts/kesai/18_train_16GPU_gigaflow_slurm.sh   # control
 MINIBATCH=${MINIBATCH:-32768}
 echo "minibatch per GPU: ${MINIBATCH}"
 # Execute torchrun across all nodes using srun
@@ -125,7 +129,7 @@ fi
 echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 40000 \
-    --num-nodes 2 \
+    --num-nodes 1 \
     env.map_dir=$PD/pufferlib/resources/drive/binaries/carla \
     vec.num_envs=128 \
     eval.reward_comfort=0.0 \
