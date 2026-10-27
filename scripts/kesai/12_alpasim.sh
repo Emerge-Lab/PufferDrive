@@ -86,7 +86,7 @@ for path in "$CKPT" "$ALPAGYM_PY" "$ALPASIM_ROOT/pyproject.toml" "$BINS/scene_ma
 done
 [ -f "$(dirname "$CKPT")/config.yaml" ] || [ -f "$(dirname "$(dirname "$CKPT")")/config.yaml" ] \
     || { echo "no config.yaml next to or one level above $CKPT"; exit 1; }
-[ -z "$(find "$USDZ_DIR" -maxdepth 1 -type l -print -quit)" ] \
+[ -z "$(find "$USDZ_DIR" -type l -print -quit)" ] \
     || { echo "$USDZ_DIR holds symlinks, which dangle inside the renderer container; point USDZ_DIR at the real files"; exit 1; }
 case "$CONTAINER_RUNTIME" in
     docker) RUNTIME_TOOLS="docker" ;;
@@ -220,7 +220,9 @@ case "$CONTAINER_RUNTIME" in
         ;;
     enroot)
         echo "enroot $(enroot version 2>&1 | head -n 1) on $(hostname)"
-        "$ALPASIM_ROOT/.venv/bin/python" -c "from alpasim_wizard.deployment.fuse_tools import ensure_fuse_tools; ensure_fuse_tools('$FUSE_DIR')" \
+        # the host creates $ALPASIM_ROOT/.venv (uv sync) on the first run; until then the wizard fetches the tools itself
+        [ ! -x "$ALPASIM_ROOT/.venv/bin/python" ] \
+            || "$ALPASIM_ROOT/.venv/bin/python" -c "from alpasim_wizard.deployment.fuse_tools import ensure_fuse_tools; ensure_fuse_tools('$FUSE_DIR')" \
             || { echo "no squashfuse + fuse-overlayfs in $FUSE_DIR: the wizard downloads them from github.com and archive.ubuntu.com (needs dpkg-deb)"; exit 1; }
         WIZARD_RUN_METHOD=SLURM_ENROOT
         ;;
