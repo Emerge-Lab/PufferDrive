@@ -112,7 +112,6 @@ typedef struct {
 } LaneQueryEntry;
 
 struct GridMap {
-    int unregistered_segment_count; // segment midpoints outside the grid, never listed in any cell
     float top_left_x;
     float top_left_y;
     float bottom_right_x;
@@ -3907,29 +3906,26 @@ static bool find_closest_lane_segment(
     const RoadMapElement *element,
     const Agent *agent,
     const LaneQueryEntry *entry,
-    bool ranges_exact,
     float window_margin_m,
     float max_distance_m,
     int *closest_seg_idx,
     float *min_dist_sq,
     float *closest_cross) {
-    if (ranges_exact) {
-        scan_lane_segment_range(
-            element,
-            agent,
-            entry->seg_first,
-            entry->seg_last,
-            closest_seg_idx,
-            min_dist_sq,
-            closest_cross);
-        float unlisted_reach_m = window_margin_m - element->max_segment_half_length_m - LANE_SCAN_GUARD_MARGIN_M;
-        float listed_dist_m = *min_dist_sq < 1e18f ? sqrtf(*min_dist_sq) : 1e9f;
-        if (listed_dist_m < unlisted_reach_m) {
-            return true;
-        }
-        if (unlisted_reach_m > max_distance_m && listed_dist_m > max_distance_m) {
-            return false;
-        }
+    scan_lane_segment_range(
+        element,
+        agent,
+        entry->seg_first,
+        entry->seg_last,
+        closest_seg_idx,
+        min_dist_sq,
+        closest_cross);
+    float unlisted_reach_m = window_margin_m - element->max_segment_half_length_m - LANE_SCAN_GUARD_MARGIN_M;
+    float listed_dist_m = *min_dist_sq < 1e18f ? sqrtf(*min_dist_sq) : 1e9f;
+    if (listed_dist_m < unlisted_reach_m) {
+        return true;
+    }
+    if (unlisted_reach_m > max_distance_m && listed_dist_m > max_distance_m) {
+        return false;
     }
     scan_lane_segment_range(element, agent, 0, element->segment_size - 2, closest_seg_idx, min_dist_sq, closest_cross);
     return true;
@@ -3963,7 +3959,6 @@ static void find_lane_and_offroad(
         entry_count = grid->lane_query_offset[cell_idx + 1] - grid->lane_query_offset[cell_idx];
         window_margin_m = road_query_window_margin_m(env, agent);
     }
-    bool ranges_exact = grid->unregistered_segment_count == 0;
 
     // Vehicle-width based distance threshold (3x width)
     float max_distance_threshold = 3.0f * agent->sim_width;
@@ -4002,7 +3997,6 @@ static void find_lane_and_offroad(
                 element,
                 agent,
                 entry,
-                ranges_exact,
                 window_margin_m,
                 max_distance_threshold,
                 &closest_seg_idx,

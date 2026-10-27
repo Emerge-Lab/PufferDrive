@@ -35,10 +35,6 @@ static void add_entity_to_grid(
     int geometry_idx,
     int obs_kind,
     int *cell_entities_insert_index) {
-    if (grid_index == -1) {
-        return;
-    }
-
     int count = cell_entities_insert_index[grid_index];
     if (count >= env->grid_map->cell_entities_count[grid_index]) {
         printf(
@@ -299,8 +295,9 @@ static int init_grid_map(Drive *env) {
         env->grid_map = NULL;
         return 1;
     }
-    env->grid_map->grid_cols = ceil(grid_width / GRID_CELL_SIZE);
-    env->grid_map->grid_rows = ceil(grid_height / GRID_CELL_SIZE);
+    // +1 so a point on the far edge indexes the last column/row instead of falling outside
+    env->grid_map->grid_cols = (int) (grid_width / GRID_CELL_SIZE) + 1;
+    env->grid_map->grid_rows = (int) (grid_height / GRID_CELL_SIZE) + 1;
     long long grid_cell_count_wide = (long long) env->grid_map->grid_cols * (long long) env->grid_map->grid_rows;
     if (env->grid_map->grid_cols < 1 || env->grid_map->grid_rows < 1 || grid_cell_count_wide > MAX_GRID_CELL_COUNT) {
         fprintf(
@@ -318,7 +315,6 @@ static int init_grid_map(Drive *env) {
     env->grid_map->cells = (GridMapEntity **) calloc(grid_cell_count, sizeof(GridMapEntity *));
     env->grid_map->cell_entities_count = (int *) calloc(grid_cell_count, sizeof(int));
     // First pass to count entities in each grid cell
-    env->grid_map->unregistered_segment_count = 0;
     for (int i = 0; i < env->num_road_elements; i++) {
         if (!is_road_grid_candidate(env->road_elements[i].type)) {
             continue;
@@ -334,8 +330,12 @@ static int init_grid_map(Drive *env) {
             float y_center = (element->y[j] + element->y[j + 1]) / 2;
             int grid_index = get_grid_index(env, x_center, y_center);
             if (grid_index == -1) {
-                env->grid_map->unregistered_segment_count++;
-                continue;
+                fprintf(stderr, "[ERROR] -> Road %d segment %d lies outside the grid extent\n", i, j);
+                free(env->grid_map->cells);
+                free(env->grid_map->cell_entities_count);
+                free(env->grid_map);
+                env->grid_map = NULL;
+                return 1;
             }
             env->grid_map->cell_entities_count[grid_index]++;
         }
@@ -382,9 +382,6 @@ static int init_grid_map(Drive *env) {
             float x_center = (element->x[j] + element->x[j + 1]) / 2;
             float y_center = (element->y[j] + element->y[j + 1]) / 2;
             int grid_index = get_grid_index(env, x_center, y_center);
-            if (grid_index == -1) {
-                continue;
-            }
             add_entity_to_grid(env, grid_index, i, j, obs_kind, cell_entities_insert_index);
             if (is_drivable_road_lane(element->type) && !drivable_grid_seen[grid_index]) {
                 drivable_grid_seen[grid_index] = true;
@@ -925,6 +922,14 @@ int load_map_binary(const char *filename, Drive *drive) {
         if ((size_t) slen > 0 && fread(road->headings, sizeof(float), slen, file) != (size_t) slen) {
             fclose(file);
             return -1;
+        }
+        for (int p = 0; p < slen; p++) {
+            if (!isfinite(road->x[p]) || !isfinite(road->y[p]) || !isfinite(road->z[p])
+                || !isfinite(road->headings[p])) {
+                printf("[ERROR] -> Road %d point %d has a non-finite coordinate or heading.\n", i, p);
+                fclose(file);
+                return -1;
+            }
         }
 
         if (is_road_lane(road->type)) {
