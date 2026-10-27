@@ -116,13 +116,9 @@ RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6_v2.sh \
 echo "Submitting longest6 v1 eval for ${MODEL_PATH}"
 RUN_DIR=${DATA_DIR} sbatch scripts/kesai/14_carla_longest6_v1.sh \
     || echo "longest6 v1 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/14_carla_longest6_v1.sh"
-if [ "$CLUSTER" = kesai ]; then
-    echo "AlpaSim eval skipped: it needs Docker, which kesai does not provide"
-else
-    echo "Submitting AlpaSim eval for ${MODEL_PATH}"
-    RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
-        || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
-fi
+echo "Submitting AlpaSim eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
+    || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
 
 # parallel_eval places one shard per allocated node via srun, so each shard's 128
 # env workers get a full node's cores instead of sharing the batch host.

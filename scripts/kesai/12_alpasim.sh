@@ -11,18 +11,27 @@
 #SBATCH --partition dev
 # AlpaSim closed-loop evaluation of a PufferDrive checkpoint on NuRec scenes, the AlpaSim counterpart of 9_nuPlan.sh:
 # alpasim-training's teacher driver runs the policy in a shadow env of this checkout (PUFFERDRIVE_ROOT=$PD) on the
-# scenes converted to PufferDrive bins; AlpaSim renders, simulates the ego and replays the logged traffic.
+# scenes converted to PufferDrive bins; AlpaSim renders, simulates the ego and replays the logged traffic. AlpaSim's
+# services run as containers: docker compose on scaleway; on kesai, which has no docker, as enroot containers started
+# straight from squashfs images inside this job (CONTAINER_RUNTIME=enroot) or as pyxis job steps (pyxis; every step first
+# unpacks its image to node-local disk, ~300 GB per run with this topology).
 #
 # One-time setup: alpasim-training at ALPAGYM_ROOT (`uv sync --all-packages`), the AlpaSim fork at ALPASIM_ROOT, the NuRec
 # scenes as real files at USDZ_DIR, their bins with 130 km/h lane limits at BINS (alpasim-training README step 4) and the
-# AlpaSim base image archived in ALPASIM_IMAGE_DIR (cd $ALPAGYM_ROOT && ALPASIM_ROOT=$ALPASIM_ROOT OUT_DIR=$ALPASIM_IMAGE_DIR
-# sbatch scripts/build_alpasim_image.sbatch; ~3 h on a dev node, ~31 GB archive). The archive must be readable by this user.
+# AlpaSim base image plus the NRE renderer image:
+#   docker: the base image archived in ALPASIM_IMAGE_DIR (cd $ALPAGYM_ROOT && ALPASIM_ROOT=$ALPASIM_ROOT
+#     OUT_DIR=$ALPASIM_IMAGE_DIR sbatch scripts/build_alpasim_image.sbatch; ~3 h on a dev node, ~31 GB archive), readable
+#     by this user; the renderer is pulled from nvcr.io.
+#   enroot/pyxis: both as squashfs files in SQSH_DIR, named the way the wizard looks them up (image basename with ':'
+#     and '-' replaced by '_'):
+#       enroot import -o $SQSH_DIR/nre_ga_26.04.sqsh docker://nvcr.io#nvidia/nre/nre-ga:26.04
+#       python scripts/kesai/docker_archive_to_sqsh.py alpasim-base-<version>.tar.zst $SQSH_DIR/alpasim_base_<version>.sqsh
+#     the archive being build_alpasim_image.sbatch's, copied over from a docker host (~100 GB of scratch, see the script).
 #
 # Settings are the plain assignments below. Only RUN_DIR is also read from the environment: 3_train and 7_eval chain this
 # eval after their own by exporting it.
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
-[ "$CLUSTER" != kesai ] || { echo "AlpaSim eval needs Docker, which kesai does not provide; run it on scaleway"; exit 1; }
 
 # quick check: TOPOLOGY=1gpu N_SCENES=2; full run: TOPOLOGY=8gpu_64rollouts (whole node) N_SCENES=0 (the whole SCENE_LIST)
 TOPOLOGY=8gpu_64rollouts
@@ -46,10 +55,22 @@ ALPAGYM_ROOT=$HOME/alpasim-training
 # held-out split Damiano evaluates on; empty = every converted scene that passed the checks (2149 on the cluster, 1584 of them train)
 SCENE_LIST=$ALPAGYM_ROOT/scene_splits/eval_405.txt
 export ALPASIM_ROOT=$HOME/alpasim
-# shoulder lanes off-road (py123d 1_bernhard_dev); USDZ_DIR stays Damiano's, the shared all-usdzs symlinks dangle inside the containers
+# shoulder lanes off-road (py123d 1_bernhard_dev)
 BINS=$SHARED_DATA/nurec/bins/eval405_130kmh_ndshoulders
-USDZ_DIR=$HOME_BASE/ddacol/code/alpasim-training/data/distill/usdz
-ALPASIM_IMAGE_DIR=$HOME_BASE/ddacol/code/alpasim-training/data/images
+case "$CLUSTER" in
+    kesai)
+        CONTAINER_RUNTIME=enroot  # enroot | pyxis
+        USDZ_DIR=$SHARED_DATA/nurec/usdz
+        SQSH_DIR=$SHARED_DATA/nurec/sqsh
+        FUSE_DIR=$HOME/.cache/alpasim-fuse-tools  # squashfuse + fuse-overlayfs the wizard downloads once for enroot
+        ;;
+    *)
+        CONTAINER_RUNTIME=docker
+        # USDZ_DIR stays Damiano's, the shared all-usdzs symlinks dangle inside the containers
+        USDZ_DIR=$HOME_BASE/ddacol/code/alpasim-training/data/distill/usdz
+        ALPASIM_IMAGE_DIR=$HOME_BASE/ddacol/code/alpasim-training/data/images
+        ;;
+esac
 case "$TOPOLOGY" in
     8gpu*) PARALLEL=32 ;;  # scenes in flight
     *) PARALLEL=4 ;;
@@ -67,9 +88,17 @@ done
     || { echo "no config.yaml next to or one level above $CKPT"; exit 1; }
 [ -z "$(find "$USDZ_DIR" -maxdepth 1 -type l -print -quit)" ] \
     || { echo "$USDZ_DIR holds symlinks, which dangle inside the renderer container; point USDZ_DIR at the real files"; exit 1; }
-for tool in docker nvidia-smi uv; do
+case "$CONTAINER_RUNTIME" in
+    docker) RUNTIME_TOOLS="docker" ;;
+    enroot) RUNTIME_TOOLS="enroot /usr/bin/fusermount" ;;  # fusermount: what the wizard's fusermount3 symlink points at
+    pyxis) RUNTIME_TOOLS="srun" ;;
+    *) echo "CONTAINER_RUNTIME must be docker, enroot or pyxis, got $CONTAINER_RUNTIME"; exit 1 ;;
+esac
+for tool in $RUNTIME_TOOLS nvidia-smi uv; do
     command -v "$tool" > /dev/null || { echo "missing tool: $tool"; exit 1; }
 done
+[ "$CONTAINER_RUNTIME" != pyxis ] || srun --help 2>&1 | grep -q -- --container-image \
+    || { echo "srun has no --container-image option: pyxis is not installed on $(hostname)"; exit 1; }
 case "$TOPOLOGY" in
     8gpu*)
         NUM_GPUS=$(nvidia-smi -L | grep -c "^GPU")
@@ -78,11 +107,19 @@ case "$TOPOLOGY" in
 esac
 ALPASIM_VERSION=$(grep -m1 '^version' "$ALPASIM_ROOT/pyproject.toml" | sed -E 's/.*"(.*)".*/\1/')
 BASE_TAG=alpasim-base:$ALPASIM_VERSION
-ALPASIM_IMAGE_TAR=$ALPASIM_IMAGE_DIR/alpasim-base-$ALPASIM_VERSION.tar.zst
 NRE_TAG=$(grep -m1 -oE 'nvcr.io/nvidia/nre/[^[:space:]"]+' "$ALPASIM_ROOT/src/wizard/configs/base_config.yaml")
 [ -n "$NRE_TAG" ] || { echo "no NRE renderer image in $ALPASIM_ROOT/src/wizard/configs/base_config.yaml"; exit 1; }
-[ -r "$ALPASIM_IMAGE_TAR" ] || docker image inspect "$BASE_TAG" > /dev/null 2>&1 \
-    || { echo "$ALPASIM_IMAGE_TAR is missing or not readable and $BASE_TAG is not on $(hostname)"; exit 1; }
+if [ "$CONTAINER_RUNTIME" = docker ]; then
+    ALPASIM_IMAGE_TAR=$ALPASIM_IMAGE_DIR/alpasim-base-$ALPASIM_VERSION.tar.zst
+    [ -r "$ALPASIM_IMAGE_TAR" ] || docker image inspect "$BASE_TAG" > /dev/null 2>&1 \
+        || { echo "$ALPASIM_IMAGE_TAR is missing or not readable and $BASE_TAG is not on $(hostname)"; exit 1; }
+else
+    BASE_SQSH=$SQSH_DIR/$(basename "$BASE_TAG" | sed 's/[:-]/_/g').sqsh
+    NRE_SQSH=$SQSH_DIR/$(basename "$NRE_TAG" | sed 's/[:-]/_/g').sqsh
+    for sqsh in "$BASE_SQSH" "$NRE_SQSH"; do
+        [ -r "$sqsh" ] || { echo "missing image $sqsh; create it as described at the top of this script"; exit 1; }
+    done
+fi
 echo "Evaluating checkpoint: $CKPT"
 
 # drop inherited entries from other PufferDrive checkouts: the teacher would import their pufferlib instead of $PD's
@@ -127,49 +164,91 @@ mkdir -p "$OUT"
     echo "checkpoint $CKPT"; echo "scenes ${#SCENES[@]}"; echo "topology $TOPOLOGY parallel $PARALLEL goal_mode $GOAL_MODE goal_radius_m $GOAL_RADIUS_M"
     echo "vru_size_pad_m $VRU_SIZE_PAD_M"
     echo "partner_split_length_m $PARTNER_SPLIT_LENGTH_M"
+    echo "container_runtime $CONTAINER_RUNTIME"
     for repo in "$PD" "$ALPAGYM_ROOT" "$ALPASIM_ROOT"; do
         echo "git $repo $(git -C "$repo" rev-parse --short HEAD 2>/dev/null) $(git -C "$repo" diff --quiet 2>/dev/null || echo dirty)"
     done
 } > "$OUT/run_info.txt"
 echo "Results -> $OUT"
 
-docker info > /dev/null 2>&1 || { echo "docker is not usable on $(hostname)"; exit 1; }
-# own compose project and port window per job, so evals sharing a node never touch each other's services
-export COMPOSE_PROJECT_NAME=alpasim_${SLURM_JOB_ID:-$$}
+# own port window per job, so evals sharing a node never touch each other's services
 BASEPORT=$((6000 + (${SLURM_JOB_ID:-$$} % 90) * 20))
+if [ "$CONTAINER_RUNTIME" = docker ]; then
+    docker info > /dev/null 2>&1 || { echo "docker is not usable on $(hostname)"; exit 1; }
+    export COMPOSE_PROJECT_NAME=alpasim_${SLURM_JOB_ID:-$$}
+fi
 LOADED_BASE=0
 PULLED_NRE=0
 cleanup() {
-    local compose_file=$OUT/alpagym/alpasim/wizard_0/docker-compose.yaml
-    [ -f "$compose_file" ] && docker compose -f "$compose_file" down --volumes --remove-orphans > /dev/null 2>&1
-    for container in $(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME"); do
-        docker rm -f "$container" > /dev/null 2>&1
-    done
-    # /var/lib/docker is tmpfs on the compute nodes: an image left behind keeps holding ~40 GB of node RAM
-    [ "$LOADED_BASE" = 1 ] && docker rmi "$BASE_TAG" > /dev/null 2>&1
-    [ "$PULLED_NRE" = 1 ] && docker rmi "$NRE_TAG" > /dev/null 2>&1
+    # the service containers outlive the wizard when the host stops it before they exit
+    case "$CONTAINER_RUNTIME" in
+        docker)
+            local compose_file=$OUT/alpagym/alpasim/wizard_0/docker-compose.yaml
+            [ -f "$compose_file" ] && docker compose -f "$compose_file" down --volumes --remove-orphans > /dev/null 2>&1
+            for container in $(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME"); do
+                docker rm -f "$container" > /dev/null 2>&1
+            done
+            # /var/lib/docker is tmpfs on the compute nodes: an image left behind keeps holding ~40 GB of node RAM
+            [ "$LOADED_BASE" = 1 ] && docker rmi "$BASE_TAG" > /dev/null 2>&1
+            [ "$PULLED_NRE" = 1 ] && docker rmi "$NRE_TAG" > /dev/null 2>&1
+            ;;
+        enroot)  # the node is ours alone: every enroot container of this user on it belongs to this eval
+            pkill -TERM -u "$(id -un)" -f "enroot start --rw" > /dev/null 2>&1
+            ;;
+        pyxis)
+            squeue -h -s -j "${SLURM_JOB_ID:-0}" -o "%i %j" 2>/dev/null | while read -r step_id step_name; do
+                case "$step_name" in alpasim-*) scancel --signal=TERM "$step_id" > /dev/null 2>&1 ;; esac
+            done
+            ;;
+    esac
 }
 trap cleanup EXIT
-if ! docker image inspect "$BASE_TAG" > /dev/null 2>&1; then
-    [ -r "$ALPASIM_IMAGE_TAR" ] || { echo "$BASE_TAG is not on $(hostname) and $ALPASIM_IMAGE_TAR is missing or not readable"; exit 1; }
-    echo "Loading $BASE_TAG from $ALPASIM_IMAGE_TAR"
-    LOADED_BASE=1
-    zstd -dc "$ALPASIM_IMAGE_TAR" | docker load || exit 1
-fi
-if ! docker image inspect "$NRE_TAG" > /dev/null 2>&1; then
-    echo "Pulling $NRE_TAG"
-    PULLED_NRE=1
-    docker pull "$NRE_TAG" || exit 1
-fi
+case "$CONTAINER_RUNTIME" in
+    docker)
+        if ! docker image inspect "$BASE_TAG" > /dev/null 2>&1; then
+            [ -r "$ALPASIM_IMAGE_TAR" ] || { echo "$BASE_TAG is not on $(hostname) and $ALPASIM_IMAGE_TAR is missing or not readable"; exit 1; }
+            echo "Loading $BASE_TAG from $ALPASIM_IMAGE_TAR"
+            LOADED_BASE=1
+            zstd -dc "$ALPASIM_IMAGE_TAR" | docker load || exit 1
+        fi
+        if ! docker image inspect "$NRE_TAG" > /dev/null 2>&1; then
+            echo "Pulling $NRE_TAG"
+            PULLED_NRE=1
+            docker pull "$NRE_TAG" || exit 1
+        fi
+        WIZARD_RUN_METHOD=DOCKER_COMPOSE
+        ;;
+    enroot)
+        echo "enroot $(enroot version 2>&1 | head -n 1) on $(hostname)"
+        "$ALPASIM_ROOT/.venv/bin/python" -c "from alpasim_wizard.deployment.fuse_tools import ensure_fuse_tools; ensure_fuse_tools('$FUSE_DIR')" \
+            || { echo "no squashfuse + fuse-overlayfs in $FUSE_DIR: the wizard downloads them from github.com and archive.ubuntu.com (needs dpkg-deb)"; exit 1; }
+        WIZARD_RUN_METHOD=SLURM_ENROOT
+        ;;
+    pyxis)
+        WIZARD_RUN_METHOD=SLURM
+        ;;
+esac
 
 # the teacher is an external driver, but the 8gpu topologies re-assert driver.skip=false and abort at startup
 [ "$PROMETHEUS" = "1" ] && PROMETHEUS_FLAG=true || PROMETHEUS_FLAG=false
 [ "$KEEP_ROLLOUT_LOGS" = "none" ] && SAVE_ROLLOUT_LOG_FLAG=false || SAVE_ROLLOUT_LOG_FLAG=true
 OVERRIDES="wizard.baseport=$BASEPORT runtime.endpoints.driver.skip=true wizard.log_level=$ALPASIM_LOG_LEVEL wizard.prometheus.start_prometheus=$PROMETHEUS_FLAG"
 OVERRIDES="$OVERRIDES runtime.simulation_config.save_rollout_log=$SAVE_ROLLOUT_LOG_FLAG"
+if [ "$CONTAINER_RUNTIME" != docker ]; then
+    # root inside the containers as with docker (the image's venv and caches are root's), started in the image's /repo:
+    # pyxis would otherwise start the base-image services in the host cwd, which does not exist inside them
+    OVERRIDES="$OVERRIDES defines.base_image=$BASE_TAG wizard.sqshcaches=[$SQSH_DIR] wizard.slurm_cpu_bind_none=true"
+    for service in renderer physics controller trafficsim runtime prometheus; do
+        OVERRIDES="$OVERRIDES services.$service.remap_root=true"
+    done
+    for service in physics controller trafficsim runtime prometheus; do
+        OVERRIDES="$OVERRIDES services.$service.workdir=/repo"
+    done
+    [ "$CONTAINER_RUNTIME" != enroot ] || OVERRIDES="$OVERRIDES wizard.fuse_dir=$FUSE_DIR"
+fi
 [ "$RENDER_VIDEO" = "1" ] && RENDER_VIDEO_FLAG=true || RENDER_VIDEO_FLAG=false
 [ "$OBS_REPLAY" = "1" ] && OBS_REPLAY_FLAG=true || OBS_REPLAY_FLAG=false
-echo "${#SCENES[@]} scenes, $TOPOLOGY with $PARALLEL in flight; full log: $OUT/evaluate.log (logs/ once the run is tidied)"
+echo "${#SCENES[@]} scenes, $TOPOLOGY with $PARALLEL in flight on $CONTAINER_RUNTIME; full log: $OUT/evaluate.log (logs/ once the run is tidied)"
 cd "$ALPAGYM_ROOT" || exit 1
 "$ALPAGYM_PY" -m alpagym_host.evaluate \
     --model_kind teacher \
@@ -184,6 +263,7 @@ cd "$ALPAGYM_ROOT" || exit 1
     --local_scene_dir "$USDZ_DIR" \
     --scene_ids "${SCENES[@]}" \
     --topology "$TOPOLOGY" \
+    --wizard_run_method "$WIZARD_RUN_METHOD" \
     --num_parallel_scenes "$PARALLEL" \
     --camera_width "$CAM_W" --camera_height "$CAM_H" \
     --simulation_timeout_s "$SIM_TIMEOUT_S" \
@@ -230,6 +310,11 @@ fi
 if [ $EVAL_STATUS -ne 0 ]; then
     echo "AlpaSim evaluation failed (exit $EVAL_STATUS); last host lines of $OUT/evaluate.log:"
     grep -vE '^[a-z0-9_-]+-[0-9]+-[0-9]+ +\|' "$OUT/evaluate.log" | tail -n 30
+    for service_log in "$OUT"/alpagym/alpasim/wizard_0/txt-logs/out-*-log.txt; do
+        [ -f "$service_log" ] || continue
+        echo "last lines of $service_log:"
+        tail -n 5 "$service_log"
+    done
 fi
 # the stack is done: take it down while docker-compose.yaml exists, the tidy deletes it
 cleanup

@@ -77,13 +77,9 @@ RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh \
 echo "Submitting longest6 v2 eval for ${MODEL_PATH}"
 RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6_v2.sh \
     || echo "longest6 v2 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6_v2.sh"
-if [ "$CLUSTER" = kesai ]; then
-    echo "AlpaSim eval skipped: it needs Docker, which kesai does not provide"
-else
-    echo "Submitting AlpaSim eval for ${MODEL_PATH}"
-    RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
-        || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
-fi
+echo "Submitting AlpaSim eval for ${MODEL_PATH}"
+RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
+    || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
 
 end=$(date +%s)
 runtime=$((end-start))

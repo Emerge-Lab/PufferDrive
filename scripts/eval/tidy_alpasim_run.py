@@ -2,7 +2,8 @@
 
   results.txt   official score + per-metric means (written by 12_alpasim.sh)
   obs_replays/  teacher observation replays (render_alpasim_obs_html.py turns them into the gallery)
-  logs/         evaluate.log, evaluation.log, evaluation.yaml, config.json, run_info.txt
+  logs/         evaluate.log, evaluation.log, evaluation.yaml, config.json, run_info.txt, txt-logs/ (enroot and pyxis
+                runs: one log per service container)
   alpasim/      results-summary.json, metrics_unprocessed.parquet (every rollout's per-step metrics), eval-config.yaml,
                 wizard-config.yaml
   videos/       the in-run mp4s, only with RENDER_VIDEO=1
@@ -37,7 +38,8 @@ WIZARD_KEPT = (
     "eval-config.yaml",
     "wizard-config.yaml",
 )
-CONTAINER_INFO_LINE = re.compile(rb"^[a-z0-9_-]+-[0-9]+-[0-9]+ +\| .*( INFO:|\[INFO\])")
+CONTAINER_INFO_LINE = re.compile(rb"^[a-z0-9_-]+-[0-9]+-[0-9]+ +\| .*( INFO:|\[INFO\])")  # docker compose prefix
+SERVICE_INFO_LINE = re.compile(rb"^.*( INFO:|\[INFO\])")  # txt-logs/out-*-log.txt of enroot and pyxis runs
 
 
 def move(src, dst_dir):
@@ -50,13 +52,13 @@ def move(src, dst_dir):
     src.rename(dst)
 
 
-def drop_container_info(log_path):
-    """-> bytes removed from log_path by dropping the INFO lines of AlpaSim's containers."""
+def drop_info_lines(log_path, info_line):
+    """-> bytes removed from log_path by dropping the lines matching info_line, AlpaSim's container INFO lines."""
     size_before = log_path.stat().st_size
     filtered_path = log_path.with_suffix(".filtered")
     with open(log_path, "rb") as source, open(filtered_path, "wb") as target:
         for line in source:
-            if CONTAINER_INFO_LINE.match(line) is None:
+            if info_line.match(line) is None:
                 target.write(line)
     filtered_path.replace(log_path)
     return size_before - log_path.stat().st_size
@@ -122,7 +124,7 @@ def main():
     remove_empty_dirs(logs_dir / "controller")
     evaluate_log = logs_dir / "evaluate.log"
     if evaluate_log.is_file() and not args.keep_container_info:
-        removed_bytes += drop_container_info(evaluate_log)
+        removed_bytes += drop_info_lines(evaluate_log, CONTAINER_INFO_LINE)
 
     wizard_dir = alpasim_dir / "wizard_0"
     summary_path = wizard_dir / "aggregate" / "results-summary.json"
@@ -135,6 +137,10 @@ def main():
         move(mp4, run_dir / "videos")
     for name in WIZARD_KEPT:
         move(wizard_dir / name, alpasim_dir)
+    move(wizard_dir / "txt-logs", logs_dir)
+    if not args.keep_container_info:
+        for service_log in sorted(logs_dir.glob("txt-logs/out-*-log.txt")):
+            removed_bytes += drop_info_lines(service_log, SERVICE_INFO_LINE)
     wizard_count, wizard_bytes, kept_logs = sweep_wizard(wizard_dir, rows, KEEP_RULES[args.keep_rollout_logs])
     removed_count += wizard_count
     removed_bytes += wizard_bytes
