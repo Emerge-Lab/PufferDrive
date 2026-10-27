@@ -94,6 +94,21 @@ def measure_bf16_peak(seconds=3.0, size=8192):
     return 2.0 * size**3 * iterations / elapsed / 1e12
 
 
+GEMM_OPS = ("aten::mm", "aten::addmm", "aten::bmm", "aten::baddbmm")  # leaf GEMM ops; linear/matmul wrap these
+
+
+def print_gemm_shape_table(prof, label, top=12):
+    """GEMM calls grouped by operand shapes with their CUDA time, so each slow GEMM kernel can be tied to a layer."""
+    rows = [e for e in prof.key_averages(group_by_input_shape=True) if e.key in GEMM_OPS and e.device_time_total > 0]
+    total_us = sum(e.device_time_total for e in rows)
+    if not rows:
+        return
+    print(f"gemm shapes, {label}: {total_us / 1e6:.3f} s of CUDA time in GEMM ops")
+    print(f"  {'share':>6s} {'ms':>9s} {'calls':>7s} {'ms/call':>8s}  op  input shapes")
+    for e in sorted(rows, key=lambda e: -e.device_time_total)[:top]:
+        print(f"  {100 * e.device_time_total / total_us:5.1f}% {e.device_time_total / 1e3:9.1f} {e.count:7d} {e.device_time_total / 1e3 / e.count:8.3f}  {e.key}  {e.input_shapes}")
+
+
 def timed(fn):
     torch.cuda.synchronize()
     start = time.perf_counter()
@@ -206,9 +221,10 @@ def main():
             from torch.profiler import ProfilerActivity, profile
 
             for label, fn in (("rollout", pufferl.evaluate), ("update", update_or_skip)):
-                with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+                with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
                     wall_seconds, _ = timed(fn)
-                print_kernel_table(prof, label, wall_seconds if label == "rollout" else wall_seconds)
+                print_kernel_table(prof, label, wall_seconds)
+                print_gemm_shape_table(prof, label)
         profile_baseline = {name: pufferl.profile.profiles[name]["elapsed"] for name in PROFILE_SECTIONS}
         epochs = []
         for epoch in range(args.epochs):

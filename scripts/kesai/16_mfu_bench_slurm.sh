@@ -31,9 +31,9 @@ NUM_ENVS=${NUM_ENVS:-32}      # override: NUM_ENVS=48 sbatch scripts/kesai/16_mf
 MINIBATCH=${MINIBATCH:-131072}
 EXTRA_ARGS=${EXTRA_ARGS:-}    # e.g. EXTRA_ARGS="--kernel-table train.compile_mode=max-autotune"
 echo "=== MFU result (paste this block back) ===" | tee ${RESULT_FILE}
-python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} ${EXTRA_ARGS} 2>&1 | grep -v "^MFU_RESULT" | grep "reference\|capability\|kernel table\|measured bf16\|reduced-precision\|^ *[0-9][0-9.]*%\|^ *share" | tee -a ${RESULT_FILE}
-python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused ${EXTRA_ARGS} 2>&1 | grep -v "^MFU_RESULT" | grep "fused\|kernel table\|measured bf16\|reduced-precision\|^ *[0-9][0-9.]*%\|^ *share" | sed 's/^fused/fused+triton/' | tee -a ${RESULT_FILE}
-env PUFFER_SLOT_ENCODER_BACKEND=cuda python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused ${EXTRA_ARGS} 2>&1 | grep -v "^MFU_RESULT" | grep "fused\|Error\|kernel table\|measured bf16\|reduced-precision\|^ *[0-9][0-9.]*%\|^ *share" | sed 's/^fused/fused+cuda/' | tee -a ${RESULT_FILE}
+python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} ${EXTRA_ARGS} 2>&1 | grep -v "^MFU_RESULT" | grep "reference\|capability\|kernel table\|gemm shapes\|measured bf16\|reduced-precision\|^ *[0-9][0-9.]*%\|^ *share" | tee -a ${RESULT_FILE}
+python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused ${EXTRA_ARGS} 2>&1 | grep -v "^MFU_RESULT" | grep "fused\|kernel table\|gemm shapes\|measured bf16\|reduced-precision\|^ *[0-9][0-9.]*%\|^ *share" | sed 's/^fused/fused+triton/' | tee -a ${RESULT_FILE}
+env PUFFER_SLOT_ENCODER_BACKEND=cuda python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused ${EXTRA_ARGS} 2>&1 | grep -v "^MFU_RESULT" | grep "fused\|Error\|kernel table\|gemm shapes\|measured bf16\|reduced-precision\|^ *[0-9][0-9.]*%\|^ *share" | sed 's/^fused/fused+cuda/' | tee -a ${RESULT_FILE}
 echo "--- rollout split, fused+triton (env = waiting for the simulation workers, the rest is the trainer process) ---" | tee -a ${RESULT_FILE}
 python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused --rollout-only --profile --warmup 1 --epochs 2 ${EXTRA_ARGS} 2>&1 | grep -A5 "section split" | tee -a ${RESULT_FILE}
 echo "--- rollout split, fused+cuda ---" | tee -a ${RESULT_FILE}
