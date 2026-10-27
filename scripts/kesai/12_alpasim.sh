@@ -110,7 +110,7 @@ fi
 case "$TOPOLOGY" in
     8gpu*)
         [ "$NUM_GPUS" -eq 8 ] || { echo "$TOPOLOGY pins its services to GPUs 0-7 and needs all 8, got $NUM_GPUS"; exit 1; }
-        PARALLEL=32 ;;  # scenes in flight
+        PARALLEL=64 ;;  # scenes in flight = the topology's capacity; the runtime fills renderers in order, 32 left two idle
     2gpu) PARALLEL=12 ;;
     *) PARALLEL=4 ;;
 esac
