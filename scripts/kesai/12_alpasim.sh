@@ -4,8 +4,8 @@
 #SBATCH --nodes 1
 #SBATCH --time 1-00:00
 #SBATCH --gres gpu:8
-#SBATCH --mem=0
-#SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
+#SBATCH --mem=0                          # all of the node's memory; --gres, --mem and --cpus-per-task are overridable on the sbatch line
+#SBATCH --cpus-per-task 128
 #SBATCH --output experiments/logs/alpasim_%j.out
 #SBATCH --error experiments/logs/alpasim_%j.err
 #SBATCH --partition dev
@@ -30,7 +30,7 @@
 #
 # Settings are the plain assignments below. Only RUN_DIR, TOPOLOGY and N_SCENES are also read from the environment: 3_train
 # and 7_eval chain this eval after their own by exporting RUN_DIR; a smoke test on a shared node is
-#   TOPOLOGY=1gpu N_SCENES=2 sbatch --oversubscribe --gres gpu:1 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
+#   TOPOLOGY=1gpu N_SCENES=2 sbatch --gres gpu:1 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
 
