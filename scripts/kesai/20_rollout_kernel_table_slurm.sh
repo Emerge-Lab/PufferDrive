@@ -4,6 +4,7 @@
 #SBATCH --nodes 1
 #SBATCH --time 0:30:00
 #SBATCH --gres gpu:1
+#SBATCH --gres-flags=enforce-binding   # CPUs on the GPU's socket
 #SBATCH --mem=120G
 #SBATCH --cpus-per-task 18
 #SBATCH --output experiments/logs/rollout_kernels_%j.out

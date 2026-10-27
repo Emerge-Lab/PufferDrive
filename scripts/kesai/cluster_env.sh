@@ -31,3 +31,11 @@ fi
 export SLURM_CPUS_PER_TASK=${SLURM_CPUS_ON_NODE:-${SLURM_CPUS_PER_TASK:-$(nproc)}}
 export CLUSTER HOME_BASE SHARED_DATA PD
 echo "cluster: $CLUSTER  checkout: $PD  shared data: ${SHARED_DATA:-none}  cpus per task: $SLURM_CPUS_PER_TASK"
+
+# "taskset -c <cpus>" for the NUMA node of GPU index $1 (nvidia-smi order), empty when unknown; prefix per-GPU workers with it
+numa_pin_for_gpu() {
+    local bus node
+    bus=$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader -i "$1" 2>/dev/null | tr 'A-F' 'a-f')
+    node=$(cat "/sys/bus/pci/devices/${bus:4}/numa_node" 2>/dev/null) || return 0
+    [ "$node" -ge 0 ] 2>/dev/null && echo "taskset -c $(cat "/sys/devices/system/node/node${node}/cpulist")"
+}

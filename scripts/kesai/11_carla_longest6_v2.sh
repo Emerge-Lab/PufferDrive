@@ -182,9 +182,11 @@ run_route() {  # $1 worker, $2 gpu, $3 route id, $4 attempt, $5 seed: one CARLA 
     mkdir -p "$route_dir"
     rm -f "$route_dir/result.json"
     # only the chase camera needs the renderer; collision sensors and telemetry work under -nullrhi
+    local pin
+    pin=$(numa_pin_for_gpu "$gpu")
     local render_args=(-RenderOffScreen -nullrhi)
     [ "$CARLA_VIEW" = "1" ] && render_args=(-RenderOffScreen -graphicsadapter="$gpu")
-    "$CARLA_ROOT/CarlaUE4.sh" "${render_args[@]}" -nosound \
+    $pin "$CARLA_ROOT/CarlaUE4.sh" "${render_args[@]}" -nosound \
         -carla-rpc-port="$port" -carla-streaming-port=$((port + 1)) > "$server_log" 2>&1 &
     local server_pid=$! up=1
     echo "$server_pid" >> "$OUT/server_pids"
@@ -209,7 +211,7 @@ except Exception:
         [ "$CARLA_VIEW" = "1" ] && log_env+=(COSIM_DEBUG_CARLA_VIEW="$route_dir/carla_view")
         [ "$OBS_HTML" = "1" ] && log_env+=(COSIM_OBS_HTML="$route_dir/obs_html")
     fi
-    env CUDA_VISIBLE_DEVICES="$gpu" "${log_env[@]}" \
+    $pin env CUDA_VISIBLE_DEVICES="$gpu" "${log_env[@]}" \
         "$PY" -u "$EVALUATOR" --routes "$ROUTES" --routes-subset "$route_id" --repetitions "$REPETITIONS" \
         --agent "$PD/pufferlib/ocean/cosim/carla/leaderboard_agent.py" --agent-config "$CKPT" \
         --checkpoint "$route_dir/result.json" --track MAP --port "$port" --traffic-manager-port "$tm_port" \

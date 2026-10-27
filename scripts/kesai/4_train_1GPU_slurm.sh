@@ -4,6 +4,7 @@
 #SBATCH --nodes 1
 #SBATCH --time 2-00:00
 #SBATCH --gres gpu:1
+#SBATCH --gres-flags=enforce-binding   # CPUs on the GPU's socket
 #SBATCH --mem=125G
 #SBATCH --cpus-per-task 18
 #SBATCH --output experiments/logs/train_1gpu_%a_%A.out

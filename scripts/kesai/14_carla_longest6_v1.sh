@@ -271,8 +271,10 @@ run_route() {  # $1 worker, $2 gpu, $3 route id, $4 attempt, $5 seed: one CARLA 
     t_start=$(date +%s)
     mkdir -p "$route_dir"
     rm -f "$route_dir/result.json"
+    local pin
+    pin=$(numa_pin_for_gpu "$gpu")
     # offscreen OpenGL on the worker's GPU (UE 4.24 has no -RenderOffScreen/-nullrhi/-graphicsadapter)
-    DISPLAY= SDL_VIDEODRIVER=offscreen SDL_HINT_CUDA_DEVICE="$gpu" "$CARLA_ROOT/CarlaUE4.sh" -opengl -nosound \
+    $pin env DISPLAY= SDL_VIDEODRIVER=offscreen SDL_HINT_CUDA_DEVICE="$gpu" "$CARLA_ROOT/CarlaUE4.sh" -opengl -nosound \
         -carla-rpc-port="$port" -carla-streaming-port=$((port + 1)) > "$server_log" 2>&1 &
     local server_pid=$! up=1
     echo "$server_pid" >> "$OUT/server_pids"
@@ -297,7 +299,7 @@ except Exception:
         [ "$CARLA_VIEW" = "1" ] && log_env+=(COSIM_DEBUG_CARLA_VIEW="$route_dir/carla_view")
         [ "$OBS_HTML" = "1" ] && log_env+=(COSIM_OBS_HTML="$route_dir/obs_html")
     fi
-    env CUDA_VISIBLE_DEVICES="$gpu" "${log_env[@]}" \
+    $pin env CUDA_VISIBLE_DEVICES="$gpu" "${log_env[@]}" \
         "$GARAGE_PY" -u "$EVALUATOR" --routes "$routes_xml" --scenarios "$SCENARIO_FILE" --repetitions "$REPETITIONS" \
         --agent "$AGENT" --agent-config "$CKPT" --checkpoint "$route_dir/result.json" --track MAP \
         --port "$port" --trafficManagerPort "$tm_port" --timeout 600 "${seed_args[@]}" \

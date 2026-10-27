@@ -1839,6 +1839,9 @@ def eval(
     scenario_offset = eval_config["scenario_offset"]
     configured_output_subdir = eval_config["output_subdir"]
     eval_training_render = args["env"]["eval_training_render"]
+    eval_device = torch.device(args["train"]["device"])
+    if eval_device.type == "cuda":
+        bind_process_to_gpu_numa_node(eval_device.index or 0)
 
     report_to_wandb = bool(args["wandb"]) and not use_training_config and failure_replay_csv is None
     environment_config, benchmarks = drive_benchmark.load_benchmark_config(
