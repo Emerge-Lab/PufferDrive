@@ -251,6 +251,10 @@ if [ "$CONTAINER_RUNTIME" != docker ]; then
     for service in physics controller trafficsim runtime prometheus; do
         OVERRIDES="$OVERRIDES services.$service.workdir=/repo"
     done
+    # enroot's import leaves the NRE entrypoint's $0.runfiles (/app/run.runfiles) empty: name the real Bazel runfiles tree
+    NRE_RUNFILES=/app/internal/scripts/pycena/runtime/pycena_nrm_full.runfiles
+    OVERRIDES="$OVERRIDES 'services.renderer.environments=[\"HOME=/tmp\",\"XDG_CACHE_HOME=/tmp/.cache\",\"OMP_NUM_THREADS=1\",\"RUNFILES_DIR=$NRE_RUNFILES\"]'"
+    OVERRIDES="$OVERRIDES services.renderer.workdir=$NRE_RUNFILES/_main"
     [ "$CONTAINER_RUNTIME" != enroot ] || OVERRIDES="$OVERRIDES wizard.fuse_dir=$FUSE_DIR"
 fi
 [ "$RENDER_VIDEO" = "1" ] && RENDER_VIDEO_FLAG=true || RENDER_VIDEO_FLAG=false
