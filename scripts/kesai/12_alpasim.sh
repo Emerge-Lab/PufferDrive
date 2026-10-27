@@ -169,8 +169,14 @@ EOF
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE//:/}_r${GOAL_RADIUS_M}$([ "$VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$VRU_SIZE_PAD_M")$([ "$PARTNER_SPLIT_LENGTH_M" = "0" ] || echo "_split$PARTNER_SPLIT_LENGTH_M")_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT"
+# the trainer deletes every older models/model_*.pt when it saves the next one: evaluate a copy that outlives the run
+CKPT_SOURCE=$CKPT
+CKPT_CONFIG=$(dirname "$CKPT")/config.yaml
+[ -f "$CKPT_CONFIG" ] || CKPT_CONFIG=$(dirname "$(dirname "$CKPT")")/config.yaml
+cp "$CKPT" "$OUT/" && cp "$CKPT_CONFIG" "$OUT/config.yaml" || { echo "could not copy $CKPT and $CKPT_CONFIG into $OUT"; exit 1; }
+CKPT=$OUT/$(basename "$CKPT")
 {
-    echo "checkpoint $CKPT"; echo "scenes ${#SCENES[@]}"; echo "topology $TOPOLOGY parallel $PARALLEL goal_mode $GOAL_MODE goal_radius_m $GOAL_RADIUS_M"
+    echo "checkpoint $CKPT_SOURCE (evaluated copy: $CKPT)"; echo "scenes ${#SCENES[@]}"; echo "topology $TOPOLOGY parallel $PARALLEL goal_mode $GOAL_MODE goal_radius_m $GOAL_RADIUS_M"
     echo "vru_size_pad_m $VRU_SIZE_PAD_M"
     echo "partner_split_length_m $PARTNER_SPLIT_LENGTH_M"
     echo "container_runtime $CONTAINER_RUNTIME"
