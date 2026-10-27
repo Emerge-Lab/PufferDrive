@@ -1493,6 +1493,13 @@ def parse_cpulist(cpulist):
     return cpus
 
 
+def apply_matmul_env_flags():
+    """PUFFER_BF16_REDUCED_REDUCTION=1 lets cuBLAS pick split-K kernels whose partial sums reduce in bf16."""
+    if os.environ.get("PUFFER_BF16_REDUCED_REDUCTION") == "1":
+        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
+        print("cuBLAS bf16 reduced-precision reductions enabled")
+
+
 def bind_process_to_gpu_numa_node(device_index):
     """Pin this process (and the env workers it forks) to the CPUs of the GPU's NUMA node; no-op without NUMA or sysfs."""
     if os.environ.get("PUFFER_NUMA_BIND", "1") == "0" or not torch.cuda.is_available():
@@ -1576,6 +1583,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         validate_puffer_drive_resources(args, "training")
     training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
 
+    apply_matmul_env_flags()
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     global_rank = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", 0)))

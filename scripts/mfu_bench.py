@@ -151,6 +151,7 @@ def main():
     P.validate_puffer_drive_resources(config, "training")
     torch_seed, env_seed = P.derive_rank_seeds(config["vec"]["seed"], config["train"]["seed"], 1, 0)
     torch.manual_seed(torch_seed)
+    P.apply_matmul_env_flags()
     P.bind_process_to_gpu_numa_node(0)
     vecenv = P.load_env(ENV_NAME, config, seed=env_seed)
     policy = P.load_policy(config, vecenv, ENV_NAME)
