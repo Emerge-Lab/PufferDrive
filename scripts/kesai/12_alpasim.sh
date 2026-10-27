@@ -29,16 +29,16 @@
 #     the archive being build_alpasim_image.sbatch's, copied over from a docker host (~100 GB of scratch, see the script).
 #
 # Settings are the plain assignments below. Only RUN_DIR, TOPOLOGY and N_SCENES are also read from the environment: 3_train
-# and 7_eval chain this eval after their own by exporting RUN_DIR; a smoke test on a shared node is
-#   TOPOLOGY=1gpu N_SCENES=2 sbatch --gres gpu:1 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
-# and a full run on two GPUs of a shared node (12 scenes in flight instead of 32) is
-#   TOPOLOGY=2gpu sbatch --gres gpu:2 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
+# and 7_eval chain this eval after their own by exporting RUN_DIR. The topology follows the GPUs the job holds (8, 2 or 1),
+# so a run on two GPUs of a shared node (12 scenes in flight instead of 32) is
+#   sbatch --gres gpu:2 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
+# and a smoke test is
+#   N_SCENES=2 sbatch --gres gpu:1 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
 
-# full run: TOPOLOGY=8gpu_64rollouts (whole node) N_SCENES=0 (the whole SCENE_LIST); quick check: see the header
-TOPOLOGY=${TOPOLOGY:-8gpu_64rollouts}
-N_SCENES=${N_SCENES:-0}
+TOPOLOGY=${TOPOLOGY:-}  # empty = from the GPU count below: 8gpu_64rollouts, 2gpu or 1gpu
+N_SCENES=${N_SCENES:-0}  # 0 = the whole SCENE_LIST
 RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0045_1000}
 CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || CKPT=$(ls "$RUN_DIR"/models/model_*.pt 2>/dev/null | sort | tail -n 1)
@@ -74,11 +74,6 @@ case "$CLUSTER" in
         ALPASIM_IMAGE_DIR=$HOME_BASE/ddacol/code/alpasim-training/data/images
         ;;
 esac
-case "$TOPOLOGY" in
-    8gpu*) PARALLEL=32 ;;  # scenes in flight
-    2gpu) PARALLEL=12 ;;
-    *) PARALLEL=4 ;;
-esac
 ALPAGYM_PY=$ALPAGYM_ROOT/.venv/bin/python
 # uv: the host syncs the AlpaSim checkout's venv before it starts the Wizard
 export PATH="$HOME/.local/bin:$PATH"
@@ -103,11 +98,21 @@ for tool in $RUNTIME_TOOLS nvidia-smi uv; do
 done
 [ "$CONTAINER_RUNTIME" != pyxis ] || srun --help 2>&1 | grep -q -- --container-image \
     || { echo "srun has no --container-image option: pyxis is not installed on $(hostname)"; exit 1; }
+NUM_GPUS=$(nvidia-smi -L | grep -c "^GPU")  # SLURM shows the job only its own GPUs
+if [ -z "$TOPOLOGY" ]; then
+    case "$NUM_GPUS" in
+        8) TOPOLOGY=8gpu_64rollouts ;;
+        2) TOPOLOGY=2gpu ;;
+        1) TOPOLOGY=1gpu ;;
+        *) echo "no topology for $NUM_GPUS GPUs: request 8, 2 or 1 (--gres) or set TOPOLOGY"; exit 1 ;;
+    esac
+fi
 case "$TOPOLOGY" in
     8gpu*)
-        NUM_GPUS=$(nvidia-smi -L | grep -c "^GPU")
         [ "$NUM_GPUS" -eq 8 ] || { echo "$TOPOLOGY pins its services to GPUs 0-7 and needs all 8, got $NUM_GPUS"; exit 1; }
-        ;;
+        PARALLEL=32 ;;  # scenes in flight
+    2gpu) PARALLEL=12 ;;
+    *) PARALLEL=4 ;;
 esac
 ALPASIM_VERSION=$(grep -m1 '^version' "$ALPASIM_ROOT/pyproject.toml" | sed -E 's/.*"(.*)".*/\1/')
 BASE_TAG=alpasim-base:$ALPASIM_VERSION
