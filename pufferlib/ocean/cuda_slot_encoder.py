@@ -304,19 +304,20 @@ fused_slot_encoder_fwd_cuda(
                 uint32_t a4 = amax[i][j];
                 #pragma unroll
                 for (int h = 0; h < 2; h++) {
-                    bool valid = slot < my_counts[i * 2 + h];
+                    // invalid slots compete as -inf via bit masking: no select for the compiler to turn into branches
+                    uint32_t keep = (slot < my_counts[i * 2 + h]) ? 0xFFFFFFFFu : 0u;
                     float v0 = bf16_round(acc[i][j][h * 2] + bb0);
                     float v1 = bf16_round(acc[i][j][h * 2 + 1] + bb1);
                     #pragma unroll
                     for (int e = 0; e < 2; e++) {
-                        float v = e ? v1 : v0;
+                        float v = __uint_as_float((__float_as_uint(e ? v1 : v0) & keep) | (0xff800000u & ~keep));
                         float &m = rmax[i][j][h * 2 + e];
-                        bool greater = valid && (v > m);
-                        if (STORE && greater) {
+                        if (STORE) {
                             int sh = (h * 2 + e) * 8;
-                            a4 = (a4 & ~(0xFFu << sh)) | ((uint32_t) slot << sh);
+                            uint32_t updated = (a4 & ~(0xFFu << sh)) | ((uint32_t) slot << sh);
+                            a4 = (v > m) ? updated : a4;
                         }
-                        m = greater ? v : m;
+                        m = fmaxf(m, v);
                     }
                 }
                 amax[i][j] = a4;
