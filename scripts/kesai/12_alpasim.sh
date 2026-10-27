@@ -255,7 +255,12 @@ if [ "$CONTAINER_RUNTIME" != docker ]; then
     NRE_RUNFILES=/app/internal/scripts/pycena/runtime/pycena_nrm_full.runfiles
     OVERRIDES="$OVERRIDES 'services.renderer.environments=[\"HOME=/tmp\",\"XDG_CACHE_HOME=/tmp/.cache\",\"OMP_NUM_THREADS=1\",\"RUNFILES_DIR=$NRE_RUNFILES\"]'"
     OVERRIDES="$OVERRIDES services.renderer.workdir=$NRE_RUNFILES/_main"
-    [ "$CONTAINER_RUNTIME" != enroot ] || OVERRIDES="$OVERRIDES wizard.fuse_dir=$FUSE_DIR"
+    if [ "$CONTAINER_RUNTIME" = enroot ]; then
+        # enroot runs the NRE image's entrypoint (the app itself) in front of the command; /etc/rc sources rc.local first
+        printf 'exec "$@"\n' > "$OUT/nre_rc.local"
+        OVERRIDES="$OVERRIDES 'services.renderer.volumes=[\"$USDZ_DIR:/mnt/nre-data\",\"$ALPASIM_ROOT/data/nre-artifacts/ego-hoods:/mnt/ego-hoods\",\"$OUT/nre_rc.local:/etc/rc.local\"]'"
+        OVERRIDES="$OVERRIDES wizard.fuse_dir=$FUSE_DIR"
+    fi
 fi
 [ "$RENDER_VIDEO" = "1" ] && RENDER_VIDEO_FLAG=true || RENDER_VIDEO_FLAG=false
 [ "$OBS_REPLAY" = "1" ] && OBS_REPLAY_FLAG=true || OBS_REPLAY_FLAG=false
