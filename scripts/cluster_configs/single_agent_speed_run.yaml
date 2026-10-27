@@ -57,6 +57,7 @@ env.reward_overspeed: 0.0
 # Behavioral perturbations off (single agent, no partners to perturb)
 env.phantom_braking_prob: 0
 env.partner_blindness_prob: 0
+env.partner_blindness_prob_min: 0
 
 # Policy: smaller shared-backbone net than the default split actor/critic
 policy.partner_input_size: 128
