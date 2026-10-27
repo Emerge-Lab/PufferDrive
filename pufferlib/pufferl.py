@@ -1482,6 +1482,39 @@ def _latest_checkpoint_path(run_dir):
     return max(model_files, key=os.path.getctime) if model_files else None
 
 
+def parse_cpulist(cpulist):
+    """sysfs cpulist ("0-119,256-375") to a set of CPU ids."""
+    cpus = set()
+    for part in cpulist.strip().split(","):
+        if not part:
+            continue
+        lo, _, hi = part.partition("-")
+        cpus.update(range(int(lo), int(hi or lo) + 1))
+    return cpus
+
+
+def bind_process_to_gpu_numa_node(device_index):
+    """Pin this process (and the env workers it forks) to the CPUs of the GPU's NUMA node; no-op without NUMA or sysfs."""
+    if os.environ.get("PUFFER_NUMA_BIND", "1") == "0" or not torch.cuda.is_available():
+        return None
+    props = torch.cuda.get_device_properties(device_index)
+    pci_dir = f"/sys/bus/pci/devices/{props.pci_domain_id:04x}:{props.pci_bus_id:02x}:{props.pci_device_id:02x}.0"
+    try:
+        numa_node = int(open(f"{pci_dir}/numa_node").read())
+        if numa_node < 0:
+            return None
+        node_cpus = parse_cpulist(open(f"/sys/devices/system/node/node{numa_node}/cpulist").read())
+    except (OSError, ValueError):
+        return None
+    cpus = node_cpus & os.sched_getaffinity(0)
+    if not cpus:
+        print(f"NUMA bind skipped: GPU {device_index} is on node {numa_node} but none of its CPUs are in this process's affinity mask")
+        return None
+    os.sched_setaffinity(0, cpus)
+    print(f"GPU {device_index} on NUMA node {numa_node}: process and env workers bound to {len(cpus)} CPUs")
+    return numa_node
+
+
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
 
@@ -1552,6 +1585,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         local_rank = int(os.environ["LOCAL_RANK"])
         print(f"rank: {global_rank} (local {local_rank}), MASTER_ADDR={master_addr}, MASTER_PORT={master_port}")
         torch.cuda.set_device(local_rank)
+        bind_process_to_gpu_numa_node(local_rank)
+    elif is_cuda_device(args["train"]["device"]) and torch.cuda.is_available():
+        bind_process_to_gpu_numa_node(torch.device(args["train"]["device"]).index or 0)
 
     train_seed = args["train"]["seed"]
     if train_seed is None:
