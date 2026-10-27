@@ -17,7 +17,7 @@ source scripts/kesai/cluster_env.sh || exit 1
 # alternate between simulation and GPU forward; smaller values keep more buffers in flight at the cost of more recv calls.
 # Values must divide NUM_ENVS (zero_copy). Prints the trainer's section split (env wait, copy, forward) per batch size.
 # Usage: sbatch scripts/kesai/19_rollout_batch_sweep_slurm.sh   # override with NUM_ENVS=.. NUM_AGENTS=.. BATCH_SIZES=".." PUFFER_NUMA_BIND=0
-# NUMA A/B on one GPU: sbatch -m block:fcyclic -c 64 (CPUs split over both sockets) with NUM_ENVS=30, once with PUFFER_NUMA_BIND=0
+# NUMA A/B, 61 processes on 64 threads in both arms: sbatch -m block:fcyclic -c 128 (binds to the GPU socket half) vs PUFFER_NUMA_BIND=0 with -m block:fcyclic -c 64 (32 per socket)
 echo "START TIME: $(date)"
 start=$(date +%s)
 cd $PD || exit 1

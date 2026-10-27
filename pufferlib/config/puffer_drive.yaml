@@ -237,13 +237,13 @@ env:
   # Upper bound of the per-episode blind-agent rate; each episode draws its rate uniformly from [partner_blindness_prob_min, this]
   partner_blindness_prob: 0.05
   # Lower bound of the per-episode blind-agent rate
-  partner_blindness_prob_min: 0.0
+  partner_blindness_prob_min: 0.05
   # Per-step probability that a flagged blind-partner agent restricts its partner observations
-  partner_blindness_trigger_prob: 0.03
+  partner_blindness_trigger_prob: 1.0
   # Duration in seconds of partner blindness once triggered
   partner_blindness_duration_seconds: 3.0
   # Blind agents keep the partners in their forward corridor (false: they see no partners at all, pre-2026-10-12 rule)
-  partner_blindness_corridor: true
+  partner_blindness_corridor: false
   # 0 disables; else each blind agent draws its share of time spent blind uniformly from [share set by trigger prob and duration, this]; 1.0 = blind every step
   partner_blindness_time_fraction_max: 0.0
   # Upper bound of the per-episode phantom-braker rate; each episode draws its rate uniformly from [0, this]
