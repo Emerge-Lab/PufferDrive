@@ -3,6 +3,7 @@ bandwidth figure. 2 min timeout instead of NCCL's 10 min default.
   one node:  srun -p dev -N1 --gres=gpu:8 --exclusive -t 10 torchrun --standalone --nproc-per-node=8 scripts/kesai/nccl_check.py
   two nodes: see 3_train_64GPU_multinode_slurm.sh for the rdzv flags; NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET shows the transport.
 """
+
 import datetime
 import os
 import time
@@ -20,7 +21,10 @@ x = torch.ones(1, device="cuda")
 t = time.time()
 dist.all_reduce(x)
 torch.cuda.synchronize()
-print(f"rank {rank} on {node}: all_reduce ok, sum={x.item():.0f} of {dist.get_world_size()}, {time.time() - t:.2f}s", flush=True)
+print(
+    f"rank {rank} on {node}: all_reduce ok, sum={x.item():.0f} of {dist.get_world_size()}, {time.time() - t:.2f}s",
+    flush=True,
+)
 
 y = torch.empty(64 * 1024 * 1024, device="cuda")  # 256 MiB
 dist.barrier()

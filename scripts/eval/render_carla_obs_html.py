@@ -109,7 +109,11 @@ def score_panel(record, town, steps, seed=None):
             f'<div style="color:#7f8ba0">route {float(meta.get("route_length", 0)):.0f} m &middot; '
             f"game {float(meta.get('duration_game', 0)):.0f} s &middot; wall {float(meta.get('duration_system', 0)):.0f} s</div>"
         )
-    title = f"{town + ' ' if town else ''}route {route_idx}" + (f" rep {rep}" if rep else "") + (f" seed {seed}" if seed is not None else "")
+    title = (
+        f"{town + ' ' if town else ''}route {route_idx}"
+        + (f" rep {rep}" if rep else "")
+        + (f" seed {seed}" if seed is not None else "")
+    )
     return (
         '<details open style="position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:1000;'
         "background:rgba(13,20,32,.93);color:#c4cddc;font:12px/1.5 ui-monospace,monospace;padding:6px 12px;"
@@ -225,7 +229,9 @@ def main():
 
     def render(page):
         html_path, record, replay, town, log_meta, seed = page
-        render_page(replay, html_path, score_panel(record, town, infraction_steps(record, replay, town, log_meta), seed))
+        render_page(
+            replay, html_path, score_panel(record, town, infraction_steps(record, replay, town, log_meta), seed)
+        )
 
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
         list(pool.map(render, pages))

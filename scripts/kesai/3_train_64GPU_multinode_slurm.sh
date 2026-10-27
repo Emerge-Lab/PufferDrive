@@ -24,7 +24,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=${RUN_NAME:-k_scaled_0054_${SEED}}
+export RUN_NAME=${RUN_NAME:-k_scaled_0059_${SEED}}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -55,8 +55,8 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # ~25 M SPS vs ~21.5 M with 32); scaleway nodes have 18 threads per rank, 32 there. More workers enlarge the rollout batch
 # (= workers x env.num_agents x horizon); forked workers share the preloaded map cache. ROLLOUT_DTYPE=float16 halves the obs buffer on the GPU.
 # A second instance needs its own RUN_NAME: RUN_NAME=k_scaled_0055_1000 sbatch -p high scripts/kesai/3_train_64GPU_multinode_slurm.sh
-# PPO update epochs: puffer_drive.yaml defaults to 3 (runs up to 0053). With this batch the GPU update took ~3/4 of an
-# iteration, so 0054 trains 1 epoch per rollout.
+# 0059: the 0053 baseline (3 PPO epochs, 60 x 1024 agents, 131072 rows per GPU per update) with GigaFlow's 1200-step
+# episodes as the only change; 0054 was the same with train.update_epochs=1 (a third of the sample passes, worse evals).
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -82,11 +82,12 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
     vec.num_envs=60 \
+    env.scenario_length=1200 \
     ${ROLLOUT_DTYPE:+train.rollout_dtype=$ROLLOUT_DTYPE} \
     env.preload_map_cache=True \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
-    train.update_epochs=1 \
+    train.update_epochs=3 \
     policy.fused_slot_encoder=true \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
