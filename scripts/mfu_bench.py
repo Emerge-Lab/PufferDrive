@@ -65,6 +65,18 @@ def model_flops_per_transition(policy):
     return forward, forward + backward
 
 
+def print_kernel_table(prof, label, wall_seconds, top=18):
+    """Per-kernel self CUDA time of one profiled phase, the share of all kernel time, and the GPU busy fraction."""
+    events = [e for e in prof.key_averages() if getattr(e, "device_type", None) is not None and e.self_device_time_total > 0]
+    events = [e for e in events if str(e.device_type).endswith("CUDA")]
+    total_us = sum(e.self_device_time_total for e in events)
+    print(f"kernel table, {label}: {total_us / 1e6:.3f} s of CUDA kernel time in {wall_seconds:.3f} s wall "
+          f"(GPU busy {100 * total_us / 1e6 / max(wall_seconds, 1e-9):.0f}%), {len(events)} distinct kernels")
+    print(f"  {'share':>6s} {'ms':>9s} {'calls':>7s}  kernel")
+    for e in sorted(events, key=lambda e: -e.self_device_time_total)[:top]:
+        print(f"  {100 * e.self_device_time_total / total_us:5.1f}% {e.self_device_time_total / 1e3:9.1f} {e.count:7d}  {e.key[:110]}")
+
+
 def timed(fn):
     torch.cuda.synchronize()
     start = time.perf_counter()
@@ -85,6 +97,12 @@ def main():
         "--profile", action="store_true", help="print the trainer's section split (env wait, copy, forward, learn)"
     )
     parser.add_argument("--load-model", help="policy checkpoint (.pt) so the rollout shows trained behavior")
+    parser.add_argument(
+        "--kernel-table",
+        action="store_true",
+        help="after warmup, profile one update and one rollout with torch.profiler and print CUDA kernel time by kernel "
+        "(timeline only, needs no GPU performance-counter permission)",
+    )
     parser.add_argument("overrides", nargs="*", help="extra hydra overrides, e.g. train.seed=3")
     args = parser.parse_args()
 
@@ -154,6 +172,13 @@ def main():
             update_seconds, _ = update_or_skip()
             print(f"warmup epoch {epoch}: rollout {rollout_seconds:.2f} s, update {update_seconds:.2f} s", flush=True)
         frames = dict(torch._dynamo.utils.counters["frames"])
+        if args.kernel_table:
+            from torch.profiler import ProfilerActivity, profile
+
+            for label, fn in (("rollout", pufferl.evaluate), ("update", update_or_skip)):
+                with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+                    wall_seconds, _ = timed(fn)
+                print_kernel_table(prof, label, wall_seconds if label == "rollout" else wall_seconds)
         profile_baseline = {name: pufferl.profile.profiles[name]["elapsed"] for name in PROFILE_SECTIONS}
         epochs = []
         for epoch in range(args.epochs):

@@ -626,6 +626,8 @@ def _(x, counts, w1, b1, gamma, beta, w2, b2, store_acts):
 def _setup_context(ctx, inputs, output):
     x, counts, _, _, gamma, beta, _, _, _ = inputs
     pooled, tie_count, normed_relu, encoded, w1_padded, b1_bf16_values, w2_bf16 = output
+    # only pooled receives a gradient; without this autograd zero-fills rows x D tensors for the other outputs
+    ctx.set_materialize_grads(False)
     ctx.save_for_backward(
         x, counts, w1_padded, b1_bf16_values, gamma, beta, w2_bf16, normed_relu, encoded, pooled, tie_count
     )
@@ -634,6 +636,8 @@ def _setup_context(ctx, inputs, output):
 def _backward(
     ctx, grad_pooled, grad_tie_count, grad_normed_relu, grad_encoded, grad_w1_padded, grad_b1_values, grad_w2_bf16
 ):
+    if grad_pooled is None:
+        return None, None, None, None, None, None, None, None, None
     x, counts, w1_padded, b1_bf16_values, gamma, beta, w2_bf16, normed_relu, encoded, pooled, tie_count = (
         ctx.saved_tensors
     )

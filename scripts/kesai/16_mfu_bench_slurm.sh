@@ -29,14 +29,15 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 RESULT_FILE=$PD/experiments/logs/mfu_bench_${SLURM_JOB_ID}_result.txt
 NUM_ENVS=${NUM_ENVS:-32}      # override: NUM_ENVS=48 sbatch scripts/kesai/16_mfu_bench_slurm.sh
 MINIBATCH=${MINIBATCH:-131072}
+EXTRA_ARGS=${EXTRA_ARGS:-}    # e.g. EXTRA_ARGS="--kernel-table train.compile_mode=max-autotune"
 echo "=== MFU result (paste this block back) ===" | tee ${RESULT_FILE}
-python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} 2>&1 | grep -v "^MFU_RESULT" | grep "reference\|capability" | tee -a ${RESULT_FILE}
-python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused 2>&1 | grep -v "^MFU_RESULT" | grep "fused" | sed 's/^fused/fused+triton/' | tee -a ${RESULT_FILE}
-env PUFFER_SLOT_ENCODER_BACKEND=cuda python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused 2>&1 | grep -v "^MFU_RESULT" | grep "fused\|Error" | sed 's/^fused/fused+cuda/' | tee -a ${RESULT_FILE}
+python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} ${EXTRA_ARGS} 2>&1 | grep -v "^MFU_RESULT" | grep "reference\|capability\|kernel table\|^ *[0-9][0-9.]*%\|^ *share" | tee -a ${RESULT_FILE}
+python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused ${EXTRA_ARGS} 2>&1 | grep -v "^MFU_RESULT" | grep "fused\|kernel table\|^ *[0-9][0-9.]*%\|^ *share" | sed 's/^fused/fused+triton/' | tee -a ${RESULT_FILE}
+env PUFFER_SLOT_ENCODER_BACKEND=cuda python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused ${EXTRA_ARGS} 2>&1 | grep -v "^MFU_RESULT" | grep "fused\|Error\|kernel table\|^ *[0-9][0-9.]*%\|^ *share" | sed 's/^fused/fused+cuda/' | tee -a ${RESULT_FILE}
 echo "--- rollout split, fused+triton (env = waiting for the simulation workers, the rest is the trainer process) ---" | tee -a ${RESULT_FILE}
-python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused --rollout-only --profile --warmup 1 --epochs 2 2>&1 | grep -A5 "section split" | tee -a ${RESULT_FILE}
+python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused --rollout-only --profile --warmup 1 --epochs 2 ${EXTRA_ARGS} 2>&1 | grep -A5 "section split" | tee -a ${RESULT_FILE}
 echo "--- rollout split, fused+cuda ---" | tee -a ${RESULT_FILE}
-env PUFFER_SLOT_ENCODER_BACKEND=cuda python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused --rollout-only --profile --warmup 1 --epochs 2 2>&1 | grep -A5 "section split" | tee -a ${RESULT_FILE}
+env PUFFER_SLOT_ENCODER_BACKEND=cuda python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused --rollout-only --profile --warmup 1 --epochs 2 ${EXTRA_ARGS} 2>&1 | grep -A5 "section split" | tee -a ${RESULT_FILE}
 
 NCU=$(command -v ncu || ls /opt/nvidia/nsight-compute/*/ncu 2>/dev/null | tail -1)
 if [ -n "${NCU}" ]; then
