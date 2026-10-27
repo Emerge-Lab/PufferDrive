@@ -21,6 +21,7 @@ echo "START TIME: $(date)"
 start=$(date +%s)
 cd $PD || exit 1
 nvidia-smi --query-gpu=name,compute_cap,memory.total --format=csv
+echo "node $(hostname)"; nvidia-smi --query-gpu=clocks.sm,clocks.max.sm,clocks.mem,power.draw,power.limit,temperature.gpu,clocks_throttle_reasons.active --format=csv
 
 export OMP_NUM_THREADS=1
 source .venv/bin/activate
@@ -63,5 +64,6 @@ echo
 echo "Result block (also in ${RESULT_FILE}):"
 cat ${RESULT_FILE}
 end=$(date +%s)
+echo "node $(hostname)"; nvidia-smi --query-gpu=clocks.sm,clocks.max.sm,clocks.mem,power.draw,power.limit,temperature.gpu,clocks_throttle_reasons.active --format=csv
 echo "END TIME: $(date)"
 echo "Runtime: $((end-start)) s"
