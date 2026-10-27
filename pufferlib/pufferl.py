@@ -796,10 +796,13 @@ class PuffeRL:
         self.optimizer.zero_grad()
         total_minibatches = 0
         retained_transition_count = keep_idx.numel()
+        # A lone trailing transition has no sample std to normalize its advantage with (NaN), so it sits out this update
+        if retained_transition_count % self.minibatch_size == 1:
+            retained_transition_count -= 1
         optimizer_batch_size = self.minibatch_size * self.accumulate_minibatches
 
         for _ in range(config["update_epochs"]):
-            permutation = keep_idx[torch.randperm(retained_transition_count, device=keep_idx.device)]
+            permutation = keep_idx[torch.randperm(keep_idx.numel(), device=keep_idx.device)]
             for start in range(0, retained_transition_count, self.minibatch_size):
                 profile("train_copy", epoch)
                 mb_idx = permutation[start : start + self.minibatch_size]
