@@ -2568,7 +2568,7 @@ static inline void sample_erratic_flags(Drive *env, Agent *agent) {
         : 0;
     agent->partner_blindness_trigger_prob = env->partner_blindness_trigger_prob;
     if (agent->is_blind_partner && env->partner_blindness_time_fraction_max > 0.0f) {
-        // blind-time fraction of a burst/gap cycle = duration / (duration + mean gap), mean gap = (1 - p) / p
+        // blind-time fraction of a blind/sighted cycle = duration / (duration + mean gap), mean gap = (1 - p) / p
         float duration_steps = (float) env->partner_blindness_duration;
         float base_trigger_prob = env->partner_blindness_trigger_prob;
         float base_fraction
@@ -4886,7 +4886,7 @@ static int write_partner_obs(
     float *obs,
     int obs_idx,
     int *partner_count) {
-    // Partner blindness restricts visibility to a forward corridor of ego width plus margin while triggered
+    // Blind steps hide all partners, or with partner_blindness_corridor only those outside the forward corridor
     if (ego->partner_blindness_counter > 0) {
         ego->partner_blindness_counter--;
     }

@@ -133,10 +133,9 @@ struct Agent {
     // Reward conditioning coefficients (per-agent, randomized at spawn)
     float reward_coefs[NUM_REWARD_COEFS];
 
-    int phantom_braking_counter;   // >0 means currently phantom braking
-    int partner_blindness_counter; // >0 means partner visibility is restricted to a forward corridor (ego width +
-                                   // margin)
-    float partner_blindness_trigger_prob; // per-step burst start chance, raised by partner_blindness_time_fraction_max
+    int phantom_braking_counter;          // >0 means currently phantom braking
+    int partner_blindness_counter;        // steps left in the current blind interval, 0 = sees partners normally
+    float partner_blindness_trigger_prob; // per-step chance of starting a blind interval while not blind
     unsigned char is_blind_partner;       // episode-level flag: agent may restrict partner visibility
     unsigned char is_phantom_braker;      // episode-level flag: agent may phantom-brake
 };
@@ -191,7 +190,7 @@ struct TrafficControlElement {
 struct LaneGraph {
     int n_lanes;
     int *lane_ids;
-    float *distances;       // n_lanes * n_lanes row-major, goal-major: [to * n_lanes + from]
+    float *distances;       // [goal * n_lanes + from]: row = goal lane, so an ego's lane obs read one contiguous row
     int *lane_to_graph_idx; // road-element idx -> graph idx (-1 if lane absent from graph), sized num_road_elements
 };
 
