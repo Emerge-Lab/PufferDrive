@@ -144,9 +144,8 @@ def fused_slot_encoder_fwd_kernel(
     w2t_ptr,
     b2_ptr,
     normed_relu_ptr,
-    encoded_ptr,
     pooled_ptr,
-    tie_count_ptr,
+    argmax_ptr,
     B,
     S,
     F,
@@ -166,7 +165,7 @@ def fused_slot_encoder_fwd_kernel(
     d_offs = tl.arange(0, D)
     f_offs = tl.arange(0, F_PAD)
     running_max = tl.full((BLOCK_B, D), float("-inf"), tl.float32)
-    tie_count = tl.zeros((BLOCK_B, D), tl.int32)
+    argmax = tl.zeros((BLOCK_B, D), tl.int32)
     for slot in range(S):
         x = tl.load(
             x_ptr + batch_offs[:, None] * stride_xb + slot * stride_xs + f_offs[None, :] * stride_xf,
@@ -196,29 +195,22 @@ def fused_slot_encoder_fwd_kernel(
             D,
             STORE_ACTS,
         )
-        if STORE_ACTS:
-            tl.store(
-                encoded_ptr + flat_rows[:, None] * D + d_offs[None, :],
-                encoded.to(tl.bfloat16),
-                mask=batch_mask[:, None],
-            )
         valid = (batch_mask & (slot < counts))[:, None]
         greater = valid & (encoded > running_max)
-        equal = valid & (encoded == running_max)
-        tie_count = tl.where(greater, 1, tl.where(equal, tie_count + 1, tie_count))
+        if STORE_ACTS:
+            argmax = tl.where(greater, slot, argmax)
         running_max = tl.where(greater, encoded, running_max)
     pooled = tl.where((counts > 0)[:, None], running_max, 0.0)
     out_offs = batch_offs[:, None] * D + d_offs[None, :]
     tl.store(pooled_ptr + out_offs, pooled.to(tl.bfloat16), mask=batch_mask[:, None])
-    tl.store(tie_count_ptr + out_offs, tie_count.to(tl.uint8), mask=batch_mask[:, None])
+    if STORE_ACTS:
+        tl.store(argmax_ptr + out_offs, argmax.to(tl.uint8), mask=batch_mask[:, None])
 
 
 @triton.jit
 def fused_slot_pool_bwd_kernel(
-    encoded_ptr,
+    argmax_ptr,
     counts_ptr,
-    pooled_ptr,
-    tie_count_ptr,
     grad_pooled_ptr,
     grad_encoded_ptr,
     grad_b2_partial_ptr,
@@ -242,12 +234,9 @@ def fused_slot_pool_bwd_kernel(
         row_offs = rows[:, None] * D + d_offs[None, :]
         batch_offs = batch[:, None] * D + d_offs[None, :]
         grad_offs = batch[:, None] * stride_grad_row + d_offs[None, :]
-        encoded = tl.load(encoded_ptr + row_offs, mask=row_mask[:, None], other=0.0).to(tl.float32)
-        pooled = tl.load(pooled_ptr + batch_offs, mask=row_mask[:, None], other=0.0).to(tl.float32)
+        argmax = tl.load(argmax_ptr + batch_offs, mask=row_mask[:, None], other=255).to(tl.int32)
         grad_pooled = tl.load(grad_pooled_ptr + grad_offs, mask=row_mask[:, None], other=0.0).to(tl.float32)
-        tie_count = tl.load(tie_count_ptr + batch_offs, mask=row_mask[:, None], other=1).to(tl.float32)
-        shared_grad = _bf16_round(grad_pooled / tl.maximum(tie_count, 1.0))
-        grad_encoded = tl.where(valid[:, None] & (encoded == pooled), shared_grad, 0.0)
+        grad_encoded = tl.where(valid[:, None] & (argmax == slots[:, None]), grad_pooled, 0.0)
         tl.store(grad_encoded_ptr + row_offs, grad_encoded.to(tl.bfloat16), mask=row_mask[:, None])
         grad_b2 += tl.sum(grad_encoded, axis=0)
     tl.store(grad_b2_partial_ptr + pid * D + d_offs, grad_b2)
@@ -424,15 +413,14 @@ def fused_slot_encoder_fwd(
     w2t: torch.Tensor,
     b2: torch.Tensor,
     store_acts: bool,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     B, S, F = x.shape
     D, feature_pad = w1_padded.shape
     config = kernel_config(x.device)
     rows = B * S if store_acts else 0
     normed_relu = torch.empty(rows, D, dtype=torch.bfloat16, device=x.device)
-    encoded = torch.empty(rows, D, dtype=torch.bfloat16, device=x.device)
     pooled = torch.empty(B, D, dtype=torch.bfloat16, device=x.device)
-    tie_count = torch.empty(B, D, dtype=torch.uint8, device=x.device)
+    argmax = torch.empty(B if store_acts else 0, D, dtype=torch.uint8, device=x.device)
     grid = (triton.cdiv(B, config.fwd_block_batch),)
     fused_slot_encoder_fwd_kernel[grid](
         x,
@@ -444,9 +432,8 @@ def fused_slot_encoder_fwd(
         w2t,
         b2,
         normed_relu,
-        encoded,
         pooled,
-        tie_count,
+        argmax,
         B,
         S,
         F,
@@ -461,7 +448,7 @@ def fused_slot_encoder_fwd(
         num_warps=config.fwd_num_warps,
         num_stages=config.fwd_num_stages,
     )
-    return pooled, tie_count, normed_relu, encoded
+    return pooled, argmax, normed_relu
 
 
 @fused_slot_encoder_fwd.register_fake
@@ -487,17 +474,13 @@ def fused_slot_encoder_bwd(
     beta: torch.Tensor,
     w2: torch.Tensor,
     normed_relu: torch.Tensor,
-    encoded: torch.Tensor,
-    pooled: torch.Tensor,
-    tie_count: torch.Tensor,
+    argmax: torch.Tensor,
     grad_pooled: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     if cuda_backend_active():
         from pufferlib.ocean.cuda_slot_encoder import cuda_slot_encoder_bwd
 
-        return cuda_slot_encoder_bwd(
-            x, counts, w1_padded, b1, gamma, beta, w2, normed_relu, encoded, pooled, tie_count, grad_pooled
-        )
+        return cuda_slot_encoder_bwd(x, counts, w1_padded, b1, gamma, beta, w2, normed_relu, argmax, grad_pooled)
     B, S, F = x.shape
     D, feature_pad = w1_padded.shape
     config = kernel_config(x.device)
@@ -509,10 +492,8 @@ def fused_slot_encoder_bwd(
     grad_encoded = torch.empty(rows, D, dtype=torch.bfloat16, device=x.device)
     grad_b2_partial = torch.empty(partial_count, D, dtype=torch.float32, device=x.device)
     fused_slot_pool_bwd_kernel[(partial_count,)](
-        encoded,
+        argmax,
         counts,
-        pooled,
-        tie_count,
         grad_pooled,
         grad_encoded,
         grad_b2_partial,
@@ -563,7 +544,7 @@ def fused_slot_encoder_bwd(
 
 
 @fused_slot_encoder_bwd.register_fake
-def _(x, counts, w1_padded, b1, gamma, beta, w2, normed_relu, encoded, pooled, tie_count, grad_pooled):
+def _(x, counts, w1_padded, b1, gamma, beta, w2, normed_relu, argmax, grad_pooled):
     F = x.shape[2]
     D = w1_padded.shape[0]
     f32 = {"dtype": torch.float32, "device": x.device}
@@ -588,7 +569,7 @@ def fused_slot_encoder(
     w2: torch.Tensor,
     b2: torch.Tensor,
     store_acts: bool,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     w1_padded = pad_weight(w1.to(torch.bfloat16), _feature_pad(w1.shape[1]))
     b1_bf16_values = b1.to(torch.bfloat16).float()
     w2_bf16 = w2.to(torch.bfloat16).contiguous()
@@ -596,14 +577,14 @@ def fused_slot_encoder(
     if cuda_backend_active():
         from pufferlib.ocean.cuda_slot_encoder import cuda_slot_encoder_fwd
 
-        pooled, tie_count, normed_relu, encoded = cuda_slot_encoder_fwd(
+        pooled, argmax, normed_relu = cuda_slot_encoder_fwd(
             x, counts, w1_padded, b1_bf16_values, gamma, beta, w2_bf16, b2_bf16_values, store_acts
         )
-        return pooled, tie_count, normed_relu, encoded, w1_padded, b1_bf16_values, w2_bf16
-    pooled, tie_count, normed_relu, encoded = fused_slot_encoder_fwd(
+        return pooled, argmax, normed_relu, w1_padded, b1_bf16_values, w2_bf16
+    pooled, argmax, normed_relu = fused_slot_encoder_fwd(
         x, counts, w1_padded, b1_bf16_values, gamma, beta, w2_bf16.t().contiguous(), b2_bf16_values, store_acts
     )
-    return pooled, tie_count, normed_relu, encoded, w1_padded, b1_bf16_values, w2_bf16
+    return pooled, argmax, normed_relu, w1_padded, b1_bf16_values, w2_bf16
 
 
 @fused_slot_encoder.register_fake
@@ -614,8 +595,7 @@ def _(x, counts, w1, b1, gamma, beta, w2, b2, store_acts):
     bf16 = {"dtype": torch.bfloat16, "device": x.device}
     return (
         torch.empty(B, D, **bf16),
-        torch.empty(B, D, dtype=torch.uint8, device=x.device),
-        torch.empty(rows, D, **bf16),
+        torch.empty(B if store_acts else 0, D, dtype=torch.uint8, device=x.device),
         torch.empty(rows, D, **bf16),
         torch.empty(D, _feature_pad(F), **bf16),
         torch.empty(D, dtype=torch.float32, device=x.device),
@@ -625,22 +605,16 @@ def _(x, counts, w1, b1, gamma, beta, w2, b2, store_acts):
 
 def _setup_context(ctx, inputs, output):
     x, counts, _, _, gamma, beta, _, _, _ = inputs
-    pooled, tie_count, normed_relu, encoded, w1_padded, b1_bf16_values, w2_bf16 = output
+    pooled, argmax, normed_relu, w1_padded, b1_bf16_values, w2_bf16 = output
     # only pooled receives a gradient; without this autograd zero-fills rows x D tensors for the other outputs
     ctx.set_materialize_grads(False)
-    ctx.save_for_backward(
-        x, counts, w1_padded, b1_bf16_values, gamma, beta, w2_bf16, normed_relu, encoded, pooled, tie_count
-    )
+    ctx.save_for_backward(x, counts, w1_padded, b1_bf16_values, gamma, beta, w2_bf16, normed_relu, argmax)
 
 
-def _backward(
-    ctx, grad_pooled, grad_tie_count, grad_normed_relu, grad_encoded, grad_w1_padded, grad_b1_values, grad_w2_bf16
-):
+def _backward(ctx, grad_pooled, grad_argmax, grad_normed_relu, grad_w1_padded, grad_b1_values, grad_w2_bf16):
     if grad_pooled is None:
         return None, None, None, None, None, None, None, None, None
-    x, counts, w1_padded, b1_bf16_values, gamma, beta, w2_bf16, normed_relu, encoded, pooled, tie_count = (
-        ctx.saved_tensors
-    )
+    x, counts, w1_padded, b1_bf16_values, gamma, beta, w2_bf16, normed_relu, argmax = ctx.saved_tensors
     grad_w1, grad_b1, grad_gamma, grad_beta, grad_w2, grad_b2 = fused_slot_encoder_bwd(
         x,
         counts,
@@ -650,9 +624,7 @@ def _backward(
         beta,
         w2_bf16,
         normed_relu,
-        encoded,
-        pooled,
-        tie_count,
+        argmax,
         grad_pooled.to(torch.bfloat16),
     )
     return None, None, grad_w1, grad_b1, grad_gamma, grad_beta, grad_w2, grad_b2, None

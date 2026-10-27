@@ -58,7 +58,7 @@ fused_slot_encoder_fwd_cuda(
     const float *__restrict__ x, const int64_t *__restrict__ counts,
     const uint16_t *__restrict__ w1, const float *__restrict__ b1, const float *__restrict__ gamma, const float *__restrict__ beta,
     const uint16_t *__restrict__ w2, const float *__restrict__ b2,
-    uint16_t *__restrict__ normed_out, uint16_t *__restrict__ encoded_out, uint16_t *__restrict__ pooled_out, uint8_t *__restrict__ tie_out,
+    uint16_t *__restrict__ normed_out, uint16_t *__restrict__ pooled_out, uint8_t *__restrict__ argmax_out,
     int B, int S, int F, int64_t stride_xb, int64_t stride_xs, int64_t stride_xf)
 {
     constexpr int NWARPS_N = D / WARP_N;
@@ -140,12 +140,12 @@ fused_slot_encoder_fwd_cuda(
     __syncthreads();
 
     float rmax[2][8][4];
-    uint32_t ties[2][8];
+    uint32_t amax[2][8];
     #pragma unroll
     for (int i = 0; i < 2; i++)
         #pragma unroll
         for (int j = 0; j < 8; j++) {
-            ties[i][j] = 0u;
+            amax[i][j] = 0u;
             #pragma unroll
             for (int e = 0; e < 4; e++) rmax[i][j][e] = NEG_INF;
         }
@@ -294,14 +294,14 @@ fused_slot_encoder_fwd_cuda(
             if (next < NCHUNK) issue_w2_chunk(next, chunk & 1);
             else issue_w2_chunk(next - NCHUNK, chunk & 1);  // prefetch next slot's first chunks
         }
-        // ---- epilogue: bias, bf16 round, running masked max + tie counts, optional store
+        // ---- epilogue: bias, bf16 round, running masked max; STORE keeps the first arg-max slot per feature
         #pragma unroll
         for (int i = 0; i < 2; i++)
             #pragma unroll
             for (int j = 0; j < 8; j++) {
                 int col = wn * WARP_N + j * 8 + (lane & 3) * 2;
                 float bb0 = b2[col], bb1 = b2[col + 1];
-                uint32_t t4 = ties[i][j];
+                uint32_t a4 = amax[i][j];
                 #pragma unroll
                 for (int h = 0; h < 2; h++) {
                     bool valid = slot < my_counts[i * 2 + h];
@@ -311,38 +311,20 @@ fused_slot_encoder_fwd_cuda(
                     for (int e = 0; e < 2; e++) {
                         float v = e ? v1 : v0;
                         float &m = rmax[i][j][h * 2 + e];
-                        int sh = (h * 2 + e) * 8;
-                        uint32_t tc = (t4 >> sh) & 0xFFu;
                         bool greater = valid && (v > m);
-                        bool equal = valid && (v == m);
-                        uint32_t ntc = greater ? 1u : (equal ? ((tc + 1u) & 0xFFu) : tc);
-                        t4 = (t4 & ~(0xFFu << sh)) | (ntc << sh);
+                        if (STORE && greater) {
+                            int sh = (h * 2 + e) * 8;
+                            a4 = (a4 & ~(0xFFu << sh)) | ((uint32_t) slot << sh);
+                        }
                         m = greater ? v : m;
                     }
-                    if (STORE) {
-                        int row = wm * WARP_M + i * 16 + (lane >> 2) + h * 8;
-                        *(uint32_t *) &sAct[row * LDA + col] = pack_bf16x2(v0, v1);
-                    }
                 }
-                ties[i][j] = t4;
+                amax[i][j] = a4;
             }
-        if (STORE) {
-            __syncthreads();
-            // coalesced copy of the staged encoded tile: row by row, 16 B per thread
-            constexpr int PIECES_PER_ROW = D / 8;
-            for (int e = tid; e < BLOCK_B * PIECES_PER_ROW; e += THREADS) {
-                int row = e / PIECES_PER_ROW, p = e % PIECES_PER_ROW;
-                int b = b0 + row;
-                if (b < B) {
-                    *(uint4 *) &encoded_out[((int64_t) b * S + slot) * D + p * 8] = *(const uint4 *) &sAct[row * LDA + p * 8];
-                }
-            }
-        }
-        __syncthreads();
         if (slot + 1 < S) store_x();
         __syncthreads();
     }
-    // ---- pooled = counts > 0 ? running max : 0 ; tie counts
+    // ---- pooled = counts > 0 ? running max : 0 ; arg-max slots
     #pragma unroll
     for (int i = 0; i < 2; i++)
         #pragma unroll
@@ -357,9 +339,11 @@ fused_slot_encoder_fwd_cuda(
                 float p0 = any ? rmax[i][j][h * 2] : 0.0f;
                 float p1 = any ? rmax[i][j][h * 2 + 1] : 0.0f;
                 *(uint32_t *) &pooled_out[(int64_t) b * D + col] = pack_bf16x2(p0, p1);
-                uint32_t t4 = ties[i][j];
-                uint16_t tp = (uint16_t) (((t4 >> (h * 16)) & 0xFFu) | (((t4 >> (h * 16 + 8)) & 0xFFu) << 8));
-                *(uint16_t *) &tie_out[(int64_t) b * D + col] = tp;
+                if (STORE) {
+                    uint32_t a4 = amax[i][j];
+                    uint16_t ap = (uint16_t) (((a4 >> (h * 16)) & 0xFFu) | (((a4 >> (h * 16 + 8)) & 0xFFu) << 8));
+                    *(uint16_t *) &argmax_out[(int64_t) b * D + col] = ap;
+                }
             }
         }
 }
@@ -411,22 +395,26 @@ def _compile(D, F_PAD, store, device_index):
     return func, threads, smem, regs, local, log.decode()
 
 
+MAX_SLOTS = 255
+
+
 def feature_pad(F):
     return 16 if F <= 16 else 32
 
 
 def cuda_slot_encoder_fwd(x, counts, w1_padded, b1, gamma, beta, w2, b2, store_acts):
-    """Mirror of fused_slot_encoder_fwd; w2 is [D][D] (not transposed). Returns pooled, tie_count, normed_relu, encoded."""
+    """Mirror of fused_slot_encoder_fwd; w2 is [D][D] (not transposed). Returns pooled, argmax (uint8, STORE only), normed_relu."""
     B, S, F = x.shape
     D, F_PAD = w1_padded.shape
     assert x.dtype == torch.float32 and w1_padded.dtype == torch.bfloat16 and w2.dtype == torch.bfloat16
     assert w1_padded.is_contiguous() and w2.is_contiguous() and x.stride(2) == 1
     func, threads, smem, _, _, _ = _compile(D, F_PAD, bool(store_acts), x.device.index or 0)
+    if S > MAX_SLOTS:
+        raise ValueError(f"fused slot encoder stores the arg-max slot as uint8: {S} slots > {MAX_SLOTS}")
     rows = B * S if store_acts else 0
     normed = torch.empty(rows, D, dtype=torch.bfloat16, device=x.device)
-    encoded = torch.empty(rows, D, dtype=torch.bfloat16, device=x.device)
     pooled = torch.empty(B, D, dtype=torch.bfloat16, device=x.device)
-    ties = torch.empty(B, D, dtype=torch.uint8, device=x.device)
+    argmax = torch.empty(B if store_acts else 0, D, dtype=torch.uint8, device=x.device)
     counts = counts.contiguous()
     assert counts.dtype == torch.int64
     args = [
@@ -439,9 +427,8 @@ def cuda_slot_encoder_fwd(x, counts, w1_padded, b1, gamma, beta, w2, b2, store_a
         np.array([w2.data_ptr()], dtype=np.uint64),
         np.array([b2.data_ptr()], dtype=np.uint64),
         np.array([normed.data_ptr()], dtype=np.uint64),
-        np.array([encoded.data_ptr()], dtype=np.uint64),
         np.array([pooled.data_ptr()], dtype=np.uint64),
-        np.array([ties.data_ptr()], dtype=np.uint64),
+        np.array([argmax.data_ptr()], dtype=np.uint64),
         np.array([B], dtype=np.int32),
         np.array([S], dtype=np.int32),
         np.array([F], dtype=np.int32),
@@ -453,10 +440,12 @@ def cuda_slot_encoder_fwd(x, counts, w1_padded, b1, gamma, beta, w2, b2, store_a
     grid = (B + 63) // 64
     stream = torch.cuda.current_stream(x.device).cuda_stream
     _check(cu.cuLaunchKernel(func, grid, 1, 1, threads, 1, 1, smem, stream, arg_ptrs.ctypes.data, 0))
-    return pooled, ties, normed, encoded
+    return pooled, argmax, normed
 
 
-ROWS_PER_BLOCK = 256
+TILE_ROWS = 64
+MAX_ROWS_PER_BLOCK = 1024
+BLOCKS_PER_SM_TARGET = 4
 
 CUDA_SRC_BWD = r"""
 typedef unsigned char uint8_t;
@@ -527,9 +516,8 @@ fused_slot_encoder_bwd_cuda(
     const float *__restrict__ x, const int64_t *__restrict__ counts,
     const uint16_t *__restrict__ w1, const float *__restrict__ b1, const float *__restrict__ gamma, const float *__restrict__ beta,
     const uint16_t *__restrict__ w2,
-    const uint16_t *__restrict__ encoded, const uint16_t *__restrict__ pooled, const uint8_t *__restrict__ tie_count,
-    const uint16_t *__restrict__ grad_pooled,
-    uint16_t *__restrict__ grad_encoded_out, uint16_t *__restrict__ grad_pre_norm_out,
+    const uint8_t *__restrict__ argmax, const uint16_t *__restrict__ grad_pooled,
+    uint16_t *__restrict__ grad_encoded_out, float *__restrict__ grad_w1_partial,
     float *__restrict__ grad_b2_partial, float *__restrict__ grad_gamma_partial, float *__restrict__ grad_beta_partial, float *__restrict__ grad_b1_partial,
     int B, int S, int F, int64_t stride_xb, int64_t stride_xs, int64_t stride_xf, int64_t stride_grad_row, int rows_per_block)
 {
@@ -563,6 +551,8 @@ fused_slot_encoder_bwd_cuda(
         int n = i / (F_PAD / 8), q = i % (F_PAD / 8);
         *(uint4 *) &sW1[n * LDX + q * 8] = *(const uint4 *) &w1[n * F_PAD + q * 8];
     }
+    float *sAccW1 = sCol;                                 // [D][F_PAD] W1 weight gradient of this block
+    for (int i = tid; i < D * F_PAD; i += THREADS) sAccW1[i] = 0.0f;
     // W2 chunk c = rows [c*32, +32) of W2[n][k] (K = n for this GEMM), 16-byte pieces
     auto issue_w2_chunk = [&](int chunk, int stage) {
         const uint16_t *src = w2 + (int64_t) chunk * KCHUNK * D;
@@ -621,25 +611,18 @@ fused_slot_encoder_bwd_cuda(
             if (row < total_rows) {
                 int64_t b = row / S, s = row - b * S;
                 bool valid = s < counts[b];
-                uint4 enc = *(const uint4 *) &encoded[row * D + p * 8];
-                uint4 pol = *(const uint4 *) &pooled[b * D + p * 8];
+                uint2 am = *(const uint2 *) &argmax[b * D + p * 8];
                 uint4 gpl = *(const uint4 *) &grad_pooled[b * stride_grad_row + p * 8];
-                uint2 tie = *(const uint2 *) &tie_count[b * D + p * 8];
-                uint32_t ew[4] = {enc.x, enc.y, enc.z, enc.w};
-                uint32_t pw[4] = {pol.x, pol.y, pol.z, pol.w};
+                uint32_t aw[2] = {am.x, am.y};
                 uint32_t gw[4] = {gpl.x, gpl.y, gpl.z, gpl.w};
-                uint32_t tw[2] = {tie.x, tie.y};
                 #pragma unroll
                 for (int t = 0; t < 4; t++) {
                     float out[2];
                     #pragma unroll
                     for (int e = 0; e < 2; e++) {
-                        float ev = bf16_bits_to_f32((ew[t] >> (16 * e)) & 0xFFFFu);
-                        float pv = bf16_bits_to_f32((pw[t] >> (16 * e)) & 0xFFFFu);
+                        int64_t winner = (aw[t >> 1] >> (8 * ((t & 1) * 2 + e))) & 0xFFu;
                         float gv = bf16_bits_to_f32((gw[t] >> (16 * e)) & 0xFFFFu);
-                        float tc = (float) ((tw[t >> 1] >> (8 * ((t & 1) * 2 + e))) & 0xFFu);
-                        float shared = bf16_round(gv / fmaxf(tc, 1.0f));
-                        out[e] = (valid && ev == pv) ? shared : 0.0f;
+                        out[e] = (valid && winner == s) ? gv : 0.0f;
                         acc_b2[t * 2 + e] += out[e];
                     }
                     packed[t] = pack_bf16x2(out[0], out[1]);
@@ -789,7 +772,7 @@ fused_slot_encoder_bwd_cuda(
         for (int i = 0; i < 2; i++)
             #pragma unroll
             for (int h = 0; h < 2; h++) mean_grad_normalized[i][h] = row_sum[i][h] / (float) D;
-        // grad_pre_norm = bf16(rstd * (grad_scaled - mean_grad - normalized * mean_grad_normalized)) -> sA -> global
+        // grad_pre_norm = bf16(rstd * (grad_scaled - mean_grad - normalized * mean_grad_normalized)) -> sA
         #pragma unroll
         for (int i = 0; i < 2; i++)
             #pragma unroll
@@ -809,15 +792,54 @@ fused_slot_encoder_bwd_cuda(
                 }
             }
         __syncthreads();
-        for (int e = tid; e < TILE_ROWS * PIECES_PER_ROW; e += THREADS) {
-            int r = e / PIECES_PER_ROW, p = e % PIECES_PER_ROW;
-            int64_t row = row0 + r;
-            if (row < total_rows) {
-                *(uint4 *) &grad_pre_norm_out[row * D + p * 8] = *(const uint4 *) &sA[r * LDA + p * 8];
+        // ---- grad_w1 += grad_pre_norm^T @ x over this tile: A = sA read transposed, B = sX, K = the 64 lanes
+        {
+            float acc_w1[2][F_PAD / 8][4];
+            #pragma unroll
+            for (int i = 0; i < 2; i++)
+                #pragma unroll
+                for (int jn = 0; jn < F_PAD / 8; jn++)
+                    #pragma unroll
+                    for (int e = 0; e < 4; e++) acc_w1[i][jn][e] = 0.0f;
+            const int m = lane >> 3, r = lane & 7;
+            #pragma unroll
+            for (int ks = 0; ks < TILE_ROWS / 16; ks++) {
+                uint32_t bfrag[F_PAD / 16][4];
+                #pragma unroll
+                for (int jj = 0; jj < F_PAD / 16; jj++) {
+                    int k = ks * 16 + (m & 1) * 8 + r;
+                    int n = jj * 16 + (m >> 1) * 8;
+                    ldmatrix_x4_trans(bfrag[jj], sX_base + (k * LDX + n) * 2);
+                }
+                #pragma unroll
+                for (int i = 0; i < 2; i++) {
+                    uint32_t afrag[4];
+                    int k = ks * 16 + (m >> 1) * 8 + r;
+                    int d = warp * 32 + i * 16 + (m & 1) * 8;
+                    ldmatrix_x4_trans(afrag, sA_base + (k * LDA + d) * 2);
+                    #pragma unroll
+                    for (int jj = 0; jj < F_PAD / 16; jj++) {
+                        mma_16816(acc_w1[i][jj * 2], afrag, bfrag[jj][0], bfrag[jj][1]);
+                        mma_16816(acc_w1[i][jj * 2 + 1], afrag, bfrag[jj][2], bfrag[jj][3]);
+                    }
+                }
             }
+            #pragma unroll
+            for (int i = 0; i < 2; i++)
+                #pragma unroll
+                for (int jn = 0; jn < F_PAD / 8; jn++)
+                    #pragma unroll
+                    for (int h = 0; h < 2; h++) {
+                        int d = warp * 32 + i * 16 + (lane >> 2) + h * 8;
+                        int f = jn * 8 + (lane & 3) * 2;
+                        sAccW1[d * F_PAD + f] += acc_w1[i][jn][h * 2];
+                        sAccW1[d * F_PAD + f + 1] += acc_w1[i][jn][h * 2 + 1];
+                    }
         }
         __syncthreads();
     }
+    for (int i = tid; i < D * F_PAD; i += THREADS) grad_w1_partial[(int64_t) blockIdx.x * D * F_PAD + i] = sAccW1[i];
+    __syncthreads();
     // ---- partial sums: columns owned per lane (C layout) -> reduce over the 8 lanes sharing lane&3 and over wm
     auto store_c_layout_partial = [&](float (*acc)[8][2], float *dst) {
         #pragma unroll
@@ -893,7 +915,7 @@ def _compile_bwd(D, F_PAD, device_index):
     threads = 32 * 2 * nwarps_n
     rows_per_pass = threads // (D // 8)
     smem = (64 * (F_PAD + 8) + D * (F_PAD + 8) + 2 * 32 * (D + 8) + 64 * (D + 8)) * 2 + (
-        nwarps_n * 64 + max(4, rows_per_pass) * D
+        nwarps_n * 64 + max(4, rows_per_pass, F_PAD) * D
     ) * 4
     _check(cu.cuFuncSetAttribute(func, cu.CUfunction_attribute.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, smem))
     regs = _check(cu.cuFuncGetAttribute(cu.CUfunction_attribute.CU_FUNC_ATTRIBUTE_NUM_REGS, func))
@@ -901,9 +923,18 @@ def _compile_bwd(D, F_PAD, device_index):
     return func, threads, smem, regs, local
 
 
-def cuda_slot_encoder_bwd(
-    x, counts, w1_padded, b1, gamma, beta, w2, normed_relu, encoded, pooled, tie_count, grad_pooled
-):
+@functools.lru_cache(maxsize=None)
+def _sm_count(device_index):
+    return torch.cuda.get_device_properties(device_index).multi_processor_count
+
+
+def bwd_rows_per_block(rows, device_index):
+    """Lanes per block: enough blocks for BLOCKS_PER_SM_TARGET waves, capped so the W1 partials stay small."""
+    per_block = rows // (BLOCKS_PER_SM_TARGET * _sm_count(device_index)) // TILE_ROWS * TILE_ROWS
+    return max(TILE_ROWS, min(MAX_ROWS_PER_BLOCK, per_block))
+
+
+def cuda_slot_encoder_bwd(x, counts, w1_padded, b1, gamma, beta, w2, normed_relu, argmax, grad_pooled):
     """Mirror of fused_slot_encoder_bwd: returns grad_w1, grad_b1, grad_gamma, grad_beta, grad_w2, grad_b2."""
     B, S, F = x.shape
     D, F_PAD = w1_padded.shape
@@ -912,9 +943,10 @@ def cuda_slot_encoder_bwd(
     if grad_pooled.stride(1) != 1:
         grad_pooled = grad_pooled.contiguous()
     counts = counts.contiguous()
-    blocks = (rows + ROWS_PER_BLOCK - 1) // ROWS_PER_BLOCK
+    rows_per_block = bwd_rows_per_block(rows, x.device.index or 0)
+    blocks = (rows + rows_per_block - 1) // rows_per_block
     grad_encoded = torch.empty(rows, D, dtype=torch.bfloat16, device=x.device)
-    grad_pre_norm = torch.empty(rows, D, dtype=torch.bfloat16, device=x.device)
+    grad_w1_partial = torch.empty(blocks, D, F_PAD, dtype=torch.float32, device=x.device)
     partials = torch.empty(4, blocks, D, dtype=torch.float32, device=x.device)
     p = lambda t: np.array([t.data_ptr()], dtype=np.uint64)
     args = [
@@ -925,12 +957,10 @@ def cuda_slot_encoder_bwd(
         p(gamma),
         p(beta),
         p(w2),
-        p(encoded),
-        p(pooled),
-        p(tie_count),
+        p(argmax),
         p(grad_pooled),
         p(grad_encoded),
-        p(grad_pre_norm),
+        p(grad_w1_partial),
         p(partials[0]),
         p(partials[1]),
         p(partials[2]),
@@ -942,13 +972,13 @@ def cuda_slot_encoder_bwd(
         np.array([x.stride(1)], dtype=np.int64),
         np.array([x.stride(2)], dtype=np.int64),
         np.array([grad_pooled.stride(0)], dtype=np.int64),
-        np.array([ROWS_PER_BLOCK], dtype=np.int32),
+        np.array([rows_per_block], dtype=np.int32),
     ]
     arg_ptrs = np.array([a.ctypes.data for a in args], dtype=np.uint64)
     stream = torch.cuda.current_stream(x.device).cuda_stream
     _check(cu.cuLaunchKernel(func, blocks, 1, 1, threads, 1, 1, smem, stream, arg_ptrs.ctypes.data, 0))
     grad_w2 = (grad_encoded.t() @ normed_relu).float()
-    grad_w1 = (grad_pre_norm.t() @ x.reshape(rows, F).to(torch.bfloat16)).float()
+    grad_w1 = grad_w1_partial[:, :, :F].sum(0).to(torch.bfloat16).float()
     grad_b2 = partials[0].sum(0).to(torch.bfloat16).float()
     grad_gamma = partials[1].sum(0)
     grad_beta = partials[2].sum(0)

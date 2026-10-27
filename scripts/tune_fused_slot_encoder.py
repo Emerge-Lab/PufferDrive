@@ -97,7 +97,7 @@ class ShapeCase:
         )
 
     def backward(self, fwd):
-        pooled, tie_count, normed_relu, encoded, w1_padded, b1_values, w2_bf16 = fwd
+        pooled, argmax, normed_relu, w1_padded, b1_values, w2_bf16 = fwd
         _, norm, _, _ = self.encoder
         return fse.fused_slot_encoder_bwd(
             self.objects,
@@ -108,9 +108,7 @@ class ShapeCase:
             norm.bias,
             w2_bf16,
             normed_relu,
-            encoded,
-            pooled,
-            tie_count,
+            argmax,
             self.grad_pooled,
         )
 

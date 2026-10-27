@@ -51,7 +51,7 @@ class DriveBackbone(nn.Module):
         valid_mask = torch.arange(objects.shape[1], device=objects.device) < valid_counts.unsqueeze(1)
         encoded_objects = encoder(objects)
         masked_objects = encoded_objects.masked_fill(~valid_mask.unsqueeze(2), torch.finfo(encoded_objects.dtype).min)
-        pooled = masked_objects.amax(dim=1)
+        pooled = masked_objects.max(dim=1).values
         return torch.where(valid_counts.unsqueeze(1) == 0, pooled.new_zeros(()), pooled)
 
     def __init__(

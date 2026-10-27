@@ -1,6 +1,7 @@
 """The fused Triton slot encoder must reproduce DriveBackbone._encode_and_pool under bf16 autocast.
 
-Agreement is checked at bf16 rounding level against the eager autocast path and against an fp32 ground truth:
+Agreement is checked at bf16 rounding level against the eager autocast path (gradient to the first maximal slot, as
+torch.max does) and against an fp32 ground truth:
 the fused path may not be further from the truth than the eager bf16 path it replaces.
 """
 
@@ -34,7 +35,7 @@ def reference_encode_and_pool(objects, valid_counts, encoder):
     valid_mask = torch.arange(objects.shape[1], device=objects.device) < valid_counts.unsqueeze(1)
     encoded = encoder(objects)
     masked = encoded.masked_fill(~valid_mask.unsqueeze(2), torch.finfo(encoded.dtype).min)
-    pooled = masked.amax(dim=1)
+    pooled = masked.max(dim=1).values
     return torch.where(valid_counts.unsqueeze(1) == 0, pooled.new_zeros(()), pooled)
 
 
