@@ -224,6 +224,10 @@ case "$CONTAINER_RUNTIME" in
         [ ! -x "$ALPASIM_ROOT/.venv/bin/python" ] \
             || "$ALPASIM_ROOT/.venv/bin/python" -c "from alpasim_wizard.deployment.fuse_tools import ensure_fuse_tools; ensure_fuse_tools('$FUSE_DIR')" \
             || { echo "no squashfuse + fuse-overlayfs in $FUSE_DIR: the wizard downloads them from github.com and archive.ubuntu.com (needs dpkg-deb)"; exit 1; }
+        # the wizard's squashfuse is an Ubuntu 18.04 build: nodes without libfuse2 need its libraries copied into $FUSE_DIR/lib
+        MISSING_FUSE_LIBS=$([ -x "$FUSE_DIR/bin/squashfuse" ] && LD_LIBRARY_PATH="$FUSE_DIR/lib" ldd "$FUSE_DIR/bin/squashfuse" | grep "not found")
+        [ -z "$MISSING_FUSE_LIBS" ] || { echo "$FUSE_DIR/bin/squashfuse cannot run on $(hostname):"; echo "$MISSING_FUSE_LIBS"; \
+            echo "apt-get download the packages (libfuse2t64, liblzo2-2), dpkg-deb -x them and copy the .so files into $FUSE_DIR/lib"; exit 1; }
         WIZARD_RUN_METHOD=SLURM_ENROOT
         ;;
     pyxis)
