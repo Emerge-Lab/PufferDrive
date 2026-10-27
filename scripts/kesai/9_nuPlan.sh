@@ -6,8 +6,8 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem=0
 #SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
-#SBATCH --output experiments/logs/log_%j.out
-#SBATCH --error experiments/logs/log_%j.err
+#SBATCH --output experiments/logs/nuPlan_reactive_%j.out
+#SBATCH --error experiments/logs/nuPlan_reactive_%j.err
 #SBATCH --partition dev
 set -u
 source scripts/kesai/cluster_env.sh || exit 1

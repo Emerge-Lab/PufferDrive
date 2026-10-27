@@ -6,8 +6,8 @@
 #SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
 #SBATCH --mem=0
 #SBATCH --time 6-00:00
-#SBATCH --output experiments/logs/log_%a_%A.out
-#SBATCH --error experiments/logs/log_%a_%A.err
+#SBATCH --output experiments/logs/train_gigaflow_%j.out
+#SBATCH --error experiments/logs/train_gigaflow_%j.err
 #SBATCH --partition low
 
 source scripts/kesai/cluster_env.sh || exit 1

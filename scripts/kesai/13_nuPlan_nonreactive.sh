@@ -6,8 +6,8 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem=0
 #SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
-#SBATCH --output experiments/logs/log_%j.out
-#SBATCH --error experiments/logs/log_%j.err
+#SBATCH --output experiments/logs/nuPlan_nonreactive_%j.out
+#SBATCH --error experiments/logs/nuPlan_nonreactive_%j.err
 #SBATCH --partition dev
 # nuPlan Val14 closed-loop evaluation against non-reactive log-replay agents (CLS-NR): 9_nuPlan.sh with the non-reactive
 # challenge, so the reactive and non-reactive scores always come from the same planner settings. Overridable env: as in

@@ -6,8 +6,8 @@
 #SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
 #SBATCH --mem=0
 #SBATCH --time 3-00:00
-#SBATCH --output experiments/logs/log_%a_%A.out
-#SBATCH --error experiments/logs/log_%a_%A.err
+#SBATCH --output experiments/logs/train_64gpu_%j.out
+#SBATCH --error experiments/logs/train_64gpu_%j.err
 #SBATCH --partition dev
 # kesai: 64 GPUs exceed the 32-GPU per-user cap of dev -> submit with -p high (uncapped, internal approval) or -p low (preemptible)
 

@@ -6,8 +6,8 @@
 #SBATCH --gres gpu:1
 #SBATCH --mem=125G
 #SBATCH --cpus-per-task 18
-#SBATCH --output experiments/logs/log_%a_%A.out
-#SBATCH --error experiments/logs/log_%a_%A.err
+#SBATCH --output experiments/logs/train_1gpu_%a_%A.out
+#SBATCH --error experiments/logs/train_1gpu_%a_%A.err
 #SBATCH --partition dev
 #SBATCH --array=0
 

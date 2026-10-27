@@ -6,8 +6,8 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem=0
 #SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
-#SBATCH --output experiments/logs/log_%j.out
-#SBATCH --error experiments/logs/log_%j.err
+#SBATCH --output experiments/logs/carla_longest6_v2_%j.out
+#SBATCH --error experiments/logs/carla_longest6_v2_%j.err
 #SBATCH --partition dev
 # CARLA longest6 evaluation of a PufferDrive checkpoint through CaRL's unmodified original_leaderboard
 # (pufferlib/ocean/cosim/carla/leaderboard_agent.py), the CARLA counterpart of 9_nuPlan.sh.

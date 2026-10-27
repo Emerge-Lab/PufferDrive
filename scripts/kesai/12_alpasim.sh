@@ -6,8 +6,8 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem=0
 #SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
-#SBATCH --output experiments/logs/log_%j.out
-#SBATCH --error experiments/logs/log_%j.err
+#SBATCH --output experiments/logs/alpasim_%j.out
+#SBATCH --error experiments/logs/alpasim_%j.err
 #SBATCH --partition dev
 # AlpaSim closed-loop evaluation of a PufferDrive checkpoint on NuRec scenes, the AlpaSim counterpart of 9_nuPlan.sh:
 # alpasim-training's teacher driver runs the policy in a shadow env of this checkout (PUFFERDRIVE_ROOT=$PD) on the

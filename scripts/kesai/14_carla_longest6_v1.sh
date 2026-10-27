@@ -6,8 +6,8 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem=0
 #SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
-#SBATCH --output experiments/logs/log_%j.out
-#SBATCH --error experiments/logs/log_%j.err
+#SBATCH --output experiments/logs/carla_longest6_v1_%j.out
+#SBATCH --error experiments/logs/carla_longest6_v1_%j.err
 #SBATCH --partition dev
 # CARLA longest6 v1 evaluation of a PufferDrive checkpoint through carla_garage's unmodified Leaderboard 1.0
 # (CARLA 0.9.10.1, pufferlib/ocean/cosim/carla/lb1/leaderboard_agent.py), the Leaderboard 1.0 counterpart of
@@ -263,7 +263,7 @@ run_route() {  # $1 worker, $2 gpu, $3 route id, $4 attempt, $5 seed: one CARLA 
     local w=$1 gpu=$2 route_id=$3 attempt=$4 seed=$5
     local route_dir=$OUT/routes/$(unit_dir "$route_id" "$seed")
     local seed_args=()
-    [ -n "$seed" ] && seed_args=(--traffic-manager-seed "$seed")   # empty seed = the evaluator's default (runs before the seeds layout)
+    [ -n "$seed" ] && seed_args=(--trafficManagerSeed "$seed")   # leaderboard 1.0 spelling; empty seed = the evaluator's default (runs before the seeds layout)
     local routes_xml=$ROUTE_DIR/longest_weathers_$route_id.xml
     local port=$((PORT_BASE + w * 50)) tm_port=$((PORT_BASE + 6000 + w * 50))
     local server_log=$route_dir/carla_server_attempt$attempt.log evaluator_log=$route_dir/evaluator_attempt$attempt.log

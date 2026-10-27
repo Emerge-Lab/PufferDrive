@@ -6,8 +6,8 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem=0
 #SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
-#SBATCH --output experiments/logs/log_%a_%A.out
-#SBATCH --error experiments/logs/log_%a_%A.err
+#SBATCH --output experiments/logs/train_nightly_%a_%A.out
+#SBATCH --error experiments/logs/train_nightly_%a_%A.err
 #SBATCH --partition dev
 #SBATCH --array=0-2
 

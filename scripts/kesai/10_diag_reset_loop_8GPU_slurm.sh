@@ -6,8 +6,8 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem=0
 #SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
-#SBATCH --output experiments/logs/log_%a_%A.out
-#SBATCH --error experiments/logs/log_%a_%A.err
+#SBATCH --output experiments/logs/diag_reset_%a_%A.out
+#SBATCH --error experiments/logs/diag_reset_%a_%A.err
 #SBATCH --partition dev
 #SBATCH --array=0-1
 
@@ -96,7 +96,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     tb=True
 
 echo "Training exited with status $?"
-echo "Summarize with: python scripts/kesai/summarize_reset_diag.py $PD/experiments/logs/log_${SLURM_ARRAY_TASK_ID}_${SLURM_ARRAY_JOB_ID}.err"
+echo "Summarize with: python scripts/kesai/summarize_reset_diag.py $PD/experiments/logs/diag_reset_${SLURM_ARRAY_TASK_ID}_${SLURM_ARRAY_JOB_ID}.err"
 end=$(date +%s)
 echo "END TIME: $(date)"
 echo "Runtime: $((end-start))"
