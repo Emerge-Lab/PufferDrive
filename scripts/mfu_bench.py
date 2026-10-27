@@ -151,6 +151,7 @@ def main():
     P.validate_puffer_drive_resources(config, "training")
     torch_seed, env_seed = P.derive_rank_seeds(config["vec"]["seed"], config["train"]["seed"], 1, 0)
     torch.manual_seed(torch_seed)
+    P.bind_process_to_gpu_numa_node(0)
     vecenv = P.load_env(ENV_NAME, config, seed=env_seed)
     policy = P.load_policy(config, vecenv, ENV_NAME)
     train_config = dict(**config["train"], env=ENV_NAME, eval=config.get("eval", {}), run_name=config["run_name"])
@@ -176,8 +177,9 @@ def main():
     peak_tflops = peak_bf16_tflops(properties.name)
     if args.measure_peak:
         measured = measure_bf16_peak()
-        print(f"measured bf16 matmul peak (fp32 accumulate, {8192}^3 cuBLAS): {measured:.0f} TFLOP/s; "
-              f"table peak used for MFU: {peak_tflops} TFLOP/s", flush=True)
+        print(f"measured bf16 matmul peak (fp32 accumulate, {8192}^3 cuBLAS): {measured:.0f} TFLOP/s "
+              f"(table value {peak_tflops}); MFU below is relative to the measured peak", flush=True)
+        peak_tflops = round(measured)
     agent_steps = train_config["batch_size"]
     print(
         f"{properties.name} capability {capability}, {args.num_envs} envs, {vecenv.num_agents} agents, "
