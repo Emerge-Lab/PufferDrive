@@ -4,7 +4,10 @@
 # A trainer rank is a process with LOCAL_RANK in its environment that has children (the env workers);
 # torchrun has children but no LOCAL_RANK, workers have LOCAL_RANK but no children.
 found=0
-for pid in $(pgrep -f "pufferlib.pufferl"); do
+# torchrun's children are the trainer ranks; without torchrun fall back to scanning every pufferl process (slow: ~500 workers)
+candidates=$(for launcher in $(pgrep -f "bin/torchrun"); do pgrep -P "$launcher"; done)
+[ -n "$candidates" ] || candidates=$(pgrep -f "pufferlib.pufferl")
+for pid in $candidates; do
     rank=$(tr '\0' '\n' < /proc/"$pid"/environ 2>/dev/null | awk -F= '$1 == "LOCAL_RANK" {print $2}')
     [ -n "$rank" ] || continue
     kids=$(pgrep -P "$pid")
