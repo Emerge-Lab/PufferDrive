@@ -321,6 +321,7 @@ fused_slot_encoder_fwd_cuda(
                 }
                 amax[i][j] = a4;
             }
+        __syncthreads();  // keeps the next slot's x loads issued before the epilogue instead of sunk to store_x
         if (slot + 1 < S) store_x();
         __syncthreads();
     }
