@@ -4,8 +4,8 @@
 #SBATCH --nodes 1
 #SBATCH --time 1-00:00
 #SBATCH --gres gpu:8
-#SBATCH --mem=0                          # all of the node's memory; --gres, --mem and --cpus-per-task are overridable on the sbatch line
-#SBATCH --cpus-per-task 128
+#SBATCH --mem=400G                       # --gres, --mem and --cpus-per-task are overridable on the sbatch line
+#SBATCH --cpus-per-task 96
 #SBATCH --output experiments/logs/alpasim_%j.out
 #SBATCH --error experiments/logs/alpasim_%j.err
 #SBATCH --partition dev
@@ -31,6 +31,8 @@
 # Settings are the plain assignments below. Only RUN_DIR, TOPOLOGY and N_SCENES are also read from the environment: 3_train
 # and 7_eval chain this eval after their own by exporting RUN_DIR; a smoke test on a shared node is
 #   TOPOLOGY=1gpu N_SCENES=2 sbatch --gres gpu:1 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
+# and a full run on two GPUs of a shared node (12 scenes in flight instead of 32) is
+#   TOPOLOGY=2gpu sbatch --gres gpu:2 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
 
@@ -74,6 +76,7 @@ case "$CLUSTER" in
 esac
 case "$TOPOLOGY" in
     8gpu*) PARALLEL=32 ;;  # scenes in flight
+    2gpu) PARALLEL=12 ;;
     *) PARALLEL=4 ;;
 esac
 ALPAGYM_PY=$ALPAGYM_ROOT/.venv/bin/python
