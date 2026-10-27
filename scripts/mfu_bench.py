@@ -77,6 +77,23 @@ def print_kernel_table(prof, label, wall_seconds, top=18):
         print(f"  {100 * e.self_device_time_total / total_us:5.1f}% {e.self_device_time_total / 1e3:9.1f} {e.count:7d}  {e.key[:110]}")
 
 
+def measure_bf16_peak(seconds=3.0, size=8192):
+    """Achieved dense bf16 matmul TFLOP/s with fp32 accumulation on this device (cuBLAS, large square shapes)."""
+    a = torch.randn(size, size, device="cuda", dtype=torch.bfloat16)
+    b = torch.randn(size, size, device="cuda", dtype=torch.bfloat16)
+    for _ in range(3):
+        a @ b
+    torch.cuda.synchronize()
+    start = time.perf_counter()
+    iterations = 0
+    while time.perf_counter() - start < seconds:
+        a @ b
+        iterations += 1
+    torch.cuda.synchronize()
+    elapsed = time.perf_counter() - start
+    return 2.0 * size**3 * iterations / elapsed / 1e12
+
+
 def timed(fn):
     torch.cuda.synchronize()
     start = time.perf_counter()
@@ -97,6 +114,12 @@ def main():
         "--profile", action="store_true", help="print the trainer's section split (env wait, copy, forward, learn)"
     )
     parser.add_argument("--load-model", help="policy checkpoint (.pt) so the rollout shows trained behavior")
+    parser.add_argument(
+        "--measure-peak",
+        action="store_true",
+        help="time large bf16 matmuls (fp32 accumulate, as the model uses) and print the achieved TFLOP/s next to the "
+        "table peak the MFU figures divide by",
+    )
     parser.add_argument(
         "--kernel-table",
         action="store_true",
@@ -151,6 +174,10 @@ def main():
     properties = torch.cuda.get_device_properties(0)
     capability = torch.cuda.get_device_capability(0)
     peak_tflops = peak_bf16_tflops(properties.name)
+    if args.measure_peak:
+        measured = measure_bf16_peak()
+        print(f"measured bf16 matmul peak (fp32 accumulate, {8192}^3 cuBLAS): {measured:.0f} TFLOP/s; "
+              f"table peak used for MFU: {peak_tflops} TFLOP/s", flush=True)
     agent_steps = train_config["batch_size"]
     print(
         f"{properties.name} capability {capability}, {args.num_envs} envs, {vecenv.num_agents} agents, "
