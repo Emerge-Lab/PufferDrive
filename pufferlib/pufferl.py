@@ -1515,7 +1515,9 @@ def bind_process_to_gpu_numa_node(device_index):
         return None
     cpus = node_cpus & os.sched_getaffinity(0)
     if not cpus:
-        print(f"NUMA bind skipped: GPU {device_index} is on node {numa_node} but none of its CPUs are in this process's affinity mask")
+        print(
+            f"NUMA bind skipped: GPU {device_index} is on node {numa_node} but none of its CPUs are in this process's affinity mask"
+        )
         return None
     os.sched_setaffinity(0, cpus)
     print(f"GPU {device_index} on NUMA node {numa_node}: process and env workers bound to {len(cpus)} CPUs")

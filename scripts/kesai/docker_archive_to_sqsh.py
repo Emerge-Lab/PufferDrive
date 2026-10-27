@@ -24,7 +24,19 @@ COPY_BUFFER_BYTES = 1 << 20
 MAX_SYMLINK_HOPS = 40
 OPAQUE_WHITEOUT = ".wh..wh..opq"
 WHITEOUT_PREFIX = ".wh."
-SQUASH_OPTIONS = ["-noappend", "-comp", "lz4", "-Xhc", "-b", "262144", "-no-xattrs", "-force-uid", "0", "-force-gid", "0"]
+SQUASH_OPTIONS = [
+    "-noappend",
+    "-comp",
+    "lz4",
+    "-Xhc",
+    "-b",
+    "262144",
+    "-no-xattrs",
+    "-force-uid",
+    "0",
+    "-force-gid",
+    "0",
+]
 EXTRACTABLE_TYPES = (tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE, tarfile.SYMTYPE, tarfile.LNKTYPE)
 
 
@@ -85,7 +97,7 @@ def apply_whiteouts(layer_members, rootfs):
         if basename == OPAQUE_WHITEOUT:
             targets = list(parent.iterdir()) if parent.is_dir() else []
         else:
-            targets = [parent / basename[len(WHITEOUT_PREFIX):]]
+            targets = [parent / basename[len(WHITEOUT_PREFIX) :]]
         for target in targets:
             if target.is_symlink() or target.exists():
                 remove_existing(target)
@@ -191,7 +203,7 @@ def main():
         with tarfile.open(layer, "r:*") as layer_tar:
             removed_count = apply_whiteouts(layer_tar.getmembers(), rootfs)
             written_count, skipped_count = extract_layer(layer_tar, rootfs, dir_modes)
-        if layer not in layers[layer_idx + 1:]:  # identical layers share one blob
+        if layer not in layers[layer_idx + 1 :]:  # identical layers share one blob
             layer.unlink()
         print(
             f"[docker_archive_to_sqsh] layer {layer_idx + 1}/{len(layers)}: {written_count} entries, "

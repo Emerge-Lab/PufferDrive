@@ -16,7 +16,8 @@ source scripts/kesai/cluster_env.sh || exit 1
 # as a function of vec.batch_size, the number of workers one recv waits for: 30 (the "auto" default) means two buffers
 # alternate between simulation and GPU forward; smaller values keep more buffers in flight at the cost of more recv calls.
 # Values must divide NUM_ENVS (zero_copy). Prints the trainer's section split (env wait, copy, forward) per batch size.
-# Usage: sbatch scripts/kesai/19_rollout_batch_sweep_slurm.sh   # override with NUM_ENVS=.. NUM_AGENTS=.. BATCH_SIZES=".."
+# Usage: sbatch scripts/kesai/19_rollout_batch_sweep_slurm.sh   # override with NUM_ENVS=.. NUM_AGENTS=.. BATCH_SIZES=".." PUFFER_NUMA_BIND=0
+# NUMA A/B on one GPU: sbatch -m block:fcyclic -c 64 (CPUs split over both sockets) with NUM_ENVS=30, once with PUFFER_NUMA_BIND=0
 echo "START TIME: $(date)"
 start=$(date +%s)
 cd $PD || exit 1
@@ -35,7 +36,7 @@ for B in ${BATCH_SIZES}; do
     env PUFFER_SLOT_ENCODER_BACKEND=cuda python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch 32768 --fused \
         --rollout-only --profile --warmup 1 --epochs 3 \
         env.num_agents=${NUM_AGENTS} train.rollout_dtype=float16 env.scenario_length=1200 vec.batch_size=${B} 2>&1 \
-        | grep -E "ROLLOUT_RESULT|^  (env|eval_copy|eval_forward|eval_misc|eval) |^epoch|Error|error" | tee -a ${RESULT_FILE}
+        | grep -E "ROLLOUT_RESULT|NUMA|^  (env|eval_copy|eval_forward|eval_misc|eval) |^epoch|Error|error" | tee -a ${RESULT_FILE}
 done
 echo "=== end of rollout sweep ===" | tee -a ${RESULT_FILE}
 echo

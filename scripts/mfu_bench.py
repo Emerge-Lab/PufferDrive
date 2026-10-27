@@ -67,14 +67,20 @@ def model_flops_per_transition(policy):
 
 def print_kernel_table(prof, label, wall_seconds, top=18):
     """Per-kernel self CUDA time of one profiled phase, the share of all kernel time, and the GPU busy fraction."""
-    events = [e for e in prof.key_averages() if getattr(e, "device_type", None) is not None and e.self_device_time_total > 0]
+    events = [
+        e for e in prof.key_averages() if getattr(e, "device_type", None) is not None and e.self_device_time_total > 0
+    ]
     events = [e for e in events if str(e.device_type).endswith("CUDA")]
     total_us = sum(e.self_device_time_total for e in events)
-    print(f"kernel table, {label}: {total_us / 1e6:.3f} s of CUDA kernel time in {wall_seconds:.3f} s wall "
-          f"(GPU busy {100 * total_us / 1e6 / max(wall_seconds, 1e-9):.0f}%), {len(events)} distinct kernels")
+    print(
+        f"kernel table, {label}: {total_us / 1e6:.3f} s of CUDA kernel time in {wall_seconds:.3f} s wall "
+        f"(GPU busy {100 * total_us / 1e6 / max(wall_seconds, 1e-9):.0f}%), {len(events)} distinct kernels"
+    )
     print(f"  {'share':>6s} {'ms':>9s} {'calls':>7s}  kernel")
     for e in sorted(events, key=lambda e: -e.self_device_time_total)[:top]:
-        print(f"  {100 * e.self_device_time_total / total_us:5.1f}% {e.self_device_time_total / 1e3:9.1f} {e.count:7d}  {e.key[:110]}")
+        print(
+            f"  {100 * e.self_device_time_total / total_us:5.1f}% {e.self_device_time_total / 1e3:9.1f} {e.count:7d}  {e.key[:110]}"
+        )
 
 
 def measure_bf16_peak(seconds=3.0, size=8192):
@@ -106,7 +112,9 @@ def print_gemm_shape_table(prof, label, top=12):
     print(f"gemm shapes, {label}: {total_us / 1e6:.3f} s of CUDA time in GEMM ops")
     print(f"  {'share':>6s} {'ms':>9s} {'calls':>7s} {'ms/call':>8s}  op  input shapes")
     for e in sorted(rows, key=lambda e: -e.device_time_total)[:top]:
-        print(f"  {100 * e.device_time_total / total_us:5.1f}% {e.device_time_total / 1e3:9.1f} {e.count:7d} {e.device_time_total / 1e3 / e.count:8.3f}  {e.key}  {e.input_shapes}")
+        print(
+            f"  {100 * e.device_time_total / total_us:5.1f}% {e.device_time_total / 1e3:9.1f} {e.count:7d} {e.device_time_total / 1e3 / e.count:8.3f}  {e.key}  {e.input_shapes}"
+        )
 
 
 def timed(fn):
@@ -193,8 +201,11 @@ def main():
     peak_tflops = peak_bf16_tflops(properties.name)
     if args.measure_peak:
         measured = measure_bf16_peak()
-        print(f"measured bf16 matmul peak (fp32 accumulate, {8192}^3 cuBLAS): {measured:.0f} TFLOP/s "
-              f"(table value {peak_tflops}); MFU below is relative to the measured peak", flush=True)
+        print(
+            f"measured bf16 matmul peak (fp32 accumulate, {8192}^3 cuBLAS): {measured:.0f} TFLOP/s "
+            f"(table value {peak_tflops}); MFU below is relative to the measured peak",
+            flush=True,
+        )
         peak_tflops = round(measured)
     agent_steps = train_config["batch_size"]
     print(
