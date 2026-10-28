@@ -370,6 +370,7 @@ static const int ROAD_OFFSETS[25][2]
 
 // Stopped-agent detection
 #define AGENT_STOPPED_SPEED_THRESHOLD 0.2f
+#define AGENT_CREEPING_SPEED_THRESHOLD_MPS 4.0f
 #define MAX_STOPPED_SECONDS 60.0f
 
 #define METRIC_SCORE_WINDOW_SECONDS 10.0f

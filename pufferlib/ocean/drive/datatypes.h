@@ -123,6 +123,9 @@ struct Agent {
     float gt_goal_x;               // Last valid ground-truth goal position x
     float gt_goal_y;               // Last valid ground-truth goal position y
     float gt_goal_z;               // Last valid ground-truth goal position z
+    // Route meters from the spawn pose to each goal of the episode's initial set
+    float initial_goal_route_distance_meters[MAX_GOALS];
+    int initial_route_goal_count;
 
     int stopped; // 0/1 -> freeze if set
     int removed; // 0/1 -> remove from sim if set

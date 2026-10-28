@@ -188,6 +188,38 @@ struct Log {
     float hitter_compliance_first_speed_limit_timestep;
     float hitter_compliance_wrong_way_distance_meters;
     float hitter_compliance_max_speed_ratio;
+    float time_stopped_seconds;
+    float time_creeping_seconds;
+    float time_driving_seconds;
+    float compliance_wrong_way_distance_meters;
+    float compliance_red_light_count;
+    float compliance_solid_line_count;
+    float hitter_n;
+    float hitter_distance_meters;
+    float hitter_goals_reached;
+    float hitter_route_goals_expected;
+    float hitter_route_goals_reached;
+    float hitter_time_stopped_seconds;
+    float hitter_time_creeping_seconds;
+    float hitter_time_driving_seconds;
+    float hitter_wrong_way_distance_meters;
+    float hitter_red_light_count;
+    float hitter_solid_line_count;
+    float hitter_offroad_count;
+    float hitter_adv_collision_count;
+    float nonhitter_n;
+    float nonhitter_distance_meters;
+    float nonhitter_goals_reached;
+    float nonhitter_route_goals_expected;
+    float nonhitter_route_goals_reached;
+    float nonhitter_time_stopped_seconds;
+    float nonhitter_time_creeping_seconds;
+    float nonhitter_time_driving_seconds;
+    float nonhitter_wrong_way_distance_meters;
+    float nonhitter_red_light_count;
+    float nonhitter_solid_line_count;
+    float nonhitter_offroad_count;
+    float nonhitter_adv_collision_count;
 };
 
 typedef struct {
@@ -1253,7 +1285,7 @@ static bool compute_new_route(Drive *env, Agent *agent, int current_lane_idx) {
     return true;
 }
 
-static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
+static bool generate_new_goals_from_route(Drive *env, Agent *agent, bool is_initial_goal_set) {
     // Places num_goals goals along the agent's route by native lane arc-length.
     // Replay follows the loaded route to its end; gigaflow route source random-walks a fresh route
     // when the current one runs out.
@@ -1307,8 +1339,13 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
 
     // Sample a spacing per goal, then walk the route placing goals at those forward distances.
     float goal_spacings_meters[MAX_GOALS];
+    float goal_route_distance_meters = 0.0f;
     for (int goal_idx = 0; goal_idx < env->num_goals; goal_idx++) {
         goal_spacings_meters[goal_idx] = sample_uniform(&env->rng_state, env->min_goal_spacing, env->max_goal_spacing);
+        goal_route_distance_meters += goal_spacings_meters[goal_idx];
+        if (is_initial_goal_set) {
+            agent->initial_goal_route_distance_meters[goal_idx] = goal_route_distance_meters;
+        }
     }
 
     float goal_x[MAX_GOALS], goal_y[MAX_GOALS], goal_z[MAX_GOALS];
@@ -1329,6 +1366,9 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
     // Common case: the route was long enough to hold every goal, front-aligned at slot 0.
     if (placed_goal_count == env->num_goals) {
         commit_goals(env, agent, goal_x, goal_y, goal_z, goal_lane, placed_goal_count, 0);
+        if (is_initial_goal_set) {
+            agent->initial_route_goal_count = placed_goal_count;
+        }
         return true;
     }
 
@@ -1375,6 +1415,9 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
             return false;
         }
         commit_goals(env, agent, goal_x, goal_y, goal_z, goal_lane, placed_goal_count, 0);
+        if (is_initial_goal_set) {
+            agent->initial_route_goal_count = placed_goal_count;
+        }
         return true;
     }
 
@@ -1389,6 +1432,10 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
     goal_lane[placed_goal_count] = last_lane_idx;
     int valid_goal_count = placed_goal_count + 1;
     commit_goals(env, agent, goal_x, goal_y, goal_z, goal_lane, valid_goal_count, env->num_goals - valid_goal_count);
+    if (is_initial_goal_set) {
+        agent->initial_goal_route_distance_meters[placed_goal_count] = route_remaining_meters;
+        agent->initial_route_goal_count = valid_goal_count;
+    }
     return true;
 }
 
@@ -1472,14 +1519,17 @@ static int gt_goal_step(Drive *env, Agent *agent) {
     return -1;
 }
 
-static bool generate_agent_goals(Drive *env, Agent *agent) {
+static bool generate_agent_goals(Drive *env, Agent *agent, bool is_initial_goal_set) {
+    if (is_initial_goal_set) {
+        agent->initial_route_goal_count = 0;
+    }
     if (controller_uses_route_goals(agent->controller) || env->goal_source == GOAL_SOURCE_ROUTE) {
         if (agent->route_length == 0) {
             if (agent->current_lane_idx == -1 || !compute_new_route(env, agent, agent->current_lane_idx)) {
                 return false;
             }
         }
-        return generate_new_goals_from_route(env, agent);
+        return generate_new_goals_from_route(env, agent, is_initial_goal_set);
     }
 
     if (env->goal_source == GOAL_SOURCE_MAP) {
@@ -2011,6 +2061,7 @@ static float compliance_lane_heading(const Agent *agent, const RoadMapElement *l
 static void record_compliance_sample(
     Drive *env,
     Agent *agent,
+    Log *agent_log,
     int lane_idx,
     float lane_heading,
     bool red_light_violation) {
@@ -2065,6 +2116,11 @@ static void record_compliance_sample(
     bool overwrite_current
         = agent->compliance_hist_count > 0 && agent->compliance_hist_timestep[newest_idx] == env->timestep;
     if (!overwrite_current) {
+        bool previous_red_light_violation = agent->compliance_hist_count > 0
+            && (agent->compliance_hist_flags[newest_idx] & COMPLIANCE_FLAG_RED_LIGHT);
+        agent_log->compliance_red_light_count += red_light_violation && !previous_red_light_violation;
+        agent_log->compliance_wrong_way_distance_meters += wrong_way_distance_meters;
+        agent_log->compliance_solid_line_count += (flags & COMPLIANCE_FLAG_SOLID_LINE) != 0;
         for (int history_idx = 0; history_idx < COMPLIANCE_HISTORY_LEN - 1; history_idx++) {
             agent->compliance_hist_timestep[history_idx] = agent->compliance_hist_timestep[history_idx + 1];
             agent->compliance_hist_flags[history_idx] = agent->compliance_hist_flags[history_idx + 1];
@@ -3272,6 +3328,50 @@ static float calculate_puffer_score(Log *agent_log, float duration_steps, float 
     return agent_log->puffer_score;
 }
 
+static void add_traffic_role_log(Drive *env, Log *episode_log) {
+    for (int i = EGO_IDX + 1; i < env->active_agent_count; i++) {
+        Agent *agent = &env->agents[env->active_agent_indices[i]];
+        if (agent->is_blind_partner || agent->is_phantom_braker) {
+            continue;
+        }
+        Log *agent_log = &env->logs[i];
+        float route_goals_expected = 0.0f;
+        for (int goal_idx = 0; goal_idx < agent->initial_route_goal_count; goal_idx++) {
+            route_goals_expected += agent->initial_goal_route_distance_meters[goal_idx] <= agent->distance_since_spawn;
+        }
+        float route_goals_reached = fminf(agent_log->num_goals_reached, (float) agent->initial_route_goal_count);
+        if (agent_log->traffic_sdc_collision_rate > 0.0f) {
+            episode_log->hitter_n += 1.0f;
+            episode_log->hitter_distance_meters += agent->distance_since_spawn;
+            episode_log->hitter_goals_reached += agent_log->num_goals_reached;
+            episode_log->hitter_route_goals_expected += route_goals_expected;
+            episode_log->hitter_route_goals_reached += route_goals_reached;
+            episode_log->hitter_time_stopped_seconds += agent_log->time_stopped_seconds;
+            episode_log->hitter_time_creeping_seconds += agent_log->time_creeping_seconds;
+            episode_log->hitter_time_driving_seconds += agent_log->time_driving_seconds;
+            episode_log->hitter_wrong_way_distance_meters += agent_log->compliance_wrong_way_distance_meters;
+            episode_log->hitter_red_light_count += agent_log->compliance_red_light_count;
+            episode_log->hitter_solid_line_count += agent_log->compliance_solid_line_count;
+            episode_log->hitter_offroad_count += agent_log->offroad_rate;
+            episode_log->hitter_adv_collision_count += agent_log->traffic_traffic_collision_rate;
+            continue;
+        }
+        episode_log->nonhitter_n += 1.0f;
+        episode_log->nonhitter_distance_meters += agent->distance_since_spawn;
+        episode_log->nonhitter_goals_reached += agent_log->num_goals_reached;
+        episode_log->nonhitter_route_goals_expected += route_goals_expected;
+        episode_log->nonhitter_route_goals_reached += route_goals_reached;
+        episode_log->nonhitter_time_stopped_seconds += agent_log->time_stopped_seconds;
+        episode_log->nonhitter_time_creeping_seconds += agent_log->time_creeping_seconds;
+        episode_log->nonhitter_time_driving_seconds += agent_log->time_driving_seconds;
+        episode_log->nonhitter_wrong_way_distance_meters += agent_log->compliance_wrong_way_distance_meters;
+        episode_log->nonhitter_red_light_count += agent_log->compliance_red_light_count;
+        episode_log->nonhitter_solid_line_count += agent_log->compliance_solid_line_count;
+        episode_log->nonhitter_offroad_count += agent_log->offroad_rate;
+        episode_log->nonhitter_adv_collision_count += agent_log->traffic_traffic_collision_rate;
+    }
+}
+
 static void add_log(Drive *env) {
     int safe_timestep = (env->timestep > 0) ? env->timestep : 1;
     Log episode_log = {0};
@@ -3412,6 +3512,9 @@ static void add_log(Drive *env) {
         episode_log.sdc_reward_overspeed += env->logs[i].reward_overspeed;
         episode_log.sdc_reward_ade += env->logs[i].reward_ade;
         episode_log.n += 1;
+    }
+    if (env->compute_eval_metrics) {
+        add_traffic_role_log(env, &episode_log);
     }
     if (env->target_collision_analyzed_episode) {
         episode_log.sdc_target_collision_count += 1.0f;
@@ -4152,7 +4255,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int active_idx) {
     agent->yaw_rate = 0.0f;
     update_agent_speed(agent);
 
-    if (!generate_agent_goals(env, agent)) {
+    if (!generate_agent_goals(env, agent, true)) {
         printf("[GIGAFLOW WARNING] -> Failed to generate goals for agent %d\n", agent_idx);
         return false;
     }
@@ -4655,7 +4758,7 @@ void init(Drive *env) {
 
     for (int i = 0; i < env->active_agent_count; i++) {
         Agent *agent = &env->agents[env->active_agent_indices[i]];
-        if (!generate_agent_goals(env, agent)) {
+        if (!generate_agent_goals(env, agent, true)) {
             invalidate_agent(agent);
             agent->removed = 1;
         }
@@ -5074,6 +5177,15 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     // Update cumulative metrics
     agent->distance_since_spawn += agent->sim_speed * env->dt;
     agent_log->avg_speed_per_agent += agent->sim_speed;
+    if (env->compute_eval_metrics) {
+        if (agent->sim_speed < AGENT_STOPPED_SPEED_THRESHOLD) {
+            agent_log->time_stopped_seconds += env->dt;
+        } else if (agent->sim_speed < AGENT_CREEPING_SPEED_THRESHOLD_MPS) {
+            agent_log->time_creeping_seconds += env->dt;
+        } else {
+            agent_log->time_driving_seconds += env->dt;
+        }
+    }
 
     // Speed limit metric (CUSTOM)
     float target_speed = 15.0f; // Default target speed
@@ -5111,7 +5223,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     bool compliance_red_light_violation = false;
     if (env->compute_eval_metrics) {
         compliance_red_light_violation = check_red_light_violation(env, agent_idx);
-        record_compliance_sample(env, agent, lane_idx, lane_heading, compliance_red_light_violation);
+        record_compliance_sample(env, agent, agent_log, lane_idx, lane_heading, compliance_red_light_violation);
     }
 
     // Handle terminal events - NOTE: move it elsewhere?
@@ -5172,6 +5284,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
                 record_compliance_sample(
                     env,
                     collision_adversary,
+                    &env->logs[active_traffic_log_idx(env, collision_adversary_idx)],
                     collision_lane_idx,
                     collision_lane_heading,
                     collision_red_light_violation);
@@ -6242,7 +6355,7 @@ void c_reset(Drive *env) {
         sample_erratic_flags(env, agent);
         generate_reward_coefs(env, agent);
 
-        if (!generate_agent_goals(env, agent)) {
+        if (!generate_agent_goals(env, agent, true)) {
             invalidate_agent(agent);
             agent->removed = 1;
         }
@@ -6623,7 +6736,7 @@ void c_step(Drive *env) {
         }
         // On regen failure remove the agent (route helper self-invalidates; the extra call is idempotent),
         // otherwise a stale current_goal_idx >= goal_count leaves an empty goal window and the agent freezes.
-        bool regen_ok = generate_agent_goals(env, agent);
+        bool regen_ok = generate_agent_goals(env, agent, false);
         if (!regen_ok) {
             invalidate_agent(agent);
             agent->removed = 1;

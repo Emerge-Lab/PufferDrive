@@ -2359,6 +2359,9 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
 #define ASSIGN_SPLIT_METRIC(key, aggregate_field, sdc_field)                                                           \
     assign_to_dict(dict, "sdc_" key, log->sdc_field *sdc_scale);                                                       \
     assign_to_dict(dict, "traffic_" key, (log->aggregate_field - log->sdc_field) * traffic_scale)
+#define ASSIGN_TRAFFIC_ROLE_SUM(field)                                                                                 \
+    assign_to_dict(dict, "hitter_" #field, log->hitter_##field *n);                                                    \
+    assign_to_dict(dict, "nonhitter_" #field, log->nonhitter_##field *n)
 
     assign_to_dict(dict, "n", log->n);
     assign_to_dict(dict, "offroad_rate", log->offroad_rate);
@@ -2539,9 +2542,23 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
             "hitter_compliance_wrong_way_distance_meters",
             log->hitter_compliance_wrong_way_distance_meters * sdc_scale);
         assign_to_dict(dict, "hitter_compliance_max_speed_ratio", log->hitter_compliance_max_speed_ratio * sdc_scale);
+        ASSIGN_TRAFFIC_ROLE_SUM(n);
+        ASSIGN_TRAFFIC_ROLE_SUM(distance_meters);
+        ASSIGN_TRAFFIC_ROLE_SUM(goals_reached);
+        ASSIGN_TRAFFIC_ROLE_SUM(route_goals_expected);
+        ASSIGN_TRAFFIC_ROLE_SUM(route_goals_reached);
+        ASSIGN_TRAFFIC_ROLE_SUM(time_stopped_seconds);
+        ASSIGN_TRAFFIC_ROLE_SUM(time_creeping_seconds);
+        ASSIGN_TRAFFIC_ROLE_SUM(time_driving_seconds);
+        ASSIGN_TRAFFIC_ROLE_SUM(wrong_way_distance_meters);
+        ASSIGN_TRAFFIC_ROLE_SUM(red_light_count);
+        ASSIGN_TRAFFIC_ROLE_SUM(solid_line_count);
+        ASSIGN_TRAFFIC_ROLE_SUM(offroad_count);
+        ASSIGN_TRAFFIC_ROLE_SUM(adv_collision_count);
     }
 
 #undef ASSIGN_SPLIT_METRIC
+#undef ASSIGN_TRAFFIC_ROLE_SUM
 
     return 0;
 }
