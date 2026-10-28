@@ -51,7 +51,7 @@ benchmarks:
       num_maps: 8
       max_agents_per_env: 50
       max_scenarios_per_batch: null
-      scenario_length: 6000
+      scenario_length: 9000  # 600 s at dt 0.0667, GIGAFLOW Table A4
       control_mode: control_vehicles
       map_dir: pufferlib/resources/drive/binaries/carla
 

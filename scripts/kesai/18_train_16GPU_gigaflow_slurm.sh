@@ -124,7 +124,7 @@ RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
     || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
 
 # parallel_eval runs 8 srun shards per node (one GPU and an eighth of the CPUs each, 60 blocking workers like
-# training) so the eval uses every GPU and thread of the allocation; 60 workers x 5 scenarios = 300 scenarios per 6000 steps.
+# training) so the eval uses every GPU and thread of the allocation; 60 workers x 5 scenarios = 300 scenarios per 9000-step episode.
 echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 80000 \
