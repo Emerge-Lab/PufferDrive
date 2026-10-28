@@ -1,0 +1,182 @@
+# @package _global_
+# Static record of the nuPlan SDC-only run whose best checkpoint is
+# .temp_puffer/2026-09-08_bootstrap_off_sdc_only_bootstrap_off_sdc_only_seed0_run_namefinal-config-run-2026-09-08_124438-seed0_4cd7fe8/best_models/best_trainer_state_002650.pt
+# Source: that run's resolved config.yaml, code at commit 331540a9, wandb pufferdrive / sdc-only / final-config-run-2026-09-08_124438-seed0.
+# Launched by scripts/launch_bootstrap_off_sdc_only.sh (seed 0 of 0:1:2:3) on Greene l40s_public: 1 GPU, 16 CPUs, 96 GB.
+# It changed only train.use_value_bootstrapping, train.seed and env.map_dir from that commit's puffer_drive.yaml defaults.
+# Every value is pinned so later default changes cannot move this recipe; keys added after 331540a9 are pinned off.
+# Task: the policy drives each scene's SDC and every other agent replays its log; 24 envs x 1024 scenes.
+# One epoch is 24 x 1024 x 64 = 1,572,864 transitions; best_models keeps the highest training puffer_score (epoch 2650).
+# Usage: puffer train puffer_drive +experiment=nuplan_sdc_only_bootstrap_off_2026_09_08 [env.map_dir=<dir>]
+rnn_name: null
+vec:
+  backend: Multiprocessing
+  num_envs: 24
+  num_workers: 24
+  batch_size: auto
+  zero_copy: true
+  seed: 42
+  logreplay_fraction: 0.0
+env:
+  simulation_mode: replay
+  control_mode: control_sdc_only
+  sdc_controller: policy
+  non_sdc_controller: policy
+  non_vehicle_controller: auto
+  init_mode: create_all_valid
+  num_agents: 1024
+  min_agents_per_env: 1
+  max_agents_per_env: 120
+  # The discrete policy head (4 x 3 jerk bins) reaches this continuous env through the trainer's action table
+  action_type: continuous
+  dynamics_model: jerk
+  reset_accel_on_stop: false
+  dt: 0.1
+  spawn_initial_speed: 0.0
+  collision_behavior: stop
+  offroad_behavior: stop
+  traffic_light_behavior: stop
+  goal_reached_behavior: ignore
+  use_map_cache: 0
+  use_neighbor_cache: 0
+  scenario_length: 200
+  resample_frequency: 1000000
+  termination_mode: 1
+  inactive_agent_threshold: 0.4
+  terminate_on_goal: 1
+  init_step: 0
+  init_step_spread: false
+  init_step_min_horizon: 20
+  init_step_spread_anneal_epochs: 0
+  failure_branching: false
+  compute_eval_metrics: false
+  goal_regen_mode: finite
+  goal_source: gt
+  obs_goal_lane_distance: true
+  goal_radius: 2.0
+  goal_speed: 30.0
+  default_speed_limit: 30.0
+  num_goals: 3
+  min_goal_spacing: 0.1
+  max_goal_spacing: 200.0
+  reward_conditioning: false
+  reward_randomization: false
+  reward_log_sampling: false
+  reward_coef_overrides: null
+  learner_agents: all
+  log_sdc_only: false
+  reward_goal: 1.0
+  reward_collision: 4.0
+  reward_collision_speed_coef: 0.0
+  reward_offroad: 1.5
+  reward_stop_line: 2.0
+  reward_comfort: 0.0
+  disable_comfort_penalty: false
+  reward_lane_align: 0.025
+  reward_vel_align: 1.0
+  reward_lane_center: 0.001
+  reward_center_bias: 0.0
+  reward_velocity: 0.0025
+  reward_reverse: 0.005
+  reward_timestep: 2.5e-05
+  reward_overspeed: 5.0e-05
+  reward_ade: 0.0
+  reward_displacement: 0.0
+  # nuPlan train split, scenes with a moving SDC
+  map_dir: /scratch/rs10105/pufferdata/nuplan_train/nuplan_train_moving
+  num_maps: 100000
+  obs_slots_lane_n: 90
+  obs_slots_boundary_n: 70
+  obs_slots_partners_n: 64
+  obs_slots_traffic_controls_n: 12
+  obs_dropout_lane: 0.3
+  obs_dropout_boundary: 0.4
+  obs_lane_stride: 2
+  obs_boundary_stride: 1
+  obs_norm_goal_offset_m: 200.0
+  obs_norm_xy_offset_m: 200.0
+  obs_norm_veh_length_m: 10.0
+  obs_norm_veh_width_m: 5.0
+  obs_norm_road_seg_length_m: 10.0
+  obs_norm_road_seg_width_m: 5.0
+  obs_norm_z_m: 10.0
+  eval_perceived_size_margin_m: 0.1
+  obs_range_road_front_m: 200.0
+  obs_range_road_behind_m: 60.0
+  obs_range_road_side_m: 50.0
+  obs_range_partner_m: 200.0
+  obs_range_traffic_control_m: 200.0
+  partner_blindness_prob: 0.0
+  partner_blindness_trigger_prob: 0.0
+  partner_blindness_duration_seconds: 3.0
+  phantom_braking_prob: 0.0
+  phantom_braking_trigger_prob: 0.0
+  phantom_braking_duration_seconds: 3.0
+policy:
+  ego_input_size: 128
+  partner_input_size: 256
+  lane_input_size: 256
+  boundary_input_size: 256
+  traffic_control_input_size: 128
+  context_input_size: 128
+  encoder_activation: relu
+  encoder_layer_norm: true
+  mask_padded_features: false
+  backbone_hidden_size: 1024
+  backbone_num_layers: 3
+  backbone_activation: gelu
+  backbone_layer_norm: false
+  actor_hidden_size: 256
+  actor_num_layers: 1
+  actor_head_layer_norm: false
+  critic_hidden_size: 256
+  critic_num_layers: 1
+  critic_head_layer_norm: false
+  shared_network: true
+  action_type: discrete
+train:
+  seed: 0
+  device: cuda
+  torch_deterministic: false
+  cpu_offload: false
+  optimizer: adamw
+  # Annealing over 500B steps keeps the learning rate ~constant for a run bounded by wall time
+  anneal_lr: true
+  amp: true
+  precision: bfloat16
+  total_timesteps: 500000000000
+  learning_rate: 0.0005
+  gamma: 0.999
+  gae_lambda: 0.95
+  update_epochs: 3
+  clip_coef: 0.2
+  vf_coef: 0.5
+  vf_clip_coef: null
+  max_grad_norm: 0.5
+  normalize_rewards: false
+  ent_coef: 0.01
+  # Truncation bootstrapping inflated nuPlan value errors (close goals, gamma 0.999)
+  use_value_bootstrapping: false
+  coplayer_policy_path: null
+  anchor_coef: 0.0
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_eps: 1.0e-08
+  adam_weight_decay: 0.01
+  checkpoint_interval: 50
+  batch_size: auto
+  min_batch_size: null
+  minibatch_size: 32768
+  max_minibatch_size: 32768
+  bptt_horizon: 64
+  compile: false
+  compile_mode: default
+  compile_fullgraph: false
+  vtrace_rho_clip: 1
+  vtrace_c_clip: 1
+  adv_sampling_prio_alpha: 0.8499999999999999
+  adv_sampling_prio_beta0: 0.8499999999999999
+  adv_filter_enabled: true
+  adv_filter_ewma_beta: 0.25
+  adv_filter_threshold_scale: 0.01
+  evaluation_interval_epochs: null

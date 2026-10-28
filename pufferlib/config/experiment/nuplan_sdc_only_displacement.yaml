@@ -1,0 +1,9 @@
+# @package _global_
+# The 2026-09-08 nuPlan SDC-only recipe plus a per-step penalty for the SDC's distance to its logged pose.
+# Usage: puffer train puffer_drive +experiment=nuplan_sdc_only_displacement [env.reward_displacement=<coef>]
+defaults:
+  - nuplan_sdc_only_bootstrap_off_2026_09_08
+  - _self_
+env:
+  # -coef * dt * meters per step: 0.05 costs 0.005 per meter per step, 1.0 per meter over a full 200-step episode
+  reward_displacement: 0.05
