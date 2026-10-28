@@ -44,14 +44,15 @@ if [ ! -f ${MODEL_PATH} ]; then
     exit 1
 fi
 
-# parallel_eval places one shard per allocated node via srun, so each shard's 128
-# env workers get a full node's cores instead of sharing the batch host.
+# parallel_eval runs 8 srun shards per node (one GPU and an eighth of the CPUs each, 60 blocking workers like
+# training) so the eval uses every GPU and thread of the allocation; 60 workers x 5 scenarios = 300 scenarios per 6000 steps.
 echo "Evaluating ${MODEL_PATH}"
 .venv/bin/python scripts/parallel_eval.py carla \
-    --total-scenarios 40000 \
+    --total-scenarios 80000 \
     --num-nodes 2 \
+    --shards-per-node 8 \
     env.map_dir=$PD/pufferlib/resources/drive/binaries/carla \
-    vec.num_envs=128 \
+    vec.num_envs=60 \
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
     env.eval_perceived_size_margin_m=0.2 \

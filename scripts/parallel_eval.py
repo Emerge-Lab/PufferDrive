@@ -3,15 +3,15 @@
 Each shard runs an independent `puffer eval` process over a disjoint scenario
 window (eval.scenario_offset), then the per-shard episode_metrics.csv files are
 merged into a single report and optionally attached to the training wandb run.
---num-gpus runs one shard per local GPU; --num-nodes runs one shard per node of
-the surrounding SLURM allocation (each claiming a full node's CPUs and one GPU
-via srun), so every shard gets its own node's cores.
+--num-gpus runs one shard per local GPU; --num-nodes runs the shards as srun steps
+of the surrounding SLURM allocation, --shards-per-node of them per node (default 1),
+each with one GPU and an equal share of the node's CPUs (SLURM_CPUS_PER_TASK).
 
 Usage (from the repo root, venv active):
     python scripts/parallel_eval.py carla \
-        --total-scenarios 40000 --num-gpus 8 \
+        --total-scenarios 80000 --num-nodes 4 --shards-per-node 8 \
         load_model_path=experiments/run/final_model.pt \
-        eval.output_name=run vec.num_envs=16 wandb=True
+        eval.output_name=run vec.num_envs=60 wandb=True
 """
 
 import argparse
@@ -33,8 +33,20 @@ def parse_arguments():
     parser.add_argument("--total-scenarios", type=int, required=True)
     shard_group = parser.add_mutually_exclusive_group(required=True)
     shard_group.add_argument("--num-gpus", type=int, help="Run one shard per local GPU")
-    shard_group.add_argument("--num-nodes", type=int, help="Run one shard per SLURM node via srun, 1 GPU each")
+    shard_group.add_argument(
+        "--num-nodes", type=int, help="Run shards as srun steps over this many SLURM nodes, 1 GPU each"
+    )
+    parser.add_argument(
+        "--shards-per-node",
+        type=int,
+        default=1,
+        help="With --num-nodes: steps per node, one GPU each, the node's CPUs split evenly between them",
+    )
     arguments, overrides = parser.parse_known_args()
+    if arguments.shards_per_node < 1:
+        parser.error("--shards-per-node must be at least 1")
+    if arguments.shards_per_node > 1 and arguments.num_nodes is None:
+        parser.error("--shards-per-node requires --num-nodes")
     for override in overrides:
         if override.startswith("--"):
             parser.error(f"Unknown flag {override}; Hydra overrides use key=value syntax")
@@ -83,7 +95,7 @@ def print_log_tail(log_path):
 def main():
     arguments, overrides = parse_arguments()
     use_srun = arguments.num_nodes is not None
-    num_shards = arguments.num_nodes if use_srun else arguments.num_gpus
+    num_shards = arguments.num_nodes * arguments.shards_per_node if use_srun else arguments.num_gpus
     if num_shards < 1:
         raise SystemExit("--num-gpus/--num-nodes must be at least 1")
     if arguments.total_scenarios < num_shards:
@@ -91,9 +103,20 @@ def main():
     if use_srun:
         if "SLURM_JOB_ID" not in os.environ:
             raise SystemExit("--num-nodes requires running inside a SLURM allocation")
-        cpus_per_shard = os.environ.get("SLURM_CPUS_PER_TASK")
-        if cpus_per_shard is None:
+        cpus_per_node = os.environ.get("SLURM_CPUS_PER_TASK")
+        if cpus_per_node is None or not cpus_per_node.isdigit():
             raise SystemExit("--num-nodes requires SLURM_CPUS_PER_TASK (set #SBATCH --cpus-per-task)")
+        cpus_per_shard = int(cpus_per_node) // arguments.shards_per_node
+        if cpus_per_shard < 1:
+            raise SystemExit(f"--shards-per-node {arguments.shards_per_node} exceeds the {cpus_per_node} CPUs per node")
+        print(
+            f"{num_shards} shards: {arguments.num_nodes} nodes x {arguments.shards_per_node} per node, {cpus_per_shard} CPUs each"
+        )
+        num_envs_override = override_value(overrides, "vec.num_envs")
+        if num_envs_override is not None and num_envs_override.isdigit() and int(num_envs_override) >= cpus_per_shard:
+            print(
+                f"Note: vec.num_envs={num_envs_override} blocking workers plus the driver exceed a shard's {cpus_per_shard} CPUs"
+            )
     for override in overrides:
         if override.partition("=")[0] in RESERVED_OVERRIDE_KEYS:
             raise SystemExit(f"Override '{override}' is managed by parallel_eval.py; remove it")
@@ -134,17 +157,19 @@ def main():
             f"eval.output_subdir={shard_subdir}",
         ]
         if use_srun:
-            # Full-node CPU request forces SLURM to place each shard step on its own node.
+            # --exact keeps the step to its CPU share (default: the whole node); --mem=0 shares the job's memory between steps
             command = [
                 "srun",
                 "--nodes=1",
                 "--ntasks=1",
+                "--exact",
                 f"--cpus-per-task={cpus_per_shard}",
+                "--mem=0",
                 "--gres=gpu:1",
                 *command,
             ]
             shard_env = dict(os.environ)
-            placement = "own node via srun"
+            placement = f"srun step, 1 GPU, {cpus_per_shard} CPUs"
         else:
             shard_env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu_ids[shard_idx])
             placement = f"GPU {gpu_ids[shard_idx]}"
