@@ -46,7 +46,7 @@ export OMP_NUM_THREADS=1
 
 # Hand-written CUDA slot-encoder kernels instead of the Triton ones (same math); triton to compare. Passed per command,
 # never exported: sbatch copies this shell's environment into the eval jobs below, whose interpreters lack cuda-bindings.
-SLOT_ENCODER_BACKEND=cuda
+SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND:-cuda}
 echo "slot encoder backend: ${SLOT_ENCODER_BACKEND}"
 
 source .venv/bin/activate
@@ -60,6 +60,8 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # led on every per-step metric, so 131072 is the default. k_scaled_0060 = the 0058 config on the 2026-10-27 fused-kernel
 # and NUMA-bind code, the speed/quality A/B against 0058:
 #   sbatch scripts/kesai/18_train_16GPU_gigaflow_slurm.sh
+# Same job on the scaleway H100 nodes (18 threads per rank, the 60 blocking workers oversubscribe the CPUs 3.3x):
+#   RUN_NAME=k_scaled_0061_1000 sbatch scripts/kesai/18_train_16GPU_gigaflow_slurm.sh   # NUM_ENVS=32 fits the CPUs but shrinks the rollout batch
 MINIBATCH=${MINIBATCH:-131072}
 echo "minibatch per GPU: ${MINIBATCH}"
 # Execute torchrun across all nodes using srun
@@ -86,7 +88,7 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
-    vec.num_envs=60 \
+    vec.num_envs=${NUM_ENVS:-60} \
     env.num_agents=4096 \
     env.scenario_length=1200 \
     train.rollout_dtype=float16 \
