@@ -24,7 +24,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=${RUN_NAME:-k_scaled_0062_${SEED}}
+export RUN_NAME=${RUN_NAME:-k_scaled_0063_${SEED}}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -52,11 +52,12 @@ echo "slot encoder backend: ${SLOT_ENCODER_BACKEND}"
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # Blocking env workers: kesai nodes give 60 threads per rank (--exclusive); 0053/0059 ran vec.num_envs=60, one worker per thread
-# (~25 M SPS vs ~21.5 M with 32). 0062 runs 128 workers per rank (2.1x oversubscribed, workers block rather than spin): 131k agents
-# per GPU, ~1400 map instances per GPU, 16.8 M transitions per GPU per rollout, ~35 GB float16 obs buffer (0053/0059 ran float32).
+# (~25 M SPS vs ~21.5 M with 32). 0062 ran 128 workers per rank (48.7 GB per GPU measured); 0063 runs 256 (4.3x oversubscribed,
+# workers block rather than spin): 262k agents per GPU, ~2800 map instances per GPU, 33.5 M transitions per GPU per rollout,
+# ~56 GB float16 obs buffer plus ~21 GB of minibatch-131072 training activations (0053/0059 ran float32 at 60 workers).
 # pufferlib's overwork guard compares a rank's workers with the node's 512 logical CPUs, so it does not flag the node-level oversubscription.
-# A second instance needs its own RUN_NAME: RUN_NAME=k_scaled_0063_1000 sbatch -p high scripts/kesai/3_train_64GPU_multinode_slurm.sh
-# 0062 = the 0059 config (puffer_drive.yaml defaults) with vec.num_envs=128 and the float16 rollout buffer; other overrides are run identity, logging, maps and hardware.
+# A second instance needs its own RUN_NAME: RUN_NAME=k_scaled_0064_1000 sbatch -p high scripts/kesai/3_train_64GPU_multinode_slurm.sh
+# 0063 = the 0059 config (puffer_drive.yaml defaults) with vec.num_envs=256 and the float16 rollout buffer; other overrides are run identity, logging, maps and hardware.
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -76,7 +77,7 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
-    vec.num_envs=128 \
+    vec.num_envs=256 \
     train.rollout_dtype=float16 \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
