@@ -135,6 +135,9 @@ struct Log {
     float reward_reverse;
     float reward_overspeed;
     float reward_ade;
+    float reward_displacement;
+    float displacement_error; // per agent: sum of per-step meters; per episode: per-agent mean per step
+    float displacement_sample_count;
 };
 
 struct GridMapEntity {
@@ -279,6 +282,7 @@ struct Drive {
     float reward_timestep;
     float reward_overspeed;
     float reward_ade;
+    float reward_displacement;         // penalty per meter from the logged pose, per second
     float default_speed_limit;         // Fallback target speed (m/s) when a lane has no mapped speed_limit
     float reward_collision_speed_coef; // Extra collision penalty per m/s of ego speed at impact; 0 disables it
     int disable_comfort_penalty;       // Force REWARD_COEF_COMFORT to 0 regardless of reward_randomization
@@ -1399,14 +1403,18 @@ static void generate_new_goals_from_log(Drive *env, Agent *agent) {
 // ========================================
 
 static float compute_displacement_error(Agent *agent, int timestep) {
+    if (agent->sim_x == INVALID_POSITION) {
+        return DISPLACEMENT_UNAVAILABLE;
+    }
+
     // Check if timestep is within valid range
     if (timestep < 0 || timestep >= agent->trajectory_size) {
-        return 0.0f;
+        return DISPLACEMENT_UNAVAILABLE;
     }
 
     // Check if reference trajectory is valid at this timestep
     if (!agent->log_valid[timestep]) {
-        return 0.0f;
+        return DISPLACEMENT_UNAVAILABLE;
     }
 
     // Get reference position from logged trajectory at current timestep
@@ -1414,7 +1422,7 @@ static float compute_displacement_error(Agent *agent, int timestep) {
     float ref_y = agent->log_trajectory_y[timestep];
 
     if (ref_x == INVALID_POSITION || ref_y == INVALID_POSITION) {
-        return 0.0f;
+        return DISPLACEMENT_UNAVAILABLE;
     }
 
     // Compute deltas: Euclidean distance between simulated and reference position
@@ -2447,6 +2455,9 @@ static void add_log(Drive *env) {
         }
         float displacement_error = env->logs[i].avg_displacement_error;
         episode_log.avg_displacement_error += displacement_error;
+        if (env->logs[i].displacement_sample_count > 0.0f) {
+            episode_log.displacement_error += env->logs[i].displacement_error / env->logs[i].displacement_sample_count;
+        }
         episode_log.episode_length += env->logs[i].episode_length;
         episode_log.episode_return += env->logs[i].episode_return;
         // Per-component reward sums (mirrors compute_rewards' env->rewards[i]+= sites).
@@ -2462,6 +2473,7 @@ static void add_log(Drive *env) {
         episode_log.reward_reverse += env->logs[i].reward_reverse;
         episode_log.reward_overspeed += env->logs[i].reward_overspeed;
         episode_log.reward_ade += env->logs[i].reward_ade;
+        episode_log.reward_displacement += env->logs[i].reward_displacement;
         // Comfort and velocity metrics (normalized per timestep)
         episode_log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         episode_log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -3639,6 +3651,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     Log *agent_log = &env->logs[log_idx];
 
     reset_agent_metrics(env, agent_idx);
+    agent->metrics_array[DISPLACEMENT_ERROR_IDX] = compute_displacement_error(agent, env->timestep);
 
     if (agent->sim_x == INVALID_POSITION) {
         return; // invalid agent position
@@ -3653,7 +3666,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     // Compute log-replay metrics
     if (env->simulation_mode == SIMULATION_MODE_REPLAY) {
         // Compute displacement error
-        float displacement_error = compute_displacement_error(agent, env->timestep);
+        float displacement_error = agent->metrics_array[DISPLACEMENT_ERROR_IDX];
         if (displacement_error > 0.0f) { // Only count valid displacements
             agent->cumulative_displacement += displacement_error;
             agent->displacement_sample_count++;
@@ -4069,6 +4082,15 @@ static void compute_rewards(Drive *env, int i) {
         agent_log->reward_ade += ade_reward;
     }
     agent_log->avg_displacement_error = current_ade;
+
+    float displacement_m = agent->metrics_array[DISPLACEMENT_ERROR_IDX];
+    if (displacement_m != DISPLACEMENT_UNAVAILABLE) {
+        float displacement_penalty = -env->reward_displacement * env->dt * displacement_m;
+        env->rewards[i] += displacement_penalty;
+        agent_log->reward_displacement += displacement_penalty;
+        agent_log->displacement_error += displacement_m;
+        agent_log->displacement_sample_count += 1.0f;
+    }
 
     // Update episode return
     agent_log->episode_return += env->rewards[i];

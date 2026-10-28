@@ -169,6 +169,8 @@ env:
   reward_timestep: 2.5e-05
   reward_overspeed: 0.00005
   reward_ade: 0.0
+  # Per-step penalty: reward_displacement * dt * meters from the agent's logged pose (0 when it has none)
+  reward_displacement: 0.0
   # --- Map ---
   # Path to map used for training
   map_dir: /home/ricky/pufferdata/nuplan_val/nuplan_val_moving

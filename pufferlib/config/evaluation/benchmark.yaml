@@ -10,6 +10,7 @@ env:
   reward_offroad: 3.0
   reward_stop_line: 1.0
   reward_ade: 0.0
+  reward_displacement: 0.0
   reward_goal: 1.0
   reward_overspeed: 0.05
   reward_comfort: 0.05

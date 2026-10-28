@@ -279,7 +279,7 @@ static const int ROAD_OFFSETS[25][2]
 // =====================================================================================
 
 // Indices into Agent.metrics_array; NUM_METRICS must stay equal to the index count
-#define NUM_METRICS 18
+#define NUM_METRICS 19
 #define COLLISION_IDX 0
 #define OFFROAD_IDX 1
 #define RED_LIGHT_IDX 2
@@ -299,6 +299,9 @@ static const int ROAD_OFFSETS[25][2]
 #define PROGRESS_RATIO_IDX 15
 #define MULTI_LANE_TIME_IDX 16
 #define MULTI_LANE_SCORE_IDX 17
+#define DISPLACEMENT_ERROR_IDX 18 // meters to the logged pose this step
+
+#define DISPLACEMENT_UNAVAILABLE -1.0f // agent or its logged pose invalid this step
 
 // Time to collision
 #define DEFAULT_TTC 5.0f              // when no vehicle ahead

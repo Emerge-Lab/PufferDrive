@@ -178,6 +178,46 @@ static int test_nuplan_wrong_way_window_scores_direction(void) {
     return 0;
 }
 
+static int test_displacement_error_per_step(void) {
+    Agent agent = drive_test_agent(5.0f, 3.0f, 0.0f);
+    float traj_x[NUPLAN_TEST_TRAJECTORY_STEPS], traj_y[NUPLAN_TEST_TRAJECTORY_STEPS];
+    int valid[NUPLAN_TEST_TRAJECTORY_STEPS];
+    nuplan_test_build_expert_route(&agent, traj_x, traj_y, valid);
+
+    // Logged pose at step 5 is (5, 0): 3 m lateral, then 4 m behind at step 9.
+    EXPECT_NEAR(compute_displacement_error(&agent, 5), 3.0f, 1e-5f);
+    EXPECT_NEAR(compute_displacement_error(&agent, 9), 5.0f, 1e-5f);
+
+    valid[5] = 0;
+    EXPECT_NEAR(compute_displacement_error(&agent, 5), DISPLACEMENT_UNAVAILABLE, 0.0f);
+    EXPECT_NEAR(compute_displacement_error(&agent, NUPLAN_TEST_TRAJECTORY_STEPS), DISPLACEMENT_UNAVAILABLE, 0.0f);
+
+    agent.sim_x = INVALID_POSITION;
+    EXPECT_NEAR(compute_displacement_error(&agent, 9), DISPLACEMENT_UNAVAILABLE, 0.0f);
+
+    Agent spawned = drive_test_agent(5.0f, 3.0f, 0.0f);
+    EXPECT_NEAR(compute_displacement_error(&spawned, 0), DISPLACEMENT_UNAVAILABLE, 0.0f);
+    return 0;
+}
+
+static int test_metric_invalid_position_has_no_displacement(void) {
+    Drive env = {0};
+    Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
+    Log log = {0};
+    float traj_x[NUPLAN_TEST_TRAJECTORY_STEPS], traj_y[NUPLAN_TEST_TRAJECTORY_STEPS];
+    int valid[NUPLAN_TEST_TRAJECTORY_STEPS];
+    nuplan_test_build_expert_route(&agent, traj_x, traj_y, valid);
+    env.agents = &agent;
+    env.logs = &log;
+    env.timestep = 4;
+    agent.sim_x = INVALID_POSITION;
+
+    compute_metrics(&env, 0, 0);
+
+    EXPECT_NEAR(agent.metrics_array[DISPLACEMENT_ERROR_IDX], DISPLACEMENT_UNAVAILABLE, 0.0f);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_metric_offroad_outside_grid);
@@ -187,5 +227,7 @@ int main(void) {
     RUN_TEST(test_nuplan_comfort_flags_violation);
     RUN_TEST(test_nuplan_score_matches_devkit_weights);
     RUN_TEST(test_nuplan_wrong_way_window_scores_direction);
+    RUN_TEST(test_displacement_error_per_step);
+    RUN_TEST(test_metric_invalid_position_has_no_displacement);
     return test_summary(failures);
 }

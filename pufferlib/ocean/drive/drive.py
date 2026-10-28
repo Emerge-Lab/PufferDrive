@@ -176,6 +176,7 @@ class Drive(pufferlib.PufferEnv):
         reward_timestep=0.000025,
         reward_overspeed=0.05,
         reward_ade=0.0,
+        reward_displacement=0.0,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
         num_goals=3,
@@ -308,6 +309,12 @@ class Drive(pufferlib.PufferEnv):
         self.reward_timestep = reward_timestep
         self.reward_overspeed = reward_overspeed
         self.reward_ade = reward_ade
+        if not (math.isfinite(reward_displacement) and reward_displacement >= 0.0):
+            raise ValueError(
+                "reward_displacement is a penalty per meter from the logged pose and must be finite and >= 0. "
+                f"Got: {reward_displacement}"
+            )
+        self.reward_displacement = float(reward_displacement)
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
@@ -739,6 +746,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_timestep": self.reward_timestep,
             "reward_overspeed": self.reward_overspeed,
             "reward_ade": self.reward_ade,
+            "reward_displacement": self.reward_displacement,
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,

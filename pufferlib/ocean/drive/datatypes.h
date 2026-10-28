@@ -96,7 +96,7 @@ struct Agent {
     float metrics_array[NUM_METRICS]; // [collision, offroad, red_light, stop_sign, reached_goal, lane_dist, lane_angle,
                                       // comfort_violation, velocity_progress, speed_limit, avg_displacement_error,
                                       // progression, at_fault_collision, ttc, distance_to_collision, progress_ratio,
-                                      // multi_lane_time, multi_lane_score]
+                                      // multi_lane_time, multi_lane_score, displacement_error]
     int current_lane_idx;
     int previous_lane_idx;
     int current_lane_geometry_idx;

@@ -164,6 +164,110 @@ static int test_reward_lane_align_wrong_way(void) {
     return 0;
 }
 
+static int test_reward_displacement_per_step(void) {
+    Drive env;
+    Agent agent;
+    Log log;
+    int active[1];
+    float reward[1] = {0};
+
+    init_reward_env(&env, &agent, &log, active, reward);
+    env.reward_displacement = 2.0f;
+    agent.metrics_array[DISPLACEMENT_ERROR_IDX] = 3.0f;
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(log.reward_displacement, -2.0f * 0.1f * 3.0f, 1e-6f);
+    EXPECT_NEAR(env.rewards[0], -2.0f * 0.1f * 3.0f, 1e-6f);
+    EXPECT_NEAR(log.displacement_error, 3.0f, 1e-6f);
+    EXPECT_NEAR(log.displacement_sample_count, 1.0f, 0.0f);
+
+    reward[0] = 0.0f;
+    agent.metrics_array[DISPLACEMENT_ERROR_IDX] = DISPLACEMENT_UNAVAILABLE;
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(env.rewards[0], 0.0f, 1e-6f);
+    EXPECT_NEAR(log.reward_displacement, -2.0f * 0.1f * 3.0f, 1e-6f);
+    EXPECT_NEAR(log.displacement_sample_count, 1.0f, 0.0f);
+    return 0;
+}
+
+#define DISPLACEMENT_TEST_STEPS 40
+#define DISPLACEMENT_TEST_MAX_AGENTS 64
+
+// Same scenario with and without the penalty: dynamics match, so rewards differ by exactly the penalty.
+static int run_displacement_reward_case(int simulation_mode, int control_mode, int num_agents, int expect_log_pose) {
+    Drive envs[2];
+    for (int coef_idx = 0; coef_idx < 2; coef_idx++) {
+        envs[coef_idx] = drive_test_env_config(drive_nuplan_map(), simulation_mode, num_agents, 0);
+        envs[coef_idx].control_mode = control_mode;
+        envs[coef_idx].reward_displacement = (float) coef_idx;
+        allocate(&envs[coef_idx]);
+        c_reset(&envs[coef_idx]);
+    }
+    Drive *penalized = &envs[1];
+    int active_count = penalized->active_agent_count;
+    EXPECT_EQ_INT(envs[0].active_agent_count, active_count);
+    EXPECT_TRUE(active_count > 0 && active_count <= DISPLACEMENT_TEST_MAX_AGENTS);
+
+    float displacement_sum_m[DISPLACEMENT_TEST_MAX_AGENTS] = {0};
+    int displacement_step_count[DISPLACEMENT_TEST_MAX_AGENTS] = {0};
+    for (int step = 0; step < DISPLACEMENT_TEST_STEPS; step++) {
+        for (int coef_idx = 0; coef_idx < 2; coef_idx++) {
+            drive_set_neutral_actions(&envs[coef_idx]);
+            c_step(&envs[coef_idx]);
+        }
+        for (int i = 0; i < active_count; i++) {
+            Agent *agent = &penalized->agents[penalized->active_agent_indices[i]];
+            EXPECT_TRUE(!agent->stopped && !agent->removed);
+            float displacement_m = agent->metrics_array[DISPLACEMENT_ERROR_IDX];
+            EXPECT_TRUE((displacement_m != DISPLACEMENT_UNAVAILABLE) == expect_log_pose);
+            if (displacement_m == DISPLACEMENT_UNAVAILABLE) {
+                EXPECT_NEAR(penalized->rewards[i], envs[0].rewards[i], 0.0f);
+                continue;
+            }
+            EXPECT_NEAR(penalized->rewards[i] - envs[0].rewards[i], -penalized->dt * displacement_m, 1e-5f);
+            displacement_sum_m[i] += displacement_m;
+            displacement_step_count[i]++;
+        }
+    }
+
+    float expected_logged_m = 0.0f;
+    for (int i = 0; i < active_count; i++) {
+        if (displacement_step_count[i] > 0) {
+            expected_logged_m += displacement_sum_m[i] / displacement_step_count[i];
+        }
+    }
+    add_log(&envs[0]);
+    add_log(penalized);
+    EXPECT_NEAR(penalized->log.displacement_error, expected_logged_m, 1e-3f);
+    EXPECT_NEAR(envs[0].log.displacement_error, expected_logged_m, 1e-3f);
+    EXPECT_NEAR(envs[0].log.reward_displacement, 0.0f, 0.0f);
+    if (expect_log_pose) {
+        EXPECT_TRUE(expected_logged_m > 0.0f);
+        EXPECT_TRUE(penalized->log.reward_displacement < 0.0f);
+    }
+    printf(
+        "displacement case mode=%d control=%d active=%d logged_m=%.3f reward=%.4f\n",
+        simulation_mode,
+        control_mode,
+        active_count,
+        penalized->log.displacement_error,
+        penalized->log.reward_displacement);
+    free_allocated(&envs[0]);
+    free_allocated(penalized);
+    return 0;
+}
+
+static int test_reward_displacement_self_play(void) {
+    return run_displacement_reward_case(SIMULATION_MODE_REPLAY, CONTROL_MODE_VEHICLES, 16, 1);
+}
+
+static int test_reward_displacement_log_replay(void) {
+    return run_displacement_reward_case(SIMULATION_MODE_REPLAY, CONTROL_MODE_SDC_ONLY, 1, 1);
+}
+
+static int test_reward_displacement_gigaflow_has_no_log_pose(void) {
+    return run_displacement_reward_case(SIMULATION_MODE_GIGAFLOW, CONTROL_MODE_VEHICLES, 8, 0);
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_observation_size_formula);
@@ -171,5 +275,9 @@ int main(void) {
     RUN_TEST(test_reward_terminal_components);
     RUN_TEST(test_reward_goal_speed_gating);
     RUN_TEST(test_reward_lane_align_wrong_way);
+    RUN_TEST(test_reward_displacement_per_step);
+    RUN_TEST(test_reward_displacement_self_play);
+    RUN_TEST(test_reward_displacement_log_replay);
+    RUN_TEST(test_reward_displacement_gigaflow_has_no_log_pose);
     return test_summary(failures);
 }

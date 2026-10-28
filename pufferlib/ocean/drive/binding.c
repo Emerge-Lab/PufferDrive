@@ -2252,6 +2252,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_timestep = (float) unpack(kwargs, "reward_timestep");
     env->reward_overspeed = (float) unpack(kwargs, "reward_overspeed");
     env->reward_ade = (float) unpack(kwargs, "reward_ade");
+    env->reward_displacement = (float) unpack(kwargs, "reward_displacement");
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
@@ -2468,6 +2469,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "red_light_violation_rate", log->red_light_violation_rate);
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
+    assign_to_dict(dict, "displacement_error", log->displacement_error);
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
     assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
     assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);
@@ -2489,6 +2491,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/reverse", log->reward_reverse);
     assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
     assign_to_dict(dict, "reward_components/ade", log->reward_ade);
+    assign_to_dict(dict, "reward_components/displacement", log->reward_displacement);
 
     if (env->compute_eval_metrics) {
         // Puffer score components

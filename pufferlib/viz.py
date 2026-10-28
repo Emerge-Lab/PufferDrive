@@ -74,6 +74,7 @@ METRIC_LABELS = [
     "progress_ratio",
     "multi_lane_time",
     "multi_lane_score",
+    "displacement",
 ]
 
 PAYLOAD_CHUNK_SIZE = 4 * 1024 * 1024
