@@ -94,11 +94,11 @@ env:
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map
   use_map_cache: true
   # Load all configured maps before fork so workers inherit shared geometry
-  preload_map_cache: false
+  preload_map_cache: true
   # Precompute neighboring road entities for observation queries
   use_neighbor_cache: true
   # Number of steps before reset; keep it off multiples of train.bptt_horizon so episode ends don't all land on the unused last buffer slot
-  scenario_length: 2500
+  scenario_length: 1200
   # Frequency of resampling scenario (in steps), 0 to disable
   resample_frequency: 0
   # End the episode early when too many agents are inactive; otherwise use scenario_length
@@ -208,7 +208,7 @@ env:
   obs_lane_stride: 2
   obs_boundary_stride: 1
   # true: strided-out segments merge into one chord so polylines stay connected; false = pre-2026-10-12 gaps
-  obs_stride_merge_segments: false
+  obs_stride_merge_segments: true
   # --- Observation normalization ---
   obs_norm_speed_mps: 60.0
   # num_goals * max_goal_spacing; goals beyond this collapse to a unit direction vector
@@ -283,7 +283,7 @@ policy:
   # Run the actor/critic heads in float32 under bf16 autocast (backbone stays bf16)
   fp32_heads: true
   # Fused Triton kernels for the per-slot encoders and their max-pool (same bf16 math, fewer activation bytes)
-  fused_slot_encoder: false
+  fused_slot_encoder: true
   # Dual or shared actor-critic backbone
   shared_network: false
   action_type: discrete

@@ -558,6 +558,7 @@ def _training_args(tmp_path, benchmark_config_path, evaluation_enabled):
             "actor_num_layers": 0,
             "critic_hidden_size": 16,
             "critic_num_layers": 0,
+            "fused_slot_encoder": False,  # tiny CPU encoders fail the fused width check
         }
     )
     args["train"].update(

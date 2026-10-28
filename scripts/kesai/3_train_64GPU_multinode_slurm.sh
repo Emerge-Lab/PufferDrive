@@ -55,8 +55,7 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # ~25 M SPS vs ~21.5 M with 32); scaleway nodes have 18 threads per rank, 32 there. More workers enlarge the rollout batch
 # (= workers x env.num_agents x horizon); forked workers share the preloaded map cache. ROLLOUT_DTYPE=float16 halves the obs buffer on the GPU.
 # A second instance needs its own RUN_NAME: RUN_NAME=k_scaled_0055_1000 sbatch -p high scripts/kesai/3_train_64GPU_multinode_slurm.sh
-# 0059: the 0053 baseline (3 PPO epochs, 60 x 1024 agents, 131072 rows per GPU per update) with GigaFlow's 1200-step
-# episodes as the only change; 0054 was the same with train.update_epochs=1 (a third of the sample passes, worse evals).
+# 0059 baseline: its env/train/policy settings are the puffer_drive.yaml defaults; overrides below are run identity, logging, maps and hardware.
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -73,22 +72,13 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     train.data_dir=${DATA_DIR} \
     env.map_dir=$PD/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v19 \
     env.num_maps=128 \
-    env.obs_stride_merge_segments=true \
-    env.partner_blindness_corridor=false \
-    env.partner_blindness_prob=0.05 \
-    env.partner_blindness_prob_min=0.05 \
-    env.partner_blindness_trigger_prob=1.0 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
     vec.num_envs=60 \
-    env.scenario_length=1200 \
     ${ROLLOUT_DTYPE:+train.rollout_dtype=$ROLLOUT_DTYPE} \
-    env.preload_map_cache=True \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
-    train.update_epochs=3 \
-    policy.fused_slot_encoder=true \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
