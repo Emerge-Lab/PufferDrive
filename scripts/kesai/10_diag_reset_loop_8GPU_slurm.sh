@@ -4,12 +4,14 @@
 #SBATCH --nodes 1
 #SBATCH --time 0-02:00
 #SBATCH --gres gpu:8
-#SBATCH --mem=1007G
-#SBATCH --cpus-per-task 144
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.err
+#SBATCH --mem=0
+#SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
+#SBATCH --output experiments/logs/diag_reset_%a_%A.out
+#SBATCH --error experiments/logs/diag_reset_%a_%A.err
 #SBATCH --partition dev
 #SBATCH --array=0-1
+
+source scripts/kesai/cluster_env.sh || exit 1
 
 # Short 1-node run to catch sub-envs that early-reset every tick right after
 # creation (see environment/early_reset_short, environment/spawn_* and the
@@ -26,7 +28,7 @@ else
     SPAWN_NOISE_ARGS="env.spawn_lateral_offset_max_frac=0.0 env.spawn_heading_max_deg=0.0"
 fi
 echo ${RUN_NAME}
-export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
+export DATA_DIR=$PD/experiments/${RUN_NAME}
 echo ${DATA_DIR}
 
 export NUMEXPR_NUM_THREADS=1
@@ -38,9 +40,9 @@ export OMP_NUM_THREADS=1
 source .venv/bin/activate
 
 # Only task 0 builds; concurrent in-place builds race on shared NFS build files.
-BUILD_STATUS_FILE=/home/bjaeger/PufferDrive/experiments/logs/build_status_${SLURM_ARRAY_JOB_ID}
+BUILD_STATUS_FILE=$PD/experiments/logs/build_status_${SLURM_ARRAY_JOB_ID}
 if [ "${SLURM_ARRAY_TASK_ID}" -eq 0 ]; then
-    bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive
+    bash scripts/kesai/build_ext_if_changed.sh $PD
     BUILD_STATUS=$?
     echo ${BUILD_STATUS} > ${BUILD_STATUS_FILE}
 else
@@ -68,7 +70,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     wandb_project=nightly-multi-long \
     wandb_group=diag_reset_loop \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine_zones \
+    env.map_dir=$PD/pufferlib/resources/drive/binaries/carla_128_affine_zones \
     env.num_maps=128 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
@@ -94,7 +96,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     tb=True
 
 echo "Training exited with status $?"
-echo "Summarize with: python scripts/kesai/summarize_reset_diag.py /home/bjaeger/PufferDrive/experiments/logs/log_${SLURM_ARRAY_TASK_ID}_${SLURM_ARRAY_JOB_ID}.err"
+echo "Summarize with: python scripts/kesai/summarize_reset_diag.py $PD/experiments/logs/diag_reset_${SLURM_ARRAY_TASK_ID}_${SLURM_ARRAY_JOB_ID}.err"
 end=$(date +%s)
 echo "END TIME: $(date)"
 echo "Runtime: $((end-start))"

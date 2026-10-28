@@ -6,7 +6,8 @@ CLUSTER_NUPLAN_ROOT -> NUPLAN_DATA_ROOT / NUPLAN_MAPS_ROOT (val logs are looked 
 when splits/val is absent) and provides `load_log`, which unpickles with placeholder classes for any
 module that cannot be imported here.
 
-Env: CLUSTER_NUPLAN_ROOT (default /home/shared/data/nuplan), NUPLAN_DATA_ROOT, NUPLAN_MAPS_ROOT.
+Env: CLUSTER_NUPLAN_ROOT (the root baked into the logs: default /home/shared/data/nuplan for scaleway,
+/cephfs/data/nuplan for logs from kesai), NUPLAN_DATA_ROOT, NUPLAN_MAPS_ROOT.
 """
 
 import io

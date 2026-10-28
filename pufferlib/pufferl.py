@@ -796,10 +796,13 @@ class PuffeRL:
         self.optimizer.zero_grad()
         total_minibatches = 0
         retained_transition_count = keep_idx.numel()
+        # A lone trailing transition has no sample std to normalize its advantage with (NaN), so it sits out this update
+        if retained_transition_count % self.minibatch_size == 1:
+            retained_transition_count -= 1
         optimizer_batch_size = self.minibatch_size * self.accumulate_minibatches
 
         for _ in range(config["update_epochs"]):
-            permutation = keep_idx[torch.randperm(retained_transition_count, device=keep_idx.device)]
+            permutation = keep_idx[torch.randperm(keep_idx.numel(), device=keep_idx.device)]
             for start in range(0, retained_transition_count, self.minibatch_size):
                 profile("train_copy", epoch)
                 mb_idx = permutation[start : start + self.minibatch_size]
@@ -1482,6 +1485,48 @@ def _latest_checkpoint_path(run_dir):
     return max(model_files, key=os.path.getctime) if model_files else None
 
 
+def parse_cpulist(cpulist):
+    """sysfs cpulist ("0-119,256-375") to a set of CPU ids."""
+    cpus = set()
+    for part in cpulist.strip().split(","):
+        if not part:
+            continue
+        lo, _, hi = part.partition("-")
+        cpus.update(range(int(lo), int(hi or lo) + 1))
+    return cpus
+
+
+def apply_matmul_env_flags():
+    """PUFFER_BF16_REDUCED_REDUCTION=1 lets cuBLAS pick split-K kernels whose partial sums reduce in bf16."""
+    if os.environ.get("PUFFER_BF16_REDUCED_REDUCTION") == "1":
+        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
+        print("cuBLAS bf16 reduced-precision reductions enabled")
+
+
+def bind_process_to_gpu_numa_node(device_index):
+    """Pin this process (and the env workers it forks) to the CPUs of the GPU's NUMA node; no-op without NUMA or sysfs."""
+    if os.environ.get("PUFFER_NUMA_BIND", "1") == "0" or not torch.cuda.is_available():
+        return None
+    props = torch.cuda.get_device_properties(device_index)
+    pci_dir = f"/sys/bus/pci/devices/{props.pci_domain_id:04x}:{props.pci_bus_id:02x}:{props.pci_device_id:02x}.0"
+    try:
+        numa_node = int(open(f"{pci_dir}/numa_node").read())
+        if numa_node < 0:
+            return None
+        node_cpus = parse_cpulist(open(f"/sys/devices/system/node/node{numa_node}/cpulist").read())
+    except (OSError, ValueError):
+        return None
+    cpus = node_cpus & os.sched_getaffinity(0)
+    if not cpus:
+        print(
+            f"NUMA bind skipped: GPU {device_index} is on node {numa_node} but none of its CPUs are in this process's affinity mask"
+        )
+        return None
+    os.sched_setaffinity(0, cpus)
+    print(f"GPU {device_index} on NUMA node {numa_node}: process and env workers bound to {len(cpus)} CPUs")
+    return numa_node
+
+
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
 
@@ -1507,6 +1552,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "obs_slots_lane_n",
             "obs_boundary_stride",
             "obs_lane_stride",
+            "obs_stride_merge_segments",
             "obs_dropout_boundary",
             "obs_dropout_lane",
             "obs_slots_partners_n",
@@ -1542,6 +1588,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         validate_puffer_drive_resources(args, "training")
     training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
 
+    apply_matmul_env_flags()
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     global_rank = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", 0)))
@@ -1551,6 +1598,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         local_rank = int(os.environ["LOCAL_RANK"])
         print(f"rank: {global_rank} (local {local_rank}), MASTER_ADDR={master_addr}, MASTER_PORT={master_port}")
         torch.cuda.set_device(local_rank)
+        bind_process_to_gpu_numa_node(local_rank)
+    elif is_cuda_device(args["train"]["device"]) and torch.cuda.is_available():
+        bind_process_to_gpu_numa_node(torch.device(args["train"]["device"]).index or 0)
 
     train_seed = args["train"]["seed"]
     if train_seed is None:
@@ -1625,6 +1675,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             # numpy scalars of the saved RNG state, not just tensors.
             tstate = torch.load(trainer_state_path, map_location=train_config["device"], weights_only=False)
             pufferl.optimizer.load_state_dict(tstate["optimizer_state_dict"])
+            # The saved groups carry the old run's annealed lr; train.learning_rate is this run's base.
+            for param_group in pufferl.optimizer.param_groups:
+                param_group["lr"] = train_config["learning_rate"]
+                param_group["initial_lr"] = train_config["learning_rate"]
             pufferl.global_step = tstate.get("global_step", pufferl.global_step)
             pufferl.epoch = tstate.get("update", pufferl.epoch)
             # Fast-forward the LR scheduler to the resumed epoch so the cosine
@@ -1653,8 +1707,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
     all_logs = []
     last_training_evaluation_epoch = None
+    stop_after_epochs = args["train"]["stop_after_epochs"]
+    stop_epoch = float("inf") if stop_after_epochs is None else pufferl.epoch + stop_after_epochs
 
-    while pufferl.global_step < train_config["total_timesteps"]:
+    while pufferl.global_step < train_config["total_timesteps"] and pufferl.epoch < stop_epoch:
         if is_cuda_device(train_config["device"]):
             torch.compiler.cudagraph_mark_step_begin()
         try:
@@ -1783,6 +1839,9 @@ def eval(
     scenario_offset = eval_config["scenario_offset"]
     configured_output_subdir = eval_config["output_subdir"]
     eval_training_render = args["env"]["eval_training_render"]
+    eval_device = torch.device(args["train"]["device"])
+    if eval_device.type == "cuda":
+        bind_process_to_gpu_numa_node(eval_device.index or 0)
 
     report_to_wandb = bool(args["wandb"]) and not use_training_config and failure_replay_csv is None
     environment_config, benchmarks = drive_benchmark.load_benchmark_config(
@@ -2496,10 +2555,9 @@ def _run_eval_rollout(
 
 
 def render_training_replays(env_name, args, policy, epoch, global_step, run_dir):
-    """Render one HTML replay per training map with the live policy, observations included."""
+    """Render one HTML replay per selected training map with the live policy, observations included."""
     run_args = copy.deepcopy(args)
     env_config = run_args["env"]
-    num_scenarios = env_config["num_maps"]
     # Fixed-length episodes: eval-mode summaries flush on the resample boundary.
     env_config["termination_mode"] = False
     env_config["compute_eval_metrics"] = True
@@ -2510,9 +2568,19 @@ def render_training_replays(env_name, args, policy, epoch, global_step, run_dir)
     capture_observations = run_args["eval"]["capture_observations"]
     # Observation replays render at multi-GB RSS each; the obs writer count bounds that too.
     max_renderer_count = run_args["eval"]["observation_replay_writer_count"] if capture_observations else None
+    # Same maps and episode seeds at every render of a run, so renders across epochs compare like for like.
+    render_seed = run_args["train"]["seed"] if run_args["train"]["seed"] is not None else 0
+    render_rng = np.random.default_rng(render_seed)
+    render_num_maps = run_args["train"]["render_num_maps"]
+    if render_num_maps is None:
+        map_indices = list(range(env_config["num_maps"]))
+    else:
+        map_indices = sorted(render_rng.choice(env_config["num_maps"], size=render_num_maps, replace=False).tolist())
+    map_seed_pairs = [(map_idx, int(render_rng.integers(0, 2**63, dtype=np.int64))) for map_idx in map_indices]
+    num_scenarios = len(map_seed_pairs)
     num_workers = min(run_args["vec"]["num_envs"], num_scenarios)
-    worker_env_kwargs, total_steps = drive_benchmark._plan_benchmark_eval_workers(
-        run_args, num_scenarios, num_workers, env_config["scenario_length"], capture_replay=True
+    worker_env_kwargs, total_steps = drive_benchmark._plan_failure_replay_workers(
+        run_args, map_seed_pairs, num_workers, env_config["scenario_length"]
     )
     output_dir = os.path.join(run_dir, "renders", f"epoch_{epoch:06d}_step_{global_step}")
 
@@ -2527,7 +2595,7 @@ def render_training_replays(env_name, args, policy, epoch, global_step, run_dir)
             "Rendering training replays",
             num_scenarios,
             policy=policy,
-            replay_output_dir=os.path.join(output_dir, "replays"),
+            replay_output_dir=os.path.join(output_dir, drive_eval_replay.ZLIB_REPLAY_DIR_NAME),
             capture_observations=capture_observations,
         )
         drive_eval_replay._render_eval_replays(

@@ -133,10 +133,11 @@ struct Agent {
     // Reward conditioning coefficients (per-agent, randomized at spawn)
     float reward_coefs[NUM_REWARD_COEFS];
 
-    int phantom_braking_counter;     // >0 means currently phantom braking
-    int partner_blindness_counter;   // >0 means currently blind to partners
-    unsigned char is_blind_partner;  // episode-level flag: agent sees no other agents
-    unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
+    int phantom_braking_counter;          // >0 means currently phantom braking
+    int partner_blindness_counter;        // steps left in the current blind interval, 0 = sees partners normally
+    float partner_blindness_trigger_prob; // per-step chance of starting a blind interval while not blind
+    unsigned char is_blind_partner;       // episode-level flag: agent may restrict partner visibility
+    unsigned char is_phantom_braker;      // episode-level flag: agent may phantom-brake
 };
 
 typedef struct {
@@ -147,6 +148,7 @@ typedef struct {
     float direction_x;
     float direction_y;
     float width_m;
+    int observed;
 } RoadObservationSegment;
 
 struct RoadMapElement {
@@ -169,6 +171,7 @@ struct RoadMapElement {
     float *cum_lengths;
     float *widths;      // per-point lane width, meters
     int speed_zone_idx; // lanes sharing one posted limit; -1 = none (junction lane or map without zones)
+    float max_segment_half_length_m;
 };
 
 struct TrafficControlElement {
@@ -187,7 +190,7 @@ struct TrafficControlElement {
 struct LaneGraph {
     int n_lanes;
     int *lane_ids;
-    float *distances;       // n_lanes * n_lanes row-major (row = from, col = to)
+    float *distances;       // [goal * n_lanes + from]: row = goal lane, so an ego's lane obs read one contiguous row
     int *lane_to_graph_idx; // road-element idx -> graph idx (-1 if lane absent from graph), sized num_road_elements
 };
 

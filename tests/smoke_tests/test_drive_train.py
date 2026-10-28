@@ -161,6 +161,7 @@ def _build_config():
             "backbone_hidden_size": 256,
             "actor_hidden_size": 128,
             "critic_hidden_size": 64,
+            "fused_slot_encoder": False,  # the CPU-only image has no triton
         },
     )
     _set_existing(args["rnn"], {"input_size": 256, "hidden_size": 256})

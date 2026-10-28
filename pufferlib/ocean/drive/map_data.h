@@ -35,10 +35,6 @@ static void add_entity_to_grid(
     int geometry_idx,
     int obs_kind,
     int *cell_entities_insert_index) {
-    if (grid_index == -1) {
-        return;
-    }
-
     int count = cell_entities_insert_index[grid_index];
     if (count >= env->grid_map->cell_entities_count[grid_index]) {
         printf(
@@ -50,10 +46,172 @@ static void add_entity_to_grid(
         return;
     }
 
+    int pool_idx = (int) (env->grid_map->cells[grid_index] - env->grid_map->entity_pool) + count;
     env->grid_map->cells[grid_index][count].entity_idx = entity_idx;
     env->grid_map->cells[grid_index][count].geometry_idx = geometry_idx;
     env->grid_map->cells[grid_index][count].obs_kind = obs_kind;
+    env->grid_map->cells[grid_index][count].pool_idx = pool_idx;
+    env->grid_map->segment_pool[pool_idx] = env->road_elements[entity_idx].observation_segments[geometry_idx];
     cell_entities_insert_index[grid_index] = count + 1;
+}
+
+// Appends one window candidate; drivable lanes already present only widen their listed segment range.
+static int append_lane_query_entry(
+    LaneQueryEntry *entries,
+    int count,
+    int first_entry,
+    int entity_idx,
+    int seg_idx,
+    int is_lane) {
+    if (is_lane) {
+        for (int e = first_entry; e < count; e++) {
+            if (entries[e].entity_idx != entity_idx) {
+                continue;
+            }
+            entries[e].seg_first = seg_idx < entries[e].seg_first ? seg_idx : entries[e].seg_first;
+            entries[e].seg_last = seg_idx > entries[e].seg_last ? seg_idx : entries[e].seg_last;
+            return count;
+        }
+    }
+    entries[count] = (LaneQueryEntry) {entity_idx, seg_idx, seg_idx};
+    return count + 1;
+}
+
+static int road_query_window_entity_count(const GridMap *grid, int cell_idx) {
+    int cell_x = cell_idx % grid->grid_cols;
+    int cell_y = cell_idx / grid->grid_cols;
+    int total = 0;
+    for (int o = 0; o < ROAD_QUERY_CELL_COUNT; o++) {
+        int nx = cell_x + ROAD_OFFSETS[o][0];
+        int ny = cell_y + ROAD_OFFSETS[o][1];
+        if (nx < 0 || nx >= grid->grid_cols || ny < 0 || ny >= grid->grid_rows) {
+            continue;
+        }
+        total += grid->cell_entities_count[ny * grid->grid_cols + nx];
+    }
+    return total;
+}
+
+// Appends the cell's window candidates in grid order starting at entries[first_entry]; returns the new count.
+static int append_cell_lane_query_entries(const Drive *env, int cell_idx, LaneQueryEntry *entries, int first_entry) {
+    const GridMap *grid = env->grid_map;
+    int cell_x = cell_idx % grid->grid_cols;
+    int cell_y = cell_idx / grid->grid_cols;
+    int count = first_entry;
+    for (int o = 0; o < ROAD_QUERY_CELL_COUNT; o++) {
+        int nx = cell_x + ROAD_OFFSETS[o][0];
+        int ny = cell_y + ROAD_OFFSETS[o][1];
+        if (nx < 0 || nx >= grid->grid_cols || ny < 0 || ny >= grid->grid_rows) {
+            continue;
+        }
+        int neighbor_idx = ny * grid->grid_cols + nx;
+        for (int e = 0; e < grid->cell_entities_count[neighbor_idx]; e++) {
+            const GridMapEntity *entity = &grid->cells[neighbor_idx][e];
+            int type = env->road_elements[entity->entity_idx].type;
+            if (!is_road_edge(type) && !is_drivable_road_lane(type)) {
+                continue;
+            }
+            count = append_lane_query_entry(
+                entries,
+                count,
+                first_entry,
+                entity->entity_idx,
+                entity->geometry_idx,
+                is_drivable_road_lane(type));
+        }
+    }
+    return count;
+}
+
+// Per cell, the road-query candidates of its 5x5 window in grid order, built once per map.
+static void cache_lane_query_lists(Drive *env) {
+    GridMap *grid = env->grid_map;
+    int cell_count = grid->grid_cols * grid->grid_rows;
+    int capacity = grid->total_entities > 0 ? grid->total_entities : 1;
+    LaneQueryEntry *entries = (LaneQueryEntry *) malloc(capacity * sizeof(LaneQueryEntry));
+    grid->lane_query_offset = (int *) malloc((cell_count + 1) * sizeof(int));
+    grid->window_entity_count = (int *) malloc(cell_count * sizeof(int));
+    if (entries == NULL || grid->lane_query_offset == NULL || grid->window_entity_count == NULL) {
+        raise_error_with_message(ERROR_MEMORY_ALLOCATION, "Failed to allocate the road query cache");
+    }
+    int count = 0;
+    for (int cell_idx = 0; cell_idx < cell_count; cell_idx++) {
+        grid->lane_query_offset[cell_idx] = count;
+        int window_count = road_query_window_entity_count(grid, cell_idx);
+        grid->window_entity_count[cell_idx] = window_count;
+        if (count + window_count > capacity) {
+            capacity = 2 * (count + window_count);
+            entries = (LaneQueryEntry *) realloc(entries, capacity * sizeof(LaneQueryEntry));
+            if (entries == NULL) {
+                raise_error_with_message(ERROR_MEMORY_ALLOCATION, "Failed to grow the road query cache");
+            }
+        }
+        count = append_cell_lane_query_entries(env, cell_idx, entries, count);
+    }
+    grid->lane_query_offset[cell_count] = count;
+    grid->lane_query_pool = entries;
+}
+
+static void set_observation_segment_geometry(
+    RoadMapElement *road,
+    int start_point_idx,
+    int end_point_idx,
+    int carrier_idx) {
+    RoadObservationSegment *segment = &road->observation_segments[carrier_idx];
+    // Preserve the observation formulas and float rounding, including zero-length segments.
+    segment->mid_x_m = (road->x[start_point_idx] + road->x[end_point_idx]) / 2.0f;
+    segment->mid_y_m = (road->y[start_point_idx] + road->y[end_point_idx]) / 2.0f;
+    segment->mid_z_m = (road->z[start_point_idx] + road->z[end_point_idx]) / 2.0f;
+    float half_dx_m = road->x[end_point_idx] - segment->mid_x_m;
+    float half_dy_m = road->y[end_point_idx] - segment->mid_y_m;
+    segment->half_length_m = sqrtf(half_dx_m * half_dx_m + half_dy_m * half_dy_m);
+    segment->direction_x = segment->half_length_m > 0.0f ? half_dx_m / segment->half_length_m : half_dx_m;
+    segment->direction_y = segment->half_length_m > 0.0f ? half_dy_m / segment->half_length_m : half_dy_m;
+    segment->width_m
+        = is_road_lane(road->type) ? 0.5f * (road->widths[start_point_idx] + road->widths[end_point_idx]) : 0.0f;
+}
+
+// Legacy stride: every obs_stride-th segment is observed with its own extent, so the skipped ones leave gaps.
+static void mark_strided_observation_segments(RoadMapElement *road, int obs_stride) {
+    int last_kept_idx = 0;
+    for (int segment_idx = 0; segment_idx < road->segment_size - 1; segment_idx++) {
+        int observed = 1;
+        if (obs_stride > 1 && segment_idx > 0) {
+            float heading_dev_rad
+                = fabsf(normalize_heading(road->headings[segment_idx] - road->headings[last_kept_idx]));
+            observed = segment_idx - last_kept_idx >= obs_stride || heading_dev_rad > OBS_STRIDE_HEADING_THRESHOLD;
+        }
+        if (observed) {
+            last_kept_idx = segment_idx;
+        }
+        road->observation_segments[segment_idx].observed = observed;
+    }
+}
+
+// One chord from the run's first point to its last point, carried by the run's middle segment.
+static void close_observation_segment_run(RoadMapElement *road, int first_segment_idx, int last_segment_idx) {
+    int carrier_idx = (first_segment_idx + last_segment_idx) / 2;
+    set_observation_segment_geometry(road, first_segment_idx, last_segment_idx + 1, carrier_idx);
+    road->observation_segments[carrier_idx].observed = 1;
+}
+
+// Runs of up to obs_stride near-collinear segments become one chord, so the polyline stays connected.
+static void merge_strided_observation_segments(RoadMapElement *road, int obs_stride) {
+    int segment_count = road->segment_size - 1;
+    int run_start_idx = 0;
+    for (int segment_idx = 0; segment_idx < segment_count; segment_idx++) {
+        if (segment_idx > run_start_idx
+            && fabsf(normalize_heading(road->headings[segment_idx] - road->headings[run_start_idx]))
+                > OBS_STRIDE_HEADING_THRESHOLD) {
+            close_observation_segment_run(road, run_start_idx, segment_idx - 1);
+            run_start_idx = segment_idx;
+        }
+        if (segment_idx - run_start_idx + 1 < obs_stride && segment_idx < segment_count - 1) {
+            continue;
+        }
+        close_observation_segment_run(road, run_start_idx, segment_idx);
+        run_start_idx = segment_idx + 1;
+    }
 }
 
 // Build after loading lane widths and before sharing the immutable road elements.
@@ -77,20 +235,14 @@ static void cache_road_observation_geometry(Drive *env) {
         if (road->observation_segments == NULL) {
             raise_error_with_message(ERROR_MEMORY_ALLOCATION, "Failed to cache geometry for road %d", road_idx);
         }
-        int has_lane_width = is_road_lane(road->type);
         for (int segment_idx = 0; segment_idx < road->segment_size - 1; segment_idx++) {
-            RoadObservationSegment *segment = &road->observation_segments[segment_idx];
-            // Preserve the observation formulas and float rounding, including zero-length segments.
-            segment->mid_x_m = (road->x[segment_idx] + road->x[segment_idx + 1]) / 2.0f;
-            segment->mid_y_m = (road->y[segment_idx] + road->y[segment_idx + 1]) / 2.0f;
-            segment->mid_z_m = (road->z[segment_idx] + road->z[segment_idx + 1]) / 2.0f;
-            float half_dx_m = road->x[segment_idx + 1] - segment->mid_x_m;
-            float half_dy_m = road->y[segment_idx + 1] - segment->mid_y_m;
-            segment->half_length_m = sqrtf(half_dx_m * half_dx_m + half_dy_m * half_dy_m);
-            segment->direction_x = segment->half_length_m > 0.0f ? half_dx_m / segment->half_length_m : half_dx_m;
-            segment->direction_y = segment->half_length_m > 0.0f ? half_dy_m / segment->half_length_m : half_dy_m;
-            segment->width_m
-                = has_lane_width ? 0.5f * (road->widths[segment_idx] + road->widths[segment_idx + 1]) : 0.0f;
+            set_observation_segment_geometry(road, segment_idx, segment_idx + 1, segment_idx);
+        }
+        int obs_stride = is_road_lane(road->type) ? env->obs_lane_stride : env->obs_boundary_stride;
+        if (env->obs_stride_merge_segments) {
+            merge_strided_observation_segments(road, obs_stride);
+        } else {
+            mark_strided_observation_segments(road, obs_stride);
         }
     }
 }
@@ -143,8 +295,9 @@ static int init_grid_map(Drive *env) {
         env->grid_map = NULL;
         return 1;
     }
-    env->grid_map->grid_cols = ceil(grid_width / GRID_CELL_SIZE);
-    env->grid_map->grid_rows = ceil(grid_height / GRID_CELL_SIZE);
+    // +1 so a point on the far edge indexes the last column/row instead of falling outside
+    env->grid_map->grid_cols = (int) (grid_width / GRID_CELL_SIZE) + 1;
+    env->grid_map->grid_rows = (int) (grid_height / GRID_CELL_SIZE) + 1;
     long long grid_cell_count_wide = (long long) env->grid_map->grid_cols * (long long) env->grid_map->grid_rows;
     if (env->grid_map->grid_cols < 1 || env->grid_map->grid_rows < 1 || grid_cell_count_wide > MAX_GRID_CELL_COUNT) {
         fprintf(
@@ -167,12 +320,22 @@ static int init_grid_map(Drive *env) {
             continue;
         }
         RoadMapElement *element = &env->road_elements[i];
+        element->max_segment_half_length_m = 0.0f;
         for (int j = 0; j < element->segment_size - 1; j++) {
+            float half_dx = (element->x[j + 1] - element->x[j]) * 0.5f;
+            float half_dy = (element->y[j + 1] - element->y[j]) * 0.5f;
+            float half_length_m = sqrtf(half_dx * half_dx + half_dy * half_dy);
+            element->max_segment_half_length_m = fmaxf(element->max_segment_half_length_m, half_length_m);
             float x_center = (element->x[j] + element->x[j + 1]) / 2;
             float y_center = (element->y[j] + element->y[j + 1]) / 2;
             int grid_index = get_grid_index(env, x_center, y_center);
             if (grid_index == -1) {
-                continue;
+                fprintf(stderr, "[ERROR] -> Road %d segment %d lies outside the grid extent\n", i, j);
+                free(env->grid_map->cells);
+                free(env->grid_map->cell_entities_count);
+                free(env->grid_map);
+                env->grid_map = NULL;
+                return 1;
             }
             env->grid_map->cell_entities_count[grid_index]++;
         }
@@ -195,6 +358,8 @@ static int init_grid_map(Drive *env) {
         env->grid_map->total_entities += env->grid_map->cell_entities_count[grid_index];
     }
     env->grid_map->entity_pool = (GridMapEntity *) calloc(env->grid_map->total_entities + 1, sizeof(GridMapEntity));
+    env->grid_map->segment_pool
+        = (RoadObservationSegment *) calloc(env->grid_map->total_entities + 1, sizeof(RoadObservationSegment));
     int pool_offset = 0;
     for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
         int count = env->grid_map->cell_entities_count[grid_index];
@@ -209,32 +374,14 @@ static int init_grid_map(Drive *env) {
         }
         RoadMapElement *element = &env->road_elements[i];
         int is_lane = is_road_lane(element->type);
-        int obs_stride = 1;
-        if (is_lane) {
-            obs_stride = env->obs_lane_stride;
-        } else if (is_road_edge(element->type)) {
-            obs_stride = env->obs_boundary_stride;
-        }
-        int last_kept_idx = 0;
         for (int j = 0; j < element->segment_size - 1; j++) {
-            // Keep a point every obs_stride points, plus wherever heading deviates enough
-            // since the last kept point (densifies curves/intersections)
-            int valid_for_obs = 1;
-            if (obs_stride > 1 && j > 0) {
-                float heading_dev = fabsf(normalize_heading(element->headings[j] - element->headings[last_kept_idx]));
-                valid_for_obs = j - last_kept_idx >= obs_stride || heading_dev > OBS_STRIDE_HEADING_THRESHOLD;
-            }
             int obs_kind = OBS_ENTITY_NONE;
-            if (valid_for_obs) {
-                last_kept_idx = j;
+            if (element->observation_segments[j].observed) {
                 obs_kind = is_lane ? OBS_ENTITY_LANE : OBS_ENTITY_EDGE;
             }
             float x_center = (element->x[j] + element->x[j + 1]) / 2;
             float y_center = (element->y[j] + element->y[j + 1]) / 2;
             int grid_index = get_grid_index(env, x_center, y_center);
-            if (grid_index == -1) {
-                continue;
-            }
             add_entity_to_grid(env, grid_index, i, j, obs_kind, cell_entities_insert_index);
             if (is_drivable_road_lane(element->type) && !drivable_grid_seen[grid_index]) {
                 drivable_grid_seen[grid_index] = true;
@@ -252,6 +399,7 @@ static int init_grid_map(Drive *env) {
     }
     free(drivable_grid_seen);
     free(cell_entities_insert_index);
+    cache_lane_query_lists(env);
     return 0;
 }
 
@@ -775,6 +923,14 @@ int load_map_binary(const char *filename, Drive *drive) {
             fclose(file);
             return -1;
         }
+        for (int p = 0; p < slen; p++) {
+            if (!isfinite(road->x[p]) || !isfinite(road->y[p]) || !isfinite(road->z[p])
+                || !isfinite(road->headings[p])) {
+                printf("[ERROR] -> Road %d point %d has a non-finite coordinate or heading.\n", i, p);
+                fclose(file);
+                return -1;
+            }
+        }
 
         if (is_road_lane(road->type)) {
             if (fread(&road->num_entries, sizeof(int), 1, file) != 1) {
@@ -921,6 +1077,15 @@ int load_map_binary(const char *filename, Drive *drive) {
             fclose(file);
             return -1;
         }
+        // File stores [from][to]; the lane observations read one goal row per ego, so keep [to][from].
+        for (int from = 0; from < n_lanes_graph; from++) {
+            for (int to = from + 1; to < n_lanes_graph; to++) {
+                float from_to = drive->lane_graph.distances[from * n_lanes_graph + to];
+                drive->lane_graph.distances[from * n_lanes_graph + to]
+                    = drive->lane_graph.distances[to * n_lanes_graph + from];
+                drive->lane_graph.distances[to * n_lanes_graph + from] = from_to;
+            }
+        }
 
         // Build reverse lookup road-element idx -> graph idx
         int num_roads = drive->num_road_elements;
@@ -1009,7 +1174,8 @@ static struct SharedMapData *map_cache_lookup(Drive *env) {
     for (int i = 0; i < g_map_cache_count; i++) {
         if (g_map_cache[i] != NULL && strcmp(g_map_cache[i]->map_name, env->map_name) == 0
             && g_map_cache[i]->obs_lane_stride == env->obs_lane_stride
-            && g_map_cache[i]->obs_boundary_stride == env->obs_boundary_stride) {
+            && g_map_cache[i]->obs_boundary_stride == env->obs_boundary_stride
+            && g_map_cache[i]->obs_stride_merge_segments == env->obs_stride_merge_segments) {
             return g_map_cache[i];
         }
     }
@@ -1039,6 +1205,7 @@ static struct SharedMapData *map_cache_store(Drive *env) {
     entry->lane_graph = env->lane_graph;
     entry->obs_lane_stride = env->obs_lane_stride;
     entry->obs_boundary_stride = env->obs_boundary_stride;
+    entry->obs_stride_merge_segments = env->obs_stride_merge_segments;
     entry->ref_count = 1;
     entry->owner_pid = getpid();
     map_cache_insert(entry);
@@ -1051,6 +1218,10 @@ static void free_grid_map(GridMap *grid_map) {
     }
     int grid_cell_count = grid_map->grid_cols * grid_map->grid_rows;
     free(grid_map->entity_pool);
+    free(grid_map->segment_pool);
+    free(grid_map->lane_query_pool);
+    free(grid_map->lane_query_offset);
+    free(grid_map->window_entity_count);
     free(grid_map->cells);
     free(grid_map->cell_entities_count);
     free(grid_map->grid_index_drivable);

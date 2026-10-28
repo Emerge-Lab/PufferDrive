@@ -3,12 +3,15 @@
 #SBATCH --nodes 8                        # Number of nodes requested
 #SBATCH --ntasks-per-node 1              # Run 1 srun task per node (which fires up torchrun)
 #SBATCH --gres gpu:8                     # GPUs per node
-#SBATCH --cpus-per-task 144
-#SBATCH --mem=1007G
+#SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
+#SBATCH --mem=0
 #SBATCH --time 3-00:00
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.err
+#SBATCH --output experiments/logs/train_64gpu_%j.out
+#SBATCH --error experiments/logs/train_64gpu_%j.err
 #SBATCH --partition dev
+# kesai: 64 GPUs exceed the 32-GPU per-user cap of dev -> submit with -p high (uncapped, internal approval) or -p low (preemptible)
+
+source scripts/kesai/cluster_env.sh || exit 1
 
 # Set up PyTorch Distributed Rendezvous parameters from Slurm variables
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
@@ -25,7 +28,7 @@ export SEED=1000
 export RUN_NAME=k_scaled_0034_${SEED}
 echo ${RUN_NAME}
 
-export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
+export DATA_DIR=$PD/experiments/${RUN_NAME}
 echo ${DATA_DIR}
 
 # Name the training run writes its final model under, so the eval steps below can
@@ -43,9 +46,9 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
 source .venv/bin/activate
-bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
+bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # Execute torchrun across all nodes using srun
-srun torchrun \
+srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
     --nproc-per-node=8 \
     --rdzv_id=${SLURM_JOB_ID} \
@@ -58,7 +61,7 @@ srun torchrun \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine \
+    env.map_dir=$PD/pufferlib/resources/drive/binaries/carla_128_affine \
     env.num_maps=128 \
     env.goal_speed_randomization=false \
     env.goal_reach_requires_speed=true \
@@ -89,7 +92,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
 .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 40000 \
     --num-nodes 8 \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
+    env.map_dir=$PD/pufferlib/resources/drive/binaries/carla \
     vec.num_envs=64 \
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
@@ -108,7 +111,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     wandb=True
 
 python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
-    eval.map_dir=/home/shared/data/nuplan/PufferDrive \
+    eval.map_dir=$SHARED_DATA/nuplan/PufferDrive \
     vec.num_envs=64 \
     eval.num_agents=300 \
     eval.reward_comfort=0.0 \

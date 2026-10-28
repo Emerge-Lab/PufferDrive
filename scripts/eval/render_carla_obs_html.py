@@ -1,5 +1,5 @@
-"""Render the interactive observation replays of a CARLA longest6 run (scripts/kesai/11_carla_longest6.sh:
-<run_dir>/routes/route_XX/obs_html/*.replay.zlib) into <run_dir>/obs_html/, one page per route plus an
+"""Render the interactive observation replays of a CARLA longest6 run (scripts/kesai/11_carla_longest6_v2.sh:
+<run_dir>/routes/route_XX[_s<seed>]/obs_html/*.replay.zlib) into <run_dir>/obs_html/, one page per route plus an
 index.html gallery (same navigator as the nuPlan and self-play eval replays).
 
 usage: python scripts/eval/render_carla_obs_html.py <run_dir> [--routes <longest6.xml>] [--workers N]
@@ -7,7 +7,8 @@ usage: python scripts/eval/render_carla_obs_html.py <run_dir> [--routes <longest
 Pages are named ds<driving score>_<flags>_<town>_route<id>.html so the gallery lists the worst first
 (flags: COL collision, RED red light, STOP stop sign, OFF outside route lanes, DEV route deviation,
 BLOCK blocked, TIMEOUT route/scenario timeout); each page carries the route's leaderboard scores and
-infractions as a panel. --routes (the evaluated xml) names the town of every route, else the world log does.
+infractions as a panel, every positioned infraction linking to the replay step where the ego was nearest.
+--routes (the evaluated xml) names the town of every route, else the world log does.
 Retried routes leave the files of crashed attempts behind: the newest files pair with the records.
 """
 
@@ -28,6 +29,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 from pufferlib import viz
+from pufferlib.ocean.cosim.carla_bridge import TOWN_OFFSETS
 
 
 COLLISION_KEYS = ("collisions_pedestrian", "collisions_vehicle", "collisions_layout")
@@ -55,7 +57,10 @@ PANEL_INFRACTIONS = (
     ("yield_emergency_vehicle_infractions", "emergency vehicles"),
 )
 MESSAGE_MAX_CHARS = 120
+POSITION_PATTERN = re.compile(r"x=([-\d.]+), y=([-\d.]+)")
+NEAREST_STEP_MAX_M = 5.0
 ROUTE_ID_PATTERN = re.compile(r"RouteScenario_(\d+)(?:_rep(\d+))?")
+SEED_DIR_PATTERN = re.compile(r"_s(\d+)$")  # route_08_s1: seed 1 of route 8 (the eval scripts drive one pass per seed)
 
 
 def infraction_messages(record, key):
@@ -70,18 +75,18 @@ def route_index_rep(record):
     return int(match.group(1)), int(match.group(2) or 0)
 
 
-def page_name(record, town):
+def page_name(record, town, seed=None):
     route_idx, rep = route_index_rep(record)
     parts = [f"ds{float(record['scores']['score_composed']):05.1f}"]
     parts += [flag for flag, keys in FLAG_INFRACTIONS if any(infraction_messages(record, key) for key in keys)]
     if town:
         parts.append(town)
-    parts.append(f"route{route_idx:02d}" + (f"_rep{rep}" if rep else ""))
+    parts.append(f"route{route_idx:02d}" + (f"_rep{rep}" if rep else "") + (f"_s{seed}" if seed is not None else ""))
     return "_".join(parts) + ".html"
 
 
-def score_panel(record, town):
-    """Fixed panel injected into the viewer: leaderboard scores, every infraction category, the messages."""
+def score_panel(record, town, steps, seed=None):
+    """Fixed panel injected into the viewer: leaderboard scores, every infraction category, the messages + steps."""
     scores, meta = record["scores"], record.get("meta", {})
     route_idx, rep = route_index_rep(record)
     lines = []
@@ -94,15 +99,21 @@ def score_panel(record, town):
             f'<span style="color:{color}">{len(messages)}</span></div>'
         )
         for message in messages:
+            step_html = f" &middot; {steps[message]}" if message in steps else ""
             lines.append(
-                f'<div style="color:#ff6b6b;padding-left:14px">&#8627; {html.escape(message[:MESSAGE_MAX_CHARS])}</div>'
+                f'<div style="color:#ff6b6b;padding-left:14px">&#8627; {html.escape(message[:MESSAGE_MAX_CHARS])}'
+                f"{step_html}</div>"
             )
     if meta:
         lines.append(
             f'<div style="color:#7f8ba0">route {float(meta.get("route_length", 0)):.0f} m &middot; '
             f"game {float(meta.get('duration_game', 0)):.0f} s &middot; wall {float(meta.get('duration_system', 0)):.0f} s</div>"
         )
-    title = f"{town + ' ' if town else ''}route {route_idx}" + (f" rep {rep}" if rep else "")
+    title = (
+        f"{town + ' ' if town else ''}route {route_idx}"
+        + (f" rep {rep}" if rep else "")
+        + (f" seed {seed}" if seed is not None else "")
+    )
     return (
         '<details open style="position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:1000;'
         "background:rgba(13,20,32,.93);color:#c4cddc;font:12px/1.5 ui-monospace,monospace;padding:6px 12px;"
@@ -113,6 +124,31 @@ def score_panel(record, town):
         + "".join(lines)
         + "</details>"
     )
+
+
+def infraction_steps(record, replay_path, town, log_meta):
+    """message -> seek link of every positioned infraction: the replay step where the ego was nearest to it.
+    CARLA -> bin offset from the route's world log (calibrated), else the town default."""
+    offset = log_meta.get("offset") or TOWN_OFFSETS.get(town)
+    if offset is None:
+        return {}
+    tick_dt = log_meta.get("tick_dt")
+    _, chunks = viz.read_replay_zlib(replay_path, chunk_names=("agent_f32",))
+    ego_xy = chunks["agent_f32"][:, 0, :2]
+    messages = [message for key, _ in PANEL_INFRACTIONS for message in infraction_messages(record, key)]
+    steps = {}
+    for message in messages:
+        match = POSITION_PATTERN.search(message)
+        if match is None:
+            continue
+        bin_x, bin_y = float(match.group(1)) + offset[0], -float(match.group(2)) + offset[1]
+        distance_m = np.hypot(ego_xy[:, 0] - bin_x, ego_xy[:, 1] - bin_y)
+        step = int(np.argmin(distance_m))
+        if distance_m[step] > NEAREST_STEP_MAX_M:
+            steps[message] = "beyond the replay"
+            continue
+        steps[message] = viz.replay_step_link(step, None if tick_dt is None else step * tick_dt)
+    return steps
 
 
 def render_page(zlib_path, html_path, panel):
@@ -137,8 +173,8 @@ def route_towns(routes_xml):
     }
 
 
-def world_log_town(npz_path):
-    return json.loads(str(np.load(npz_path)["meta"])).get("town", "")
+def world_log_meta(npz_path):
+    return json.loads(str(np.load(npz_path)["meta"]))
 
 
 def newest_files(route_dir, subdir, suffix, count):
@@ -148,9 +184,11 @@ def newest_files(route_dir, subdir, suffix, count):
 
 
 def collect_jobs(run_dir, towns):
-    """-> [(record, replay zlib path, town)] over routes/route_*, the newest replay per route record."""
+    """-> [(record, replay zlib path, town, world log meta, seed or None)] over routes/route_*, the newest replay per record."""
     jobs = []
     for route_dir in sorted(Path(run_dir, "routes").glob("route_*")):
+        seed_match = SEED_DIR_PATTERN.search(route_dir.name)
+        seed = seed_match.group(1) if seed_match else None
         result_path = route_dir / "result.json"
         if not result_path.is_file():
             print(f"[{route_dir.name}] no result.json, skipped")
@@ -165,16 +203,15 @@ def collect_jobs(run_dir, towns):
         records = records[-len(replays) :]
         world_logs = newest_files(route_dir, "world_log", ".npz", len(replays))
         for k, (record, replay) in enumerate(zip(records, replays)):
-            town = towns.get(route_index_rep(record)[0])
-            if town is None and k < len(world_logs):
-                town = world_log_town(world_logs[k])
-            jobs.append((record, replay, town or ""))
+            log_meta = world_log_meta(world_logs[k]) if k < len(world_logs) else {}
+            town = towns.get(route_index_rep(record)[0]) or log_meta.get("town", "")
+            jobs.append((record, replay, town, log_meta, seed))
     return jobs
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("run_dir", help="output dir of 11_carla_longest6.sh (holds routes/route_*/)")
+    ap.add_argument("run_dir", help="output dir of 11_carla_longest6_v2.sh (holds routes/route_*/)")
     ap.add_argument("--routes", help="evaluated route xml, names the town of every route")
     ap.add_argument("--workers", type=int, default=min(16, os.cpu_count() or 1))
     args = ap.parse_args()
@@ -185,10 +222,20 @@ def main():
         raise SystemExit(f"no routes/route_*/obs_html/*.replay.zlib with a result.json under {run_dir}")
     obs_dir = run_dir / "obs_html"
     obs_dir.mkdir(exist_ok=True)
-    pages = [(obs_dir / page_name(record, town), record, replay, town) for record, replay, town in jobs]
+    pages = [
+        (obs_dir / page_name(record, town, seed), record, replay, town, log_meta, seed)
+        for record, replay, town, log_meta, seed in jobs
+    ]
+
+    def render(page):
+        html_path, record, replay, town, log_meta, seed = page
+        render_page(
+            replay, html_path, score_panel(record, town, infraction_steps(record, replay, town, log_meta), seed)
+        )
+
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
-        list(pool.map(lambda job: render_page(job[2], job[0], score_panel(job[1], job[3])), pages))
-    file_metrics = {page.name: gallery_metrics(record) for page, record, _, _ in pages}
+        list(pool.map(render, pages))
+    file_metrics = {page.name: gallery_metrics(record) for page, record, *_ in pages}
     report = run_dir / "report" / "index.html"
     links = [("Analysis report", os.path.relpath(report, obs_dir))] if report.is_file() else []
     viz.build_gallery_index(str(obs_dir), file_metrics=file_metrics, links=links)

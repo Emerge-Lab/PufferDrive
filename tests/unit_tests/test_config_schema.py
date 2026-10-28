@@ -304,6 +304,15 @@ class TestConfigSchema(unittest.TestCase):
         with self.assertRaisesRegex(pufferlib.APIUsageError, "preload_map_cache"):
             validate_puffer_drive_config(args, "test")
 
+    @patch("sys.argv", ["pufferl.py"])
+    def test_partner_blindness_prob_min_must_not_exceed_max(self):
+        args = load_config("puffer_drive")
+        args["env"]["partner_blindness_prob_min"] = 0.5
+        args["env"]["partner_blindness_prob"] = 0.1
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "partner_blindness_prob_min"):
+            validate_puffer_drive_config(args, "test")
+
 
 if __name__ == "__main__":
     unittest.main()

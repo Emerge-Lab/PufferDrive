@@ -4,21 +4,23 @@
 #SBATCH --nodes=1
 #SBATCH --time=1-00:00
 #SBATCH --gres=gpu:8
-#SBATCH --mem=1007G
-#SBATCH --cpus-per-task=144
-#SBATCH --output=/home/bjaeger/PufferDrive/experiments/logs/eval_%a_%A.out
-#SBATCH --error=/home/bjaeger/PufferDrive/experiments/logs/eval_%a_%A.err
+#SBATCH --mem=0
+#SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
+#SBATCH --output=experiments/logs/eval_%a_%A.out
+#SBATCH --error=experiments/logs/eval_%a_%A.err
 #SBATCH --partition=dev
+
+source scripts/kesai/cluster_env.sh || exit 1
 
 # print info about current job
 echo "START TIME: $(date)"
 start=`date +%s`
 
 export RUN_NAME=k_scaled_0008_1000
-MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
+MODEL_PATH=$PD/experiments/${RUN_NAME}/final_model.pt
 
 source .venv/bin/activate
-bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
+bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 
 #.venv/bin/python scripts/parallel_eval.py carla \
 #    --total-scenarios 40000 \
@@ -29,7 +31,7 @@ bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 #    wandb=True
 
 python -m pufferlib.pufferl eval puffer_drive nuplan_single \
-    eval.map_dir=/home/shared/data/nuplan/PufferDrive \
+    eval.map_dir=$SHARED_DATA/nuplan/PufferDrive \
     vec.num_envs=64 \
     eval.max_sdc_replay_workers=64 \
     env.goal_source=gt \
