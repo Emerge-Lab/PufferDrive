@@ -113,10 +113,8 @@ def main():
             f"{num_shards} shards: {arguments.num_nodes} nodes x {arguments.shards_per_node} per node, {cpus_per_shard} CPUs each"
         )
         num_envs_override = override_value(overrides, "vec.num_envs")
-        if num_envs_override is not None and num_envs_override.isdigit() and int(num_envs_override) >= cpus_per_shard:
-            print(
-                f"Note: vec.num_envs={num_envs_override} blocking workers plus the driver exceed a shard's {cpus_per_shard} CPUs"
-            )
+        if num_envs_override is not None and num_envs_override.isdigit() and int(num_envs_override) > cpus_per_shard:
+            print(f"Note: vec.num_envs={num_envs_override} blocking workers exceed a shard's {cpus_per_shard} CPUs")
     for override in overrides:
         if override.partition("=")[0] in RESERVED_OVERRIDE_KEYS:
             raise SystemExit(f"Override '{override}' is managed by parallel_eval.py; remove it")
