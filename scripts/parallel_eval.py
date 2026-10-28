@@ -109,8 +109,10 @@ def main():
         cpus_per_shard = int(cpus_per_node) // arguments.shards_per_node
         if cpus_per_shard < 1:
             raise SystemExit(f"--shards-per-node {arguments.shards_per_node} exceeds the {cpus_per_node} CPUs per node")
+        numa_note = ", in-process NUMA bind off" if arguments.shards_per_node > 1 else ""
         print(
-            f"{num_shards} shards: {arguments.num_nodes} nodes x {arguments.shards_per_node} per node, {cpus_per_shard} CPUs each"
+            f"{num_shards} shards: {arguments.num_nodes} nodes x {arguments.shards_per_node} per node, "
+            f"{cpus_per_shard} CPUs each{numa_note}"
         )
         num_envs_override = override_value(overrides, "vec.num_envs")
         if num_envs_override is not None and num_envs_override.isdigit() and int(num_envs_override) > cpus_per_shard:
@@ -167,6 +169,9 @@ def main():
                 *command,
             ]
             shard_env = dict(os.environ)
+            if arguments.shards_per_node > 1:
+                # the --exact CPU slice is the placement; a socket bind inside it could leave fewer CPUs than workers
+                shard_env.setdefault("PUFFER_NUMA_BIND", "0")
             placement = f"srun step, 1 GPU, {cpus_per_shard} CPUs"
         else:
             shard_env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu_ids[shard_idx])
