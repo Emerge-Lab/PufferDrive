@@ -8,7 +8,7 @@
 #SBATCH --time 6-00:00
 #SBATCH --output experiments/logs/train_gigaflow_%j.out
 #SBATCH --error experiments/logs/train_gigaflow_%j.err
-#SBATCH --partition low
+#SBATCH --partition dev
 
 source scripts/kesai/cluster_env.sh || exit 1
 
@@ -24,7 +24,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=${RUN_NAME:-k_scaled_0057_${SEED}}
+export RUN_NAME=${RUN_NAME:-k_scaled_0060_${SEED}}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -56,10 +56,11 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # ~35 ms per update whatever the node count (run 0055, 2 nodes: 66 ms per 32k update vs ~32 ms of compute); inside a node it
 # goes over PCIe. vec.num_envs=60 is one blocking worker per kesai thread; env.num_agents=4096 per worker gives 31.5 M
 # transitions per GPU per rollout (paper: ~41.6 M) and a 52 GB float16 obs buffer (60 GB total per GPU).
-# Minibatch ablation, two jobs from this file:
-#   sbatch scripts/kesai/18_train_16GPU_gigaflow_slurm.sh                                              # k_scaled_0057, 32768
-#   MINIBATCH=131072 RUN_NAME=k_scaled_0058_1000 sbatch scripts/kesai/18_train_16GPU_gigaflow_slurm.sh   # control
-MINIBATCH=${MINIBATCH:-32768}
+# Minibatch ablation 2026-10-27: k_scaled_0057 (MINIBATCH=32768) vs k_scaled_0058 (131072, old kernels throughout); 0058
+# led on every per-step metric, so 131072 is the default. k_scaled_0060 = the 0058 config on the 2026-10-27 fused-kernel
+# and NUMA-bind code, the speed/quality A/B against 0058:
+#   sbatch scripts/kesai/18_train_16GPU_gigaflow_slurm.sh
+MINIBATCH=${MINIBATCH:-131072}
 echo "minibatch per GPU: ${MINIBATCH}"
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
