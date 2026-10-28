@@ -29,6 +29,8 @@ if [ ! -f "$PD/setup.py" ]; then
     return 1 2>/dev/null || exit 1
 fi
 export SLURM_CPUS_PER_TASK=${SLURM_CPUS_ON_NODE:-${SLURM_CPUS_PER_TASK:-$(nproc)}}
+# pufferlib opens 4 pipe fds per env worker; the job's soft nofile limit (1024 on kesai) caps workers near 200 per rank
+ulimit -n "$(ulimit -Hn)" 2>/dev/null || echo "cluster_env.sh: could not raise the open-file limit (soft $(ulimit -Sn), hard $(ulimit -Hn))" >&2
 export CLUSTER HOME_BASE SHARED_DATA PD
 echo "cluster: $CLUSTER  checkout: $PD  shared data: ${SHARED_DATA:-none}  cpus per task: $SLURM_CPUS_PER_TASK"
 
