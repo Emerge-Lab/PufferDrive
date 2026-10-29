@@ -579,13 +579,15 @@ STATIC_PARTNER_TYPES = ("TRAFFIC_CONE", "BARRIER", "CZONE_SIGN", "GENERIC_OBJECT
 
 def partner_tracked_objects(tracked_objects, map_api, static_on_lane: dict):
     """Objects the shadow env should see: moving agents always; static clutter (cones, barriers, signs,
-    generic objects) only when it stands inside a lane or lane-connector polygon, where the ego can hit it.
-    The wider drivable area also covers intersection corners and crosswalks, where barrier rows line the
-    curb: those filled the nearest-N partner slots as 0.6 x 3 m stopped vehicles the policy never saw in
-    training. static_on_lane: track_token -> bool, filled here (statics never move)."""
+    generic objects) only when its box overlaps a lane or lane-connector polygon, where the ego can hit it
+    (a center-point test dropped a curbside object protruding 0.7 m into the lane). The wider drivable area
+    also covers intersection corners and crosswalks, where barrier rows line the curb: those filled the
+    nearest-N partner slots as 0.6 x 3 m stopped vehicles the policy never saw in training.
+    static_on_lane: track_token -> bool, filled here (statics never move)."""
     from nuplan.common.actor_state.state_representation import Point2D
     from nuplan.common.maps.maps_datatypes import SemanticMapLayer
 
+    lane_layers = [SemanticMapLayer.LANE, SemanticMapLayer.LANE_CONNECTOR]
     kept = []
     for obj in tracked_objects:
         type_name = obj.tracked_object_type.name
@@ -596,12 +598,13 @@ def partner_tracked_objects(tracked_objects, map_api, static_on_lane: dict):
             continue
         on_lane = static_on_lane.get(obj.track_token)
         if on_lane is None:
-            point = Point2D(obj.center.x, obj.center.y)
-            # is_in_layer(LANE_CONNECTOR) tests the centerline layer; the polygon lookup is get_all_map_objects
-            on_lane = bool(
-                map_api.is_in_layer(point, SemanticMapLayer.LANE)
-                or map_api.get_all_map_objects(point, SemanticMapLayer.LANE_CONNECTOR)
+            box = obj.box.geometry
+            # the query patch is a square of half-side radius around the center; the half diagonal covers the box
+            query_radius_m = 0.5 * float(np.hypot(obj.box.length, obj.box.width))
+            proximal = map_api.get_proximal_map_objects(
+                Point2D(obj.center.x, obj.center.y), query_radius_m, lane_layers
             )
+            on_lane = any(lane.polygon.intersects(box) for layer in lane_layers for lane in proximal[layer])
             static_on_lane[obj.track_token] = on_lane
         if on_lane:
             kept.append(obj)

@@ -181,7 +181,7 @@ class PufferDrivePlanner(AbstractPlanner):
         self._goal_window: Optional[RouteGoalWindow] = None
         self._last_integrated = None  # (bin_x, bin_y, heading) the shadow ego was left at by the last step
         self._last_light_states = None  # traffic-light state array from the most recent _sync
-        self._static_on_lane: Dict[str, bool] = {}  # static object track_token -> stands inside a lane polygon
+        self._static_on_lane: Dict[str, bool] = {}  # static object track_token -> its box overlaps a lane polygon
 
     # --- AbstractPlanner interface -------------------------------------------
     def initialize(self, initialization: PlannerInitialization) -> None:
