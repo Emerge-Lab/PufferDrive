@@ -1,7 +1,7 @@
 import json
 import math
 from pathlib import Path
-from typing import Dict, Optional, Type
+from typing import Dict, NamedTuple, Optional, Type
 
 import numpy as np
 
@@ -16,16 +16,30 @@ from nuplan.planning.simulation.planner.abstract_planner import (
 )
 from nuplan.planning.simulation.trajectory.abstract_trajectory import AbstractTrajectory
 from nuplan.planning.simulation.trajectory.interpolated_trajectory import InterpolatedTrajectory
+from nuplan.planning.simulation.trajectory.trajectory_sampling import TrajectorySampling
+
+from carl_nuplan.planning.simulation.trajectory.action_trajectory import ActionTrajectory
 
 from pufferlib.ocean.cosim import nuplan_bridge as nb
 from pufferlib.ocean.cosim.arch import checkpoint_config_path
 from pufferlib.ocean.cosim.goals import RouteGoalWindow, route_goals_from_xy
+from pufferlib.ocean.cosim.nuplan_bicycle import (
+    DEVKIT_ACCEL_TIME_CONSTANT_S,
+    DEVKIT_STEERING_TIME_CONSTANT_S,
+    BicycleCommandConfig,
+    bicycle_commands,
+    bicycle_response,
+)
 from pufferlib.ocean.drive.drive import Drive
 
 from pufferlib.ocean.cosim.nuplan_bridge import DEFAULT_ARCH, FAR_AWAY
 from pufferlib.ocean.drive import binding
 
 EGO_OBS_ACCEL_LONG_IDX = 4  # write_ego_obs column order: speed, width, length, steering, accel_long, ...
+EGO_OBS_STEERING_IDX = 3
+EGO_DYNAMICS_PUFFERDRIVE = "pufferdrive"  # the shadow env integrates the ego, perfect_tracking_controller replays it
+EGO_DYNAMICS_NUPLAN_BICYCLE = "nuplan_bicycle"  # nuPlan's KinematicBicycleModel is the plant (one_stage_controller)
+BICYCLE_RESPONSE_TOL = 1e-4  # m/s^2 and m/s: nuPlan's ego state must be the bicycle model's response to our command
 EGO_TRACKING_TOL_M = 0.05  # perfect_tracking_controller hands back our integrated pose up to log-timestamp jitter
 EGO_TRACKING_TOL_RAD = 0.005
 SCENARIO_LENGTH_MARGIN_STEPS = 2  # shadow env must never hit its own truncation while nuPlan still plans
@@ -65,6 +79,18 @@ def _angle_diff(a: float, b: float) -> float:
     return (a - b + math.pi) % (2.0 * math.pi) - math.pi
 
 
+class BicycleStep(NamedTuple):
+    """One nuplan_bicycle planning call: the plant state it saw, the command it sent and the jerk integrator's
+    post-step state (the accel/steering the policy observes and the next call restamps)."""
+
+    time_us: int
+    plant_accel_mps2: float
+    plant_speed_mps: float
+    accel_cmd_mps2: float
+    intent_accel_mps2: float
+    intent_steering_rad: float
+
+
 def _steering_from(yaw_rate: float, speed: float, wheel_base: float) -> float:
     if abs(speed) < 0.1:
         return 0.0
@@ -72,7 +98,8 @@ def _steering_from(yaw_rate: float, speed: float, wheel_base: float) -> float:
 
 
 class PufferDrivePlanner(AbstractPlanner):
-    """nuPlan planner that delegates observation + ego dynamics to PufferDrive."""
+    """nuPlan planner that delegates the observation and, with ego_dynamics=pufferdrive, the ego dynamics to
+    PufferDrive."""
 
     requires_scenario: bool = True
 
@@ -95,6 +122,11 @@ class PufferDrivePlanner(AbstractPlanner):
         startup_brake_jerk_cap_mps3: float = 0.0,
         vru_size_pad_m: float = 0.0,
         symmetric_lane_widths: bool = False,
+        ego_dynamics: str = EGO_DYNAMICS_PUFFERDRIVE,
+        bicycle_min_speed_mps: float = 0.0,
+        bicycle_undo_low_pass: bool = False,
+        bicycle_accel_time_constant_s: float = DEVKIT_ACCEL_TIME_CONSTANT_S,
+        bicycle_steering_time_constant_s: float = DEVKIT_STEERING_TIME_CONSTANT_S,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
         obs_html_max_steps: int = 800,
@@ -135,6 +167,19 @@ class PufferDrivePlanner(AbstractPlanner):
             left + right (nuPlan lanes with a parking strip have their baseline 1.7 m from one boundary and
             4.3 m from the other; the sum made the policy believe it had 3 m towards the oncoming lane).
             The copy is cached in bin_cache_dir, one rewrite per city.
+        :param ego_dynamics: "pufferdrive": the shadow env integrates the ego with its jerk model and nuPlan's
+            perfect_tracking_controller replays the pose. "nuplan_bicycle": nuPlan's KinematicBicycleModel is
+            the plant, driven through CaRL's one_stage_controller like CaRL: every step the shadow ego takes
+            nuPlan's pose, speed and yaw rate, keeps its own jerk-integrated accel/steering (the state the
+            policy was trained to observe; the plant lags behind it), and its post-step accel/steering
+            become the model's commands.
+        :param bicycle_min_speed_mps: nuplan_bicycle speed floor [m/s], enforced on the command (the model has
+            none): 0 = CaRL's no-reverse driving, -2 = Drive's MAX_BACKWARD_SPEED.
+        :param bicycle_undo_low_pass: nuplan_bicycle: pre-compensate the model's first-order command lag so one
+            model step lands on the shadow env's targets (CaRL default: off, the model realises dt/(dt+tau)).
+        :param bicycle_accel_time_constant_s: the motion model's acceleration low-pass time constant [s]
+            (devkit default 0.2); a mismatch fails the per-step response check.
+        :param bicycle_steering_time_constant_s: same for steering [s] (devkit default 0.05).
         :param env_overrides: Drive env kwargs overriding DEFAULT_ARCH.
         :param obs_html_dir: write the interactive pufferlib.viz observation replay per
             scenario (the exact obs the policy received, its outputs and encoder pool winners).
@@ -168,6 +213,24 @@ class PufferDrivePlanner(AbstractPlanner):
         if self._vru_size_pad_m < 0:
             raise ValueError("vru_size_pad_m must be >= 0")
         self._symmetric_lane_widths = bool(symmetric_lane_widths)
+        if ego_dynamics not in (EGO_DYNAMICS_PUFFERDRIVE, EGO_DYNAMICS_NUPLAN_BICYCLE):
+            raise ValueError(
+                f"ego_dynamics must be '{EGO_DYNAMICS_PUFFERDRIVE}' or '{EGO_DYNAMICS_NUPLAN_BICYCLE}', "
+                f"got {ego_dynamics!r}"
+            )
+        self._ego_dynamics = ego_dynamics
+        self._bicycle_min_speed_mps = float(bicycle_min_speed_mps)
+        if not binding.MAX_BACKWARD_SPEED <= self._bicycle_min_speed_mps <= 0.0:
+            raise ValueError(
+                f"bicycle_min_speed_mps must be within [{binding.MAX_BACKWARD_SPEED}, 0], got {bicycle_min_speed_mps}"
+            )
+        self._bicycle_undo_low_pass = bool(bicycle_undo_low_pass)
+        self._bicycle_accel_time_constant_s = float(bicycle_accel_time_constant_s)
+        self._bicycle_steering_time_constant_s = float(bicycle_steering_time_constant_s)
+        if not (self._bicycle_accel_time_constant_s >= 0 and self._bicycle_steering_time_constant_s >= 0):
+            raise ValueError("the bicycle model time constants must be >= 0")
+        self._bicycle_cfg: Optional[BicycleCommandConfig] = None  # resolved in _build from the scenario dt
+        self._last_bicycle_step: Optional[BicycleStep] = None
         self._startup_jerk_cap_steps = 0  # resolved in _build from the scenario dt
         self._startup_action_bounds = None  # (lo, hi) on the continuous jerk action while the cap is live
         self._env_overrides = env_overrides or {}
@@ -399,6 +462,15 @@ class PufferDrivePlanner(AbstractPlanner):
                 self._startup_accel_jerk_cap_mps3, self._startup_brake_jerk_cap_mps3
             )
 
+        if self._ego_dynamics == EGO_DYNAMICS_NUPLAN_BICYCLE:
+            self._bicycle_cfg = BicycleCommandConfig(
+                dt_s=float(self._arch["dt"]),
+                min_speed_mps=self._bicycle_min_speed_mps,
+                undo_low_pass=self._bicycle_undo_low_pass,
+                accel_time_constant_s=self._bicycle_accel_time_constant_s,
+                steering_time_constant_s=self._bicycle_steering_time_constant_s,
+            )
+
         # Round-trip probe: slot 0 must be the ego we set. It is silently wrong when
         # gigaflow spawning failed (e.g. a city bin without lane connectivity).
         probe_x, probe_y = self._transform.loc_to_bin(ex, ey)
@@ -503,29 +575,37 @@ class PufferDrivePlanner(AbstractPlanner):
         tf = self._transform
         env = self._env
 
-        # ego (slot 0): synced from nuPlan telemetry once, at the scenario's initial state. Afterwards the
-        # shadow env owns the ego: nuPlan's perfect_tracking_controller hands back exactly the pose we
-        # integrated, and re-deriving accel_long/steering from telemetry every tick re-injects
-        # finite-difference accel after every stop and drives the ego into reverse.
+        # ego (slot 0). pufferdrive dynamics: synced from nuPlan telemetry once, at the scenario's initial state;
+        # afterwards the shadow env owns the ego (nuPlan's perfect_tracking_controller hands back exactly the pose
+        # we integrated, and re-deriving accel_long/steering from telemetry every tick re-injects finite-difference
+        # accel after every stop and drives the ego into reverse). nuplan_bicycle dynamics: nuPlan's bicycle model
+        # is the plant: pose, speed and yaw rate are restamped every step, accel/steering stay the jerk integrator's
+        # own state (the lagged plant never lands exactly on zero, which would make the zero-crossing snaps stick).
         h = float(ego_state.center.heading)
         dcs = ego_state.dynamic_car_state
-        v_local = dcs.center_velocity_2d
-        vx_g = v_local.x * math.cos(h) - v_local.y * math.sin(h)
-        vy_g = v_local.x * math.sin(h) + v_local.y * math.cos(h)
         ex, ey = tf.loc_to_bin(ego_state.center.x, ego_state.center.y)
-        if self._last_integrated is not None:
+        if self._ego_dynamics == EGO_DYNAMICS_NUPLAN_BICYCLE:
+            self._check_bicycle_response(ego_state)
+            speed = float(dcs.rear_axle_velocity_2d.x)
+            last = self._last_bicycle_step
+            self._stamp_ego(
+                ex,
+                ey,
+                h,
+                speed * math.cos(h),
+                speed * math.sin(h),
+                float(dcs.angular_velocity),
+                float(dcs.rear_axle_acceleration_2d.x) if last is None else last.intent_accel_mps2,
+                float(ego_state.tire_steering_angle) if last is None else last.intent_steering_rad,
+            )
+        elif self._last_integrated is not None:
             self._check_ego_tracking(ex, ey, h)
         else:
-            env.set_agent_states(
-                np.array([0], np.int32),
-                np.array([ex], np.float32),
-                np.array([ey], np.float32),
-                np.array([0.0], np.float32),
-                np.array([h], np.float32),
-                np.array([vx_g], np.float32),
-                np.array([vy_g], np.float32),
-                np.array([float(dcs.angular_velocity)], np.float32),
-                np.array([float(dcs.center_acceleration_2d.x)], np.float32),
+            v_local = dcs.center_velocity_2d
+            vx_g = v_local.x * math.cos(h) - v_local.y * math.sin(h)
+            vy_g = v_local.x * math.sin(h) + v_local.y * math.cos(h)
+            self._stamp_ego(
+                ex, ey, h, vx_g, vy_g, float(dcs.angular_velocity), float(dcs.center_acceleration_2d.x), None
             )
 
         # background (slots 1..): streamed from nuPlan, never simulated here. nuPlan's TrackedObject
@@ -561,6 +641,30 @@ class PufferDrivePlanner(AbstractPlanner):
 
         self._goal_window.sync(ex, ey, h)
 
+    def _stamp_ego(
+        self,
+        bin_x: float,
+        bin_y: float,
+        heading: float,
+        vx: float,
+        vy: float,
+        yaw_rate: float,
+        accel_long: float,
+        steering: Optional[float],
+    ) -> None:
+        self._env.set_agent_states(
+            np.array([0], np.int32),
+            np.array([bin_x], np.float32),
+            np.array([bin_y], np.float32),
+            np.array([0.0], np.float32),
+            np.array([heading], np.float32),
+            np.array([vx], np.float32),
+            np.array([vy], np.float32),
+            np.array([yaw_rate], np.float32),
+            np.array([accel_long], np.float32),
+            steering=None if steering is None else np.array([steering], np.float32),
+        )
+
     def _check_ego_tracking(self, bin_x: float, bin_y: float, heading: float) -> None:
         lx, ly, lh = self._last_integrated
         if (
@@ -571,6 +675,26 @@ class PufferDrivePlanner(AbstractPlanner):
             raise RuntimeError(
                 f"nuPlan ego pose ({bin_x:.3f}, {bin_y:.3f}, {heading:.4f}) diverged from the integrated "
                 f"shadow pose ({lx:.3f}, {ly:.3f}, {lh:.4f}); the planner assumes perfect_tracking_controller"
+            )
+
+    def _check_bicycle_response(self, ego_state: EgoState) -> None:
+        last = self._last_bicycle_step
+        if last is None:
+            return
+        elapsed_s = (ego_state.time_point.time_us - last.time_us) * 1e-6
+        if elapsed_s <= 0:
+            raise RuntimeError(f"nuPlan ego time did not advance since the last command ({elapsed_s:.6f} s)")
+        expected_accel, expected_speed = bicycle_response(
+            self._bicycle_cfg, last.plant_accel_mps2, last.accel_cmd_mps2, last.plant_speed_mps, elapsed_s
+        )
+        dcs = ego_state.dynamic_car_state
+        accel = float(dcs.rear_axle_acceleration_2d.x)
+        speed = float(dcs.rear_axle_velocity_2d.x)
+        if abs(accel - expected_accel) > BICYCLE_RESPONSE_TOL or abs(speed - expected_speed) > BICYCLE_RESPONSE_TOL:
+            raise RuntimeError(
+                f"nuPlan ego accel/speed ({accel:.4f}, {speed:.4f}) are not the kinematic bicycle model's response "
+                f"({expected_accel:.4f}, {expected_speed:.4f}) to the last command; ego_dynamics=nuplan_bicycle needs "
+                "ego_controller=one_stage_controller and the planner's bicycle time constants must match its model"
             )
 
     # --- planning -------------------------------------------------------------
@@ -639,6 +763,9 @@ class PufferDrivePlanner(AbstractPlanner):
             print(f"[pufferdrive_planner] wrote obs replay ({len(self._obs_replay)} steps) -> {out}")
             self._obs_replay = None
 
+        if self._ego_dynamics == EGO_DYNAMICS_NUPLAN_BICYCLE:
+            return self._bicycle_action_trajectory(ego_state, act[0])
+
         # integrated ego -> nuPlan EgoState at t + dt
         dt = float(self._arch["dt"])
         state = self._env.get_global_agent_state()
@@ -682,3 +809,35 @@ class PufferDrivePlanner(AbstractPlanner):
         if pose_indices[-1] != n_poses:
             pose_indices.append(n_poses)
         return InterpolatedTrajectory([_state_at(i) for i in pose_indices])
+
+    def _bicycle_action_trajectory(self, ego_state: EgoState, action: np.ndarray) -> ActionTrajectory:
+        """Shadow-env post-step accel/steering targets -> commands for nuPlan's bicycle model over the next dt."""
+        ego_obs = np.asarray(self._env.observations)[0]
+        intent_accel = float(ego_obs[EGO_OBS_ACCEL_LONG_IDX]) * binding.ACCEL_LONG_NORM
+        intent_steering = float(ego_obs[EGO_OBS_STEERING_IDX]) * binding.STEERING_LIMIT
+        shadow_speed = float(ego_obs[0]) * self._env.obs_norm_speed_mps
+        dcs = ego_state.dynamic_car_state
+        accel = float(dcs.rear_axle_acceleration_2d.x)
+        speed = float(dcs.rear_axle_velocity_2d.x)
+        accel_cmd, steering_rate_cmd = bicycle_commands(
+            self._bicycle_cfg,
+            intent_accel,
+            intent_steering,
+            accel,
+            float(ego_state.tire_steering_angle),
+            speed,
+            stop_this_step=speed != 0.0 and shadow_speed == 0.0,
+        )
+        self._last_bicycle_step = BicycleStep(
+            ego_state.time_point.time_us, accel, speed, accel_cmd, intent_accel, intent_steering
+        )
+        sampling = TrajectorySampling(
+            num_poses=int(round(self._horizon_seconds / self._bicycle_cfg.dt_s)), interval_length=self._bicycle_cfg.dt_s
+        )
+        return ActionTrajectory(
+            accel_cmd,
+            steering_rate_cmd,
+            ego_state,
+            raw_action=[float(a) for a in action],
+            trajectory_sampling=sampling,
+        )

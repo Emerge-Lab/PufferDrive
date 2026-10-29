@@ -43,6 +43,10 @@
 #   SYMMETRIC_LANE_WIDTHS=true|false  the shadow env loads a cached copy of the city bin whose lane widths are
 #             twice the centerline's distance to the nearer GPKG boundary (the converter writes left + right,
 #             which overstates nuPlan's parking-strip lanes). Unset = planner yaml, false.
+#   EGO_DYNAMICS=pufferdrive|nuplan_bicycle  ego plant (unset = planner yaml, pufferdrive). nuplan_bicycle drives
+#             nuPlan's KinematicBicycleModel through CaRL's one_stage_controller (the ego_controller override is
+#             added here). BICYCLE_MIN_SPEED_MPS [m/s, <= 0: 0 = no reverse driving, -2 = Drive's floor] and
+#             BICYCLE_UNDO_LOW_PASS=true|false (pre-compensate the model's command lag) tune it; unset = planner yaml.
 #   OBS_SLOTS_PARTNERS_N  shadow-env partner obs slots (unset = planner yaml, 40).
 #   EVAL_PERCEIVED_SIZE_MARGIN_M  [m per side] ego box inflation in the policy's obs (unset = arch.py, 0.2).
 #   REWARD_OVERSPEED  overspeed conditioning alpha fed to the policy (unset = arch.py, 0.1).
@@ -94,6 +98,13 @@ EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
 [ -n "${STARTUP_BRAKE_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_brake_jerk_cap_mps3=$STARTUP_BRAKE_JERK_CAP")
 [ -n "${VRU_SIZE_PAD_M:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.vru_size_pad_m=$VRU_SIZE_PAD_M")
 [ -n "${SYMMETRIC_LANE_WIDTHS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.symmetric_lane_widths=$SYMMETRIC_LANE_WIDTHS")
+if [ "${EGO_DYNAMICS:-}" = "nuplan_bicycle" ]; then
+    EXTRA_ARGS+=("ego_controller=one_stage_controller" "planner.pufferdrive_planner.ego_dynamics=nuplan_bicycle")
+elif [ -n "${EGO_DYNAMICS:-}" ]; then
+    EXTRA_ARGS+=("planner.pufferdrive_planner.ego_dynamics=$EGO_DYNAMICS")
+fi
+[ -n "${BICYCLE_MIN_SPEED_MPS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_min_speed_mps=$BICYCLE_MIN_SPEED_MPS")
+[ -n "${BICYCLE_UNDO_LOW_PASS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_undo_low_pass=$BICYCLE_UNDO_LOW_PASS")
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_slots_partners_n=$OBS_SLOTS_PARTNERS_N")
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_perceived_size_margin_m=$EVAL_PERCEIVED_SIZE_MARGIN_M")
 [ -n "${REWARD_OVERSPEED:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.reward_overspeed=$REWARD_OVERSPEED")

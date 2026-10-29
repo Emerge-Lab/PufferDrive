@@ -1674,6 +1674,8 @@ PyMODINIT_FUNC PyInit_binding(void) {
     // norm (obs[0]) is per-env config: env.obs_norm_speed_mps.
     PyModule_AddObject(m, "ACCEL_LONG_NORM", PyFloat_FromDouble(fabsf(ACCEL_LONG_LIMIT[0])));
     PyModule_AddObject(m, "ACCEL_LONG_MAX", PyFloat_FromDouble(ACCEL_LONG_LIMIT[1]));
+    PyModule_AddObject(m, "STEERING_LIMIT", PyFloat_FromDouble(STEERING_LIMIT));
+    PyModule_AddObject(m, "MAX_BACKWARD_SPEED", PyFloat_FromDouble(MAX_BACKWARD_SPEED));
     PyModule_AddObject(m, "AGENT_STOPPED_SPEED_THRESHOLD", PyFloat_FromDouble(AGENT_STOPPED_SPEED_THRESHOLD));
     PyModule_AddObject(m, "CONDITIONING_ACC_MIN", PyFloat_FromDouble(REWARD_BOUNDS[REWARD_COEF_ACC].min_val));
     PyModule_AddObject(m, "CONDITIONING_ACC_MAX", PyFloat_FromDouble(REWARD_BOUNDS[REWARD_COEF_ACC].max_val));

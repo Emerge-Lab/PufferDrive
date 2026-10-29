@@ -71,6 +71,13 @@ export REWARD_OVERSPEED=0.1
 # city bins have 22% of segments wider than 5 m, up to 50 m). LANE_WIDTH_CLIP_MAX_M=0 turns it off (pre-2026-10-29 evals).
 export LANE_WIDTH_CLIP_MIN_M=${LANE_WIDTH_CLIP_MIN_M:-2.85}
 export LANE_WIDTH_CLIP_MAX_M=${LANE_WIDTH_CLIP_MAX_M:-4.4}
+# Ego plant: pufferdrive (shadow jerk model, nuPlan replays the pose) or nuplan_bicycle (nuPlan's KinematicBicycleModel
+# via CaRL's one_stage_controller, the policy's accel/steering targets become its commands). Bicycle arms:
+# BICYCLE_MIN_SPEED_MPS 0 (CaRL: no reverse driving) vs -2 (Drive's floor); BICYCLE_UNDO_LOW_PASS false (CaRL: the
+# model realises dt/(dt+tau) of each command) vs true (one model step lands on the targets).
+export EGO_DYNAMICS=${EGO_DYNAMICS:-pufferdrive}
+export BICYCLE_MIN_SPEED_MPS=${BICYCLE_MIN_SPEED_MPS:-0}
+export BICYCLE_UNDO_LOW_PASS=${BICYCLE_UNDO_LOW_PASS:-false}
 ABLATION_TAG=""
 [ "$SLIDING_GOAL_WINDOW" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_slide"
 [ "$STARTUP_ACCEL_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
@@ -82,6 +89,10 @@ ABLATION_TAG=""
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && ABLATION_TAG="${ABLATION_TAG}_margin${EVAL_PERCEIVED_SIZE_MARGIN_M}"
 [ -n "${REWARD_OVERSPEED:-}" ] && ABLATION_TAG="${ABLATION_TAG}_overspeed${REWARD_OVERSPEED}"
 [ "$LANE_WIDTH_CLIP_MAX_M" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_lanew${LANE_WIDTH_CLIP_MIN_M}-${LANE_WIDTH_CLIP_MAX_M}"
+if [ "$EGO_DYNAMICS" = "nuplan_bicycle" ]; then
+    ABLATION_TAG="${ABLATION_TAG}_bicycle_vmin${BICYCLE_MIN_SPEED_MPS}"
+    [ "$BICYCLE_UNDO_LOW_PASS" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_nolag"
+fi
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}_${GOAL_SOURCE}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 

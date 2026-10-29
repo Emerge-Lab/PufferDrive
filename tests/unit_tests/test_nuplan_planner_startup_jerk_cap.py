@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 nuplan = pytest.importorskip("nuplan")
+pytest.importorskip("carl_nuplan")
 
 from pufferlib.ocean.cosim.nuplan.planner import startup_jerk_action_bounds
 from pufferlib.ocean.drive import binding

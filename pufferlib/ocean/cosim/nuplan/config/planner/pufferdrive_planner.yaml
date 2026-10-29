@@ -25,6 +25,18 @@ pufferdrive_planner:
   vru_size_pad_m: 0.0
   # eval hack: shadow env loads a cached copy of the city bin with lane width = 2 x distance to the nearer GPKG boundary
   symmetric_lane_widths: false
+  # Ego plant. pufferdrive: the shadow env's jerk model integrates the ego, nuPlan's perfect_tracking_controller
+  # replays the pose. nuplan_bicycle: nuPlan's KinematicBicycleModel is the plant (run with
+  # ego_controller=one_stage_controller); the shadow ego takes nuPlan's pose/speed/yaw rate every step, keeps its own
+  # jerk-integrated accel/steering, and its post-step accel/steering are the model's commands.
+  # bicycle_min_speed_mps: speed floor enforced on the command (0 = CaRL's
+  # no-reverse driving, -2 = Drive's MAX_BACKWARD_SPEED). bicycle_undo_low_pass: pre-compensate the model's command
+  # lag (CaRL default off). The time constants must match the motion model (devkit 0.2 / 0.05).
+  ego_dynamics: pufferdrive
+  bicycle_min_speed_mps: 0.0
+  bicycle_undo_low_pass: false
+  bicycle_accel_time_constant_s: 0.2
+  bicycle_steering_time_constant_s: 0.05
   env_overrides:
     obs_slots_partners_n: 40 # GIGAFLOW eval value (Table A4); slots are max-pooled, so any checkpoint transfers
     stop_signs_enabled: false # nuPlan city bins export TURN_STOP zones as stop signs; keep them out of the obs

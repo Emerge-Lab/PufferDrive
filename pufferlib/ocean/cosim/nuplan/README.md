@@ -20,6 +20,20 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   iteration; afterwards the shadow env owns it and the planner raises if
   nuPlan's ego pose ever diverges from the integrated one (the configs pin
   `perfect_tracking_controller`).
+- Ego plant ablation `ego_dynamics: nuplan_bicycle` (env `EGO_DYNAMICS=nuplan_bicycle`; script 9 tags
+  the run `_bicycle_vmin<floor>[_nolag]`): nuPlan's `KinematicBicycleModel` is the plant, driven through
+  CaRL's `one_stage_controller` exactly like CaRL. Every step the shadow ego takes nuPlan's pose, speed
+  and yaw rate but keeps its own jerk-integrated accel/steering (the state the policy was trained to
+  observe; restamping the lagged plant's values made Drive's zero-crossing snaps fire every step and
+  swallow the policy's steering), and its post-step accel/steering become the model's acceleration /
+  steering-rate commands (`cosim/nuplan_bicycle.py`). The model low-passes both (gain dt/(dt+tau), tau
+  0.2 s / 0.05 s) and has neither a speed floor nor a stop snap: `bicycle_min_speed_mps`
+  (`BICYCLE_MIN_SPEED_MPS`; 0 = CaRL's no-reverse driving, -2 = Drive's floor) is enforced on the command,
+  a shadow stop snap commands the model to exactly zero speed, and `bicycle_undo_low_pass`
+  (`BICYCLE_UNDO_LOW_PASS`) pre-compensates the lag so one model step lands on the targets (off = CaRL's
+  lag, the model realises a third of each accel step). The planner checks every step that nuPlan's accel and speed are the
+  model's response to its last command, so a perfect-tracking controller or mismatched time constants
+  abort the scenario.
 - Route goals (`goal_source: external`): PDM-style lane-graph route ->
   goals every `goal_spacing` m. Planner `goal_source: roadblock` (env
   `GOAL_SOURCE=roadblock`) uses the centroids of the CaRL-corrected route
