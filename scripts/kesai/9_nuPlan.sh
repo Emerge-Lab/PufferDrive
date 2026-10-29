@@ -57,11 +57,13 @@ export STARTUP_BRAKE_JERK_CAP=2
 # pedestrian and bicycle partner boxes grow by this much in length and width in the policy's obs (0 = off): 0.8 puts them strictly above the smallest training vehicle
 export VRU_SIZE_PAD_M=0.8
 # hold partner stop counters at 0 in the policy's obs (CARLA's COSIM_ZERO_PARTNER_STOPPED_TIME): a lead stopped longer than
-# any training red light (10 s) otherwise reads as parked and the policy backs out of the queue. false = off.
-export ZERO_PARTNER_STOPPED_TIME=${ZERO_PARTNER_STOPPED_TIME:-true}
+# any training red light (10 s) otherwise reads as parked and the policy backs out of the queue. Default off: run 281
+# (with symw) fixed 5 reverses but added 13 collisions, 7 of them with cones and parked cars in pickup/dropoff zones.
+export ZERO_PARTNER_STOPPED_TIME=${ZERO_PARTNER_STOPPED_TIME:-false}
 # lane width = 2 x distance to the nearer GPKG boundary (city bins store left + right, 6 m on nuPlan's parking-strip lanes
-# whose baseline sits 1.7 m from the oncoming side); cached copy of the bin in NUPLAN_EXP_ROOT/pufferdrive_bin_cache. false = off.
-export SYMMETRIC_LANE_WIDTHS=${SYMMETRIC_LANE_WIDTHS:-true}
+# whose baseline sits 1.7 m from the oncoming side); cached copy of the bin in NUPLAN_EXP_ROOT/pufferdrive_bin_cache.
+# Default off: in run 281 (with pstop0) Pittsburgh and Singapore lost 2.6-2.8 points, their lanes now read 2.85-3.4 m.
+export SYMMETRIC_LANE_WIDTHS=${SYMMETRIC_LANE_WIDTHS:-false}
 # Shadow-env obs overrides: partner slots (training 20, GIGAFLOW eval 40; 40 real partners max-pooled is OOD in
 # sidewalk crowds) and the ego perceived-size margin [m per side] (0.2 = native eval; nuPlan's 2.3 x 5.2 m ego
 # reads as 2.7 x 5.6 m). Unset = planner yaml / arch.py defaults (40 / 0.2).
