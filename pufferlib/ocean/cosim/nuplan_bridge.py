@@ -578,6 +578,17 @@ def match_connectors_to_stop_lines(
 
 MOVING_PARTNER_TYPES = ("VEHICLE", "PEDESTRIAN", "BICYCLE")  # the only types the training bins turn into agents
 STATIC_PARTNER_TYPES = ("TRAFFIC_CONE", "BARRIER", "CZONE_SIGN", "GENERIC_OBJECT")
+# get_proximal_map_objects matches lane connectors by centerline (lanes by polygon): the patch must reach the
+# centerline of every connector whose polygon can overlap the object's box
+STATIC_PARTNER_LANE_QUERY_RADIUS_M = 10.0
+
+
+def lane_polygon_overlaps(lane, box) -> bool:
+    try:
+        polygon = lane.polygon
+    except AssertionError:  # devkit: lane connector without a scaled-width polygon row, nothing to hit
+        return False
+    return bool(polygon.intersects(box))
 
 
 def partner_tracked_objects(tracked_objects, map_api, static_on_lane: dict):
@@ -602,12 +613,10 @@ def partner_tracked_objects(tracked_objects, map_api, static_on_lane: dict):
         on_lane = static_on_lane.get(obj.track_token)
         if on_lane is None:
             box = obj.box.geometry
-            # the query patch is a square of half-side radius around the center; the half diagonal covers the box
-            query_radius_m = 0.5 * float(np.hypot(obj.box.length, obj.box.width))
             proximal = map_api.get_proximal_map_objects(
-                Point2D(obj.center.x, obj.center.y), query_radius_m, lane_layers
+                Point2D(obj.center.x, obj.center.y), STATIC_PARTNER_LANE_QUERY_RADIUS_M, lane_layers
             )
-            on_lane = any(lane.polygon.intersects(box) for layer in lane_layers for lane in proximal[layer])
+            on_lane = any(lane_polygon_overlaps(lane, box) for layer in lane_layers for lane in proximal[layer])
             static_on_lane[obj.track_token] = on_lane
         if on_lane:
             kept.append(obj)

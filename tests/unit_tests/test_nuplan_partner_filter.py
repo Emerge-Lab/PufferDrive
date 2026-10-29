@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 nuplan = pytest.importorskip("nuplan")  # noqa: F841  (partner_tracked_objects imports nuPlan datatypes)
-from shapely.geometry import box  # noqa: E402
+from shapely.geometry import LineString, box  # noqa: E402
 
 from pufferlib.ocean.cosim import nuplan_bridge as nb  # noqa: E402
 
@@ -33,24 +33,44 @@ def _obj(type_name, token, x=0.0, y=0.0, length=0.4, width=0.4):
     )
 
 
-class FakeMap:
-    """Polygons per layer, returned only when they intersect the square query patch (as the devkit does)."""
+class ConnectorWithoutPolygon:
+    """Devkit lane connector whose scaled-width polygon row is missing: .polygon asserts."""
 
-    def __init__(self, lane_polygons, connector_polygons=()):
-        self.polygons = {"LANE": list(lane_polygons), "LANE_CONNECTOR": list(connector_polygons)}
+    def __init__(self, centerline):
+        self.centerline = centerline
+
+    @property
+    def polygon(self):
+        raise AssertionError("Could not find the desired key")
+
+
+class FakeMap:
+    """Devkit proximity semantics: the square query patch is matched against lane polygons but against lane
+    connector centerlines."""
+
+    def __init__(self, lane_polygons, connectors=()):
+        self.lanes = [SimpleNamespace(polygon=p) for p in lane_polygons]
+        self.connectors = [
+            c if isinstance(c, ConnectorWithoutPolygon) else SimpleNamespace(polygon=c[0], centerline=c[1])
+            for c in connectors
+        ]
         self.queries = 0
 
     def get_proximal_map_objects(self, point, radius, layers):
         self.queries += 1
         patch = box(point.x - radius, point.y - radius, point.x + radius, point.y + radius)
-        return {
-            layer: [SimpleNamespace(polygon=p) for p in self.polygons[layer.name] if p.intersects(patch)]
-            for layer in layers
-        }
+        result = {}
+        for layer in layers:
+            if layer.name == "LANE":
+                result[layer] = [lane for lane in self.lanes if lane.polygon.intersects(patch)]
+            else:
+                result[layer] = [c for c in self.connectors if c.centerline.intersects(patch)]
+        return result
 
 
 LANE = box(-10.0, -2.0, 0.0, 2.0)  # right lane edge at x = 0
 CONNECTOR = box(19.0, -1.0, 21.0, 1.0)
+CONNECTOR_CENTERLINE = LineString([(19.0, 0.0), (21.0, 0.0)])
 
 
 def test_moving_agents_kept_static_off_road_dropped():
@@ -65,7 +85,7 @@ def test_moving_agents_kept_static_off_road_dropped():
         _obj("GENERIC_OBJECT", "g_on_connector", 20.0),
         _obj("EGO", "ego", 0.0),
     ]
-    map_api = FakeMap([LANE], [CONNECTOR])
+    map_api = FakeMap([LANE], [(CONNECTOR, CONNECTOR_CENTERLINE)])
     cache = {}
     kept = nb.partner_tracked_objects(objs, map_api, cache)
     assert [o.track_token for o in kept] == [
@@ -95,3 +115,16 @@ def test_static_verdict_is_cached_per_track():
     nb.partner_tracked_objects(objs, map_api, cache)
     assert map_api.queries == 2
     assert [o.track_token for o in nb.partner_tracked_objects(objs, map_api, cache)] == ["c1"]
+
+
+def test_static_inside_a_connector_away_from_its_centerline_is_kept():
+    """A 0.3 m patch around a cone 0.8 m off the centerline never reached the connector (run 390 regression)."""
+    objs = [_obj("TRAFFIC_CONE", "c_edge", 20.0, 0.8), _obj("TRAFFIC_CONE", "c_outside", 20.0, 1.5)]
+    kept = nb.partner_tracked_objects(objs, FakeMap([], [(CONNECTOR, CONNECTOR_CENTERLINE)]), {})
+    assert [o.track_token for o in kept] == ["c_edge"]
+
+
+def test_connector_without_polygon_row_is_skipped():
+    objs = [_obj("TRAFFIC_CONE", "c1", 30.0)]
+    map_api = FakeMap([], [ConnectorWithoutPolygon(LineString([(29.0, 0.0), (31.0, 0.0)]))])
+    assert nb.partner_tracked_objects(objs, map_api, {}) == []
