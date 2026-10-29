@@ -12,17 +12,14 @@
 
 source scripts/kesai/cluster_env.sh || exit 1
 
-# CARLA self-play eval only (no co-sim follow-ups), same overrides as the post-training eval in 3_train:
-#   RUN_NAME=k_scaled_0059_1000 sbatch scripts/kesai/21_selfplay_eval_slurm.sh
-#   RUN_NAME=k_scaled_0059_1000 SCENARIO_LENGTH=6000 EVAL_OUTPUT_DIR_NAME=eval80k_400s sbatch scripts/kesai/21_selfplay_eval_slurm.sh
+# CARLA self-play eval only (no co-sim follow-ups), same overrides as the post-training eval in 3_train.
+# Defaults below evaluate k_scaled_0059 on the 9000-step layout; override per job with sbatch --export, e.g. the 400 s A/B:
+#   sbatch --export=ALL,SCENARIO_LENGTH=6000,EVAL_OUTPUT_DIR_NAME=eval80k_400s scripts/kesai/21_selfplay_eval_slurm.sh
 # EVAL_OUTPUT_DIR_NAME names the output folder and the wandb prefix (final_<name>_carla), so re-evals never overwrite the training run's eval.
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-if [ -z "${RUN_NAME}" ]; then
-    echo "RUN_NAME is required, e.g. RUN_NAME=k_scaled_0059_1000 sbatch $0" >&2
-    exit 1
-fi
+export RUN_NAME=${RUN_NAME:-k_scaled_0059_1000}
 export MODEL_PATH=$PD/experiments/${RUN_NAME}/final_model.pt
 if [ ! -f "${MODEL_PATH}" ]; then
     echo "missing checkpoint ${MODEL_PATH}" >&2
