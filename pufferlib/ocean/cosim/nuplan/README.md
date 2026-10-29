@@ -39,11 +39,7 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   `LANE_WIDTH_CLIP_MIN_M` / `LANE_WIDTH_CLIP_MAX_M`, Drive env keys via `env_overrides`): the
   lane widths the policy observes are clipped to this range (the CARLA training maps span
   2.85-4.4 m, the nuPlan city bins reach 50 m at junction connectors and multi-lane
-  roadblocks). Off by default, script 9 sets 2.85-4.4 m. Eval hack `zero_partner_stopped_time` (env
-  `ZERO_PARTNER_STOPPED_TIME`, CARLA's `COSIM_ZERO_PARTNER_STOPPED_TIME`): every partner's seconds_stopped
-  observation is held at 0, the ego's own counter is untouched; a lead standing longer than any training red
-  light (10 s) otherwise reads as parked and the policy backs out of the queue (nuPlan scores that as a
-  direction violation plus negative progress). Off by default, script 9 sets it. The shadow env consumes the goals of its
+  roadblocks). Off by default, script 9 sets 2.85-4.4 m. The shadow env consumes the goals of its
   `num_goals` window itself exactly like training (`goal_regen_mode: finite`,
   consumed slots zeroed in the obs); the planner pushes the next window only
   when the current one is exhausted or its current goal is clearly behind the

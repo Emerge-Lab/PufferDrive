@@ -23,8 +23,6 @@ pufferdrive_planner:
   startup_brake_jerk_cap_mps3: 0.0
   # eval hack: grow pedestrian and bicycle partner boxes by this much [m] in length and width in the policy's obs (training min 0.8 x 0.8); 0 = off
   vru_size_pad_m: 0.0
-  # eval hack (CARLA's COSIM_ZERO_PARTNER_STOPPED_TIME): hold every partner's seconds_stopped obs at 0, ego counter untouched
-  zero_partner_stopped_time: false
   # eval hack: shadow env loads a cached copy of the city bin with lane width = 2 x distance to the nearer GPKG boundary
   symmetric_lane_widths: false
   env_overrides:

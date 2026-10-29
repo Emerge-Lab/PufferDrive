@@ -56,13 +56,9 @@ export STARTUP_ACCEL_JERK_CAP=2
 export STARTUP_BRAKE_JERK_CAP=2
 # pedestrian and bicycle partner boxes grow by this much in length and width in the policy's obs (0 = off): 0.8 puts them strictly above the smallest training vehicle
 export VRU_SIZE_PAD_M=0.8
-# hold partner stop counters at 0 in the policy's obs (CARLA's COSIM_ZERO_PARTNER_STOPPED_TIME): a lead stopped longer than
-# any training red light (10 s) otherwise reads as parked and the policy backs out of the queue. Default off: run 281
-# (with symw) fixed 5 reverses but added 13 collisions, 7 of them with cones and parked cars in pickup/dropoff zones.
-export ZERO_PARTNER_STOPPED_TIME=${ZERO_PARTNER_STOPPED_TIME:-false}
 # lane width = 2 x distance to the nearer GPKG boundary (city bins store left + right, 6 m on nuPlan's parking-strip lanes
 # whose baseline sits 1.7 m from the oncoming side); cached copy of the bin in NUPLAN_EXP_ROOT/pufferdrive_bin_cache.
-# Default off: in run 281 (with pstop0) Pittsburgh and Singapore lost 2.6-2.8 points, their lanes now read 2.85-3.4 m.
+# Default off: alone it scored 0.9257 vs 0.9314 for the plain clip (run 295, 2026-10-29): TTC and progress worse, lanes read 2.85-3.4 m.
 export SYMMETRIC_LANE_WIDTHS=${SYMMETRIC_LANE_WIDTHS:-false}
 # Shadow-env obs overrides: partner slots (training 20, GIGAFLOW eval 40; 40 real partners max-pooled is OOD in
 # sidewalk crowds) and the ego perceived-size margin [m per side] (0.2 = native eval; nuPlan's 2.3 x 5.2 m ego
@@ -80,7 +76,6 @@ ABLATION_TAG=""
 [ "$STARTUP_ACCEL_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
 [ "$STARTUP_BRAKE_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jbrk${STARTUP_BRAKE_JERK_CAP}"
 [ "$VRU_SIZE_PAD_M" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_vrupad${VRU_SIZE_PAD_M}m"
-[ "$ZERO_PARTNER_STOPPED_TIME" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_pstop0"
 [ "$SYMMETRIC_LANE_WIDTHS" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_symw"
 [ "$CITY_BIN_DIR" != "$SHARED_DATA/nuplan/PufferDrive" ] && ABLATION_TAG="${ABLATION_TAG}_bins$(basename "$CITY_BIN_DIR")"
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && ABLATION_TAG="${ABLATION_TAG}_slots${OBS_SLOTS_PARTNERS_N}"

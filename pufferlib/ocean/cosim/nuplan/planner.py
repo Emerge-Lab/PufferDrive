@@ -94,7 +94,6 @@ class PufferDrivePlanner(AbstractPlanner):
         startup_accel_jerk_cap_mps3: float = 0.0,
         startup_brake_jerk_cap_mps3: float = 0.0,
         vru_size_pad_m: float = 0.0,
-        zero_partner_stopped_time: bool = False,
         symmetric_lane_widths: bool = False,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
@@ -131,9 +130,6 @@ class PufferDrivePlanner(AbstractPlanner):
             and width [m] before the policy sees them, so they read strictly larger than the smallest
             training vehicle (0.8 x 0.8 m; nuPlan pedestrians are 0.4-0.8 m, bicycles ~0.5 m wide); nuPlan
             keeps scoring the true boxes. 0 = off.
-        :param zero_partner_stopped_time: eval hack (CARLA's COSIM_ZERO_PARTNER_STOPPED_TIME): every partner's
-            seconds_stopped observation is held at 0, the ego's own counter is untouched. A lead standing
-            longer than any training red light (10 s) otherwise reads as parked and the policy backs out.
         :param symmetric_lane_widths: eval hack: the shadow env loads a copy of the city bin whose lane widths
             are twice the centerline's distance to the nearer GPKG boundary instead of the converter's
             left + right (nuPlan lanes with a parking strip have their baseline 1.7 m from one boundary and
@@ -171,7 +167,6 @@ class PufferDrivePlanner(AbstractPlanner):
         self._vru_size_pad_m = float(vru_size_pad_m)
         if self._vru_size_pad_m < 0:
             raise ValueError("vru_size_pad_m must be >= 0")
-        self._zero_partner_stopped_time = bool(zero_partner_stopped_time)
         self._symmetric_lane_widths = bool(symmetric_lane_widths)
         self._startup_jerk_cap_steps = 0  # resolved in _build from the scenario dt
         self._startup_action_bounds = None  # (lo, hi) on the continuous jerk action while the cap is live
@@ -549,19 +544,7 @@ class PufferDrivePlanner(AbstractPlanner):
             idx, x, y, z, hh, vx, vy, tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
             if self._vru_size_pad_m > 0:
                 ln, wd = nb.pad_vru_partner_sizes(tp, ln, wd, self._vru_size_pad_m)
-            partner_zero = np.zeros_like(vx)
-            env.set_agent_states(
-                idx,
-                x,
-                y,
-                z,
-                hh,
-                vx,
-                vy,
-                partner_zero,
-                partner_zero,
-                seconds_stopped=partner_zero if self._zero_partner_stopped_time else None,
-            )
+            env.set_agent_states(idx, x, y, z, hh, vx, vy, np.zeros_like(vx), np.zeros_like(vx))
             env.set_agent_sizes(idx, ln, wd)
         surplus = np.arange(1 + len(objs), self._num_agents, dtype=np.int32)
         if len(surplus):

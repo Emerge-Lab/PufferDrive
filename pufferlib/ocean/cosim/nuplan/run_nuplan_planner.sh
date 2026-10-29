@@ -40,8 +40,6 @@
 #   VRU_SIZE_PAD_M  [m] add this to pedestrian and bicycle partner boxes' length and width in the policy's
 #             observation (training never spawns below 0.8 m; 0.8 = strictly above the smallest training
 #             vehicle); unset/0 = off.
-#   ZERO_PARTNER_STOPPED_TIME=true|false  hold every partner's seconds_stopped observation at 0 (the ego's
-#             own counter is untouched; CARLA's COSIM_ZERO_PARTNER_STOPPED_TIME). Unset = planner yaml, false.
 #   SYMMETRIC_LANE_WIDTHS=true|false  the shadow env loads a cached copy of the city bin whose lane widths are
 #             twice the centerline's distance to the nearer GPKG boundary (the converter writes left + right,
 #             which overstates nuPlan's parking-strip lanes). Unset = planner yaml, false.
@@ -95,7 +93,6 @@ EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
 [ -n "${STARTUP_ACCEL_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_accel_jerk_cap_mps3=$STARTUP_ACCEL_JERK_CAP")
 [ -n "${STARTUP_BRAKE_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_brake_jerk_cap_mps3=$STARTUP_BRAKE_JERK_CAP")
 [ -n "${VRU_SIZE_PAD_M:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.vru_size_pad_m=$VRU_SIZE_PAD_M")
-[ -n "${ZERO_PARTNER_STOPPED_TIME:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.zero_partner_stopped_time=$ZERO_PARTNER_STOPPED_TIME")
 [ -n "${SYMMETRIC_LANE_WIDTHS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.symmetric_lane_widths=$SYMMETRIC_LANE_WIDTHS")
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_slots_partners_n=$OBS_SLOTS_PARTNERS_N")
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_perceived_size_margin_m=$EVAL_PERCEIVED_SIZE_MARGIN_M")
