@@ -511,6 +511,7 @@ class EvaluationConfig:
     max_rendered_failures: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     traffic_policy: str | None = None
     traffic_conditioning: TrafficConditioning = TrafficConditioning.checkpoint_defaults
+    hide_target_marker: bool = False
     failure_replay_csv: str | None = MISSING
     capture_observations: bool = MISSING
     observation_replay_wave_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)

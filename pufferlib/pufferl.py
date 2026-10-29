@@ -2608,6 +2608,17 @@ def _run_eval_rollout(
                     else:
                         policy_obs_tensor = environment_obs_tensor
                     target_obs_tensor = policy_obs_tensor
+                    if args["eval"]["hide_target_marker"]:
+                        observation_env = vecenv.driver_env
+                        partner_start = (
+                            observation_env.ego_features + observation_env.num_reward_coefs + observation_env.goal_dim
+                        )
+                        partner_end = (
+                            partner_start + observation_env.obs_slots_partners_n * observation_env.partner_features
+                        )
+                        policy_obs_tensor = policy_obs_tensor.clone()
+                        partner_marker_start = partner_start + observation_env.partner_features - 1
+                        policy_obs_tensor[:, partner_marker_start : partner_end : observation_env.partner_features] = 0
                     if condition_traffic:
                         if rollout_step % capture_batch_steps == 0:
                             traffic_conditioning = fixed_traffic_conditioning.expand(
