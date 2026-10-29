@@ -87,6 +87,9 @@ env:
   yield_signs_enabled: false
   # Skip red light violation detection (metrics, reward, behavior)
   disable_red_light_infractions: false
+  # Training-only: a red light violation fires once the front edge comes within this gap (m) of the stop line;
+  # eval and co-sim fire when the front edge crosses the line
+  red_light_train_front_margin_m: 0.3
   # Skip stop sign violation detection (metrics, reward, behavior); the sign obs still turn red/green
   disable_stop_sign_infractions: false
   # Cycle the lights of a junction phase-by-phase (TLPHASE1 bins); false keeps independent lights (legacy)

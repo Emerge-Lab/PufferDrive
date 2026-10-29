@@ -137,6 +137,7 @@ class Drive(pufferlib.PufferEnv):
         obs_norm_road_seg_width_m=5.0,
         obs_norm_z_m=10.0,
         eval_perceived_size_margin_m=0.1,
+        red_light_train_front_margin_m=0.3,
         obs_partner_split_length_m=0.0,
         eval_standstill_jerk_deadband_mps3=0.0,
         obs_range_traffic_control_m=100.0,
@@ -329,6 +330,11 @@ class Drive(pufferlib.PufferEnv):
         self.obs_norm_road_seg_width_m = float(obs_norm_road_seg_width_m)
         self.obs_norm_z_m = float(obs_norm_z_m)
         self.eval_perceived_size_margin_m = float(eval_perceived_size_margin_m)
+        self.red_light_train_front_margin_m = float(red_light_train_front_margin_m)
+        if not np.isfinite(self.red_light_train_front_margin_m) or self.red_light_train_front_margin_m < 0.0:
+            raise ValueError(
+                f"red_light_train_front_margin_m must be finite and >= 0. Got: {red_light_train_front_margin_m}"
+            )
         self.obs_partner_split_length_m = float(obs_partner_split_length_m)
         if not np.isfinite(self.obs_partner_split_length_m) or self.obs_partner_split_length_m < 0.0:
             raise ValueError(f"obs_partner_split_length_m must be finite and >= 0. Got: {obs_partner_split_length_m}")
@@ -648,6 +654,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_norm_road_seg_width_m": self.obs_norm_road_seg_width_m,
             "obs_norm_z_m": self.obs_norm_z_m,
             "eval_perceived_size_margin_m": self.eval_perceived_size_margin_m,
+            "red_light_train_front_margin_m": self.red_light_train_front_margin_m,
             "obs_partner_split_length_m": self.obs_partner_split_length_m,
             "eval_standstill_jerk_deadband_mps3": self.eval_standstill_jerk_deadband_mps3,
             "obs_range_traffic_control_m": self.obs_range_traffic_control_m,

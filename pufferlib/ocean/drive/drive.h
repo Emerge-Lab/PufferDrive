@@ -314,6 +314,7 @@ struct Drive {
     float obs_norm_road_seg_width_m;
     float obs_norm_z_m;
     float eval_perceived_size_margin_m;
+    float red_light_train_front_margin_m; // training-only gap the front edge must keep before a red stop line
     float obs_partner_split_length_m; // 0 disables; longer partners are observed as ceil(length / this) equal pieces
     int cosim_eval_semantics;         // co-sim: apply the eval-only obs/action tweaks without native eval batching
     float eval_standstill_jerk_deadband_mps3; // 0 disables; eval-only standstill deadband on j_long
@@ -1774,10 +1775,19 @@ static bool check_corner_boxes_overlap(float corners_a[4][2], float corners_b[4]
     return true;
 }
 
+static float red_light_front_margin_m(Drive *env) {
+    bool eval_semantics = (env->eval_mode && !env->eval_training_render) || env->cosim_eval_semantics;
+    return eval_semantics ? 0.0f : env->red_light_train_front_margin_m;
+}
+
 static bool check_red_light_violation(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
-    // Vehicle center crosses on red; the laterally extended line cannot be driven
-    // around, and the heading gate exempts exiting/opposing traffic.
+    // Front edge crosses on red; the extended line cannot be driven around, the heading gate exempts exiting traffic.
+    float front_offset_m = 0.5f * agent->sim_length + red_light_front_margin_m(env);
+    float front_x = agent->sim_x + front_offset_m * agent->cos_heading;
+    float front_y = agent->sim_y + front_offset_m * agent->sin_heading;
+    float prev_front_x = agent->prev_x + front_offset_m * agent->prev_cos_heading;
+    float prev_front_y = agent->prev_y + front_offset_m * agent->prev_sin_heading;
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
         if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
@@ -1817,14 +1827,14 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
             normal_x = -normal_x;
             normal_y = -normal_y;
         }
-        float s_prev = (agent->prev_x - mid_x) * normal_x + (agent->prev_y - mid_y) * normal_y;
-        float s_cur = (agent->sim_x - mid_x) * normal_x + (agent->sim_y - mid_y) * normal_y;
+        float s_prev = (prev_front_x - mid_x) * normal_x + (prev_front_y - mid_y) * normal_y;
+        float s_cur = (front_x - mid_x) * normal_x + (front_y - mid_y) * normal_y;
         if (!(s_prev < 0.0f && s_cur >= 0.0f)) {
             continue;
         }
         float crossing_frac = s_prev / (s_prev - s_cur);
-        float cross_x = agent->prev_x + crossing_frac * (agent->sim_x - agent->prev_x);
-        float cross_y = agent->prev_y + crossing_frac * (agent->sim_y - agent->prev_y);
+        float cross_x = prev_front_x + crossing_frac * (front_x - prev_front_x);
+        float cross_y = prev_front_y + crossing_frac * (front_y - prev_front_y);
         float lateral = (cross_x - mid_x) * line_ux + (cross_y - mid_y) * line_uy;
         if (fabsf(lateral) <= 0.5f * line_len + RED_LIGHT_LATERAL_EXTENSION_M) {
             return true;
@@ -3039,7 +3049,10 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
             continue;
         }
 
-        if (check_agent_on_stop_line(env, &tmp_agent, true)) {
+        // inflated by the training margin so no spawn starts inside the front edge detector's dead band
+        Agent stop_line_probe = tmp_agent;
+        stop_line_probe.sim_length += 2.0f * red_light_front_margin_m(env);
+        if (check_agent_on_stop_line(env, &stop_line_probe, true)) {
             env->spawn_reject_counts[SPAWN_REJECT_STOP_LINE]++;
             continue;
         }

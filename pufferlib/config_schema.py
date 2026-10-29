@@ -268,6 +268,7 @@ class DriveEnvConfig:
     traffic_light_behavior: InfractionBehavior = MISSING
     stop_sign_behavior: InfractionBehavior = MISSING
     disable_red_light_infractions: bool = MISSING
+    red_light_train_front_margin_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     disable_stop_sign_infractions: bool = MISSING
     traffic_light_junction_phases: bool = MISSING
     traffic_lights_enabled: bool = MISSING

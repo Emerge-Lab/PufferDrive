@@ -2148,6 +2148,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_norm_road_seg_width_m = (float) unpack(kwargs, "obs_norm_road_seg_width_m");
     env->obs_norm_z_m = (float) unpack(kwargs, "obs_norm_z_m");
     env->eval_perceived_size_margin_m = (float) unpack(kwargs, "eval_perceived_size_margin_m");
+    env->red_light_train_front_margin_m = (float) unpack(kwargs, "red_light_train_front_margin_m");
+    if (!(env->red_light_train_front_margin_m >= 0.0f) || !isfinite(env->red_light_train_front_margin_m)) {
+        PyErr_SetString(PyExc_ValueError, "red_light_train_front_margin_m must be finite and >= 0");
+        return -1;
+    }
     env->obs_partner_split_length_m = (float) unpack(kwargs, "obs_partner_split_length_m");
     if (!(env->obs_partner_split_length_m >= 0.0f) || !isfinite(env->obs_partner_split_length_m)) {
         PyErr_SetString(PyExc_ValueError, "obs_partner_split_length_m must be finite and >= 0");
