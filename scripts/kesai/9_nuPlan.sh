@@ -62,6 +62,10 @@ export OBS_SLOTS_PARTNERS_N=40
 export EVAL_PERCEIVED_SIZE_MARGIN_M=0.2
 # overspeed conditioning alpha (unset = arch.py 0.1 = max of the U(0, 0.1) training range; 0.05 kept the ego at the limit, 0.005 let it speed)
 export REWARD_OVERSPEED=0.1
+# Lane-width clip [m]: the policy observes lane widths clipped to the training range (CARLA maps 2.85-4.4 m; nuPlan
+# city bins have 22% of segments wider than 5 m, up to 50 m). LANE_WIDTH_CLIP_MAX_M=0 turns it off (pre-2026-10-29 evals).
+export LANE_WIDTH_CLIP_MIN_M=${LANE_WIDTH_CLIP_MIN_M:-2.85}
+export LANE_WIDTH_CLIP_MAX_M=${LANE_WIDTH_CLIP_MAX_M:-4.4}
 ABLATION_TAG=""
 [ "$SLIDING_GOAL_WINDOW" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_slide"
 [ "$STARTUP_ACCEL_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
@@ -70,6 +74,7 @@ ABLATION_TAG=""
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && ABLATION_TAG="${ABLATION_TAG}_slots${OBS_SLOTS_PARTNERS_N}"
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && ABLATION_TAG="${ABLATION_TAG}_margin${EVAL_PERCEIVED_SIZE_MARGIN_M}"
 [ -n "${REWARD_OVERSPEED:-}" ] && ABLATION_TAG="${ABLATION_TAG}_overspeed${REWARD_OVERSPEED}"
+[ "$LANE_WIDTH_CLIP_MAX_M" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_lanew${LANE_WIDTH_CLIP_MIN_M}-${LANE_WIDTH_CLIP_MAX_M}"
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}_${GOAL_SOURCE}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 

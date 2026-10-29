@@ -226,6 +226,9 @@ env:
   eval_perceived_size_margin_m: 0.1
   # Eval-only: partners longer than this (m) are observed as ceil(length / this) touching pieces (training max 7.0). 0 disables.
   obs_partner_split_length_m: 0.0
+  # Eval-only: observed lane widths (m) are clipped to [min, max]; the CARLA training maps span 2.85-4.4 m. max 0 disables.
+  obs_lane_width_clip_min_m: 0.0
+  obs_lane_width_clip_max_m: 0.0
   # Eval-only: while standing exactly still, |longitudinal jerk| below this (m/s^3) is zeroed
   # so leftover mean-action jerk cannot creep the car. 0 disables.
   eval_standstill_jerk_deadband_mps3: 0.0

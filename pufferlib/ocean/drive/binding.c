@@ -2158,6 +2158,14 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "obs_partner_split_length_m must be finite and >= 0");
         return -1;
     }
+    env->obs_lane_width_clip_min_m = (float) unpack(kwargs, "obs_lane_width_clip_min_m");
+    env->obs_lane_width_clip_max_m = (float) unpack(kwargs, "obs_lane_width_clip_max_m");
+    if (!(env->obs_lane_width_clip_min_m >= 0.0f) || !isfinite(env->obs_lane_width_clip_min_m)
+        || !(env->obs_lane_width_clip_max_m >= 0.0f) || !isfinite(env->obs_lane_width_clip_max_m)
+        || (env->obs_lane_width_clip_max_m > 0.0f && env->obs_lane_width_clip_min_m > env->obs_lane_width_clip_max_m)) {
+        PyErr_SetString(PyExc_ValueError, "obs_lane_width_clip_min_m/max_m must be finite, >= 0 and min <= max");
+        return -1;
+    }
     env->eval_standstill_jerk_deadband_mps3 = (float) unpack(kwargs, "eval_standstill_jerk_deadband_mps3");
     env->obs_range_traffic_control_m = (float) unpack(kwargs, "obs_range_traffic_control_m");
     env->obs_range_partner_m = (float) unpack(kwargs, "obs_range_partner_m");

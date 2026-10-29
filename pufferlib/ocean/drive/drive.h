@@ -316,6 +316,8 @@ struct Drive {
     float eval_perceived_size_margin_m;
     float red_light_train_front_margin_m; // training-only gap the front edge must keep before a red stop line
     float obs_partner_split_length_m; // 0 disables; longer partners are observed as ceil(length / this) equal pieces
+    float obs_lane_width_clip_min_m;  // observed lane width floor; 0 = no floor
+    float obs_lane_width_clip_max_m;  // observed lane width ceiling; 0 disables both clips
     int cosim_eval_semantics;         // co-sim: apply the eval-only obs/action tweaks without native eval batching
     float eval_standstill_jerk_deadband_mps3; // 0 disables; eval-only standstill deadband on j_long
     float obs_range_traffic_control_m;
@@ -5058,6 +5060,8 @@ static int write_road_obs_rows(
     int is_lane = neighbor_cursor->obs_kind == OBS_ENTITY_LANE;
     int segment_features = is_lane ? lane_feature_count(env) : BOUNDARY_FEATURES;
     int rows_written = 0;
+    float width_clip_min_m = env->obs_lane_width_clip_max_m > 0.0f ? env->obs_lane_width_clip_min_m : 0.0f;
+    float width_clip_max_m = env->obs_lane_width_clip_max_m > 0.0f ? env->obs_lane_width_clip_max_m : INFINITY;
 
     for (const GridMapEntity *entity = neighbor_cursor_next(env, neighbor_cursor);
          entity != NULL && rows_written < slot_cap;
@@ -5086,7 +5090,7 @@ static int write_road_obs_rows(
         row[5] = rel_seg_dir_y;
         // Goal-distance features: absolute and relative to ego's lane->goal distance.
         if (is_lane) {
-            row[6] = segment->width_m / env->obs_norm_road_seg_width_m;
+            row[6] = clip(segment->width_m, width_clip_min_m, width_clip_max_m) / env->obs_norm_road_seg_width_m;
             float lane_dist_m
                 = goal_graph_idx >= 0 ? lane_graph_distance_to_goal_m(env, entity_idx, goal_graph_idx) : -1.0f;
             write_lane_goal_distance_obs(lane_dist_m, ego_dist_to_goal_m, &row[7]);

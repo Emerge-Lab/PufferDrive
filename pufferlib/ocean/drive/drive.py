@@ -139,6 +139,8 @@ class Drive(pufferlib.PufferEnv):
         eval_perceived_size_margin_m=0.1,
         red_light_train_front_margin_m=0.3,
         obs_partner_split_length_m=0.0,
+        obs_lane_width_clip_min_m=0.0,
+        obs_lane_width_clip_max_m=0.0,
         eval_standstill_jerk_deadband_mps3=0.0,
         obs_range_traffic_control_m=100.0,
         obs_range_partner_m=100.0,
@@ -338,6 +340,18 @@ class Drive(pufferlib.PufferEnv):
         self.obs_partner_split_length_m = float(obs_partner_split_length_m)
         if not np.isfinite(self.obs_partner_split_length_m) or self.obs_partner_split_length_m < 0.0:
             raise ValueError(f"obs_partner_split_length_m must be finite and >= 0. Got: {obs_partner_split_length_m}")
+        self.obs_lane_width_clip_min_m = float(obs_lane_width_clip_min_m)
+        self.obs_lane_width_clip_max_m = float(obs_lane_width_clip_max_m)
+        lane_width_clip_enabled = self.obs_lane_width_clip_max_m > 0.0
+        if (
+            not (0.0 <= self.obs_lane_width_clip_min_m < float("inf"))
+            or not (0.0 <= self.obs_lane_width_clip_max_m < float("inf"))
+            or (lane_width_clip_enabled and self.obs_lane_width_clip_min_m > self.obs_lane_width_clip_max_m)
+        ):
+            raise ValueError(
+                "obs_lane_width_clip_min_m/max_m must be finite, >= 0 and min <= max (max 0 disables), "
+                f"got {obs_lane_width_clip_min_m} / {obs_lane_width_clip_max_m}"
+            )
         self.eval_standstill_jerk_deadband_mps3 = float(eval_standstill_jerk_deadband_mps3)
         if self.eval_standstill_jerk_deadband_mps3 < 0:
             raise ValueError(
@@ -656,6 +670,8 @@ class Drive(pufferlib.PufferEnv):
             "eval_perceived_size_margin_m": self.eval_perceived_size_margin_m,
             "red_light_train_front_margin_m": self.red_light_train_front_margin_m,
             "obs_partner_split_length_m": self.obs_partner_split_length_m,
+            "obs_lane_width_clip_min_m": self.obs_lane_width_clip_min_m,
+            "obs_lane_width_clip_max_m": self.obs_lane_width_clip_max_m,
             "eval_standstill_jerk_deadband_mps3": self.eval_standstill_jerk_deadband_mps3,
             "obs_range_traffic_control_m": self.obs_range_traffic_control_m,
             "obs_range_partner_m": self.obs_range_partner_m,

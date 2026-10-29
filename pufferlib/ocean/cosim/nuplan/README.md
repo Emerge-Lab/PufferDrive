@@ -35,7 +35,11 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   policy's observation (training spawns nothing below 0.8 x 0.8 m, nuPlan pedestrians
   are 0.4-0.8 m, bicycles ~0.5 m wide), so they read strictly larger than the smallest
   training vehicle; nuPlan still scores the true boxes. Off by default, script 9 sets
-  0.8 m. The shadow env consumes the goals of its
+  0.8 m. Eval hack `obs_lane_width_clip_min_m` / `obs_lane_width_clip_max_m` (env
+  `LANE_WIDTH_CLIP_MIN_M` / `LANE_WIDTH_CLIP_MAX_M`, Drive env keys via `env_overrides`): the
+  lane widths the policy observes are clipped to this range (the CARLA training maps span
+  2.85-4.4 m, the nuPlan city bins reach 50 m at junction connectors and multi-lane
+  roadblocks). Off by default, script 9 sets 2.85-4.4 m. The shadow env consumes the goals of its
   `num_goals` window itself exactly like training (`goal_regen_mode: finite`,
   consumed slots zeroed in the obs); the planner pushes the next window only
   when the current one is exhausted or its current goal is clearly behind the

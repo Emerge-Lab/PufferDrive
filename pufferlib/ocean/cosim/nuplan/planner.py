@@ -399,7 +399,10 @@ class PufferDrivePlanner(AbstractPlanner):
         else:
             # pre-3.0 checkpoints keep action_type only in the env section
             cfg["policy"].setdefault("action_type", cfg["env"]["action_type"])
-            policy = getattr(drive_torch, cfg.get("policy_name", "Drive"))(self._env, **cfg["policy"])
+            policy_kwargs = dict(cfg["policy"])
+            if torch.device(self._device).type == "cpu":
+                policy_kwargs["fused_slot_encoder"] = False  # CUDA-only triton kernel; CPU uses the reference path
+            policy = getattr(drive_torch, cfg.get("policy_name", "Drive"))(self._env, **policy_kwargs)
             sd = _state_dict_cache.get(str(self._checkpoint_path))
             if sd is None:
                 sd = clean_policy_state_dict(

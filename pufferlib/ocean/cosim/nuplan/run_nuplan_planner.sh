@@ -43,6 +43,8 @@
 #   OBS_SLOTS_PARTNERS_N  shadow-env partner obs slots (unset = planner yaml, 40).
 #   EVAL_PERCEIVED_SIZE_MARGIN_M  [m per side] ego box inflation in the policy's obs (unset = arch.py, 0.2).
 #   REWARD_OVERSPEED  overspeed conditioning alpha fed to the policy (unset = arch.py, 0.1).
+#   LANE_WIDTH_CLIP_MIN_M / LANE_WIDTH_CLIP_MAX_M  [m] clip the lane widths the policy observes to this
+#             range (training maps span 2.85-4.4 m; nuPlan city bins reach 50 m); unset = off.
 #   COSIM_OBS_HTML=all|failures|infractions|0   interactive observation replay (exact policy
 #             input/outputs per step, pufferlib.viz HTML) -> $GROUP/obs_html. all: every
 #             scenario. failures (default): only scenarios scoring below
@@ -91,6 +93,8 @@ EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_slots_partners_n=$OBS_SLOTS_PARTNERS_N")
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_perceived_size_margin_m=$EVAL_PERCEIVED_SIZE_MARGIN_M")
 [ -n "${REWARD_OVERSPEED:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.reward_overspeed=$REWARD_OVERSPEED")
+[ -n "${LANE_WIDTH_CLIP_MIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_lane_width_clip_min_m=$LANE_WIDTH_CLIP_MIN_M")
+[ -n "${LANE_WIDTH_CLIP_MAX_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_lane_width_clip_max_m=$LANE_WIDTH_CLIP_MAX_M")
 [ -n "${WORKER:-}" ] && EXTRA_ARGS+=("worker=$WORKER")
 [ -n "${THREADS_PER_NODE:-}" ] && EXTRA_ARGS+=("worker.threads_per_node=$THREADS_PER_NODE")
 [ -n "${LIMIT_TOTAL_SCENARIOS:-}" ] && EXTRA_ARGS+=("scenario_filter.limit_total_scenarios=$LIMIT_TOTAL_SCENARIOS")
