@@ -14,7 +14,7 @@ source scripts/kesai/cluster_env.sh || exit 1
 
 export PY=$(conda info --base)/envs/carl_nuplan/bin/python
 # Overridable env: RUN_DIR (3_train_64GPU_multinode_slurm.sh submits this job with RUN_DIR=<its run dir>), CHALLENGES
-RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0045_1000}
+RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0059_1000}
 case "$RUN_DIR" in /*) ;; *) RUN_DIR=$PD/$RUN_DIR ;; esac # relative to the checkout: $PD is only defined inside the job
 # the planner finds config.yaml next to final_model.pt (or one level above a models/*.pt)
 export CKPT=$RUN_DIR/final_model.pt
