@@ -22,7 +22,10 @@ Nothing in this module imports `nuplan` at module scope, so the pure-python bin
 writer stays testable from an env without the nuplan-devkit installed.
 """
 
+import os
 from pathlib import Path
+
+from typing import Tuple
 
 import numpy as np
 
@@ -679,3 +682,61 @@ def traffic_light_states(
         elif j not in route_elements and _LIGHT_RESTRICTIVENESS[state] < _LIGHT_RESTRICTIVENESS[int(states[j])]:
             states[j] = state
     return states
+
+
+SYMMETRIC_WIDTH_MIN_M = 1.0  # floor where a baseline touches its polygon edge (lane tips, fan-outs)
+SYMMETRIC_WIDTH_MAX_M = 50.0  # PufferDrive's loader limit
+SYMMETRIC_WIDTH_MATCH_TOL_M = 0.5  # mean vertex distance to the matched baseline; farther lanes keep their widths
+SYMMETRIC_WIDTH_SEARCH_M = 3.0
+
+
+def symmetric_lane_widths(roads, transform: NuPlanTransform, map_objects) -> Tuple[int, int]:
+    """Rewrite every bin lane's per-vertex widths as twice the distance to the nearer boundary of the nuPlan
+    lane / lane connector whose baseline the bin lane lies on: the widest symmetric corridor around the
+    centerline. `map_objects` expose baseline_path / left_boundary / right_boundary with `.linestring`.
+    Returns (lanes patched, lanes left unchanged because no baseline matched)."""
+    import shapely
+    from shapely.strtree import STRtree
+
+    baselines = [obj.baseline_path.linestring for obj in map_objects]
+    tree = STRtree(baselines)
+    patched = unmatched = 0
+    for road in roads:
+        if "widths" not in road or not road["S"]:
+            continue
+        ux, uy = transform.bin_to_loc(np.asarray(road["x"], np.float64), np.asarray(road["y"], np.float64))
+        points = shapely.points(ux, uy)
+        search = shapely.box(ux.min(), uy.min(), ux.max(), uy.max()).buffer(SYMMETRIC_WIDTH_SEARCH_M)
+        candidates = tree.query(search)
+        if not len(candidates):
+            unmatched += 1
+            continue
+        mean_dist = [float(np.mean(shapely.distance(baselines[c], points))) for c in candidates]
+        best = int(candidates[int(np.argmin(mean_dist))])
+        if min(mean_dist) > SYMMETRIC_WIDTH_MATCH_TOL_M:
+            unmatched += 1
+            continue
+        try:
+            left = map_objects[best].left_boundary.linestring
+            right = map_objects[best].right_boundary.linestring
+        except Exception:  # noqa: BLE001 -- a connector without a scaled-width polygon row keeps its widths
+            unmatched += 1
+            continue
+        nearer = np.minimum(shapely.distance(left, points), shapely.distance(right, points))
+        road["widths"] = tuple(np.clip(2.0 * nearer, SYMMETRIC_WIDTH_MIN_M, SYMMETRIC_WIDTH_MAX_M).tolist())
+        patched += 1
+    return patched, unmatched
+
+
+def patch_bin_lane_widths(bin_path: Path, out_path: Path, transform: NuPlanTransform, map_objects) -> Tuple[int, int]:
+    """Copy of `bin_path` with symmetric_lane_widths applied, written atomically to `out_path`."""
+    data = _mbin.read_bin(Path(bin_path))
+    if not data["has_width_section"]:
+        raise ValueError(f"{bin_path}: no LANEWID1 section to rewrite")
+    counts = symmetric_lane_widths(data["roads"], transform, map_objects)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_path.with_name(f"{out_path.name}.{os.getpid()}.tmp")
+    _mbin.write_bin(data, tmp)
+    os.replace(tmp, out_path)
+    return counts

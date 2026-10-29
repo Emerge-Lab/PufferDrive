@@ -94,6 +94,8 @@ class PufferDrivePlanner(AbstractPlanner):
         startup_accel_jerk_cap_mps3: float = 0.0,
         startup_brake_jerk_cap_mps3: float = 0.0,
         vru_size_pad_m: float = 0.0,
+        zero_partner_stopped_time: bool = False,
+        symmetric_lane_widths: bool = False,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
         obs_html_max_steps: int = 800,
@@ -129,6 +131,14 @@ class PufferDrivePlanner(AbstractPlanner):
             and width [m] before the policy sees them, so they read strictly larger than the smallest
             training vehicle (0.8 x 0.8 m; nuPlan pedestrians are 0.4-0.8 m, bicycles ~0.5 m wide); nuPlan
             keeps scoring the true boxes. 0 = off.
+        :param zero_partner_stopped_time: eval hack (CARLA's COSIM_ZERO_PARTNER_STOPPED_TIME): every partner's
+            seconds_stopped observation is held at 0, the ego's own counter is untouched. A lead standing
+            longer than any training red light (10 s) otherwise reads as parked and the policy backs out.
+        :param symmetric_lane_widths: eval hack: the shadow env loads a copy of the city bin whose lane widths
+            are twice the centerline's distance to the nearer GPKG boundary instead of the converter's
+            left + right (nuPlan lanes with a parking strip have their baseline 1.7 m from one boundary and
+            4.3 m from the other; the sum made the policy believe it had 3 m towards the oncoming lane).
+            The copy is cached in bin_cache_dir, one rewrite per city.
         :param env_overrides: Drive env kwargs overriding DEFAULT_ARCH.
         :param obs_html_dir: write the interactive pufferlib.viz observation replay per
             scenario (the exact obs the policy received, its outputs and encoder pool winners).
@@ -161,6 +171,8 @@ class PufferDrivePlanner(AbstractPlanner):
         self._vru_size_pad_m = float(vru_size_pad_m)
         if self._vru_size_pad_m < 0:
             raise ValueError("vru_size_pad_m must be >= 0")
+        self._zero_partner_stopped_time = bool(zero_partner_stopped_time)
+        self._symmetric_lane_widths = bool(symmetric_lane_widths)
         self._startup_jerk_cap_steps = 0  # resolved in _build from the scenario dt
         self._startup_action_bounds = None  # (lo, hi) on the continuous jerk action while the cap is live
         self._env_overrides = env_overrides or {}
@@ -219,6 +231,27 @@ class PufferDrivePlanner(AbstractPlanner):
         except AttributeError:
             return map_api._maps_db.load_vector_layer(map_api.map_name, layer_name)
 
+    def _symmetric_width_bin(self, city_bin: Path, tf: nb.NuPlanTransform) -> Path:
+        """Cached copy of the city bin with every lane width rewritten from the GPKG boundaries."""
+        cached = self._bin_cache_dir / f"{city_bin.stem}.symw.bin"
+        if cached.exists():
+            return cached
+        from nuplan.common.actor_state.state_representation import Point2D
+        from nuplan.common.maps.maps_datatypes import SemanticMapLayer
+
+        pts = nb.read_bin_lane_points(city_bin)
+        lo, hi = pts.min(axis=0), pts.max(axis=0)
+        cx, cy = tf.bin_to_loc(*((lo + hi) / 2.0))
+        radius = float(np.hypot(*(hi - lo)) / 2.0) + self._map_radius
+        layers = [SemanticMapLayer.LANE, SemanticMapLayer.LANE_CONNECTOR]
+        objs = self._initialization.map_api.get_proximal_map_objects(Point2D(cx, cy), radius, layers)
+        patched, unmatched = nb.patch_bin_lane_widths(city_bin, cached, tf, objs[layers[0]] + objs[layers[1]])
+        print(
+            f"[pufferdrive_planner] {city_bin.name}: symmetric lane widths for {patched} lanes "
+            f"({unmatched} unmatched keep theirs) -> {cached}"
+        )
+        return cached
+
     def _city_bin_origin(self, bin_path: Path, stop_line_centers: np.ndarray) -> nb.NuPlanTransform:
         """Recover a city bin's frame origin (it stores no centroid): global
         translation vote on stop-line landmarks, then translation-only ICP of
@@ -269,7 +302,8 @@ class PufferDrivePlanner(AbstractPlanner):
             if geo["origin"] is not None
             else self._city_bin_origin(city_bin, geo["stop_line_centers"])
         )
-        return city_bin, tf, geo
+        env_bin = self._symmetric_width_bin(city_bin, tf) if self._symmetric_lane_widths else city_bin
+        return env_bin, tf, geo
 
     def _match_traffic_lights(self, geo: dict, ex: float, ey: float) -> Dict[str, int]:
         """Signalized lane connectors within map_radius -> bin traffic elements,
@@ -515,7 +549,19 @@ class PufferDrivePlanner(AbstractPlanner):
             idx, x, y, z, hh, vx, vy, tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
             if self._vru_size_pad_m > 0:
                 ln, wd = nb.pad_vru_partner_sizes(tp, ln, wd, self._vru_size_pad_m)
-            env.set_agent_states(idx, x, y, z, hh, vx, vy, np.zeros_like(vx), np.zeros_like(vx))
+            partner_zero = np.zeros_like(vx)
+            env.set_agent_states(
+                idx,
+                x,
+                y,
+                z,
+                hh,
+                vx,
+                vy,
+                partner_zero,
+                partner_zero,
+                seconds_stopped=partner_zero if self._zero_partner_stopped_time else None,
+            )
             env.set_agent_sizes(idx, ln, wd)
         surplus = np.arange(1 + len(objs), self._num_agents, dtype=np.int32)
         if len(surplus):
