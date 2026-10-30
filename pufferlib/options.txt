@@ -1,0 +1,11 @@
+WE need to now move to CARLA based renders (the rendering CARLA gives us). THis means moving away from the render we had and goig to carla based renders
+
+The features literally ALL remain the same - but on the CARLA render
+
+In addition to that, I now want the following -
+
+
+Add  a map of the town we are rendering at the bottom right
+I need rearview mirror at top (centre) - and a right view and a left view mirror in the driver mode.
+The accelerator has to be toned down - it accelerates pretty quicklyThe brake has to be stamped more than I would want it to. Lets fix thatI need an arrow at the top left telling us WHERE our next goal is wr tour current positionThe BEV is too zoomed out right nowI need speed limit at the top right - and tell me if I’m exceeding that speed limit
+I need to perceive the speed -> buildings and trees will help
