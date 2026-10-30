@@ -86,6 +86,8 @@ export BICYCLE_UNDO_LOW_PASS=${BICYCLE_UNDO_LOW_PASS:-false}
 # BICYCLE_CENTER_ACCEL_CAP=true reduces the plant's accel while turning (CaRL clip_angular_adjustment);
 # EGO_ACCEL_CAP_MPS2 lowers the ego accel cap for any ego dynamics (unset = 0.96 x 2.40 = 2.304).
 export BICYCLE_CENTER_ACCEL_CAP=${BICYCLE_CENTER_ACCEL_CAP:-false}
+export BICYCLE_CENTER_ACCEL_CAP_MARGIN=${BICYCLE_CENTER_ACCEL_CAP_MARGIN:-1.0}
+export BICYCLE_MAX_YAW_JERK=${BICYCLE_MAX_YAW_JERK:-0}
 export EGO_ACCEL_CAP_MPS2=${EGO_ACCEL_CAP_MPS2:-}
 ABLATION_TAG=""
 [ "$SLIDING_GOAL_WINDOW" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_slide"
@@ -101,7 +103,11 @@ ABLATION_TAG=""
 if [ "$EGO_DYNAMICS" = "nuplan_bicycle" ]; then
     ABLATION_TAG="${ABLATION_TAG}_bicycle_vmin${BICYCLE_MIN_SPEED_MPS}"
     [ "$BICYCLE_UNDO_LOW_PASS" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_nolag"
-    [ "$BICYCLE_CENTER_ACCEL_CAP" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_centercap"
+    if [ "$BICYCLE_CENTER_ACCEL_CAP" = "true" ]; then
+        ABLATION_TAG="${ABLATION_TAG}_centercap"
+        [ "$BICYCLE_CENTER_ACCEL_CAP_MARGIN" != "1.0" ] && ABLATION_TAG="${ABLATION_TAG}${BICYCLE_CENTER_ACCEL_CAP_MARGIN}"
+    fi
+    [ "$BICYCLE_MAX_YAW_JERK" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_yawjerk${BICYCLE_MAX_YAW_JERK}"
 fi
 [ -n "$EGO_ACCEL_CAP_MPS2" ] && ABLATION_TAG="${ABLATION_TAG}_acap${EGO_ACCEL_CAP_MPS2}"
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals

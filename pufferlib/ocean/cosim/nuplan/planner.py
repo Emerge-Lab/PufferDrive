@@ -89,6 +89,7 @@ class BicycleStep(NamedTuple):
     accel_cmd_mps2: float
     intent_accel_mps2: float
     intent_steering_rad: float
+    plant_yaw_rate_radps: float
 
 
 def _steering_from(yaw_rate: float, speed: float, wheel_base: float) -> float:
@@ -128,6 +129,8 @@ class PufferDrivePlanner(AbstractPlanner):
         bicycle_accel_time_constant_s: float = DEVKIT_ACCEL_TIME_CONSTANT_S,
         bicycle_steering_time_constant_s: float = DEVKIT_STEERING_TIME_CONSTANT_S,
         bicycle_center_accel_cap: bool = False,
+        bicycle_center_accel_cap_margin: float = 1.0,
+        bicycle_max_yaw_jerk_radps3: float = 0.0,
         accel_cap_mps2: Optional[float] = None,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
@@ -185,7 +188,14 @@ class PufferDrivePlanner(AbstractPlanner):
         :param bicycle_center_accel_cap: nuplan_bicycle: CaRL's clip_angular_adjustment. nuPlan scores the
             acceleration at the vehicle center, which the devkit computes as rear-axle accel + d*yaw_rate^2 +
             d*yaw_accel (d = rear axle to center), so the plant's acceleration is reduced while turning to keep
-            that reading under accel_cap_mps2. The policy keeps its own intent and observations.
+            that reading under accel_cap_mps2 x bicycle_center_accel_cap_margin. The policy keeps its own
+            intent and observations.
+        :param bicycle_center_accel_cap_margin: factor on accel_cap_mps2 for the center cap (nuPlan smooths the
+            reported acceleration with a Savitzky-Golay window and overshoots a peaky capped profile).
+        :param bicycle_max_yaw_jerk_radps3: nuplan_bicycle: bound on the per-step change of the yaw
+            acceleration [rad/s^3], enforced by slowing the steering command (the derivative sibling of CaRL's
+            clip_max_abs_yaw_accel): nuPlan's longitudinal jerk is the derivative of the center acceleration,
+            which carries d*yaw_accel. 0 = off.
         :param accel_cap_mps2: cap on the ego's longitudinal acceleration (the policy's c_acc conditioning =
             cap / ACCEL_LONG_MAX, which must stay inside its training range); None = 0.96 x nuPlan's 2.40
             comfort bound.
@@ -239,6 +249,14 @@ class PufferDrivePlanner(AbstractPlanner):
         if not (self._bicycle_accel_time_constant_s >= 0 and self._bicycle_steering_time_constant_s >= 0):
             raise ValueError("the bicycle model time constants must be >= 0")
         self._bicycle_center_accel_cap = bool(bicycle_center_accel_cap)
+        self._bicycle_center_accel_cap_margin = float(bicycle_center_accel_cap_margin)
+        if not 0 < self._bicycle_center_accel_cap_margin <= 1:
+            raise ValueError(
+                f"bicycle_center_accel_cap_margin must be in (0, 1], got {bicycle_center_accel_cap_margin}"
+            )
+        self._bicycle_max_yaw_jerk_radps3 = float(bicycle_max_yaw_jerk_radps3)
+        if not self._bicycle_max_yaw_jerk_radps3 >= 0:
+            raise ValueError(f"bicycle_max_yaw_jerk_radps3 must be >= 0, got {bicycle_max_yaw_jerk_radps3}")
         if accel_cap_mps2 is None:
             self._accel_cap_mps2 = COMFORT_ACCEL_MARGIN * NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2
         else:
@@ -489,7 +507,10 @@ class PufferDrivePlanner(AbstractPlanner):
                 undo_low_pass=self._bicycle_undo_low_pass,
                 accel_time_constant_s=self._bicycle_accel_time_constant_s,
                 steering_time_constant_s=self._bicycle_steering_time_constant_s,
-                center_accel_cap_mps2=self._accel_cap_mps2 if self._bicycle_center_accel_cap else 0.0,
+                center_accel_cap_mps2=self._accel_cap_mps2 * self._bicycle_center_accel_cap_margin
+                if self._bicycle_center_accel_cap
+                else 0.0,
+                max_yaw_jerk_radps3=self._bicycle_max_yaw_jerk_radps3,
                 wheel_base_m=float(vehicle.wheel_base),
                 rear_axle_to_center_m=float(vehicle.rear_axle_to_center),
             )
@@ -842,6 +863,8 @@ class PufferDrivePlanner(AbstractPlanner):
         dcs = ego_state.dynamic_car_state
         accel = float(dcs.rear_axle_acceleration_2d.x)
         speed = float(dcs.rear_axle_velocity_2d.x)
+        yaw_rate = float(dcs.angular_velocity)
+        last = self._last_bicycle_step
         accel_cmd, steering_rate_cmd = bicycle_commands(
             self._bicycle_cfg,
             intent_accel,
@@ -849,11 +872,12 @@ class PufferDrivePlanner(AbstractPlanner):
             accel,
             float(ego_state.tire_steering_angle),
             speed,
-            yaw_rate_radps=float(dcs.angular_velocity),
+            yaw_rate_radps=yaw_rate,
+            yaw_rate_prev_radps=None if last is None else last.plant_yaw_rate_radps,
             stop_this_step=speed != 0.0 and shadow_speed == 0.0,
         )
         self._last_bicycle_step = BicycleStep(
-            ego_state.time_point.time_us, accel, speed, accel_cmd, intent_accel, intent_steering
+            ego_state.time_point.time_us, accel, speed, accel_cmd, intent_accel, intent_steering, yaw_rate
         )
         sampling = TrajectorySampling(
             num_poses=int(round(self._horizon_seconds / self._bicycle_cfg.dt_s)), interval_length=self._bicycle_cfg.dt_s

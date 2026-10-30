@@ -38,8 +38,12 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   pulling away at the 2.30 m/s^2 cap into a left turn reads above the 2.40 bound (Val14: ~250 scenarios;
   perfect tracking drops the angular velocity and never sees it). `bicycle_center_accel_cap`
   (`BICYCLE_CENTER_ACCEL_CAP`, tag `_centercap`) is CaRL's clip_angular_adjustment: the plant's accel is
-  reduced while turning so that reading stays under the cap; `accel_cap_mps2` (`EGO_ACCEL_CAP_MPS2`, tag
-  `_acap<v>`, any ego dynamics) lowers the ego's accel cap itself.
+  reduced while turning so that reading stays under the cap (`bicycle_center_accel_cap_margin`,
+  `BICYCLE_CENTER_ACCEL_CAP_MARGIN`, leaves headroom for nuPlan's Savitzky-Golay overshoot);
+  `bicycle_max_yaw_jerk_radps3` (`BICYCLE_MAX_YAW_JERK`, tag `_yawjerk<v>`) slows the steering command so the
+  yaw acceleration, whose derivative enters nuPlan's longitudinal jerk through the same formula, cannot jump
+  within a step; `accel_cap_mps2` (`EGO_ACCEL_CAP_MPS2`, tag `_acap<v>`, any ego dynamics) lowers the ego's
+  accel cap itself (Val14: no gain over the center cap, costs progress).
 - Route goals (`goal_source: external`): PDM-style lane-graph route ->
   goals every `goal_spacing` m. Planner `goal_source: roadblock` (env
   `GOAL_SOURCE=roadblock`) uses the centroids of the CaRL-corrected route

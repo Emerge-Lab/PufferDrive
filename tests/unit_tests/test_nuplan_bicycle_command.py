@@ -17,6 +17,10 @@ from pufferlib.ocean.cosim.nuplan_bicycle import (
     low_pass_response,
 )
 
+PACIFICA_WHEEL_BASE_M = 3.089
+PACIFICA_REAR_AXLE_TO_CENTER_M = 1.461
+ACCEL_CAP_MPS2 = 2.304
+
 DT_S = 0.1
 
 
@@ -100,11 +104,6 @@ def test_config_rejects_invalid_values(kwargs):
         BicycleCommandConfig(**kwargs)
 
 
-PACIFICA_WHEEL_BASE_M = 3.089
-PACIFICA_REAR_AXLE_TO_CENTER_M = 1.461
-ACCEL_CAP_MPS2 = 2.304
-
-
 def _center_cap_cfg(undo_low_pass):
     return BicycleCommandConfig(
         dt_s=DT_S,
@@ -131,6 +130,50 @@ def test_center_accel_cap_binds_only_when_the_yaw_terms_push_the_center_over_the
     assert realised + center_accel_shift(cfg, realised, speed, steering_next, 0.0) <= ACCEL_CAP_MPS2 + 1e-9
     right_turn, _ = bicycle_commands(cfg, ACCEL_CAP_MPS2, -0.3, accel, -0.3, speed, yaw_rate_radps=0.0)
     assert right_turn == pytest.approx(straight)
+
+
+def _yaw_rate(speed, steering):
+    return speed * math.tan(steering) / PACIFICA_WHEEL_BASE_M
+
+
+@pytest.mark.parametrize("undo_low_pass", [False, True])
+def test_yaw_jerk_bound_spreads_a_steering_reversal_over_several_steps(undo_low_pass):
+    max_yaw_jerk = 1.5
+    cfg = BicycleCommandConfig(
+        dt_s=DT_S,
+        min_speed_mps=0.0,
+        undo_low_pass=undo_low_pass,
+        max_yaw_jerk_radps3=max_yaw_jerk,
+        wheel_base_m=PACIFICA_WHEEL_BASE_M,
+    )
+    steering_gain = low_pass_gain(DT_S, cfg.steering_time_constant_s)
+    speed, steering = 3.0, 0.2
+    yaw_rate_prev = _yaw_rate(speed, steering - 0.06)  # the wheel was moving left at the 0.6 rad/s limit
+    yaw_rate = _yaw_rate(speed, steering)
+    _, rate_cmd = bicycle_commands(
+        cfg, 0.0, steering - 0.06, 0.0, steering, speed, yaw_rate_radps=yaw_rate, yaw_rate_prev_radps=yaw_rate_prev
+    )
+    steering_next = low_pass_response(steering, steering + rate_cmd * DT_S, steering_gain)
+    yaw_accel_change = (_yaw_rate(speed, steering_next) - 2 * yaw_rate + yaw_rate_prev) / DT_S / DT_S
+    assert abs(yaw_accel_change) <= max_yaw_jerk + 1e-9
+    assert steering_next > steering - 0.06  # the full reversal was not allowed in one step
+    unbounded = BicycleCommandConfig(dt_s=DT_S, min_speed_mps=0.0, undo_low_pass=undo_low_pass)
+    gentle, _ = bicycle_commands(unbounded, 0.0, steering + 0.005, 0.0, steering, speed, yaw_rate, yaw_rate)
+    bounded, _ = bicycle_commands(cfg, 0.0, steering + 0.005, 0.0, steering, speed, yaw_rate, yaw_rate)
+    assert bounded == pytest.approx(gentle)
+
+
+def test_yaw_jerk_bound_is_inactive_at_standstill_and_on_the_first_step():
+    cfg = BicycleCommandConfig(
+        dt_s=DT_S, min_speed_mps=0.0, undo_low_pass=True, max_yaw_jerk_radps3=1.5, wheel_base_m=PACIFICA_WHEEL_BASE_M
+    )
+    free = BicycleCommandConfig(dt_s=DT_S, min_speed_mps=0.0, undo_low_pass=True)
+    assert bicycle_commands(cfg, 0.0, -0.3, 0.0, 0.3, 0.0, 0.0, 0.0) == pytest.approx(
+        bicycle_commands(free, 0.0, -0.3, 0.0, 0.3, 0.0, 0.0, 0.0)
+    )
+    assert bicycle_commands(cfg, 0.0, -0.3, 0.0, 0.3, 5.0, 0.0, None) == pytest.approx(
+        bicycle_commands(free, 0.0, -0.3, 0.0, 0.3, 5.0, 0.0, None)
+    )
 
 
 def test_center_accel_cap_config_needs_the_vehicle_geometry():

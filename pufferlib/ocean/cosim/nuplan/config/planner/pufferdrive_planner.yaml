@@ -42,6 +42,8 @@ pufferdrive_planner:
   # to keep it under accel_cap_mps2. accel_cap_mps2: ego accel cap [m/s^2] (null = 0.96 x nuPlan's 2.40 comfort bound);
   # the policy's c_acc conditioning = cap / 2.5 must stay inside its training range.
   bicycle_center_accel_cap: false
+  bicycle_center_accel_cap_margin: 1.0 # factor on accel_cap_mps2 for the center cap (savgol overshoot headroom)
+  bicycle_max_yaw_jerk_radps3: 0.0 # bound on the per-step change of yaw accel via the steering command; 0 = off
   accel_cap_mps2: null
   env_overrides:
     obs_slots_partners_n: 40 # GIGAFLOW eval value (Table A4); slots are max-pooled, so any checkpoint transfers
