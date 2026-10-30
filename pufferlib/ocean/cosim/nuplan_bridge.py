@@ -22,6 +22,7 @@ Nothing in this module imports `nuplan` at module scope, so the pure-python bin
 writer stays testable from an env without the nuplan-devkit installed.
 """
 
+import math
 import os
 from pathlib import Path
 
@@ -633,6 +634,40 @@ def pad_vru_partner_sizes(types, lengths, widths, pad_m: float):
     lengths = np.where(vru, lengths + pad_m, lengths).astype(np.float32)
     widths = np.where(vru, widths + pad_m, widths).astype(np.float32)
     return lengths, widths
+
+
+def split_long_partners(x, y, z, h, vx, vy, types, lengths, widths, max_length_m: float):
+    """Partners longer than max_length_m become ceil(length / max_length_m) equal boxes along their heading, in
+    place of the original (training spawns nothing longer than 7 m; a 12 m bus is one box the policy never saw)."""
+    out = [[] for _ in range(9)]
+    for j in range(len(x)):
+        pieces = max(1, int(math.ceil(float(lengths[j]) / max_length_m)))
+        piece_length = float(lengths[j]) / pieces
+        for k in range(pieces):
+            along = (k + 0.5) * piece_length - 0.5 * float(lengths[j])
+            values = (
+                x[j] + along * math.cos(h[j]),
+                y[j] + along * math.sin(h[j]),
+                z[j],
+                h[j],
+                vx[j],
+                vy[j],
+                types[j],
+                piece_length,
+                widths[j],
+            )
+            for column, value in zip(out, values):
+                column.append(value)
+    dtypes = (np.float32,) * 6 + (np.int32, np.float32, np.float32)
+    return tuple(np.array(column, dtype) for column, dtype in zip(out, dtypes))
+
+
+def nearest_partner_slots(x, y, ego_x: float, ego_y: float, slots: int):
+    """Row order for at most `slots` partners: the devkit order when they fit, else nearest to the ego first."""
+    if len(x) <= slots:
+        return np.arange(len(x))
+    distance_sq = (np.asarray(x, np.float64) - ego_x) ** 2 + (np.asarray(y, np.float64) - ego_y) ** 2
+    return np.argsort(distance_sq, kind="stable")[:slots]
 
 
 def tracked_objects_to_arrays(tracked_objects, transform: NuPlanTransform, first_slot: int = 1):

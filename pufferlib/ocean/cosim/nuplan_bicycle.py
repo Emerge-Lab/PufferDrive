@@ -11,6 +11,7 @@ from typing import Optional
 DEVKIT_ACCEL_TIME_CONSTANT_S = 0.2
 DEVKIT_STEERING_TIME_CONSTANT_S = 0.05
 YAW_JERK_MIN_SPEED_MPS = 0.1  # below this the yaw rate is ~0 whatever the wheel does; the atan bounds degenerate
+FLOOR_SPEED_TOL_MPS = 1e-6  # the floor lands the model on min_speed up to float rounding
 
 
 @dataclass(frozen=True)
@@ -21,9 +22,7 @@ class BicycleCommandConfig:
     accel_time_constant_s: float = DEVKIT_ACCEL_TIME_CONSTANT_S
     steering_time_constant_s: float = DEVKIT_STEERING_TIME_CONSTANT_S
     center_accel_cap_mps2: float = 0.0  # cap on the devkit's center accel (rear + d*yaw_rate^2 + d*yaw_accel); 0 = off
-    max_yaw_jerk_radps3: float = (
-        0.0  # bound on the per-step change of yaw acceleration via the steering command; 0 = off
-    )
+    max_yaw_jerk_radps3: float = 0.0  # per-step change of yaw accel bounded via the steering command; 0 = off
     wheel_base_m: float = 0.0
     rear_axle_to_center_m: float = 0.0
 
@@ -54,6 +53,14 @@ def low_pass_response(current: float, command: float, gain: float) -> float:
 
 def low_pass_command(current: float, target: float, gain: float) -> float:
     return current + (target - current) / gain
+
+
+def floor_clamped_intent_accel(cfg: BicycleCommandConfig, speed_mps: float, intent_accel_mps2: float) -> float:
+    """Drive zeroes the acceleration when the car stops; with the model held on the floor a negative intent would
+    wind down to the clip while the speed never moves, a state the policy never saw."""
+    if speed_mps <= cfg.min_speed_mps + FLOOR_SPEED_TOL_MPS and intent_accel_mps2 < 0:
+        return 0.0
+    return intent_accel_mps2
 
 
 def center_accel_shift(

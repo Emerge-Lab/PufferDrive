@@ -46,7 +46,18 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   `bicycle_max_yaw_jerk_radps3` (`BICYCLE_MAX_YAW_JERK`, tag `_yawjerk<v>`) slows the steering command so the
   yaw acceleration, whose derivative enters nuPlan's longitudinal jerk through the same formula, cannot jump
   within a step; `accel_cap_mps2` (`EGO_ACCEL_CAP_MPS2`, tag `_acap<v>`, any ego dynamics) lowers the ego's
-  accel cap itself (Val14: no gain over the center cap, costs progress).
+  accel cap itself (Val14: no gain over the center cap, costs progress). Run-426 anatomy knobs (2026-10-30,
+  default off): `partner_split_max_length_m` (`PARTNER_SPLIT_MAX_LENGTH_M`, tag
+  `_split<v>`): partners longer than this are shown as equal boxes along their heading (training spawns at
+  most 7 m, nuPlan buses reach 12.7 m). `STANDSTILL_JERK_DEADBAND` (tag `_deadband<v>`) overrides the shadow
+  env's standstill jerk deadband (arch.py 1.5 m/s^3; it was an anti-reverse-creep hack for perfect tracking
+  and froze five run-426 stalls whose start intent was below it; the bicycle floor does that job now).
+  `bicycle_floor_accel_clamp` (`BICYCLE_FLOOR_ACCEL_CLAMP`, default true, tag `_clamp`): the policy's
+  integrated acceleration is clamped to zero while the plant sits on the speed floor, mirroring Drive's stop
+  reset (nine run-426 stalls had it wound down to -5 m/s^2 at standstill); false reproduces run 426. Known
+  and left to training: Drive's jerk model keeps its kinematic reference at the box center while nuPlan's
+  bicycle rotates about the rear axle 1.46 m behind it, so the same steering cuts the nuPlan center to the
+  inside of a turn (four inside-rear corner collisions in run 426); no eval-side conversion.
 - Route goals (`goal_source: external`): PDM-style lane-graph route ->
   goals every `goal_spacing` m. Planner `goal_source: roadblock` (env
   `GOAL_SOURCE=roadblock`) uses the centroids of the CaRL-corrected route

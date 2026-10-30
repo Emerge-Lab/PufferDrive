@@ -94,6 +94,15 @@ export BICYCLE_CENTER_ACCEL_CAP=${BICYCLE_CENTER_ACCEL_CAP:-true}
 export BICYCLE_CENTER_ACCEL_CAP_MARGIN=${BICYCLE_CENTER_ACCEL_CAP_MARGIN:-0.95}
 export BICYCLE_MAX_YAW_JERK=${BICYCLE_MAX_YAW_JERK:-0}
 export EGO_ACCEL_CAP_MPS2=${EGO_ACCEL_CAP_MPS2:-}
+# Run-426 anatomy arms: PARTNER_SPLIT_MAX_LENGTH_M=7 (buses up to 12.7 m vs training max 7 m), STANDSTILL_JERK_DEADBAND=0
+# (five stalls were the policy's 0-1.5 m/s^3 start intent being zeroed; the floor now does the deadband's anti-reverse
+# job). Drive's jerk model keeps its axle at the box centre while nuPlan's sits 1.46 m behind (four inside-rear corner
+# collisions in run 426): a training-side item, no eval-side conversion.
+# true since 2026-10-30 evening (tag _clamp): the policy's integrated accel is zeroed while the plant sits on the floor
+# (9 of run 426's 18 stalls had it wound down to -5 at standstill); false = run 426 behaviour.
+export BICYCLE_FLOOR_ACCEL_CLAMP=${BICYCLE_FLOOR_ACCEL_CLAMP:-true}
+export PARTNER_SPLIT_MAX_LENGTH_M=${PARTNER_SPLIT_MAX_LENGTH_M:-}
+export STANDSTILL_JERK_DEADBAND=${STANDSTILL_JERK_DEADBAND:-}
 ABLATION_TAG=""
 [ "$SLIDING_GOAL_WINDOW" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_slide"
 [ "$STARTUP_ACCEL_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
@@ -113,8 +122,11 @@ if [ "$EGO_DYNAMICS" = "nuplan_bicycle" ]; then
         [ "$BICYCLE_CENTER_ACCEL_CAP_MARGIN" != "1.0" ] && ABLATION_TAG="${ABLATION_TAG}${BICYCLE_CENTER_ACCEL_CAP_MARGIN}"
     fi
     [ "$BICYCLE_MAX_YAW_JERK" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_yawjerk${BICYCLE_MAX_YAW_JERK}"
+    [ "$BICYCLE_FLOOR_ACCEL_CLAMP" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_clamp"
 fi
 [ -n "$EGO_ACCEL_CAP_MPS2" ] && ABLATION_TAG="${ABLATION_TAG}_acap${EGO_ACCEL_CAP_MPS2}"
+[ -n "$PARTNER_SPLIT_MAX_LENGTH_M" ] && ABLATION_TAG="${ABLATION_TAG}_split${PARTNER_SPLIT_MAX_LENGTH_M}"
+[ -n "$STANDSTILL_JERK_DEADBAND" ] && ABLATION_TAG="${ABLATION_TAG}_deadband${STANDSTILL_JERK_DEADBAND}"
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}_${GOAL_SOURCE}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 

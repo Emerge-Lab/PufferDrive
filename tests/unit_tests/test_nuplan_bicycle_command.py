@@ -13,6 +13,7 @@ from pufferlib.ocean.cosim.nuplan_bicycle import (
     bicycle_commands,
     bicycle_response,
     center_accel_shift,
+    floor_clamped_intent_accel,
     low_pass_gain,
     low_pass_response,
 )
@@ -174,6 +175,15 @@ def test_yaw_jerk_bound_is_inactive_at_standstill_and_on_the_first_step():
     assert bicycle_commands(cfg, 0.0, -0.3, 0.0, 0.3, 5.0, 0.0, None) == pytest.approx(
         bicycle_commands(free, 0.0, -0.3, 0.0, 0.3, 5.0, 0.0, None)
     )
+
+
+@pytest.mark.parametrize("min_speed_mps", [0.0, -2.0])
+def test_intent_accel_is_clamped_to_zero_only_while_braking_on_the_floor(min_speed_mps):
+    cfg = BicycleCommandConfig(dt_s=DT_S, min_speed_mps=min_speed_mps, undo_low_pass=True)
+    assert floor_clamped_intent_accel(cfg, min_speed_mps, -3.0) == 0.0
+    assert floor_clamped_intent_accel(cfg, min_speed_mps + 5e-7, -3.0) == 0.0
+    assert floor_clamped_intent_accel(cfg, min_speed_mps, 1.2) == 1.2
+    assert floor_clamped_intent_accel(cfg, min_speed_mps + 0.5, -3.0) == -3.0
 
 
 def test_center_accel_cap_config_needs_the_vehicle_geometry():

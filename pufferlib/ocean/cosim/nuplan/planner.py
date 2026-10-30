@@ -29,6 +29,7 @@ from pufferlib.ocean.cosim.nuplan_bicycle import (
     BicycleCommandConfig,
     bicycle_commands,
     bicycle_response,
+    floor_clamped_intent_accel,
 )
 from pufferlib.ocean.drive.drive import Drive
 
@@ -131,7 +132,9 @@ class PufferDrivePlanner(AbstractPlanner):
         bicycle_center_accel_cap: bool = False,
         bicycle_center_accel_cap_margin: float = 1.0,
         bicycle_max_yaw_jerk_radps3: float = 0.0,
+        bicycle_floor_accel_clamp: bool = True,
         accel_cap_mps2: Optional[float] = None,
+        partner_split_max_length_m: float = 0.0,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
         obs_html_max_steps: int = 800,
@@ -196,6 +199,11 @@ class PufferDrivePlanner(AbstractPlanner):
             acceleration [rad/s^3], enforced by slowing the steering command (the derivative sibling of CaRL's
             clip_max_abs_yaw_accel): nuPlan's longitudinal jerk is the derivative of the center acceleration,
             which carries d*yaw_accel. 0 = off.
+        :param bicycle_floor_accel_clamp: nuplan_bicycle: clamp the policy's integrated acceleration to zero while
+            the plant sits on the speed floor (Drive zeroes it when the car stops; on the floor a negative intent
+            would wind down to the clip at zero speed, a state the policy never saw). Off = run 426 behaviour.
+        :param partner_split_max_length_m: partners longer than this [m] are shown to the policy as equal boxes
+            along their heading (training spawns at most 7 m; nuPlan buses reach 12.7 m). 0 = off.
         :param accel_cap_mps2: cap on the ego's longitudinal acceleration (the policy's c_acc conditioning =
             cap / ACCEL_LONG_MAX, which must stay inside its training range); None = 0.96 x nuPlan's 2.40
             comfort bound.
@@ -257,6 +265,10 @@ class PufferDrivePlanner(AbstractPlanner):
         self._bicycle_max_yaw_jerk_radps3 = float(bicycle_max_yaw_jerk_radps3)
         if not self._bicycle_max_yaw_jerk_radps3 >= 0:
             raise ValueError(f"bicycle_max_yaw_jerk_radps3 must be >= 0, got {bicycle_max_yaw_jerk_radps3}")
+        self._bicycle_floor_accel_clamp = bool(bicycle_floor_accel_clamp)
+        self._partner_split_max_length_m = float(partner_split_max_length_m)
+        if not self._partner_split_max_length_m >= 0:
+            raise ValueError(f"partner_split_max_length_m must be >= 0, got {partner_split_max_length_m}")
         if accel_cap_mps2 is None:
             self._accel_cap_mps2 = COMFORT_ACCEL_MARGIN * NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2
         else:
@@ -632,6 +644,9 @@ class PufferDrivePlanner(AbstractPlanner):
             self._check_bicycle_response(ego_state)
             speed = float(dcs.rear_axle_velocity_2d.x)
             last = self._last_bicycle_step
+            intent_accel = float(dcs.rear_axle_acceleration_2d.x) if last is None else last.intent_accel_mps2
+            if self._bicycle_floor_accel_clamp:
+                intent_accel = floor_clamped_intent_accel(self._bicycle_cfg, speed, intent_accel)
             self._stamp_ego(
                 ex,
                 ey,
@@ -639,7 +654,7 @@ class PufferDrivePlanner(AbstractPlanner):
                 speed * math.cos(h),
                 speed * math.sin(h),
                 float(dcs.angular_velocity),
-                float(dcs.rear_axle_acceleration_2d.x) if last is None else last.intent_accel_mps2,
+                intent_accel,
                 float(ego_state.tire_steering_angle) if last is None else last.intent_steering_rad,
             )
         elif self._last_integrated is not None:
@@ -658,19 +673,24 @@ class PufferDrivePlanner(AbstractPlanner):
         objs = nb.partner_tracked_objects(
             detections.tracked_objects, self._initialization.map_api, self._static_on_lane
         )
-        if len(objs) > self._num_agents - 1:
-            # keep the nearest: devkit ordering is by type/token, so blind
-            # truncation could drop a close vehicle while keeping far ones
-            ox, oy = ego_state.center.x, ego_state.center.y
-            objs.sort(key=lambda o: (o.center.x - ox) ** 2 + (o.center.y - oy) ** 2)
-            objs = objs[: self._num_agents - 1]
+        partner_count = 0
         if objs:
-            idx, x, y, z, hh, vx, vy, tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
+            _, x, y, z, hh, vx, vy, tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
             if self._vru_size_pad_m > 0:
                 ln, wd = nb.pad_vru_partner_sizes(tp, ln, wd, self._vru_size_pad_m)
-            env.set_agent_states(idx, x, y, z, hh, vx, vy, np.zeros_like(vx), np.zeros_like(vx))
-            env.set_agent_sizes(idx, ln, wd)
-        surplus = np.arange(1 + len(objs), self._num_agents, dtype=np.int32)
+            if self._partner_split_max_length_m > 0:
+                x, y, z, hh, vx, vy, tp, ln, wd = nb.split_long_partners(
+                    x, y, z, hh, vx, vy, tp, ln, wd, self._partner_split_max_length_m
+                )
+            # nearest first only when the slots run out: devkit ordering is by type/token, so blind truncation
+            # could drop a close vehicle while keeping far ones
+            keep = nb.nearest_partner_slots(x, y, ex, ey, self._num_agents - 1)
+            partner_count = len(keep)
+            idx = np.arange(1, 1 + partner_count, dtype=np.int32)
+            zeros = np.zeros(partner_count, np.float32)
+            env.set_agent_states(idx, x[keep], y[keep], z[keep], hh[keep], vx[keep], vy[keep], zeros, zeros)
+            env.set_agent_sizes(idx, ln[keep], wd[keep])
+        surplus = np.arange(1 + partner_count, self._num_agents, dtype=np.int32)
         if len(surplus):
             far = np.full(len(surplus), FAR_AWAY, np.float32)
             zero = np.zeros_like(far)

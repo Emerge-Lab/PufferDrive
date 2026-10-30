@@ -51,7 +51,13 @@
 #             (rear accel + d*yaw_rate^2 + d*yaw_accel) stays under the accel cap (CaRL clip_angular_adjustment);
 #             BICYCLE_CENTER_ACCEL_CAP_MARGIN (factor on the cap, savgol headroom) and BICYCLE_MAX_YAW_JERK
 #             [rad/s^3, bound on the per-step change of yaw accel via the steering command; 0 = off] tune comfort.
+#             BICYCLE_FLOOR_ACCEL_CLAMP=true|false: clamp the policy's integrated accel to 0 while the plant sits on
+#             the speed floor (unset = planner yaml, true; false reproduces run 426's standstill windup).
 #   EGO_ACCEL_CAP_MPS2  [m/s^2] ego accel cap, any ego dynamics (unset = planner yaml, 0.96 x 2.40).
+#   PARTNER_SPLIT_MAX_LENGTH_M  [m] partners longer than this are shown as equal boxes along their heading
+#             (training spawns at most 7 m, nuPlan buses reach 12.7 m); unset/0 = off.
+#   STANDSTILL_JERK_DEADBAND  [m/s^3] shadow-env standstill jerk deadband (unset = arch.py, 1.5; 0 = off: with the
+#             bicycle plant's speed floor the deadband's anti-reverse-creep job is done by the floor).
 #   OBS_SLOTS_PARTNERS_N  shadow-env partner obs slots (unset = planner yaml, 40).
 #   EVAL_PERCEIVED_SIZE_MARGIN_M  [m per side] ego box inflation in the policy's obs (unset = arch.py, 0.2).
 #   REWARD_OVERSPEED  overspeed conditioning alpha fed to the policy (unset = arch.py, 0.1).
@@ -114,6 +120,9 @@ fi
 [ -n "${BICYCLE_CENTER_ACCEL_CAP_MARGIN:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_center_accel_cap_margin=$BICYCLE_CENTER_ACCEL_CAP_MARGIN")
 [ -n "${BICYCLE_MAX_YAW_JERK:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_max_yaw_jerk_radps3=$BICYCLE_MAX_YAW_JERK")
 [ -n "${EGO_ACCEL_CAP_MPS2:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.accel_cap_mps2=$EGO_ACCEL_CAP_MPS2")
+[ -n "${BICYCLE_FLOOR_ACCEL_CLAMP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_floor_accel_clamp=$BICYCLE_FLOOR_ACCEL_CLAMP")
+[ -n "${PARTNER_SPLIT_MAX_LENGTH_M:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.partner_split_max_length_m=$PARTNER_SPLIT_MAX_LENGTH_M")
+[ -n "${STANDSTILL_JERK_DEADBAND:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_standstill_jerk_deadband_mps3=$STANDSTILL_JERK_DEADBAND")
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_slots_partners_n=$OBS_SLOTS_PARTNERS_N")
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_perceived_size_margin_m=$EVAL_PERCEIVED_SIZE_MARGIN_M")
 [ -n "${REWARD_OVERSPEED:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.reward_overspeed=$REWARD_OVERSPEED")
