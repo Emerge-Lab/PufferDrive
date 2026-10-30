@@ -1,7 +1,7 @@
 """Drive one car among frozen-policy traffic. Terminal telemetry only until the renderer (M5).
 
-    python scripts/wheel_demo/run_demo.py --checkpoint ~/Downloads/k_scaled_0050_1000/final_model.pt
-    python scripts/wheel_demo/run_demo.py --checkpoint ... --input synthetic --steps 100
+    python scripts/wheel_demo/run_demo.py --render --ffb
+    python scripts/wheel_demo/run_demo.py --input synthetic --steps 100
 
 With --input wheel it reads the real G920 and must run in the FOREGROUND (macOS attributes Input
 Monitoring to the responsible process). With --input synthetic it drives a scripted lap and needs
@@ -31,6 +31,9 @@ from pufferlib.wheel_demo.ffb import ForceFeedbackLoop, G920ForceFeedback
 from pufferlib.wheel_demo.levels import LEVELS, LEVEL_NAMES, apply_level, level_by_name
 from pufferlib.wheel_demo.maps import CARLA_TOWNS
 from pufferlib.wheel_demo.render import CAMERA_MODE_NAMES, DemoWindow
+
+# Shipped with the repo, so the demo runs with no flags. Overridable with --checkpoint.
+DEFAULT_CHECKPOINT = "weights/k_scaled_0050_1000/final_model.pt"
 
 HUD_EVERY_STEPS = 3
 SYNTHETIC_STEER_PERIOD_STEPS = 40.0
@@ -119,7 +122,10 @@ def apply_window_keys(window, loop, level_index=0):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument(
+        "--checkpoint",
+        default=DEFAULT_CHECKPOINT,
+        help="policy driving the traffic; defaults to the one shipped in weights/")
     parser.add_argument("--town", default="ask", choices=("ask",) + tuple(CARLA_TOWNS))
     parser.add_argument("--agents", type=int, default=64)
     parser.add_argument("--human-agent", type=int, default=0)

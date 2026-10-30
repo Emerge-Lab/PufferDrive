@@ -7,6 +7,11 @@ pedals, while every other car is driven by a frozen PufferDrive policy under jer
 rendering with agent / chase / driver cameras. Live reward-conditioning tuning so nearby
 traffic changes character mid-drive ("game levels"). Force feedback you can feel.
 
+> **This document is the design and the milestone definitions — it is not a status report.**
+> For where the work actually stands (milestones complete, open findings, known gaps), see
+> [`wheel_demo_handoff.md`](wheel_demo_handoff.md). To get a new machine running, including the
+> Linux porting notes, see [`wheel_demo_setup.md`](wheel_demo_setup.md).
+
 ---
 
 ## 0. What the code actually looks like today
@@ -528,7 +533,7 @@ recorded traces. That is a design requirement on M1 and M6, not an afterthought.
 
 **Resolved.**
 
-- **Checkpoint:** `~/Downloads/k_scaled_0050_1000/` — `final_model.pt` + `config.yaml`,
+- **Checkpoint:** now shipped in-repo at `weights/k_scaled_0050_1000/` — `final_model.pt` + `config.yaml`,
   exactly the layout `cosim/arch.checkpoint_config_path` expects. Trained at `dt = 0.3`,
   `dynamics_model: jerk`, `action_type: continuous`, `reward_conditioning: true`,
   `reward_randomization: true`, `base_max_speed_mps: 20`, `conditioning_speed_scale: 2.0`

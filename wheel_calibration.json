@@ -1,0 +1,13 @@
+{
+  "brake_raw_floor": 53,
+  "brake_raw_rest": 255,
+  "clutch_raw_floor": 0,
+  "clutch_raw_rest": 255,
+  "pedal_deadzone_norm": 0.02,
+  "steering_deadzone_norm": 0.0,
+  "steering_raw_center": 32767,
+  "steering_raw_max": 65535,
+  "steering_raw_min": 0,
+  "throttle_raw_floor": 0,
+  "throttle_raw_rest": 255
+}
