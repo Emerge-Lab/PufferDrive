@@ -37,6 +37,12 @@ pufferdrive_planner:
   bicycle_undo_low_pass: false
   bicycle_accel_time_constant_s: 0.2
   bicycle_steering_time_constant_s: 0.05
+  # bicycle_center_accel_cap (nuplan_bicycle only, CaRL's clip_angular_adjustment): nuPlan scores the center accel,
+  # which the devkit computes as rear accel + d*yaw_rate^2 + d*yaw_accel; the plant's accel is reduced while turning
+  # to keep it under accel_cap_mps2. accel_cap_mps2: ego accel cap [m/s^2] (null = 0.96 x nuPlan's 2.40 comfort bound);
+  # the policy's c_acc conditioning = cap / 2.5 must stay inside its training range.
+  bicycle_center_accel_cap: false
+  accel_cap_mps2: null
   env_overrides:
     obs_slots_partners_n: 40 # GIGAFLOW eval value (Table A4); slots are max-pooled, so any checkpoint transfers
     stop_signs_enabled: false # nuPlan city bins export TURN_STOP zones as stop signs; keep them out of the obs

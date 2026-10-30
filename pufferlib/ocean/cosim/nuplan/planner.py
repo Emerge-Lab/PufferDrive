@@ -127,6 +127,8 @@ class PufferDrivePlanner(AbstractPlanner):
         bicycle_undo_low_pass: bool = False,
         bicycle_accel_time_constant_s: float = DEVKIT_ACCEL_TIME_CONSTANT_S,
         bicycle_steering_time_constant_s: float = DEVKIT_STEERING_TIME_CONSTANT_S,
+        bicycle_center_accel_cap: bool = False,
+        accel_cap_mps2: Optional[float] = None,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
         obs_html_max_steps: int = 800,
@@ -180,6 +182,13 @@ class PufferDrivePlanner(AbstractPlanner):
         :param bicycle_accel_time_constant_s: the motion model's acceleration low-pass time constant [s]
             (devkit default 0.2); a mismatch fails the per-step response check.
         :param bicycle_steering_time_constant_s: same for steering [s] (devkit default 0.05).
+        :param bicycle_center_accel_cap: nuplan_bicycle: CaRL's clip_angular_adjustment. nuPlan scores the
+            acceleration at the vehicle center, which the devkit computes as rear-axle accel + d*yaw_rate^2 +
+            d*yaw_accel (d = rear axle to center), so the plant's acceleration is reduced while turning to keep
+            that reading under accel_cap_mps2. The policy keeps its own intent and observations.
+        :param accel_cap_mps2: cap on the ego's longitudinal acceleration (the policy's c_acc conditioning =
+            cap / ACCEL_LONG_MAX, which must stay inside its training range); None = 0.96 x nuPlan's 2.40
+            comfort bound.
         :param env_overrides: Drive env kwargs overriding DEFAULT_ARCH.
         :param obs_html_dir: write the interactive pufferlib.viz observation replay per
             scenario (the exact obs the policy received, its outputs and encoder pool winners).
@@ -229,6 +238,18 @@ class PufferDrivePlanner(AbstractPlanner):
         self._bicycle_steering_time_constant_s = float(bicycle_steering_time_constant_s)
         if not (self._bicycle_accel_time_constant_s >= 0 and self._bicycle_steering_time_constant_s >= 0):
             raise ValueError("the bicycle model time constants must be >= 0")
+        self._bicycle_center_accel_cap = bool(bicycle_center_accel_cap)
+        if accel_cap_mps2 is None:
+            self._accel_cap_mps2 = COMFORT_ACCEL_MARGIN * NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2
+        else:
+            self._accel_cap_mps2 = float(accel_cap_mps2)
+            conditioning = self._accel_cap_mps2 / binding.ACCEL_LONG_MAX
+            if not binding.CONDITIONING_ACC_MIN <= conditioning <= binding.CONDITIONING_ACC_MAX:
+                raise ValueError(
+                    f"accel_cap_mps2={accel_cap_mps2} is outside the policy's c_acc training range "
+                    f"[{binding.CONDITIONING_ACC_MIN * binding.ACCEL_LONG_MAX:.3f}, "
+                    f"{binding.CONDITIONING_ACC_MAX * binding.ACCEL_LONG_MAX:.3f}] m/s^2"
+                )
         self._bicycle_cfg: Optional[BicycleCommandConfig] = None  # resolved in _build from the scenario dt
         self._last_bicycle_step: Optional[BicycleStep] = None
         self._startup_jerk_cap_steps = 0  # resolved in _build from the scenario dt
@@ -405,10 +426,8 @@ class PufferDrivePlanner(AbstractPlanner):
                 "goal_source": "external",
                 # Training semantics: a window's final goal clears only below goal_speed (3 m/s)
                 "goal_reach_requires_speed": True,
-                # C_acc conditioning: cap the jerk model's positive accel at nuPlan's comfort bound instead of 2.5
-                "conditioning_accel_scale": COMFORT_ACCEL_MARGIN
-                * NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2
-                / binding.ACCEL_LONG_MAX,
+                # C_acc conditioning: cap the jerk model's positive accel at accel_cap_mps2 instead of 2.5
+                "conditioning_accel_scale": self._accel_cap_mps2 / binding.ACCEL_LONG_MAX,
                 # lockstep with nuPlan's planning iterations, not the training dt (mimolette: 0.3)
                 "dt": float(self._scenario.database_interval),
                 "scenario_length": int(self._scenario.get_number_of_iterations()) + SCENARIO_LENGTH_MARGIN_STEPS,
@@ -463,12 +482,16 @@ class PufferDrivePlanner(AbstractPlanner):
             )
 
         if self._ego_dynamics == EGO_DYNAMICS_NUPLAN_BICYCLE:
+            vehicle = ego_state.car_footprint.vehicle_parameters
             self._bicycle_cfg = BicycleCommandConfig(
                 dt_s=float(self._arch["dt"]),
                 min_speed_mps=self._bicycle_min_speed_mps,
                 undo_low_pass=self._bicycle_undo_low_pass,
                 accel_time_constant_s=self._bicycle_accel_time_constant_s,
                 steering_time_constant_s=self._bicycle_steering_time_constant_s,
+                center_accel_cap_mps2=self._accel_cap_mps2 if self._bicycle_center_accel_cap else 0.0,
+                wheel_base_m=float(vehicle.wheel_base),
+                rear_axle_to_center_m=float(vehicle.rear_axle_to_center),
             )
 
         # Round-trip probe: slot 0 must be the ego we set. It is silently wrong when
@@ -826,6 +849,7 @@ class PufferDrivePlanner(AbstractPlanner):
             accel,
             float(ego_state.tire_steering_angle),
             speed,
+            yaw_rate_radps=float(dcs.angular_velocity),
             stop_this_step=speed != 0.0 and shadow_speed == 0.0,
         )
         self._last_bicycle_step = BicycleStep(

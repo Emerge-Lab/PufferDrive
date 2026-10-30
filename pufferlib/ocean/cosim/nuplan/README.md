@@ -33,7 +33,13 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   (`BICYCLE_UNDO_LOW_PASS`) pre-compensates the lag so one model step lands on the targets (off = CaRL's
   lag, the model realises a third of each accel step). The planner checks every step that nuPlan's accel and speed are the
   model's response to its last command, so a perfect-tracking controller or mismatched time constants
-  abort the scenario.
+  abort the scenario. Comfort under the bicycle model: nuPlan scores the acceleration at the vehicle
+  center, which the devkit computes as rear-axle accel + d*yaw_rate^2 + d*yaw_accel (d = 1.46 m), so
+  pulling away at the 2.30 m/s^2 cap into a left turn reads above the 2.40 bound (Val14: ~250 scenarios;
+  perfect tracking drops the angular velocity and never sees it). `bicycle_center_accel_cap`
+  (`BICYCLE_CENTER_ACCEL_CAP`, tag `_centercap`) is CaRL's clip_angular_adjustment: the plant's accel is
+  reduced while turning so that reading stays under the cap; `accel_cap_mps2` (`EGO_ACCEL_CAP_MPS2`, tag
+  `_acap<v>`, any ego dynamics) lowers the ego's accel cap itself.
 - Route goals (`goal_source: external`): PDM-style lane-graph route ->
   goals every `goal_spacing` m. Planner `goal_source: roadblock` (env
   `GOAL_SOURCE=roadblock`) uses the centroids of the CaRL-corrected route

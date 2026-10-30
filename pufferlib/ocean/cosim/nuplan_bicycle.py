@@ -4,6 +4,7 @@ The devkit model low-passes acceleration and steering with gain dt/(dt+tau) befo
 has neither a speed floor nor a stop snap: both are enforced here on the realised (low-passed) acceleration.
 """
 
+import math
 from dataclasses import dataclass
 
 DEVKIT_ACCEL_TIME_CONSTANT_S = 0.2
@@ -17,6 +18,9 @@ class BicycleCommandConfig:
     undo_low_pass: bool  # pre-compensate the command lag so one model step lands on the targets
     accel_time_constant_s: float = DEVKIT_ACCEL_TIME_CONSTANT_S
     steering_time_constant_s: float = DEVKIT_STEERING_TIME_CONSTANT_S
+    center_accel_cap_mps2: float = 0.0  # cap on the devkit's center accel (rear + d*yaw_rate^2 + d*yaw_accel); 0 = off
+    wheel_base_m: float = 0.0
+    rear_axle_to_center_m: float = 0.0
 
     def __post_init__(self):
         if not self.dt_s > 0:
@@ -25,6 +29,10 @@ class BicycleCommandConfig:
             raise ValueError(f"min_speed_mps must be <= 0, got {self.min_speed_mps}")
         if not (self.accel_time_constant_s >= 0 and self.steering_time_constant_s >= 0):
             raise ValueError("the low-pass time constants must be >= 0")
+        if not self.center_accel_cap_mps2 >= 0:
+            raise ValueError(f"center_accel_cap_mps2 must be >= 0, got {self.center_accel_cap_mps2}")
+        if self.center_accel_cap_mps2 > 0 and not (self.wheel_base_m > 0 and self.rear_axle_to_center_m >= 0):
+            raise ValueError("center_accel_cap_mps2 needs wheel_base_m > 0 and rear_axle_to_center_m >= 0")
 
 
 def low_pass_gain(dt_s: float, time_constant_s: float) -> float:
@@ -39,6 +47,16 @@ def low_pass_command(current: float, target: float, gain: float) -> float:
     return current + (target - current) / gain
 
 
+def center_accel_shift(
+    cfg: BicycleCommandConfig, accel_mps2: float, speed_mps: float, steering_next_rad: float, yaw_rate_radps: float
+) -> float:
+    """What the devkit adds to the rear-axle acceleration at the vehicle center after one model step."""
+    speed_next = speed_mps + accel_mps2 * cfg.dt_s
+    yaw_rate_next = speed_next * math.tan(steering_next_rad) / cfg.wheel_base_m
+    yaw_accel_next = (yaw_rate_next - yaw_rate_radps) / cfg.dt_s
+    return cfg.rear_axle_to_center_m * (yaw_rate_next * yaw_rate_next + yaw_accel_next)
+
+
 def bicycle_commands(
     cfg: BicycleCommandConfig,
     target_accel_mps2: float,
@@ -46,11 +64,13 @@ def bicycle_commands(
     current_accel_mps2: float,
     current_steering_rad: float,
     speed_mps: float,
+    yaw_rate_radps: float = 0.0,
     stop_this_step: bool = False,
 ):
     """-> (acceleration [m/s^2], steering rate [rad/s]) for a CaRL ActionTrajectory over the next dt.
     stop_this_step: the shadow env snapped its speed to zero this step, so the realised acceleration brings
-    the model to exactly zero speed too."""
+    the model to exactly zero speed too. With center_accel_cap_mps2 the realised acceleration is reduced
+    while turning so the center acceleration nuPlan scores stays under the cap (CaRL clip_angular_adjustment)."""
     accel_gain = low_pass_gain(cfg.dt_s, cfg.accel_time_constant_s)
     steering_gain = low_pass_gain(cfg.dt_s, cfg.steering_time_constant_s)
     accel_cmd = target_accel_mps2
@@ -60,6 +80,12 @@ def bicycle_commands(
         steering_cmd = low_pass_command(current_steering_rad, target_steering_rad, steering_gain)
     if stop_this_step:
         accel_cmd = low_pass_command(current_accel_mps2, -speed_mps / cfg.dt_s, accel_gain)
+    if cfg.center_accel_cap_mps2 > 0:
+        accel_realised = low_pass_response(current_accel_mps2, accel_cmd, accel_gain)
+        steering_next = low_pass_response(current_steering_rad, steering_cmd, steering_gain)
+        shift = center_accel_shift(cfg, accel_realised, speed_mps, steering_next, yaw_rate_radps)
+        if accel_realised > cfg.center_accel_cap_mps2 - shift:
+            accel_cmd = low_pass_command(current_accel_mps2, cfg.center_accel_cap_mps2 - shift, accel_gain)
     floor_accel_mps2 = (cfg.min_speed_mps - speed_mps) / cfg.dt_s
     accel_cmd = max(accel_cmd, low_pass_command(current_accel_mps2, floor_accel_mps2, accel_gain))
     return accel_cmd, (steering_cmd - current_steering_rad) / cfg.dt_s

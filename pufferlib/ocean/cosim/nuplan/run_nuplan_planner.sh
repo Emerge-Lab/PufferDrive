@@ -47,6 +47,9 @@
 #             nuPlan's KinematicBicycleModel through CaRL's one_stage_controller (the ego_controller override is
 #             added here). BICYCLE_MIN_SPEED_MPS [m/s, <= 0: 0 = no reverse driving, -2 = Drive's floor] and
 #             BICYCLE_UNDO_LOW_PASS=true|false (pre-compensate the model's command lag) tune it; unset = planner yaml.
+#             BICYCLE_CENTER_ACCEL_CAP=true|false: reduce the plant's accel while turning so nuPlan's center accel
+#             (rear accel + d*yaw_rate^2 + d*yaw_accel) stays under the accel cap (CaRL clip_angular_adjustment).
+#   EGO_ACCEL_CAP_MPS2  [m/s^2] ego accel cap, any ego dynamics (unset = planner yaml, 0.96 x 2.40).
 #   OBS_SLOTS_PARTNERS_N  shadow-env partner obs slots (unset = planner yaml, 40).
 #   EVAL_PERCEIVED_SIZE_MARGIN_M  [m per side] ego box inflation in the policy's obs (unset = arch.py, 0.2).
 #   REWARD_OVERSPEED  overspeed conditioning alpha fed to the policy (unset = arch.py, 0.1).
@@ -105,6 +108,8 @@ elif [ -n "${EGO_DYNAMICS:-}" ]; then
 fi
 [ -n "${BICYCLE_MIN_SPEED_MPS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_min_speed_mps=$BICYCLE_MIN_SPEED_MPS")
 [ -n "${BICYCLE_UNDO_LOW_PASS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_undo_low_pass=$BICYCLE_UNDO_LOW_PASS")
+[ -n "${BICYCLE_CENTER_ACCEL_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_center_accel_cap=$BICYCLE_CENTER_ACCEL_CAP")
+[ -n "${EGO_ACCEL_CAP_MPS2:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.accel_cap_mps2=$EGO_ACCEL_CAP_MPS2")
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_slots_partners_n=$OBS_SLOTS_PARTNERS_N")
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_perceived_size_margin_m=$EVAL_PERCEIVED_SIZE_MARGIN_M")
 [ -n "${REWARD_OVERSPEED:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.reward_overspeed=$REWARD_OVERSPEED")
