@@ -1,3 +1,6 @@
+#ifndef PUFFERLIB_OCEAN_DRIVE_DRIVE_H
+#define PUFFERLIB_OCEAN_DRIVE_DRIVE_H
+
 #include "datatypes.h"
 #include "error.h"
 #include "rng.h"
@@ -234,6 +237,26 @@ struct Drive {
     float *speed_zone_offset_mps;       // num_speed_zones
     unsigned char *lane_limit_resolved; // scratch for junction-lane inheritance
     int dynamics_model;
+    int human_agent_idx;       // -1 = nobody is driving; otherwise index into agents
+    int human_prev_controller; // restored to the agent when control is handed back
+    int vehicle_size_profile;
+    int substep_mode;
+    int substeps_per_policy_step;
+    int substeps_taken;
+    int is_first_integration; // per-policy-step randomness fires on this pass only
+    int human_grip_mode;
+    int human_longitudinal_mode;
+    int human_gearbox_mode;
+    int human_gear;
+    int human_engine_stalled;
+    float human_engine_rpm;
+    float human_throttle_norm;
+    float human_brake_norm;
+    float human_clutch_norm;
+    int human_shift_request;
+    float human_max_speed_mps;
+    float human_steering_cmd_norm;
+    float human_accel_long_cmd_mps2;
     int reset_accel_on_stop;
     int init_mode;
     int control_mode;
@@ -579,6 +602,9 @@ static inline void update_agent_radius(Agent *agent) {
 }
 
 static inline void apply_infraction_behavior(Agent *agent, int behavior) {
+    if (agent->ignores_infraction_behavior) {
+        return;
+    }
     if (behavior == INFRACTION_BEHAVIOR_STOP && !agent->stopped) {
         agent->stopped = 1;
     } else if (behavior == INFRACTION_BEHAVIOR_REMOVE && !agent->removed) {
@@ -2945,8 +2971,10 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->mark_as_expert = 0;
 
     float spawn_length, spawn_width, spawn_edge_clearance_m;
-    if (env->eval_mode && !env->eval_training_render) {
-        // Eval: uniform random car-sized boxes
+    int car_sized
+        = (env->eval_mode && !env->eval_training_render) || (env->vehicle_size_profile == VEHICLE_SIZE_PROFILE_CAR);
+    if (car_sized) {
+        // Eval and demo: uniform random car-sized boxes
         spawn_length = sample_uniform(&env->rng_state, 2.0f, 5.5f);
         spawn_width = sample_uniform(&env->rng_state, 1.5f, 2.5f);
         spawn_edge_clearance_m = EVAL_SPAWN_EDGE_CLEARANCE_M;
@@ -3620,6 +3648,26 @@ void remove_bad_trajectories(Drive *env) {
 
 void init(Drive *env) {
     env->timestep = 0;
+    env->human_agent_idx = -1;
+    env->human_prev_controller = CONTROLLER_POLICY;
+    env->human_grip_mode = GRIP_MODE_KINEMATIC;
+    env->human_steering_cmd_norm = 0.0f;
+    env->human_accel_long_cmd_mps2 = 0.0f;
+    env->substep_mode = SUBSTEP_MODE_ALL;
+    env->substeps_per_policy_step = 1; // 1 = no sub-stepping, so training behaviour is unchanged
+    env->substeps_taken = 0;
+    env->human_longitudinal_mode = HUMAN_LONGITUDINAL_DIRECT;
+    env->human_gearbox_mode = GEARBOX_MODE_AUTOMATIC;
+    env->human_gear = GEAR_NEUTRAL;
+    env->human_engine_stalled = 0;
+    env->human_engine_rpm = ENGINE_IDLE_RPM;
+    env->human_throttle_norm = 0.0f;
+    env->human_brake_norm = 0.0f;
+    env->human_clutch_norm = 0.0f;
+    env->human_shift_request = 0;
+    // Top of the policy's trained speed band: as fast as the car can go while still being an
+    // object the traffic policy has seen.
+    env->human_max_speed_mps = env->base_max_speed_mps * fmaxf(env->conditioning_speed_scale, 1.0f);
     env->first_reset_pending = 1;
     struct SharedMapData *shared = env->use_map_cache ? map_cache_lookup(env) : NULL;
     if (shared != NULL) {
@@ -5291,6 +5339,32 @@ static void compute_observations(Drive *env) {
     }
 }
 
+static void integrate_bicycle_arc(Agent *agent, float signed_curvature, float speed_new, float speed_old, float dt) {
+    float heading_x = agent->cos_heading;
+    float heading_y = agent->sin_heading;
+    float distance_m = 0.5f * (speed_new + speed_old) * dt;
+    float theta = distance_m * signed_curvature;
+    float dx_local, dy_local;
+
+    if (fabsf(signed_curvature) < BICYCLE_ARC_EPSILON || fabsf(theta) < BICYCLE_ARC_EPSILON) {
+        dx_local = distance_m;
+        dy_local = 0.0f;
+    } else {
+        dx_local = sinf(theta) / signed_curvature;
+        dy_local = (1.0f - cosf(theta)) / signed_curvature;
+    }
+
+    agent->sim_x += dx_local * heading_x - dy_local * heading_y;
+    agent->sim_y += dx_local * heading_y + dy_local * heading_x;
+    agent->sim_heading = normalize_heading(agent->sim_heading + theta);
+    agent->cos_heading = cosf(agent->sim_heading);
+    agent->sin_heading = sinf(agent->sim_heading);
+    agent->sim_vx = speed_new * cosf(agent->sim_heading);
+    agent->sim_vy = speed_new * sinf(agent->sim_heading);
+    agent->yaw_rate = speed_new * signed_curvature;
+    update_agent_speed(agent);
+}
+
 static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     copy_pose_to_prev(agent);
@@ -5306,12 +5380,14 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     }
 
     // Phantom braking: override action with max braking
-    if (agent->phantom_braking_counter > 0) {
-        agent->phantom_braking_counter--;
-    }
-    if (agent->phantom_braking_counter == 0 && agent->is_phantom_braker && env->phantom_braking_trigger_prob > 0.0f
-        && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->phantom_braking_trigger_prob) {
-        agent->phantom_braking_counter = env->phantom_braking_duration;
+    if (env->is_first_integration) {
+        if (agent->phantom_braking_counter > 0) {
+            agent->phantom_braking_counter--;
+        }
+        if (agent->phantom_braking_counter == 0 && agent->is_phantom_braker && env->phantom_braking_trigger_prob > 0.0f
+            && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->phantom_braking_trigger_prob) {
+            agent->phantom_braking_counter = env->phantom_braking_duration;
+        }
     }
 
     if (env->dynamics_model == DYNAMICS_MODEL_CLASSIC) {
@@ -5509,34 +5585,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         // Recalculate lateral acceleration from actual curvature
         a_lat_new = v_new * v_new * signed_curvature;
 
-        // Calculate resulting movement using bicycle dynamics
-        float d = 0.5f * (v_new + signed_v) * env->dt;
-        float theta = d * signed_curvature;
-        float dx_local, dy_local;
-
-        if (fabsf(signed_curvature) < 1e-5f || fabsf(theta) < 1e-5f) {
-            dx_local = d;
-            dy_local = 0.0f;
-        } else {
-            dx_local = sinf(theta) / signed_curvature;
-            dy_local = (1.0f - cosf(theta)) / signed_curvature;
-        }
-
-        float dx = dx_local * heading_x - dy_local * heading_y;
-        float dy = dx_local * heading_y + dy_local * heading_x;
-
-        // Update agent state
-        agent->sim_x += dx;
-        agent->sim_y += dy;
-        agent->sim_heading = normalize_heading(agent->sim_heading + theta);
-        agent->cos_heading = cosf(agent->sim_heading);
-        agent->sin_heading = sinf(agent->sim_heading);
-        agent->sim_vx = v_new * cosf(agent->sim_heading);
-        agent->sim_vy = v_new * sinf(agent->sim_heading);
-        const float yaw_rate = v_new * signed_curvature;
-        agent->yaw_rate = yaw_rate;
-
-        update_agent_speed(agent);
+        integrate_bicycle_arc(agent, signed_curvature, v_new, signed_v, env->dt);
         // Update jerk and acceleration
         agent->jerk_long = jerk_long_before_stop_reset;
         agent->jerk_lat = (a_lat_new - agent->accel_lat) / env->dt;
@@ -5548,6 +5597,323 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     update_agent_z(env, agent);
 
     return;
+}
+
+static float gear_ratio(int gear) {
+    if (gear == GEAR_REVERSE) {
+        return -GEAR_REVERSE_RATIO;
+    }
+    if (gear == GEAR_NEUTRAL) {
+        return 0.0f;
+    }
+    return GEAR_RATIOS[gear - 1];
+}
+
+static float engine_torque_nm(float engine_rpm, float throttle_norm) {
+    if (engine_rpm < ENGINE_STALL_RPM || engine_rpm > ENGINE_REDLINE_RPM) {
+        return 0.0f;
+    }
+    float offset = (engine_rpm - ENGINE_PEAK_TORQUE_RPM) / ENGINE_PEAK_TORQUE_RPM;
+    float shape = 1.0f - ENGINE_TORQUE_FALLOFF * offset * offset;
+    return throttle_norm * ENGINE_PEAK_TORQUE_NM * fmaxf(shape, 0.0f);
+}
+
+static float engine_rpm_for_speed(float speed_mps, int gear) {
+    float ratio = gear_ratio(gear);
+    if (ratio == 0.0f) {
+        return ENGINE_IDLE_RPM;
+    }
+    float wheel_rad_per_s = fabsf(speed_mps) / TIRE_RADIUS_M;
+    return wheel_rad_per_s * fabsf(ratio) * FINAL_DRIVE_RATIO * RAD_PER_S_TO_RPM;
+}
+
+static float clutch_engagement(float clutch_norm) {
+    if (clutch_norm >= CLUTCH_ENGAGE_FRACTION) {
+        return 0.0f;
+    }
+    return 1.0f - clutch_norm / CLUTCH_ENGAGE_FRACTION;
+}
+
+// Manual: the clutch must be down for the dog teeth to move, otherwise the request is refused.
+static void apply_manual_shift_request(Drive *env, int shift_request) {
+    if (shift_request == 0) {
+        return;
+    }
+    if (env->human_clutch_norm < CLUTCH_ENGAGE_FRACTION) {
+        return;
+    }
+    int requested_gear = env->human_gear + shift_request;
+    if (requested_gear < GEAR_REVERSE || requested_gear > GEARBOX_FORWARD_GEAR_COUNT) {
+        return;
+    }
+    env->human_gear = requested_gear;
+    env->human_engine_stalled = 0;
+}
+
+static void select_automatic_gear(Drive *env, float speed_mps) {
+    if (env->human_gear == GEAR_REVERSE) {
+        return; // the driver selected reverse; the box does not shift out of it
+    }
+    if (env->human_gear == GEAR_NEUTRAL) {
+        env->human_gear = 1;
+    }
+    float engine_rpm = engine_rpm_for_speed(speed_mps, env->human_gear);
+    if (engine_rpm > AUTO_UPSHIFT_RPM && env->human_gear < GEARBOX_FORWARD_GEAR_COUNT) {
+        env->human_gear++;
+    } else if (engine_rpm < AUTO_DOWNSHIFT_RPM && env->human_gear > 1) {
+        env->human_gear--;
+    }
+}
+
+// Mutates the powertrain (gear, rpm, stall) and returns the longitudinal acceleration it makes.
+static float human_powertrain_accel_mps2(Drive *env, Agent *agent, int shift_request) {
+    float speed_mps = agent->sim_speed_signed;
+    if (env->human_gearbox_mode == GEARBOX_MODE_AUTOMATIC) {
+        select_automatic_gear(env, speed_mps);
+    } else {
+        apply_manual_shift_request(env, shift_request);
+    }
+
+    float engagement = clutch_engagement(env->human_clutch_norm);
+    float ratio = gear_ratio(env->human_gear);
+    int driveline_connected = (engagement > 0.0f) && (ratio != 0.0f);
+
+    float free_rev_rpm = ENGINE_IDLE_RPM + env->human_throttle_norm * ENGINE_FREE_REV_GAIN;
+    if (!driveline_connected) {
+        env->human_engine_rpm = free_rev_rpm;
+        env->human_engine_stalled = 0; // clutch in or neutral: the engine is free, so it restarts
+    } else {
+        // A slipping clutch lets the engine outrun the driveline; only a fully engaged one can be
+        // dragged below stall speed. An automatic has no clutch pedal and never stalls.
+        float driveline_rpm = engine_rpm_for_speed(speed_mps, env->human_gear);
+        int fully_engaged = (engagement >= 1.0f) && (env->human_gearbox_mode == GEARBOX_MODE_MANUAL);
+        if (fully_engaged && driveline_rpm < ENGINE_STALL_RPM) {
+            env->human_engine_stalled = 1;
+        }
+        // ENGINE_IDLE_RPM also acts as the idle governor's floor: a running engine never sits below it
+        float slip_rpm = ENGINE_IDLE_RPM + env->human_throttle_norm * ENGINE_FREE_REV_GAIN * (1.0f - engagement);
+        env->human_engine_rpm = env->human_engine_stalled ? 0.0f : fmaxf(driveline_rpm, slip_rpm);
+    }
+
+    float drive_force_n = 0.0f;
+    float engine_brake_n = 0.0f;
+    if (driveline_connected && !env->human_engine_stalled) {
+        float effective_throttle = fmaxf(env->human_throttle_norm, ENGINE_IDLE_THROTTLE);
+        float torque_nm = engine_torque_nm(env->human_engine_rpm, effective_throttle) * engagement;
+        drive_force_n = torque_nm * fabsf(ratio) * FINAL_DRIVE_RATIO * DRIVETRAIN_EFFICIENCY / TIRE_RADIUS_M;
+        if (ratio < 0.0f) {
+            drive_force_n = -drive_force_n;
+        }
+        engine_brake_n = (1.0f - env->human_throttle_norm) * env->human_engine_rpm * ENGINE_BRAKING_N_PER_RPM;
+    }
+
+    // Resistances oppose motion and are capped at what would bring the car to rest this step, so
+    // braking can stop the car but never drive it the other way.
+    float stopping_force_n = fabsf(speed_mps) * VEHICLE_MASS_KG / env->dt;
+    float resist_n = env->human_brake_norm * BRAKE_MAX_FORCE_N + engine_brake_n;
+    if (speed_mps != 0.0f) {
+        resist_n += AERO_DRAG_N_PER_MPS2 * speed_mps * speed_mps + ROLLING_RESISTANCE_N;
+    }
+    // The brake may cancel the drive force as well as the car's momentum -- otherwise idle creep
+    // outlasts it and the car crawls forward while held on the pedal -- but no more, so braking
+    // can bring the car to rest and never drive it the other way.
+    resist_n = fminf(resist_n, stopping_force_n + fabsf(drive_force_n));
+    // At a standstill resistance opposes whichever way the driveline is pushing, so a braked car
+    // is held rather than crept forward by idle torque.
+    float push_sign = (speed_mps > 0.0f) ? 1.0f : ((speed_mps < 0.0f) ? -1.0f : 0.0f);
+    if (push_sign == 0.0f) {
+        push_sign = (drive_force_n > 0.0f) ? 1.0f : ((drive_force_n < 0.0f) ? -1.0f : 0.0f);
+    }
+    float resist_signed_n = -push_sign * resist_n;
+
+    float accel_long = (drive_force_n + resist_signed_n) / VEHICLE_MASS_KG;
+    return clip(accel_long, HUMAN_ACCEL_LIMIT_MPS2[0], HUMAN_ACCEL_LIMIT_MPS2[1]);
+}
+
+int c_set_human_pedals(
+    Drive *env,
+    float steering_norm,
+    float throttle_norm,
+    float brake_norm,
+    float clutch_norm,
+    int shift_request) {
+    if (!isfinite(steering_norm) || !isfinite(throttle_norm) || !isfinite(brake_norm) || !isfinite(clutch_norm)) {
+        return -1;
+    }
+    if (shift_request < -1 || shift_request > 1) {
+        return -1;
+    }
+    env->human_longitudinal_mode = HUMAN_LONGITUDINAL_POWERTRAIN;
+    env->human_steering_cmd_norm = clip(steering_norm, -1.0f, 1.0f);
+    env->human_throttle_norm = clip(throttle_norm, 0.0f, 1.0f);
+    env->human_brake_norm = clip(brake_norm, 0.0f, 1.0f);
+    env->human_clutch_norm = clip(clutch_norm, 0.0f, 1.0f);
+    env->human_shift_request = shift_request;
+    return 0;
+}
+
+int c_restart_human_engine(Drive *env) {
+    env->human_engine_stalled = 0;
+    env->human_engine_rpm = ENGINE_IDLE_RPM;
+    return 0;
+}
+
+int c_set_human_gearbox_mode(Drive *env, int gearbox_mode) {
+    if (gearbox_mode != GEARBOX_MODE_MANUAL && gearbox_mode != GEARBOX_MODE_AUTOMATIC) {
+        return -1;
+    }
+    env->human_gearbox_mode = gearbox_mode;
+    return 0;
+}
+
+int c_set_human_gear(Drive *env, int gear) {
+    if (gear < GEAR_REVERSE || gear > GEARBOX_FORWARD_GEAR_COUNT) {
+        return -1;
+    }
+    env->human_gear = gear;
+    env->human_engine_stalled = 0;
+    return 0;
+}
+
+// The human car runs no jerk integrator on either axis: the wheel sets the road-wheel angle and
+// the pedals set longitudinal acceleration. Only the arc integrator is shared with the jerk path.
+static void move_human(Drive *env, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    copy_pose_to_prev(agent);
+
+    if (agent->removed) {
+        invalidate_agent(agent);
+        return;
+    }
+    if (agent->stopped) {
+        clear_agent_motion(agent);
+        agent->steering_angle = 0.0f;
+        return;
+    }
+
+    // steering_norm is +1 at the wheel's RIGHT lock, but positive curvature turns the car LEFT
+    // (constants.h: lane_curvature positive = left turn), so the command is negated here.
+    float steering_angle = -env->human_steering_cmd_norm * HUMAN_STEERING_LIMIT_RAD;
+    float accel_long = (env->human_longitudinal_mode == HUMAN_LONGITUDINAL_POWERTRAIN)
+        ? human_powertrain_accel_mps2(env, agent, env->human_shift_request)
+        : clip(env->human_accel_long_cmd_mps2, HUMAN_ACCEL_LIMIT_MPS2[0], HUMAN_ACCEL_LIMIT_MPS2[1]);
+    env->human_shift_request = 0; // a paddle pull is consumed by exactly one step
+
+    float speed_old = agent->sim_speed_signed;
+    float speed_new = speed_old + 0.5f * (accel_long + agent->accel_long) * env->dt;
+    // Comfort scores the driver's jerk, so take it before the stop reset rewrites accel_long
+    float jerk_long_before_stop_reset = (accel_long - agent->accel_long) / env->dt;
+    if (speed_old * speed_new < 0.0f) {
+        speed_new = 0.0f;
+        accel_long = 0.0f;
+    } else {
+        speed_new
+            = clip(speed_new, MAX_BACKWARD_SPEED, env->base_max_speed_mps * agent->reward_coefs[REWARD_COEF_SPEED]);
+    }
+
+    float signed_curvature = tanf(steering_angle) / agent->wheelbase;
+    if (env->human_grip_mode == GRIP_MODE_REALISTIC) {
+        float accel_lat_demand = speed_new * speed_new * signed_curvature;
+        if (fabsf(accel_lat_demand) > HUMAN_TIRE_GRIP_MPS2) {
+            // Front tyres saturate: the car understeers onto a wider arc than the wheel asks for
+            signed_curvature = copysignf(HUMAN_TIRE_GRIP_MPS2 / (speed_new * speed_new), signed_curvature);
+        }
+    }
+
+    integrate_bicycle_arc(agent, signed_curvature, speed_new, speed_old, env->dt);
+
+    float accel_lat_new = speed_new * speed_new * signed_curvature;
+    agent->jerk_long = jerk_long_before_stop_reset;
+    agent->jerk_lat = (accel_lat_new - agent->accel_lat) / env->dt;
+    agent->accel_long = accel_long;
+    agent->accel_lat = accel_lat_new;
+    agent->steering_angle = steering_angle;
+
+    update_agent_z(env, agent);
+}
+
+int c_select_human_agent(Drive *env, int agent_idx) {
+    if (agent_idx < -1 || agent_idx >= env->num_total_agents) {
+        return -1;
+    }
+    if (agent_idx >= 0 && !env->agents[agent_idx].active_agent) {
+        return -1; // c_step only moves active agents; a static one would never respond to the wheel
+    }
+    if (env->human_agent_idx >= 0 && env->human_agent_idx < env->num_total_agents) {
+        Agent *previous = &env->agents[env->human_agent_idx];
+        previous->controller = env->human_prev_controller;
+        previous->ignores_infraction_behavior = 0;
+    }
+    env->human_agent_idx = agent_idx;
+    env->human_steering_cmd_norm = 0.0f;
+    env->human_accel_long_cmd_mps2 = 0.0f;
+    if (agent_idx < 0) {
+        return 0;
+    }
+    Agent *agent = &env->agents[agent_idx];
+    env->human_prev_controller = agent->controller;
+    agent->controller = CONTROLLER_HUMAN;
+    agent->ignores_infraction_behavior = 1;
+    agent->steering_angle = 0.0f;
+    agent->accel_long = 0.0f;
+    agent->accel_lat = 0.0f;
+    agent->jerk_long = 0.0f;
+    agent->jerk_lat = 0.0f;
+    // Your car's capability must not come from the per-agent conditioning lottery
+    agent->reward_coefs[REWARD_COEF_SPEED] = env->human_max_speed_mps / env->base_max_speed_mps;
+    agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
+    agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
+    agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
+    return 0;
+}
+
+int c_set_human_max_speed(Drive *env, float max_speed_mps) {
+    // Outside the trained band the car becomes an object the traffic policy has never seen
+    float lowest = env->base_max_speed_mps / env->conditioning_speed_scale;
+    float highest = env->base_max_speed_mps * env->conditioning_speed_scale;
+    if (!isfinite(max_speed_mps) || max_speed_mps < lowest || max_speed_mps > highest) {
+        return -1;
+    }
+    env->human_max_speed_mps = max_speed_mps;
+    if (env->human_agent_idx >= 0) {
+        env->agents[env->human_agent_idx].reward_coefs[REWARD_COEF_SPEED] = max_speed_mps / env->base_max_speed_mps;
+    }
+    return 0;
+}
+
+int c_set_human_input(Drive *env, float steering_norm, float accel_long_mps2) {
+    if (!isfinite(steering_norm) || !isfinite(accel_long_mps2)) {
+        return -1;
+    }
+    env->human_longitudinal_mode = HUMAN_LONGITUDINAL_DIRECT;
+    env->human_steering_cmd_norm = clip(steering_norm, -1.0f, 1.0f);
+    env->human_accel_long_cmd_mps2 = accel_long_mps2;
+    return 0;
+}
+
+int c_set_human_grip_mode(Drive *env, int grip_mode) {
+    if (grip_mode != GRIP_MODE_KINEMATIC && grip_mode != GRIP_MODE_REALISTIC) {
+        return -1;
+    }
+    env->human_grip_mode = grip_mode;
+    return 0;
+}
+
+static void reclaim_human_agent(Drive *env) {
+    int agent_idx = env->human_agent_idx;
+    env->human_agent_idx = -1;
+    if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
+        return;
+    }
+    Agent *agent = &env->agents[agent_idx];
+    if (agent->active_agent) {
+        c_select_human_agent(env, agent_idx);
+        return;
+    }
+    // Nobody drives it now: hand the car back rather than leave it human-flagged with its
+    // infraction response still disabled.
+    agent->controller = env->human_prev_controller;
+    agent->ignores_infraction_behavior = 0;
 }
 
 static void apply_pose_noise(Drive *env, Agent *agent) {
@@ -5570,6 +5936,7 @@ static void update_rollout_masks(Drive *env) {
 }
 
 void c_reset(Drive *env) {
+    env->substeps_taken = 0;
     env->autoreset_pending = 0;
     env->episode_end_timestep = env->scenario_length;
     if (env->first_reset_pending) {
@@ -5590,6 +5957,7 @@ void c_reset(Drive *env) {
             sample_erratic_flags(env, &env->agents[agent_idx]);
             compute_metrics(env, agent_idx, x);
         }
+        reclaim_human_agent(env);
         update_rollout_masks(env);
         compute_observations(env);
         return;
@@ -5642,6 +6010,7 @@ void c_reset(Drive *env) {
             compute_metrics(env, agent_idx, x);
             env->logs[x].stopped_at_reset = agent->stopped ? 1.0f : 0.0f;
         }
+        reclaim_human_agent(env);
         update_rollout_masks(env);
         compute_observations(env);
         return;
@@ -5669,6 +6038,7 @@ void c_reset(Drive *env) {
         }
         compute_metrics(env, agent_idx, x);
     }
+    reclaim_human_agent(env);
     update_rollout_masks(env);
     compute_observations(env);
 }
@@ -5720,10 +6090,128 @@ static void record_short_early_reset(Drive *env) {
         (unsigned long long) env->episode_seed);
 }
 
+static void move_agent_for_substep(Drive *env, int action_idx, int agent_idx, int keep_policy_step_prev) {
+    Agent *agent = &env->agents[agent_idx];
+    float prev_x = agent->prev_x;
+    float prev_y = agent->prev_y;
+    float prev_cos_heading = agent->prev_cos_heading;
+    float prev_sin_heading = agent->prev_sin_heading;
+
+    if (agent->controller == CONTROLLER_HUMAN) {
+        move_human(env, agent_idx);
+    } else if (agent->controller == CONTROLLER_POLICY) {
+        move_dynamics(env, action_idx, agent_idx);
+    } else if (agent->controller == CONTROLLER_IDM) {
+        move_idm(env, agent_idx);
+    } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
+        move_expert(env, agent_idx);
+    }
+
+    // The boundary's swept collision check must span the whole policy step, not just the last
+    // sub-step, so prev stays pinned to where the agent was when the policy last decided.
+    if (keep_policy_step_prev) {
+        agent->prev_x = prev_x;
+        agent->prev_y = prev_y;
+        agent->prev_cos_heading = prev_cos_heading;
+        agent->prev_sin_heading = prev_sin_heading;
+    }
+}
+
+// One physics sub-step. Policy agents re-integrate the action they were last given; the human car
+// re-reads whatever the wheel is doing now. c_step then does metrics, rewards and observations once.
+void c_substep(Drive *env) {
+    if (env->substeps_taken >= env->substeps_per_policy_step) {
+        return;
+    }
+    int keep_policy_step_prev = (env->substeps_taken > 0);
+    env->is_first_integration = (env->substeps_taken == 0);
+    int is_last_substep = (env->substeps_taken + 1 == env->substeps_per_policy_step);
+    float policy_dt = env->dt;
+    env->dt = policy_dt / (float) env->substeps_per_policy_step; // the movement helpers integrate on env->dt
+
+    if (env->substep_mode == SUBSTEP_MODE_ALL) {
+        for (int i = 0; i < env->expert_static_agent_count; i++) {
+            move_agent_for_substep(env, i, env->expert_static_agent_indices[i], keep_policy_step_prev);
+        }
+    }
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        Agent *agent = &env->agents[agent_idx];
+        if (env->substep_mode == SUBSTEP_MODE_HUMAN_ONLY && agent->controller != CONTROLLER_HUMAN) {
+            continue;
+        }
+        move_agent_for_substep(env, i, agent_idx, keep_policy_step_prev);
+        if (is_last_substep && agent->controller == CONTROLLER_POLICY && !agent->stopped && !agent->removed
+            && (env->pose_noise_xy_m > 0.0f || env->pose_noise_yaw_rad > 0.0f)
+            && (!env->eval_mode || env->eval_training_render)) {
+            apply_pose_noise(env, agent);
+        }
+    }
+
+    env->dt = policy_dt;
+    env->substeps_taken++;
+}
+
+// Render-only dead reckoning. Under SUBSTEP_MODE_HUMAN_ONLY partners hold still between policy
+// steps, so the renderer predicts them forward from their own velocity and yaw rate. Const with
+// respect to sim state: a predicted pose must never become a real one, or the car you collide with
+// stops being the car you can see. Under SUBSTEP_MODE_ALL every pose is already current and this
+// returns them unchanged.
+static void predict_pose(const Agent *agent, float elapsed_seconds, float *x_out, float *y_out, float *heading_out) {
+    float distance_m = agent->sim_speed_signed * elapsed_seconds;
+    float theta = agent->yaw_rate * elapsed_seconds;
+    float dx_local, dy_local;
+
+    if (fabsf(theta) < BICYCLE_ARC_EPSILON || fabsf(distance_m) < BICYCLE_ARC_EPSILON) {
+        dx_local = distance_m;
+        dy_local = 0.0f;
+    } else {
+        float signed_curvature = theta / distance_m;
+        dx_local = sinf(theta) / signed_curvature;
+        dy_local = (1.0f - cosf(theta)) / signed_curvature;
+    }
+
+    *x_out = agent->sim_x + dx_local * agent->cos_heading - dy_local * agent->sin_heading;
+    *y_out = agent->sim_y + dx_local * agent->sin_heading + dy_local * agent->cos_heading;
+    *heading_out = normalize_heading(agent->sim_heading + theta);
+}
+
+void c_get_render_poses(Drive *env, float elapsed_seconds, float *x_out, float *y_out, float *heading_out) {
+    for (int j = 0; j < env->num_agents; j++) {
+        int agent_idx = (j < env->active_agent_count) ? env->active_agent_indices[j]
+                                                      : env->static_agent_indices[j - env->active_agent_count];
+        Agent *agent = &env->agents[agent_idx];
+        int pose_is_current = (env->substep_mode == SUBSTEP_MODE_ALL) || (agent->controller == CONTROLLER_HUMAN);
+        if (pose_is_current) {
+            x_out[j] = agent->sim_x + env->world_mean_x;
+            y_out[j] = agent->sim_y + env->world_mean_y;
+            heading_out[j] = agent->sim_heading;
+            continue;
+        }
+        predict_pose(agent, elapsed_seconds, &x_out[j], &y_out[j], &heading_out[j]);
+        x_out[j] += env->world_mean_x;
+        y_out[j] += env->world_mean_y;
+    }
+}
+
+int c_set_substepping(Drive *env, int substep_mode, int substeps_per_policy_step) {
+    if (substep_mode != SUBSTEP_MODE_ALL && substep_mode != SUBSTEP_MODE_HUMAN_ONLY) {
+        return -1;
+    }
+    if (substeps_per_policy_step < 1) {
+        return -1;
+    }
+    env->substep_mode = substep_mode;
+    env->substeps_per_policy_step = substeps_per_policy_step;
+    env->substeps_taken = 0;
+    return 0;
+}
+
 void c_step(Drive *env) {
     // In eval, a scenario is evaluated once: hold the env after its episode
     // ended, so a short episode does not replay and re-emit within the window.
     if (env->eval_mode && env->eval_episode_done) {
+        env->substeps_taken = 0;
         memset(env->rewards, 0, env->active_agent_count * sizeof(float));
         memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
         memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
@@ -5740,8 +6228,14 @@ void c_step(Drive *env) {
     env->timestep++;
 
     // -> 1. Apply actions and move agents
+    // Only skip movement for agents the sub-steps actually moved: HUMAN_ONLY advanced the human
+    // alone, so everyone else still takes their one policy-rate step here.
+    int substeps_moved_everyone = (env->substeps_taken > 0) && (env->substep_mode == SUBSTEP_MODE_ALL);
+    int substeps_moved_the_human = (env->substeps_taken > 0);
+    // Anything still moving here has not been integrated yet this policy step.
+    env->is_first_integration = 1;
     // Move static experts
-    for (int i = 0; i < env->expert_static_agent_count; i++) {
+    for (int i = 0; !substeps_moved_everyone && i < env->expert_static_agent_count; i++) {
         int background_idx = env->expert_static_agent_indices[i];
         Agent *agent = &env->agents[background_idx];
         if (agent->controller == CONTROLLER_IDM) {
@@ -5756,18 +6250,25 @@ void c_step(Drive *env) {
         env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
+        if (substeps_moved_everyone || (substeps_moved_the_human && agent->controller == CONTROLLER_HUMAN)) {
+            continue;
+        }
         if (agent->controller == CONTROLLER_POLICY) {
             move_dynamics(env, i, agent_idx);
             if (!agent->stopped && !agent->removed && (env->pose_noise_xy_m > 0.0f || env->pose_noise_yaw_rad > 0.0f)
                 && (!env->eval_mode || env->eval_training_render)) {
                 apply_pose_noise(env, agent);
             }
+        } else if (agent->controller == CONTROLLER_HUMAN) {
+            move_human(env, agent_idx);
         } else if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, agent_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
             move_expert(env, agent_idx);
         }
     }
+
+    env->substeps_taken = 0;
 
     // Update stopped-duration for every agent (active + replayed/static), not
     // just policy-controlled ones, so the partner seconds_stopped observation is
@@ -5891,3 +6392,5 @@ void c_step(Drive *env) {
     // -> 5. Observations must describe the goals used by the next action.
     compute_observations(env);
 }
+
+#endif

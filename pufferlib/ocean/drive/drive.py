@@ -82,6 +82,7 @@ class Drive(pufferlib.PufferEnv):
         action_type="discrete",
         dynamics_model="classic",
         reset_accel_on_stop=False,
+        vehicle_size_profile=0,
         simulation_mode="gigaflow",
         termination_mode=False,
         inactive_agent_threshold=0.4,
@@ -274,6 +275,7 @@ class Drive(pufferlib.PufferEnv):
             "jerk": binding.DYNAMICS_MODEL_JERK,
         }[dynamics_model]
         self.reset_accel_on_stop = reset_accel_on_stop
+        self.vehicle_size_profile = int(vehicle_size_profile)
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
         self.max_scenarios_per_batch = max_scenarios_per_batch
@@ -551,6 +553,7 @@ class Drive(pufferlib.PufferEnv):
             "action_type": self._action_type_flag,
             "dynamics_model": self.dynamics_model_flag,
             "reset_accel_on_stop": self.reset_accel_on_stop,
+            "vehicle_size_profile": self.vehicle_size_profile,
             "reward_goal": self.reward_goal,
             "reward_collision": self.reward_collision,
             "reward_offroad": self.reward_offroad,
@@ -898,6 +901,61 @@ class Drive(pufferlib.PufferEnv):
         dynamics or advancing the timestep (call after set_agent_states)."""
         binding.vec_recompute_observations(self.c_envs)
         return self.observations
+
+    def select_human_agent(self, agent_idx):
+        """hand one car to the steering wheel; -1 releases it back to its previous controller."""
+        binding.vec_select_human_agent(self.c_envs, int(agent_idx))
+
+    def set_human_input(self, steering_norm, accel_long_mps2):
+        """steering_norm in [-1, 1] (full left to full right), longitudinal acceleration in m/s^2."""
+        binding.vec_set_human_input(self.c_envs, float(steering_norm), float(accel_long_mps2))
+
+    def set_human_grip_mode(self, grip_mode):
+        """GRIP_MODE_KINEMATIC follows the front wheels exactly; GRIP_MODE_REALISTIC understeers
+        past the tyre limit."""
+        binding.vec_set_human_grip_mode(self.c_envs, int(grip_mode))
+
+    def set_substepping(self, substep_mode, substeps_per_policy_step):
+        """physics rate, independent of the policy's decision rate."""
+        binding.vec_set_substepping(self.c_envs, int(substep_mode), int(substeps_per_policy_step))
+
+    def substep(self):
+        """advance one physics sub-step; call substeps_per_policy_step of these, then step()."""
+        binding.vec_substep(self.c_envs)
+
+    def get_render_poses(self, elapsed_seconds, x, y, heading):
+        """poses for drawing, dead-reckoned for partners under SUBSTEP_MODE_HUMAN_ONLY."""
+        binding.vec_get_render_poses(self.c_envs, float(elapsed_seconds), x, y, heading)
+
+    def set_human_pedals(self, steering_norm, throttle_norm, brake_norm, clutch_norm, shift_request=0):
+        """engage the powertrain: pedals in [0, 1], shift_request -1/0/+1 (one paddle pull)."""
+        binding.vec_set_human_pedals(
+            self.c_envs,
+            float(steering_norm),
+            float(throttle_norm),
+            float(brake_norm),
+            float(clutch_norm),
+            int(shift_request),
+        )
+
+    def restart_human_engine(self):
+        """clear a stall; the clutch alone only restarts it when fully depressed."""
+        binding.vec_restart_human_engine(self.c_envs)
+
+    def set_human_gearbox_mode(self, gearbox_mode):
+        binding.vec_set_human_gearbox_mode(self.c_envs, int(gearbox_mode))
+
+    def set_human_gear(self, gear):
+        """-1 reverse, 0 neutral, 1..6."""
+        binding.vec_set_human_gear(self.c_envs, int(gear))
+
+    def set_human_max_speed(self, max_speed_mps):
+        """speed cap for the human car; must stay inside the policy's trained speed band."""
+        binding.vec_set_human_max_speed(self.c_envs, float(max_speed_mps))
+
+    def get_human_state(self):
+        """human car pose and dynamics for the HUD, or None when nobody is driving."""
+        return binding.vec_get_human_state(self.c_envs)
 
     def set_traffic_light_states(self, states):
         """override each traffic-light element's state at the current

@@ -1,3 +1,6 @@
+#ifndef PUFFERLIB_OCEAN_DRIVE_DATATYPES_H
+#define PUFFERLIB_OCEAN_DRIVE_DATATYPES_H
+
 #include "constants.h"
 
 #include <stdlib.h>
@@ -114,6 +117,7 @@ struct Agent {
     float gt_goal_y;               // Last valid ground-truth goal position y
     float gt_goal_z;               // Last valid ground-truth goal position z
 
+    int ignores_infraction_behavior; // 0/1 -> infractions are still scored but never stop/remove this agent
     int stopped;                     // 0/1 -> freeze if set
     int removed;                     // 0/1 -> remove from sim if set
     int first_collision_partner_idx; // agent index of the first collision partner this episode, -1 if none
@@ -230,3 +234,5 @@ void free_lane_graph(struct LaneGraph *graph) {
     free(graph->distances);
     free(graph->lane_to_graph_idx);
 }
+
+#endif

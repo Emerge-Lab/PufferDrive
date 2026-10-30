@@ -1120,6 +1120,316 @@ static PyObject *vec_recompute_observations(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_select_human_agent(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_select_human_agent requires 2 arguments (vec_env, agent_idx)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int agent_idx = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    Drive *drive = (Drive *) vec->envs[0];
+    if (c_select_human_agent(drive, agent_idx) != 0) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "vec_select_human_agent: %d is not selectable. Pass -1 to release, or the index of an "
+            "ACTIVE agent in [0, %d); a static agent is never stepped and would not respond to the wheel.",
+            agent_idx,
+            drive->num_total_agents);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_set_human_input(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(
+            PyExc_TypeError,
+            "vec_set_human_input requires 3 arguments (vec_env, steering_norm, accel_long_mps2)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    double steering_norm = PyFloat_AsDouble(PyTuple_GetItem(args, 1));
+    double accel_long_mps2 = PyFloat_AsDouble(PyTuple_GetItem(args, 2));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (c_set_human_input((Drive *) vec->envs[0], (float) steering_norm, (float) accel_long_mps2) != 0) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_human_input: steering_norm or accel_long_mps2 is not finite");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_set_human_grip_mode(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_human_grip_mode requires 2 arguments (vec_env, grip_mode)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int grip_mode = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (c_set_human_grip_mode((Drive *) vec->envs[0], grip_mode) != 0) {
+        PyErr_Format(PyExc_ValueError, "vec_set_human_grip_mode: unknown grip mode %d", grip_mode);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_set_substepping(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_substepping requires 3 arguments (vec_env, mode, substeps)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int mode = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
+    int substeps = (int) PyLong_AsLong(PyTuple_GetItem(args, 2));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    for (int i = 0; i < vec->num_envs; i++) {
+        if (c_set_substepping((Drive *) vec->envs[i], mode, substeps) != 0) {
+            PyErr_Format(PyExc_ValueError, "vec_set_substepping: bad mode %d or substeps %d", mode, substeps);
+            return NULL;
+        }
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_substep(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    for (int i = 0; i < vec->num_envs; i++) {
+        c_substep((Drive *) vec->envs[i]);
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_get_render_poses(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 5) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_render_poses requires 5 arguments (vec_env, elapsed, x, y, heading)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    double elapsed_seconds = PyFloat_AsDouble(PyTuple_GetItem(args, 1));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    PyArrayObject *x = (PyArrayObject *) PyTuple_GetItem(args, 2);
+    PyArrayObject *y = (PyArrayObject *) PyTuple_GetItem(args, 3);
+    PyArrayObject *heading = (PyArrayObject *) PyTuple_GetItem(args, 4);
+    if (!PyArray_Check(x) || !PyArray_Check(y) || !PyArray_Check(heading)) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_render_poses: x, y and heading must be NumPy arrays");
+        return NULL;
+    }
+    int offset = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *drive = (Drive *) vec->envs[i];
+        int required = offset + drive->num_agents;
+        if (required > (int) PyArray_SIZE(x) || required > (int) PyArray_SIZE(y)
+            || required > (int) PyArray_SIZE(heading)) {
+            PyErr_SetString(PyExc_ValueError, "vec_get_render_poses: x, y or heading too small for the agent count");
+            return NULL;
+        }
+        c_get_render_poses(
+            drive,
+            (float) elapsed_seconds,
+            (float *) PyArray_DATA(x) + offset,
+            (float *) PyArray_DATA(y) + offset,
+            (float *) PyArray_DATA(heading) + offset);
+        offset += drive->num_agents;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_set_human_pedals(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 6) {
+        PyErr_SetString(
+            PyExc_TypeError,
+            "vec_set_human_pedals requires 6 arguments (vec_env, steering, throttle, brake, clutch, shift_request)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    double steering = PyFloat_AsDouble(PyTuple_GetItem(args, 1));
+    double throttle = PyFloat_AsDouble(PyTuple_GetItem(args, 2));
+    double brake = PyFloat_AsDouble(PyTuple_GetItem(args, 3));
+    double clutch = PyFloat_AsDouble(PyTuple_GetItem(args, 4));
+    long shift_request = PyLong_AsLong(PyTuple_GetItem(args, 5));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (c_set_human_pedals(
+            (Drive *) vec->envs[0],
+            (float) steering,
+            (float) throttle,
+            (float) brake,
+            (float) clutch,
+            (int) shift_request)
+        != 0) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_human_pedals: non-finite pedal, or shift_request outside [-1, 1]");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_restart_human_engine(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    c_restart_human_engine((Drive *) vec->envs[0]);
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_set_human_gearbox_mode(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_human_gearbox_mode requires 2 arguments (vec_env, gearbox_mode)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int gearbox_mode = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (c_set_human_gearbox_mode((Drive *) vec->envs[0], gearbox_mode) != 0) {
+        PyErr_Format(PyExc_ValueError, "vec_set_human_gearbox_mode: unknown gearbox mode %d", gearbox_mode);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_set_human_gear(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_human_gear requires 2 arguments (vec_env, gear)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int gear = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (c_set_human_gear((Drive *) vec->envs[0], gear) != 0) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "vec_set_human_gear: gear %d outside [%d, %d]",
+            gear,
+            GEAR_REVERSE,
+            GEARBOX_FORWARD_GEAR_COUNT);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_set_human_max_speed(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_human_max_speed requires 2 arguments (vec_env, max_speed_mps)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    double max_speed_mps = PyFloat_AsDouble(PyTuple_GetItem(args, 1));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    Drive *drive = (Drive *) vec->envs[0];
+    if (c_set_human_max_speed(drive, (float) max_speed_mps) != 0) {
+        char message[192];
+        snprintf(
+            message,
+            sizeof(message),
+            "vec_set_human_max_speed: %.3f m/s is outside the trained band [%.3f, %.3f]",
+            max_speed_mps,
+            (double) (drive->base_max_speed_mps / drive->conditioning_speed_scale),
+            (double) (drive->base_max_speed_mps * drive->conditioning_speed_scale));
+        PyErr_SetString(PyExc_ValueError, message);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_get_human_state(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    Drive *drive = (Drive *) vec->envs[0];
+    int agent_idx = drive->human_agent_idx;
+    if (agent_idx < 0 || agent_idx >= drive->num_total_agents) {
+        Py_RETURN_NONE;
+    }
+    Agent *agent = &drive->agents[agent_idx];
+    return Py_BuildValue(
+        "{s:i,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:i,s:i,s:i,s:i,s:i,s:i}",
+        "agent_idx",
+        agent_idx,
+        "sim_x",
+        agent->sim_x + drive->world_mean_x,
+        "sim_y",
+        agent->sim_y + drive->world_mean_y,
+        "sim_heading",
+        agent->sim_heading,
+        "speed_mps",
+        agent->sim_speed_signed,
+        "steering_angle_rad",
+        agent->steering_angle,
+        "accel_long_mps2",
+        agent->accel_long,
+        "accel_lat_mps2",
+        agent->accel_lat,
+        "yaw_rate_rps",
+        agent->yaw_rate,
+        "collision",
+        agent->metrics_array[COLLISION_IDX],
+        "engine_rpm",
+        drive->human_engine_rpm,
+        "max_speed_mps",
+        drive->human_max_speed_mps,
+        "grip_mode",
+        drive->human_grip_mode,
+        "stopped",
+        agent->stopped,
+        "removed",
+        agent->removed,
+        "gear",
+        drive->human_gear,
+        "gearbox_mode",
+        drive->human_gearbox_mode,
+        "engine_stalled",
+        drive->human_engine_stalled);
+}
+
 static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 2) {
         PyErr_SetString(PyExc_TypeError, "vec_set_traffic_light_states requires 2 arguments");
@@ -1554,6 +1864,51 @@ static PyMethodDef methods[]
         vec_recompute_observations,
         METH_VARARGS,
         "Recompute observations without stepping (co-sim)"},
+       {"vec_select_human_agent",
+        vec_select_human_agent,
+        METH_VARARGS,
+        "Hand one car to CONTROLLER_HUMAN; -1 releases (wheel demo, env 0)"},
+       {"vec_set_human_input",
+        vec_set_human_input,
+        METH_VARARGS,
+        "Set the human car's steering_norm and longitudinal acceleration (wheel demo, env 0)"},
+       {"vec_set_human_grip_mode",
+        vec_set_human_grip_mode,
+        METH_VARARGS,
+        "Select GRIP_MODE_KINEMATIC or GRIP_MODE_REALISTIC (wheel demo, env 0)"},
+       {"vec_substep", vec_substep, METH_VARARGS, "Advance one physics sub-step (wheel demo)"},
+       {"vec_set_substepping",
+        vec_set_substepping,
+        METH_VARARGS,
+        "SUBSTEP_MODE_ALL or SUBSTEP_MODE_HUMAN_ONLY, and sub-steps per policy step (wheel demo)"},
+       {"vec_get_render_poses",
+        vec_get_render_poses,
+        METH_VARARGS,
+        "Poses for drawing; dead-reckons partners under SUBSTEP_MODE_HUMAN_ONLY (wheel demo)"},
+       {"vec_set_human_pedals",
+        vec_set_human_pedals,
+        METH_VARARGS,
+        "Steering plus throttle/brake/clutch and a paddle request; engages the powertrain (wheel demo)"},
+       {"vec_restart_human_engine",
+        vec_restart_human_engine,
+        METH_VARARGS,
+        "Restart a stalled engine (wheel demo, env 0)"},
+       {"vec_set_human_gearbox_mode",
+        vec_set_human_gearbox_mode,
+        METH_VARARGS,
+        "GEARBOX_MODE_MANUAL or GEARBOX_MODE_AUTOMATIC (wheel demo, env 0)"},
+       {"vec_set_human_gear",
+        vec_set_human_gear,
+        METH_VARARGS,
+        "Select a gear directly: -1 reverse, 0 neutral, 1..6 (wheel demo, env 0)"},
+       {"vec_set_human_max_speed",
+        vec_set_human_max_speed,
+        METH_VARARGS,
+        "Set the human car's speed cap in m/s, inside the trained band (wheel demo, env 0)"},
+       {"vec_get_human_state",
+        vec_get_human_state,
+        METH_VARARGS,
+        "Human car pose/dynamics for the HUD, or None when nobody is driving (wheel demo, env 0)"},
        {"vec_set_traffic_light_states",
         vec_set_traffic_light_states,
         METH_VARARGS,
@@ -1642,6 +1997,23 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_STATE_GREEN", TRAFFIC_CONTROL_STATE_GREEN);
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_STATE_OFF", TRAFFIC_CONTROL_STATE_OFF);
     PyModule_AddIntConstant(m, "EGO_FEATURES", EGO_FEATURES);
+    PyModule_AddIntConstant(m, "SUBSTEP_MODE_ALL", SUBSTEP_MODE_ALL);
+    PyModule_AddIntConstant(m, "SUBSTEP_MODE_HUMAN_ONLY", SUBSTEP_MODE_HUMAN_ONLY);
+    PyModule_AddIntConstant(m, "GRIP_MODE_KINEMATIC", GRIP_MODE_KINEMATIC);
+    PyModule_AddIntConstant(m, "GEARBOX_MODE_MANUAL", GEARBOX_MODE_MANUAL);
+    PyModule_AddIntConstant(m, "GEARBOX_MODE_AUTOMATIC", GEARBOX_MODE_AUTOMATIC);
+    PyModule_AddIntConstant(m, "GEAR_REVERSE", GEAR_REVERSE);
+    PyModule_AddIntConstant(m, "GEAR_NEUTRAL", GEAR_NEUTRAL);
+    PyModule_AddIntConstant(m, "GEARBOX_FORWARD_GEAR_COUNT", GEARBOX_FORWARD_GEAR_COUNT);
+    PyModule_AddObject(m, "ENGINE_REDLINE_RPM", PyFloat_FromDouble(ENGINE_REDLINE_RPM));
+    PyModule_AddObject(m, "ENGINE_IDLE_RPM", PyFloat_FromDouble(ENGINE_IDLE_RPM));
+    PyModule_AddObject(m, "CLUTCH_ENGAGE_FRACTION", PyFloat_FromDouble(CLUTCH_ENGAGE_FRACTION));
+    PyModule_AddIntConstant(m, "GRIP_MODE_REALISTIC", GRIP_MODE_REALISTIC);
+    PyModule_AddIntConstant(m, "CONTROLLER_HUMAN", CONTROLLER_HUMAN);
+    PyModule_AddObject(m, "HUMAN_WHEEL_RANGE_DEG", PyFloat_FromDouble(HUMAN_WHEEL_RANGE_DEG));
+    PyModule_AddObject(m, "HUMAN_STEERING_LIMIT_RAD", PyFloat_FromDouble(HUMAN_STEERING_LIMIT_RAD));
+    PyModule_AddObject(m, "HUMAN_STEERING_RATIO", PyFloat_FromDouble(HUMAN_STEERING_RATIO));
+    PyModule_AddObject(m, "HUMAN_TIRE_GRIP_MPS2", PyFloat_FromDouble(HUMAN_TIRE_GRIP_MPS2));
     PyModule_AddIntConstant(m, "GOAL_FEATURES", GOAL_FEATURES);
     PyModule_AddIntConstant(m, "MAX_GOALS", MAX_GOALS);
     PyModule_AddIntConstant(m, "AGENT_F32_FIELDS", AGENT_F32_FIELDS);

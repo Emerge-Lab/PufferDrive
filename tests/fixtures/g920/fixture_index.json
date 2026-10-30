@@ -1,0 +1,46 @@
+{
+  "report_length": 10,
+  "total_frames": 14384,
+  "phases": {
+    "steering_sweep": {
+      "start_frame": 0,
+      "end_frame": 4847,
+      "frames": 4847
+    },
+    "throttle": {
+      "start_frame": 4847,
+      "end_frame": 4962,
+      "frames": 115
+    },
+    "brake": {
+      "start_frame": 4962,
+      "end_frame": 5279,
+      "frames": 317
+    },
+    "clutch": {
+      "start_frame": 5279,
+      "end_frame": 5524,
+      "frames": 245
+    },
+    "paddle_up": {
+      "start_frame": 5524,
+      "end_frame": 5998,
+      "frames": 474
+    },
+    "paddle_down": {
+      "start_frame": 5998,
+      "end_frame": 6646,
+      "frames": 648
+    },
+    "buttons": {
+      "start_frame": 6646,
+      "end_frame": 7134,
+      "frames": 488
+    },
+    "combined": {
+      "start_frame": 7134,
+      "end_frame": 14384,
+      "frames": 7250
+    }
+  }
+}

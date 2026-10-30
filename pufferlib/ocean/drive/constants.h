@@ -91,6 +91,7 @@
 #define CONTROLLER_POLICY 1
 #define CONTROLLER_REPLAY 2
 #define CONTROLLER_IDM 3
+#define CONTROLLER_HUMAN 4
 
 // Episode generation
 #define SIMULATION_MODE_GIGAFLOW 0
@@ -120,6 +121,20 @@
 #define ACTION_TYPE_DISCRETE 0
 #define ACTION_TYPE_CONTINUOUS 1
 
+// Physics runs on a finer step than the policy's decision rate: the policy decides once per
+// env->dt and its action is held across the sub-steps, while the wheel is re-read on every one.
+#define SUBSTEP_MODE_ALL 0
+#define SUBSTEP_MODE_HUMAN_ONLY 1
+
+// Vehicle spawn sizing. Training deliberately randomises hard (0.8 m to 7 m) for robustness; a
+// demo wants cars. Selecting CAR gets the eval size range without eval_mode's batching semantics.
+#define VEHICLE_SIZE_PROFILE_TRAINING 0
+#define VEHICLE_SIZE_PROFILE_CAR 1
+
+// Tyre model for the human-driven car
+#define GRIP_MODE_KINEMATIC 0
+#define GRIP_MODE_REALISTIC 1
+
 // =====================================================================================
 // 3. DYNAMICS
 // =====================================================================================
@@ -129,6 +144,57 @@
 static const float REAR_AXLE_RATIO = 0.5f;
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
 static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
+
+// Human-driven car: the wheel commands a road-wheel ANGLE, never a jerk. Half the wheel's
+// travel maps onto the road-wheel limit, giving a passenger-car steering ratio.
+#define HUMAN_WHEEL_RANGE_DEG 900.0f
+#define HUMAN_STEERING_LIMIT_RAD 0.55f
+#define HUMAN_STEERING_RATIO (HUMAN_WHEEL_RANGE_DEG * (float) M_PI / 360.0f / HUMAN_STEERING_LIMIT_RAD)
+#define HUMAN_TIRE_GRIP_MPS2 8.5f
+#define BICYCLE_ARC_EPSILON 1e-5f
+
+// Human powertrain. DIRECT takes a longitudinal acceleration straight from the caller (M2);
+// POWERTRAIN derives it from throttle/brake/clutch through an engine and gearbox (M3).
+#define HUMAN_LONGITUDINAL_DIRECT 0
+#define HUMAN_LONGITUDINAL_POWERTRAIN 1
+
+#define GEARBOX_MODE_MANUAL 0
+#define GEARBOX_MODE_AUTOMATIC 1
+
+#define GEAR_REVERSE (-1)
+#define GEAR_NEUTRAL 0
+#define GEARBOX_FORWARD_GEAR_COUNT 6
+static const float GEAR_RATIOS[GEARBOX_FORWARD_GEAR_COUNT] = {3.55f, 2.04f, 1.38f, 1.03f, 0.81f, 0.64f};
+#define GEAR_REVERSE_RATIO 3.25f
+#define FINAL_DRIVE_RATIO 3.90f
+#define DRIVETRAIN_EFFICIENCY 0.85f
+#define TIRE_RADIUS_M 0.33f
+#define VEHICLE_MASS_KG 1500.0f
+#define RAD_PER_S_TO_RPM 9.5492966f
+
+#define ENGINE_IDLE_RPM 800.0f
+#define ENGINE_STALL_RPM 500.0f
+#define ENGINE_REDLINE_RPM 6500.0f
+#define ENGINE_PEAK_TORQUE_NM 320.0f
+#define ENGINE_PEAK_TORQUE_RPM 3500.0f
+#define ENGINE_TORQUE_FALLOFF 0.55f  // parabola depth either side of the peak
+#define ENGINE_FREE_REV_GAIN 4200.0f // rpm added per unit throttle with the clutch in
+#define ENGINE_IDLE_THROTTLE 0.06f   // idle torque, so an automatic creeps instead of needing throttle
+
+// The human car is not jerk-conditioned, so it is not bound by the policy's ACCEL_LONG_LIMIT.
+// Partners observe position, heading, size and speed -- never acceleration -- so a car-like
+// acceleration envelope stays in distribution as long as the SPEED cap does.
+static const float HUMAN_ACCEL_LIMIT_MPS2[2] = {-9.0f, 4.0f};
+
+// A shift needs the clutch past this fraction of its travel; below it the request is refused.
+#define CLUTCH_ENGAGE_FRACTION 0.55f
+#define AUTO_UPSHIFT_RPM 2900.0f
+#define AUTO_DOWNSHIFT_RPM 1250.0f
+
+#define BRAKE_MAX_FORCE_N 12000.0f
+#define AERO_DRAG_N_PER_MPS2 0.40f // 0.5 * rho * Cd * A
+#define ROLLING_RESISTANCE_N 180.0f
+#define ENGINE_BRAKING_N_PER_RPM 0.055f
 
 #define NUM_JERK_LONG_ACTIONS 4
 #define NUM_JERK_LAT_ACTIONS 3
