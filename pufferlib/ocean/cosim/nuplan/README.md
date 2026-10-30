@@ -20,8 +20,11 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   iteration; afterwards the shadow env owns it and the planner raises if
   nuPlan's ego pose ever diverges from the integrated one (the configs pin
   `perfect_tracking_controller`).
-- Ego plant ablation `ego_dynamics: nuplan_bicycle` (env `EGO_DYNAMICS=nuplan_bicycle`; script 9 tags
-  the run `_bicycle_vmin<floor>[_nolag]`): nuPlan's `KinematicBicycleModel` is the plant, driven through
+- Ego plant `ego_dynamics: nuplan_bicycle` (env `EGO_DYNAMICS=nuplan_bicycle`, script 9's default since
+  2026-10-30 together with floor 0, lag compensation and the center cap at margin 0.95: run 426 = 93.35 vs
+  93.12 for perfect tracking, 5 fewer collisions, 11 fewer TTC failures; `EGO_DYNAMICS=pufferdrive` is the
+  old eval; script 9 tags the run `_bicycle_vmin<floor>[_nolag][_centercap<m>]`): nuPlan's
+  `KinematicBicycleModel` is the plant, driven through
   CaRL's `one_stage_controller` exactly like CaRL. Every step the shadow ego takes nuPlan's pose, speed
   and yaw rate but keeps its own jerk-integrated accel/steering (the state the policy was trained to
   observe; restamping the lagged plant's values made Drive's zero-crossing snaps fire every step and

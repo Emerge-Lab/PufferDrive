@@ -75,18 +75,23 @@ export REWARD_OVERSPEED=0.1
 # city bins have 22% of segments wider than 5 m, up to 50 m). LANE_WIDTH_CLIP_MAX_M=0 turns it off (pre-2026-10-29 evals).
 export LANE_WIDTH_CLIP_MIN_M=${LANE_WIDTH_CLIP_MIN_M:-2.85}
 export LANE_WIDTH_CLIP_MAX_M=${LANE_WIDTH_CLIP_MAX_M:-4.4}
-# Ego plant: pufferdrive (shadow jerk model, nuPlan replays the pose) or nuplan_bicycle (nuPlan's KinematicBicycleModel
-# via CaRL's one_stage_controller, the policy's accel/steering targets become its commands). Bicycle arms:
-# BICYCLE_MIN_SPEED_MPS 0 (CaRL: no reverse driving) vs -2 (Drive's floor); BICYCLE_UNDO_LOW_PASS false (CaRL: the
-# model realises dt/(dt+tau) of each command) vs true (one model step lands on the targets).
-export EGO_DYNAMICS=${EGO_DYNAMICS:-pufferdrive}
+# Ego plant (default since 2026-10-30, run 426 = 93.35 vs 93.12 perfect tracking, 5 fewer collisions, 11 fewer TTC
+# fails): nuplan_bicycle = nuPlan's KinematicBicycleModel via CaRL's one_stage_controller, the policy's accel/steering
+# targets become its commands. EGO_DYNAMICS=pufferdrive = the pre-2026-10-30 perfect-tracking eval (shadow jerk model
+# integrates the ego, nuPlan replays the pose; hides yaw rate and the center-accel term from the comfort metrics).
+# Ablated: BICYCLE_MIN_SPEED_MPS -2 (Drive's floor) costs ~0.9 on every safety metric; BICYCLE_UNDO_LOW_PASS=false
+# (CaRL's actuator lag, the model realises dt/(dt+tau) of each command) trades 6 collisions / 1.2 TTC for +3.7 comfort,
+# net -0.5 (run 425).
+export EGO_DYNAMICS=${EGO_DYNAMICS:-nuplan_bicycle}
 export BICYCLE_MIN_SPEED_MPS=${BICYCLE_MIN_SPEED_MPS:-0}
-export BICYCLE_UNDO_LOW_PASS=${BICYCLE_UNDO_LOW_PASS:-false}
-# Comfort arms: nuPlan scores the center accel (rear + d*yaw_rate^2 + d*yaw_accel), which the bicycle plant exposes.
-# BICYCLE_CENTER_ACCEL_CAP=true reduces the plant's accel while turning (CaRL clip_angular_adjustment);
-# EGO_ACCEL_CAP_MPS2 lowers the ego accel cap for any ego dynamics (unset = 0.96 x 2.40 = 2.304).
-export BICYCLE_CENTER_ACCEL_CAP=${BICYCLE_CENTER_ACCEL_CAP:-false}
-export BICYCLE_CENTER_ACCEL_CAP_MARGIN=${BICYCLE_CENTER_ACCEL_CAP_MARGIN:-1.0}
+export BICYCLE_UNDO_LOW_PASS=${BICYCLE_UNDO_LOW_PASS:-true}
+# Comfort: nuPlan scores the center accel (rear + d*yaw_rate^2 + d*yaw_accel), which the bicycle plant exposes.
+# BICYCLE_CENTER_ACCEL_CAP=true reduces the plant's accel while turning (CaRL clip_angular_adjustment; 248 -> 20
+# positive lon-accel fails), MARGIN 0.95 takes the Savitzky-Golay overshoot residual (+0.2 CLS, run 426).
+# Dead ends: EGO_ACCEL_CAP_MPS2=2.0 (global cap, costs progress, run 421) and BICYCLE_MAX_YAW_JERK=2 (steering
+# inertia the policy never saw: offroad 5%, run 427).
+export BICYCLE_CENTER_ACCEL_CAP=${BICYCLE_CENTER_ACCEL_CAP:-true}
+export BICYCLE_CENTER_ACCEL_CAP_MARGIN=${BICYCLE_CENTER_ACCEL_CAP_MARGIN:-0.95}
 export BICYCLE_MAX_YAW_JERK=${BICYCLE_MAX_YAW_JERK:-0}
 export EGO_ACCEL_CAP_MPS2=${EGO_ACCEL_CAP_MPS2:-}
 ABLATION_TAG=""
