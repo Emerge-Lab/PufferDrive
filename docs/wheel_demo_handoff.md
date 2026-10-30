@@ -22,7 +22,7 @@ M7 and the render work below are committed after it.
 | M4 Real-time loop and sub-stepping | done |
 | M5 Renderer and cameras | done |
 | M6 Force feedback | done — transport proven, **feel never tuned by a human** |
-| M7 Reward tuning and levels | done |
+| M7 Reward tuning and levels | implemented and measured, but **no automated tests** — see §3a |
 | M8 Calibration, polish, determinism | **not started** |
 | M9 Steering assist | **not started** |
 
@@ -32,7 +32,7 @@ M7 and the render work below are committed after it.
 make -C tests/drive           ->  All test groups passed, Failed: 0   (234 PASS + test_error's 11)
 make -C tests/drive render    ->  15 PASS
 python -m pytest -q tests/unit_tests
-                              ->  509 passed, 22 skipped, 1 failed
+                              ->  510 passed, 21 skipped, 1 failed
 ```
 
 That one failure is **pre-existing and unrelated**:
@@ -111,6 +111,27 @@ bite at the very end. `WheelCalibration.brake_response_gamma` (default **0.6**) 
 travel gives 42% braking (was 25%), 50% gives 66%. **Only a foot can say whether this is now right.**
 
 ---
+
+## 3a. M7 has no test coverage
+
+This is a gap against the project's own working agreement, and it should be closed before M7 is
+called done. Nothing under `tests/` references `levels`, `set_reward_coef_bounds`,
+`resample_reward_coefs` or the reward-bounds C entry points — verified by grep, not by assumption.
+
+What M7 currently rests on is **measurement, not tests**: applying the three presets shifts mean
+conditioning by **+0.70 / +0.01 / −0.70** and nearest-gap by **9.7 / 9.1 / 8.3 m**, and the policy
+golden stayed identical. That is evidence the feature works; it is not a regression guard.
+
+Two test files are missing and should be written by an independent agent:
+
+- `tests/unit_tests/test_wheel_levels.py` — that a level shifts the window rather than pinning a
+  value; that fractions outside `0 <= low <= high <= 1` raise; that `COEF_SPEED` uses its special
+  `[1/conditioning_speed_scale, scale]` limits; that the human car's coefficients are never touched;
+  that cycling levels is reversible.
+- `tests/drive/test_drive_reward_tuning.c` — that `c_set_reward_coef_bounds` rejects bounds outside
+  the policy's trained window, that `c_resample_reward_coefs` returns the number of cars changed and
+  skips the human, and that `reward_bounds_overridden` leaves the training sampler untouched by
+  default.
 
 ## 3. Open findings, not yet fixed
 
