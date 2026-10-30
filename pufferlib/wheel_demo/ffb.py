@@ -25,6 +25,8 @@ GRIP_FALLOFF = 0.55
 # A collision is a sharp jolt that decays over a few frames.
 IMPACT_FORCE = 1.0
 IMPACT_DECAY_PER_SECOND = 6.0
+# Past this the pulse has decayed to nothing, so it stops being applied.
+IMPACT_WINDOW_SECONDS = 1.0
 # Offroad is a buzz, not a push.
 OFFROAD_RUMBLE_FORCE = 0.22
 OFFROAD_RUMBLE_HZ = 22.0
@@ -88,7 +90,9 @@ def compute_force(feel, steering_limit_rad, impact_age_s=None, elapsed_s=0.0):
 
     if impact_age_s is not None and impact_age_s >= 0.0:
         decay = math.exp(-IMPACT_DECAY_PER_SECOND * impact_age_s)
-        force += math.copysign(IMPACT_FORCE * decay, -feel.steering_angle_rad or 1.0)
+        # The jolt kicks away from where the driver is holding the wheel; centred, it kicks right.
+        jolt_direction = -1.0 if feel.steering_angle_rad > 0.0 else 1.0
+        force += jolt_direction * IMPACT_FORCE * decay
 
     return _clamp(force)
 
@@ -246,7 +250,7 @@ class G920ForceFeedback(ForceFeedbackOutput):
         )
         return self
 
-    def _download(self, slot, device_force):
+    def _download(self, slot, device_force, want_reply=True):
         unsigned = device_force & 0xFFFF
         params = [
             slot,
@@ -259,15 +263,23 @@ class G920ForceFeedback(ForceFeedbackOutput):
             unsigned & 0xFF,
         ] + [0] * 6
         reply = self._request(
-            HIDPP_REPORT_LONG, self._feature_index, HIDPP_FF_DOWNLOAD_EFFECT, params, HIDPP_LONG_PAYLOAD_BYTES
+            HIDPP_REPORT_LONG,
+            self._feature_index,
+            HIDPP_FF_DOWNLOAD_EFFECT,
+            params,
+            HIDPP_LONG_PAYLOAD_BYTES,
+            want_reply=want_reply,
         )
         return reply[4] if reply else None
 
     def send(self, force):
+        if self._device is None or self._slot is None:
+            raise RuntimeError("G920ForceFeedback.send() before start()")
         if not -FORCE_LIMIT <= force <= FORCE_LIMIT:
             raise ValueError(f"force {force} outside [-{FORCE_LIMIT}, {FORCE_LIMIT}]")
         device_force = int(DEVICE_FORCE_SIGN * force * self.force_gain * DEVICE_FORCE_FULL_SCALE)
-        self._download(self._slot, device_force)
+        # No reply is awaited per frame: one dropped reply would stall the wheel for a full timeout.
+        self._download(self._slot, device_force, want_reply=False)
 
     def stop(self):
         if self._device is None:
@@ -307,11 +319,29 @@ class ForceFeedbackLoop:
 
     def _run(self):
         started = time.monotonic()
+        impact_started_s = None
+        was_colliding = False
         try:
             while self._running:
                 feel = self.feel_source()
                 if feel is not None:
-                    self.output.send(compute_force(feel, self.steering_limit_rad, elapsed_s=time.monotonic() - started))
+                    now_s = time.monotonic()
+                    if feel.collision and not was_colliding:
+                        impact_started_s = now_s
+                    was_colliding = feel.collision
+                    impact_age_s = None
+                    if impact_started_s is not None:
+                        impact_age_s = now_s - impact_started_s
+                        if impact_age_s > IMPACT_WINDOW_SECONDS:
+                            impact_started_s, impact_age_s = None, None
+                    self.output.send(
+                        compute_force(
+                            feel,
+                            self.steering_limit_rad,
+                            impact_age_s=impact_age_s,
+                            elapsed_s=now_s - started,
+                        )
+                    )
                 time.sleep(self.interval_s)
         except Exception as error:
             self.error = error

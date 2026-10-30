@@ -192,7 +192,10 @@ def test_pedal_with_non_inverted_calibration_still_maps_rest_to_zero():
     calibration = WheelCalibration(brake_raw_rest=12, brake_raw_floor=240, pedal_deadzone_norm=0.0)
     assert calibration.pedal_to_norm(12, "brake") == 0.0
     assert calibration.pedal_to_norm(240, "brake") == 1.0
-    assert calibration.pedal_to_norm(126, "brake") == pytest.approx(0.5, abs=1e-2)
+    # Half travel yields MORE than half braking: the brake curve is deliberately progressive
+    # (brake_response_gamma), so a light press bites harder than a linear pedal would.
+    assert calibration.pedal_to_norm(126, "brake") == pytest.approx(0.5**0.6, abs=1e-2)
+    assert calibration.pedal_to_norm(126, "brake") > 0.5
 
 
 @pytest.mark.parametrize(

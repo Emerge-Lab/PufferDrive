@@ -21,34 +21,38 @@
 #define CAMERA_MODE_COUNT 3
 
 // Matches the offline renderer's tuned presets so the live view and recorded clips agree.
-#define CHASE_BACK_M 25.0f
-#define CHASE_EYE_HEIGHT_M 15.0f
-#define CHASE_AHEAD_M 40.0f
+#define CHASE_BACK_M 9.0f
+#define CHASE_EYE_HEIGHT_M 3.6f
+#define CHASE_AHEAD_M 14.0f
+#define CHASE_TARGET_HEIGHT_M 1.6f
 #define CHASE_FOV_DEG 45.0f
-#define DRIVER_EYE_HEIGHT_M 1.4f
+#define DRIVER_EYE_HEIGHT_M 1.26f
+#define DRIVER_SEAT_FORWARD_M 0.30f
+#define DRIVER_SEAT_LEFT_M 0.38f // left-hand drive
 #define DRIVER_AHEAD_M 30.0f
-#define DRIVER_TARGET_HEIGHT_M 1.0f
+#define DRIVER_TARGET_HEIGHT_M 0.35f
 #define DRIVER_FOV_DEG 60.0f
 #define AGENT_VIEW_SPAN_M 120.0f
 #define AGENT_VIEW_HEIGHT_M 100.0f
 
-#define RENDER_CULL_RANGE_M 220.0f
+#define RENDER_CULL_RANGE_M 420.0f
 #define GROUND_SPAN_M 1400.0f
 #define ROAD_SURFACE_HEIGHT_M 0.01f
-#define EGO_MARKER_HEIGHT_M 4.2f
-#define EGO_MARKER_RADIUS_M 0.9f
+#define EGO_MARKER_HEIGHT_M 2.6f
+#define EGO_MARKER_RADIUS_M 0.45f
 
 // Cockpit wheel. It is rotated by the HAND-wheel angle, not the road-wheel angle, so the thing on
 // screen turns exactly as far as the wheel in your hands: full lock is +-450 deg, not +-31.5.
-#define COCKPIT_WHEEL_RADIUS_PX 138.0f
-#define COCKPIT_WHEEL_RIM_PX 17.0f
+#define COCKPIT_WHEEL_RADIUS_PX 112.0f
+#define COCKPIT_WHEEL_RIM_PX 13.0f
 #define COCKPIT_WHEEL_SPOKE_COUNT 3
 #define COCKPIT_WHEEL_SPOKE_WIDTH_PX 14.0f
 #define COCKPIT_WHEEL_HUB_PX 24.0f
 #define COCKPIT_WHEEL_INDEX_PX 12.0f
-#define COCKPIT_WHEEL_BOTTOM_MARGIN_PX 126.0f
+#define COCKPIT_WHEEL_BOTTOM_MARGIN_PX 72.0f
 #define COCKPIT_WHEEL_CENTER_X_FRACTION 0.27f // left-hand drive: the wheel is on the driver's side
-#define COCKPIT_DASH_HEIGHT_PX 112.0f
+#define COCKPIT_DASH_HEIGHT_PX 138.0f
+#define COCKPIT_COWL_RISE_PX 46.0f
 #define ROAD_EDGE_HEIGHT_M 0.12f
 #define LANE_LINE_HEIGHT_M 0.02f
 #define STOP_LINE_HEIGHT_M 0.05f
@@ -73,24 +77,25 @@
 
 static const Color COLOR_SKY_DAY = {207, 224, 240, 255};
 static const Color COLOR_SKY_NIGHT = {10, 12, 22, 255};
-static const Color COLOR_GROUND_DAY = {220, 223, 214, 255};
-static const Color COLOR_GROUND_NIGHT = {16, 18, 20, 255};
-static const Color COLOR_ROAD_EDGE_DAY = {42, 46, 53, 255};
+static const Color COLOR_GROUND_DAY = {108, 132, 88, 255};
+static const Color COLOR_GROUND_NIGHT = {18, 24, 18, 255};
+static const Color COLOR_ROAD_EDGE_DAY = {186, 188, 184, 255};
 static const Color COLOR_ROAD_EDGE_NIGHT = {96, 100, 110, 255};
 static const Color COLOR_LANE_DAY = {242, 242, 242, 255};
 static const Color COLOR_LANE_NIGHT = {120, 122, 128, 255};
-static const Color COLOR_ROAD_SURFACE_DAY = {154, 161, 171, 255};
+static const Color COLOR_ROAD_SURFACE_DAY = {72, 74, 78, 255};
 static const Color COLOR_ROAD_SURFACE_NIGHT = {30, 31, 35, 255};
 static const Color COLOR_EGO_MARKER = {60, 200, 255, 255};
 static const Color COLOR_WHEEL_RIM = {96, 102, 115, 255};
 static const Color COLOR_WHEEL_SPOKE = {126, 133, 148, 255};
 static const Color COLOR_WHEEL_INDEX = {235, 60, 55, 255};
 static const Color COLOR_WHEEL_HUB = {58, 62, 72, 255};
-static const Color COLOR_DASH = {32, 34, 39, 255};
+static const Color COLOR_DASH = {28, 30, 35, 255};
+static const Color COLOR_COWL = {40, 43, 50, 255};
 static const Color COLOR_DASH_EDGE = {58, 62, 70, 255};
 static const Color COLOR_GOAL = {235, 70, 215, 255};
 static const Color COLOR_HUD = {245, 245, 245, 255};
-static const Color COLOR_HUD_PANEL = {12, 14, 18, 200};
+static const Color COLOR_HUD_PANEL = {12, 14, 18, 165};
 static const Color COLOR_WARN = {240, 90, 70, 255};
 static const Color COLOR_BRAKE_ON = {255, 40, 30, 255};
 static const Color COLOR_BRAKE_OFF = {150, 38, 32, 255};
@@ -341,7 +346,8 @@ static void draw_agents(
             continue;
         }
         draw_vehicle(env, agent, draw_x, draw_y, pose_heading[j], is_human);
-        if (is_human) {
+        // Only the top-down view needs a marker; from behind the wheel you know which car is yours.
+        if (is_human && g_renderer.camera_mode == CAMERA_MODE_AGENT) {
             DrawCylinderEx(
                 (Vector3) {draw_x, draw_y, agent->sim_z + EGO_MARKER_HEIGHT_M},
                 (Vector3) {draw_x, draw_y, agent->sim_z + EGO_MARKER_HEIGHT_M + 1.6f},
@@ -370,10 +376,14 @@ static void set_camera(const Agent *ego) {
 
     camera->projection = CAMERA_PERSPECTIVE;
     if (g_renderer.camera_mode == CAMERA_MODE_DRIVER) {
+        float left_x = -ego->sin_heading;
+        float left_y = ego->cos_heading;
+        float eye_x = ego->sim_x + forward_x * DRIVER_SEAT_FORWARD_M + left_x * DRIVER_SEAT_LEFT_M;
+        float eye_y = ego->sim_y + forward_y * DRIVER_SEAT_FORWARD_M + left_y * DRIVER_SEAT_LEFT_M;
         camera->fovy = DRIVER_FOV_DEG;
-        camera->position = (Vector3) {ego->sim_x, ego->sim_y, ego->sim_z + DRIVER_EYE_HEIGHT_M};
-        camera->target = (Vector3) {ego->sim_x + forward_x * DRIVER_AHEAD_M,
-                                    ego->sim_y + forward_y * DRIVER_AHEAD_M,
+        camera->position = (Vector3) {eye_x, eye_y, ego->sim_z + DRIVER_EYE_HEIGHT_M};
+        camera->target = (Vector3) {eye_x + forward_x * DRIVER_AHEAD_M,
+                                    eye_y + forward_y * DRIVER_AHEAD_M,
                                     ego->sim_z + DRIVER_TARGET_HEIGHT_M};
         return;
     }
@@ -382,8 +392,9 @@ static void set_camera(const Agent *ego) {
     camera->position = (Vector3) {ego->sim_x - forward_x * CHASE_BACK_M,
                                   ego->sim_y - forward_y * CHASE_BACK_M,
                                   ego->sim_z + CHASE_EYE_HEIGHT_M};
-    camera->target
-        = (Vector3) {ego->sim_x + forward_x * CHASE_AHEAD_M, ego->sim_y + forward_y * CHASE_AHEAD_M, ego->sim_z + 1.0f};
+    camera->target = (Vector3) {ego->sim_x + forward_x * CHASE_AHEAD_M,
+                                ego->sim_y + forward_y * CHASE_AHEAD_M,
+                                ego->sim_z + CHASE_TARGET_HEIGHT_M};
 }
 
 static const char *camera_mode_name(int camera_mode) {
@@ -421,8 +432,17 @@ static void draw_cockpit_wheel(const Agent *ego) {
            (float) g_renderer.screen_height - COCKPIT_WHEEL_BOTTOM_MARGIN_PX};
 
     int dash_top = g_renderer.screen_height - (int) COCKPIT_DASH_HEIGHT_PX;
-    DrawRectangle(0, dash_top, g_renderer.screen_width, (int) COCKPIT_DASH_HEIGHT_PX, COLOR_DASH);
-    DrawRectangle(0, dash_top, g_renderer.screen_width, 3, COLOR_DASH_EDGE);
+    int width = g_renderer.screen_width;
+
+    DrawRectangle(0, dash_top, width, (int) COCKPIT_DASH_HEIGHT_PX, COLOR_DASH);
+    // The cowl rises over the instruments in front of the driver and falls away to the sides.
+    DrawEllipse(
+        (int) center.x,
+        dash_top + (int) COCKPIT_COWL_RISE_PX,
+        COCKPIT_WHEEL_RADIUS_PX * 1.9f,
+        COCKPIT_COWL_RISE_PX,
+        COLOR_COWL);
+    DrawRectangle(0, dash_top, width, 2, COLOR_DASH_EDGE);
 
     DrawRing(
         center,
@@ -453,9 +473,16 @@ static void draw_cockpit_wheel(const Agent *ego) {
 }
 
 static void draw_hud(Drive *env, const Agent *ego) {
-    const int panel_height = 104;
-    DrawRectangle(0, g_renderer.screen_height - panel_height, g_renderer.screen_width, panel_height, COLOR_HUD_PANEL);
-    int line_y = g_renderer.screen_height - panel_height + 10;
+    const int panel_height = 76;
+    if (g_renderer.camera_mode != CAMERA_MODE_DRIVER) {
+        DrawRectangle(
+            0,
+            g_renderer.screen_height - panel_height,
+            g_renderer.screen_width,
+            panel_height,
+            COLOR_HUD_PANEL);
+    }
+    int line_y = g_renderer.screen_height - panel_height + 8;
 
     DrawText(
         TextFormat(
@@ -468,7 +495,7 @@ static void draw_hud(Drive *env, const Agent *ego) {
         line_y,
         26,
         env->human_engine_stalled ? COLOR_WARN : COLOR_HUD);
-    line_y += 32;
+    line_y += 30;
 
     DrawText(
         TextFormat(
@@ -480,20 +507,20 @@ static void draw_hud(Drive *env, const Agent *ego) {
             env->human_gearbox_mode == GEARBOX_MODE_MANUAL ? "manual" : "auto"),
         16,
         line_y,
-        18,
+        17,
         COLOR_HUD);
-    line_y += 24;
 
+    // Status and key help live at the TOP: at the bottom they covered the road just ahead of you.
     DrawText(
         TextFormat(
-            "agent %d   camera %s   %s   %s   [1/2/3] camera  [n] night  [tab] next car  [r] restart",
+            "agent %d   camera %s   %s   %s   [1/2/3] camera  [n] night  [l] level  [tab] next car  [r] restart",
             env->human_agent_idx,
             camera_mode_name(g_renderer.camera_mode),
             g_renderer.night_mode ? "night" : "day",
             env->substep_mode == SUBSTEP_MODE_ALL ? "substep: all" : "substep: human only"),
         16,
-        line_y,
-        18,
+        12,
+        16,
         COLOR_HUD);
 
     const char *infraction = NULL;

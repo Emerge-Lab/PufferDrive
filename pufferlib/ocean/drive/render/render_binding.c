@@ -123,7 +123,7 @@ static PyObject *render_poll_keys(PyObject *self, PyObject *args) {
         return Py_BuildValue("{}");
     }
     return Py_BuildValue(
-        "{s:O,s:O,s:O,s:O,s:O,s:O}",
+        "{s:O,s:O,s:O,s:O,s:O,s:O,s:O}",
         "camera_chase",
         IsKeyPressed(KEY_ONE) ? Py_True : Py_False,
         "camera_driver",
@@ -135,7 +135,22 @@ static PyObject *render_poll_keys(PyObject *self, PyObject *args) {
         "next_agent",
         IsKeyPressed(KEY_TAB) ? Py_True : Py_False,
         "restart_engine",
-        IsKeyPressed(KEY_R) ? Py_True : Py_False);
+        IsKeyPressed(KEY_R) ? Py_True : Py_False,
+        "cycle_level",
+        IsKeyPressed(KEY_L) ? Py_True : Py_False);
+}
+
+static PyObject *render_screenshot(PyObject *self, PyObject *args) {
+    const char *path;
+    if (!PyArg_ParseTuple(args, "s", &path)) {
+        return NULL;
+    }
+    if (!g_renderer.window_open) {
+        PyErr_SetString(PyExc_RuntimeError, "screenshot before init");
+        return NULL;
+    }
+    TakeScreenshot(path);
+    Py_RETURN_NONE;
 }
 
 static PyObject *render_close(PyObject *self, PyObject *args) {
@@ -155,6 +170,7 @@ static PyMethodDef render_methods[]
        {"set_night_mode", render_set_night_mode, METH_VARARGS, "Switch between day and night"},
        {"should_close", render_should_close, METH_VARARGS, "True once the window wants to close"},
        {"poll_keys", render_poll_keys, METH_VARARGS, "Edge-triggered key events as a dict"},
+       {"screenshot", render_screenshot, METH_VARARGS, "Save the last drawn frame to a PNG"},
        {"close", render_close, METH_VARARGS, "Close the window and release models"},
        {NULL, NULL, 0, NULL}};
 

@@ -64,6 +64,15 @@ static void capture_ring(
     captured_ring_count++;
 }
 
+// The dashboard cowl. Captured only so render.h's draw calls never reach real raylib headless.
+static void capture_ellipse(int center_x, int center_y, float radius_h_px, float radius_v_px, Color color) {
+    (void) center_x;
+    (void) center_y;
+    (void) radius_h_px;
+    (void) radius_v_px;
+    (void) color;
+}
+
 static void capture_circle(Vector2 center, float radius_px, Color color) {
     (void) color;
     if (captured_circle_count < CAPTURE_RECT_MAX) {
@@ -167,6 +176,7 @@ static void reset_capture(void) {
 #define DrawRectanglePro capture_rectangle_pro
 #define DrawRing capture_ring
 #define DrawCircleV capture_circle
+#define DrawEllipse capture_ellipse
 #define DrawText capture_text
 #define TextFormat capture_text_format
 #define DrawCube capture_cube
@@ -279,7 +289,7 @@ static int test_camera_chase(void) {
                 camera.target,
                 (Vector3) {ego.sim_x + forward_x * CHASE_AHEAD_M,
                            ego.sim_y + forward_y * CHASE_AHEAD_M,
-                           ego.sim_z + 1.0f},
+                           ego.sim_z + CHASE_TARGET_HEIGHT_M},
                 POSITION_TOLERANCE_M,
                 "chase target")
             == 0);
@@ -307,6 +317,9 @@ static int test_camera_driver(void) {
         Agent ego = render_test_ego(TEST_HEADINGS_RAD[heading_idx]);
         float forward_x = cosf(ego.sim_heading);
         float forward_y = sinf(ego.sim_heading);
+        // Left of the car's heading, the side the driver sits on.
+        float left_x = -sinf(ego.sim_heading);
+        float left_y = cosf(ego.sim_heading);
         set_camera(&ego);
         Camera3D camera = g_renderer.camera;
 
@@ -316,23 +329,28 @@ static int test_camera_driver(void) {
         EXPECT_TRUE(
             expect_vector3_near(
                 camera.position,
-                (Vector3) {ego.sim_x, ego.sim_y, ego.sim_z + DRIVER_EYE_HEIGHT_M},
+                (Vector3) {ego.sim_x + forward_x * DRIVER_SEAT_FORWARD_M + left_x * DRIVER_SEAT_LEFT_M,
+                           ego.sim_y + forward_y * DRIVER_SEAT_FORWARD_M + left_y * DRIVER_SEAT_LEFT_M,
+                           ego.sim_z + DRIVER_EYE_HEIGHT_M},
                 POSITION_TOLERANCE_M,
                 "driver position")
             == 0);
         EXPECT_TRUE(
             expect_vector3_near(
                 camera.target,
-                (Vector3) {ego.sim_x + forward_x * DRIVER_AHEAD_M,
-                           ego.sim_y + forward_y * DRIVER_AHEAD_M,
-                           ego.sim_z + DRIVER_TARGET_HEIGHT_M},
+                (Vector3) {
+                    ego.sim_x + forward_x * (DRIVER_SEAT_FORWARD_M + DRIVER_AHEAD_M) + left_x * DRIVER_SEAT_LEFT_M,
+                    ego.sim_y + forward_y * (DRIVER_SEAT_FORWARD_M + DRIVER_AHEAD_M) + left_y * DRIVER_SEAT_LEFT_M,
+                    ego.sim_z + DRIVER_TARGET_HEIGHT_M},
                 POSITION_TOLERANCE_M,
                 "driver target")
             == 0);
 
-        // The eye sits on the car, not behind it: zero horizontal offset in both axes.
-        EXPECT_NEAR(camera.position.x - ego.sim_x, 0.0f, POSITION_TOLERANCE_M);
-        EXPECT_NEAR(camera.position.y - ego.sim_y, 0.0f, POSITION_TOLERANCE_M);
+        // The eye sits in the driver's seat: ahead of centre, and to the LEFT for left-hand drive.
+        Vector3 seat = vector3_sub(camera.position, (Vector3) {ego.sim_x, ego.sim_y, ego.sim_z});
+        EXPECT_NEAR(seat.x * forward_x + seat.y * forward_y, DRIVER_SEAT_FORWARD_M, POSITION_TOLERANCE_M);
+        EXPECT_NEAR(seat.x * left_x + seat.y * left_y, DRIVER_SEAT_LEFT_M, POSITION_TOLERANCE_M);
+        EXPECT_TRUE(DRIVER_SEAT_LEFT_M > 0.0f);
         Vector3 look = vector3_sub(camera.target, camera.position);
         EXPECT_NEAR(sqrtf(look.x * look.x + look.y * look.y), DRIVER_AHEAD_M, POSITION_TOLERANCE_M);
         EXPECT_NEAR(look.x * forward_x + look.y * forward_y, DRIVER_AHEAD_M, POSITION_TOLERANCE_M);
@@ -424,11 +442,11 @@ static int test_camera_continuous_across_heading_wrap(void) {
 // The presets are tuned to match the offline renders, so the live view and recorded clips agree.
 // Pinned as literals: the formula tests above are all written in terms of these symbols.
 static int test_camera_presets_match_the_tuned_values(void) {
-    EXPECT_NEAR(CHASE_BACK_M, 25.0f, 0.0f);
-    EXPECT_NEAR(CHASE_EYE_HEIGHT_M, 15.0f, 0.0f);
-    EXPECT_NEAR(CHASE_AHEAD_M, 40.0f, 0.0f);
+    EXPECT_NEAR(CHASE_BACK_M, 9.0f, 0.0f);
+    EXPECT_NEAR(CHASE_EYE_HEIGHT_M, 3.6f, 0.0f);
+    EXPECT_NEAR(CHASE_AHEAD_M, 14.0f, 0.0f);
     EXPECT_NEAR(CHASE_FOV_DEG, 45.0f, 0.0f);
-    EXPECT_NEAR(DRIVER_EYE_HEIGHT_M, 1.4f, 0.0f);
+    EXPECT_NEAR(DRIVER_EYE_HEIGHT_M, 1.26f, 0.0f);
     EXPECT_NEAR(DRIVER_AHEAD_M, 30.0f, 0.0f);
     EXPECT_NEAR(DRIVER_FOV_DEG, 60.0f, 0.0f);
     EXPECT_EQ_INT(CAMERA_MODE_CHASE, 0);

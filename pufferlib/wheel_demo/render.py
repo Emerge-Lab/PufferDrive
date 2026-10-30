@@ -69,5 +69,8 @@ class DemoWindow:
     def should_close(self):
         return self._render.should_close()
 
+    def screenshot(self, path):
+        self._render.screenshot(path)
+
     def close(self):
         self._render.close()

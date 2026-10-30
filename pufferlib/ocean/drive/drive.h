@@ -240,6 +240,11 @@ struct Drive {
     int human_agent_idx;       // -1 = nobody is driving; otherwise index into agents
     int human_prev_controller; // restored to the agent when control is handed back
     int vehicle_size_profile;
+    // Live reward-conditioning bounds. Agents draw their coefficients from these, so shifting them
+    // mid-episode changes how the surrounding traffic drives without reloading anything.
+    float reward_coef_min[NUM_REWARD_COEFS];
+    float reward_coef_max[NUM_REWARD_COEFS];
+    int reward_bounds_overridden; // 0 keeps the training sampler exactly as it was
     int substep_mode;
     int substeps_per_policy_step;
     int substeps_taken;
@@ -423,6 +428,19 @@ static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
     {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED           C_vel
 };
+
+// C_vel's conditioning is normalised against [1/scale, scale] rather than the bounds table, so its
+// trained window has to be reported the same way or a level would be rejected for being in range.
+static void reward_coef_limits(const Drive *env, int coef_idx, float *min_out, float *max_out) {
+    const RewardBound *limits = env->reward_log_sampling ? REWARD_BOUNDS_LOG : REWARD_BOUNDS;
+    if (coef_idx == REWARD_COEF_SPEED) {
+        *min_out = 1.0f / env->conditioning_speed_scale;
+        *max_out = env->conditioning_speed_scale;
+        return;
+    }
+    *min_out = limits[coef_idx].min_val;
+    *max_out = limits[coef_idx].max_val;
+}
 
 // ========================================
 // Utility Functions
@@ -2629,8 +2647,8 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         for (int i = 0; i < (int) (sizeof(random_coefs) / sizeof(random_coefs[0])); i++) {
             int c = random_coefs[i];
             agent->reward_coefs[c] = bounds[c].log_scale
-                ? sample_log_uniform(&env->rng_state, bounds[c].min_val, bounds[c].max_val)
-                : sample_uniform(&env->rng_state, bounds[c].min_val, bounds[c].max_val);
+                ? sample_log_uniform(&env->rng_state, env->reward_coef_min[c], env->reward_coef_max[c])
+                : sample_uniform(&env->rng_state, env->reward_coef_min[c], env->reward_coef_max[c]);
         }
         if (!env->goal_speed_randomization) {
             agent->reward_coefs[REWARD_COEF_GOAL_SPEED] = env->goal_speed;
@@ -2640,7 +2658,12 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_THROTTLE] = sample_mixed_uniform(&env->rng_state, 1.25f);
         agent->reward_coefs[REWARD_COEF_STEER] = sample_mixed_uniform(&env->rng_state, 1.25f);
         agent->reward_coefs[REWARD_COEF_ACC] = sample_mixed_uniform(&env->rng_state, 1.5f);
-        agent->reward_coefs[REWARD_COEF_SPEED] = sample_mixed_uniform(&env->rng_state, env->conditioning_speed_scale);
+        agent->reward_coefs[REWARD_COEF_SPEED] = env->reward_bounds_overridden
+            ? sample_uniform(
+                  &env->rng_state,
+                  env->reward_coef_min[REWARD_COEF_SPEED],
+                  env->reward_coef_max[REWARD_COEF_SPEED])
+            : sample_mixed_uniform(&env->rng_state, env->conditioning_speed_scale);
     } else {
         agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
         agent->reward_coefs[REWARD_COEF_GOAL_SPEED] = env->goal_speed;
@@ -3648,6 +3671,17 @@ void remove_bad_trajectories(Drive *env) {
 
 void init(Drive *env) {
     env->timestep = 0;
+    const RewardBound *default_bounds = env->reward_log_sampling ? REWARD_BOUNDS_LOG : REWARD_BOUNDS;
+    for (int c = 0; c < NUM_REWARD_COEFS; c++) {
+        env->reward_coef_min[c] = default_bounds[c].min_val;
+        env->reward_coef_max[c] = default_bounds[c].max_val;
+    }
+    env->reward_bounds_overridden = 0;
+    reward_coef_limits(
+        env,
+        REWARD_COEF_SPEED,
+        &env->reward_coef_min[REWARD_COEF_SPEED],
+        &env->reward_coef_max[REWARD_COEF_SPEED]);
     env->human_agent_idx = -1;
     env->human_prev_controller = CONTROLLER_POLICY;
     env->human_grip_mode = GRIP_MODE_KINEMATIC;
@@ -5865,6 +5899,47 @@ int c_select_human_agent(Drive *env, int agent_idx) {
     agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
     agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
     return 0;
+}
+
+// Shifting the sampling bounds keeps the per-driver variety that makes traffic look alive, which
+// pinning every car to one coefficient vector would destroy.
+int c_set_reward_coef_bounds(Drive *env, const float *min_values, const float *max_values) {
+    for (int c = 0; c < NUM_REWARD_COEFS; c++) {
+        float limit_min, limit_max;
+        reward_coef_limits(env, c, &limit_min, &limit_max);
+        if (!isfinite(min_values[c]) || !isfinite(max_values[c]) || min_values[c] > max_values[c]) {
+            return -1;
+        }
+        // Outside the trained window write_reward_target_obs saturates the conditioning signal at
+        // +-1, so the policy stops responding and the level silently does nothing.
+        if (min_values[c] < limit_min || max_values[c] > limit_max) {
+            return -1;
+        }
+    }
+    env->reward_bounds_overridden = 1;
+    for (int c = 0; c < NUM_REWARD_COEFS; c++) {
+        env->reward_coef_min[c] = min_values[c];
+        env->reward_coef_max[c] = max_values[c];
+    }
+    return 0;
+}
+
+// Redraws every policy-driven car from the current bounds. The human car is skipped: its
+// coefficients are pinned to the reference profile by c_select_human_agent.
+int c_resample_reward_coefs(Drive *env) {
+    if (!env->reward_randomization) {
+        return -1;
+    }
+    int resampled = 0;
+    for (int i = 0; i < env->active_agent_count; i++) {
+        Agent *agent = &env->agents[env->active_agent_indices[i]];
+        if (agent->controller != CONTROLLER_POLICY) {
+            continue;
+        }
+        generate_reward_coefs(env, agent);
+        resampled++;
+    }
+    return resampled;
 }
 
 int c_set_human_max_speed(Drive *env, float max_speed_mps) {

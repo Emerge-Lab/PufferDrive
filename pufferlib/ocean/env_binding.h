@@ -1263,6 +1263,87 @@ static PyObject *vec_get_render_poses(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static int unpack_coef_array(PyObject *obj, const char *name, float **out) {
+    if (!PyArray_Check(obj)) {
+        PyErr_Format(PyExc_TypeError, "%s must be a float32 NumPy array", name);
+        return -1;
+    }
+    PyArrayObject *array = (PyArrayObject *) obj;
+    if (PyArray_TYPE(array) != NPY_FLOAT32 || (int) PyArray_SIZE(array) != NUM_REWARD_COEFS) {
+        PyErr_Format(PyExc_ValueError, "%s must be %d float32 values", name, NUM_REWARD_COEFS);
+        return -1;
+    }
+    *out = (float *) PyArray_DATA(array);
+    return 0;
+}
+
+static PyObject *vec_set_reward_coef_bounds(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_reward_coef_bounds requires 3 arguments (vec_env, min, max)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    float *min_values, *max_values;
+    if (unpack_coef_array(PyTuple_GetItem(args, 1), "min", &min_values) != 0
+        || unpack_coef_array(PyTuple_GetItem(args, 2), "max", &max_values) != 0) {
+        return NULL;
+    }
+    for (int i = 0; i < vec->num_envs; i++) {
+        if (c_set_reward_coef_bounds((Drive *) vec->envs[i], min_values, max_values) != 0) {
+            PyErr_SetString(
+                PyExc_ValueError,
+                "vec_set_reward_coef_bounds: a bound is non-finite, inverted, or outside the policy's trained "
+                "window; outside it the conditioning signal saturates and the level would do nothing");
+            return NULL;
+        }
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_get_reward_coef_limits(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_reward_coef_limits requires 3 arguments (vec_env, min, max)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    float *min_values, *max_values;
+    if (unpack_coef_array(PyTuple_GetItem(args, 1), "min", &min_values) != 0
+        || unpack_coef_array(PyTuple_GetItem(args, 2), "max", &max_values) != 0) {
+        return NULL;
+    }
+    Drive *drive = (Drive *) vec->envs[0];
+    for (int c = 0; c < NUM_REWARD_COEFS; c++) {
+        reward_coef_limits(drive, c, &min_values[c], &max_values[c]);
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_resample_reward_coefs(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    long resampled = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        int count = c_resample_reward_coefs((Drive *) vec->envs[i]);
+        if (count < 0) {
+            PyErr_SetString(
+                PyExc_RuntimeError,
+                "vec_resample_reward_coefs: reward_randomization is off, so every agent shares one fixed "
+                "coefficient vector and there is nothing to resample");
+            return NULL;
+        }
+        resampled += count;
+    }
+    return PyLong_FromLong(resampled);
+}
+
 static PyObject *vec_set_human_pedals(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 6) {
         PyErr_SetString(
@@ -1391,7 +1472,7 @@ static PyObject *vec_get_human_state(PyObject *self, PyObject *args) {
     }
     Agent *agent = &drive->agents[agent_idx];
     return Py_BuildValue(
-        "{s:i,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:i,s:i,s:i,s:i,s:i,s:i}",
+        "{s:i,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:i,s:i,s:i,s:i,s:i,s:i}",
         "agent_idx",
         agent_idx,
         "sim_x",
@@ -1412,6 +1493,8 @@ static PyObject *vec_get_human_state(PyObject *self, PyObject *args) {
         agent->yaw_rate,
         "collision",
         agent->metrics_array[COLLISION_IDX],
+        "offroad",
+        agent->metrics_array[OFFROAD_IDX],
         "engine_rpm",
         drive->human_engine_rpm,
         "max_speed_mps",
@@ -1885,6 +1968,18 @@ static PyMethodDef methods[]
         vec_get_render_poses,
         METH_VARARGS,
         "Poses for drawing; dead-reckons partners under SUBSTEP_MODE_HUMAN_ONLY (wheel demo)"},
+       {"vec_set_reward_coef_bounds",
+        vec_set_reward_coef_bounds,
+        METH_VARARGS,
+        "Shift the window agents draw their reward conditioning from (wheel demo levels)"},
+       {"vec_get_reward_coef_limits",
+        vec_get_reward_coef_limits,
+        METH_VARARGS,
+        "The policy's trained coefficient window; bounds outside it saturate the conditioning"},
+       {"vec_resample_reward_coefs",
+        vec_resample_reward_coefs,
+        METH_VARARGS,
+        "Redraw every policy car's coefficients from the current bounds; returns how many"},
        {"vec_set_human_pedals",
         vec_set_human_pedals,
         METH_VARARGS,
@@ -1997,6 +2092,17 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_STATE_GREEN", TRAFFIC_CONTROL_STATE_GREEN);
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_STATE_OFF", TRAFFIC_CONTROL_STATE_OFF);
     PyModule_AddIntConstant(m, "EGO_FEATURES", EGO_FEATURES);
+    PyModule_AddIntConstant(m, "REWARD_COEF_GOAL_RADIUS", REWARD_COEF_GOAL_RADIUS);
+    PyModule_AddIntConstant(m, "REWARD_COEF_COLLISION", REWARD_COEF_COLLISION);
+    PyModule_AddIntConstant(m, "REWARD_COEF_OFFROAD", REWARD_COEF_OFFROAD);
+    PyModule_AddIntConstant(m, "REWARD_COEF_COMFORT", REWARD_COEF_COMFORT);
+    PyModule_AddIntConstant(m, "REWARD_COEF_LANE_ALIGN", REWARD_COEF_LANE_ALIGN);
+    PyModule_AddIntConstant(m, "REWARD_COEF_VEL_ALIGN", REWARD_COEF_VEL_ALIGN);
+    PyModule_AddIntConstant(m, "REWARD_COEF_LANE_CENTER", REWARD_COEF_LANE_CENTER);
+    PyModule_AddIntConstant(m, "REWARD_COEF_STOP_LINE", REWARD_COEF_STOP_LINE);
+    PyModule_AddIntConstant(m, "REWARD_COEF_OVERSPEED", REWARD_COEF_OVERSPEED);
+    PyModule_AddIntConstant(m, "REWARD_COEF_REVERSE", REWARD_COEF_REVERSE);
+    PyModule_AddIntConstant(m, "REWARD_COEF_SPEED", REWARD_COEF_SPEED);
     PyModule_AddIntConstant(m, "SUBSTEP_MODE_ALL", SUBSTEP_MODE_ALL);
     PyModule_AddIntConstant(m, "SUBSTEP_MODE_HUMAN_ONLY", SUBSTEP_MODE_HUMAN_ONLY);
     PyModule_AddIntConstant(m, "GRIP_MODE_KINEMATIC", GRIP_MODE_KINEMATIC);

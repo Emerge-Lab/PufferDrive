@@ -28,6 +28,7 @@ from pufferlib.wheel_demo.loop import (
 )
 from pufferlib.wheel_demo.calibrate import calibrate_interactively, validate_calibration
 from pufferlib.wheel_demo.ffb import ForceFeedbackLoop, G920ForceFeedback
+from pufferlib.wheel_demo.levels import LEVELS, LEVEL_NAMES, apply_level, level_by_name
 from pufferlib.wheel_demo.maps import CARLA_TOWNS
 from pufferlib.wheel_demo.render import CAMERA_MODE_NAMES, DemoWindow
 
@@ -58,7 +59,9 @@ def print_hud(step_idx, wheel_state, human, dt):
     if human is None:
         print(f"step {step_idx:5d}  (nobody is driving)")
         return
-    steering_deg = math.degrees(human["steering_angle_rad"])
+    # Driver-facing sign: positive is a RIGHT turn, matching the wheel in your hands and the
+    # window HUD. The sim's steering_angle is positive-left, so it is negated here too.
+    steering_deg = -math.degrees(human["steering_angle_rad"])
     wheel_deg = steering_deg * binding.HUMAN_STEERING_RATIO
     print(
         f"t={step_idx * dt:6.1f}s  "
@@ -87,9 +90,20 @@ def choose_town(requested):
         print("  not one of those.")
 
 
-def apply_window_keys(window, loop):
-    """Window keys drive the demo: cameras, night, car takeover, engine restart."""
+def cycle_level(loop, current_index):
+    """Next difficulty level, applied to the live traffic. The human car is unaffected."""
+    next_index = (current_index + 1) % len(LEVELS)
+    level = LEVELS[next_index]
+    changed = apply_level(loop.env, level)
+    print(f"  level -> {level.name}: {level.description} ({changed} cars resampled)")
+    return next_index
+
+
+def apply_window_keys(window, loop, level_index=0):
+    """Window keys drive the demo: cameras, night, level, car takeover, engine restart."""
     keys = window.poll()
+    if keys.get("cycle_level"):
+        level_index = cycle_level(loop, level_index)
     for name, camera_mode in (("camera_chase", 0), ("camera_driver", 1), ("camera_agent", 2)):
         if keys.get(name):
             window.set_camera_mode(camera_mode)
@@ -100,6 +114,7 @@ def apply_window_keys(window, loop):
     if keys.get("next_agent"):
         total = loop.observations.shape[0]
         loop.select_human_agent((loop.human_agent_idx + 1) % total)
+    return level_index
 
 
 def main():
@@ -124,6 +139,7 @@ def main():
     parser.add_argument("--ffb", action="store_true", help="force feedback (needs the wheel connected)")
     parser.add_argument("--ffb-gain", type=float, default=0.55, help="overall force strength, 0-1")
     parser.add_argument("--calibrate", action="store_true", help="calibrate the wheel before driving")
+    parser.add_argument("--level", default="normal", choices=LEVEL_NAMES, help="how the surrounding traffic behaves")
     args = parser.parse_args()
 
     if args.calibrate:
@@ -164,11 +180,16 @@ def main():
     )
     print("-" * 118)
 
+    starting_level = level_by_name(args.level)
+    state = {"level_index": LEVELS.index(starting_level)}
+    changed = apply_level(loop.env, starting_level)
+    print(f"level: {starting_level.name} - {starting_level.description} ({changed} cars)")
+
     def on_substep(substep_idx, _wheel_state):
         if window is None:
             return
         window.draw(loop.env, substep_idx * loop.substep_dt)
-        apply_window_keys(window, loop)
+        state["level_index"] = apply_window_keys(window, loop, state["level_index"])
 
     try:
         for step_idx in range(args.steps):

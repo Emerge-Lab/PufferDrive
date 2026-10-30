@@ -32,6 +32,7 @@ HUMAN_STATE_KEYS = {
     "accel_lat_mps2",
     "yaw_rate_rps",
     "collision",
+    "offroad",
     "grip_mode",
     "stopped",
     "removed",
@@ -284,6 +285,50 @@ def test_direct_input_takes_the_car_back_from_the_pedals(env):
     env.set_human_input(0.0, -3.0)
     env.step(env.action_space.sample() * 0)
     assert env.get_human_state()["accel_long_mps2"] == pytest.approx(-3.0, abs=1e-5)
+
+
+# Full lock and full throttle leave the road within this many policy steps on every test map.
+OFFROAD_MAX_STEPS = 120
+FULL_LOCK_STEERING_NORM = 1.0
+FULL_THROTTLE = 1.0
+
+
+def test_driving_off_the_road_reports_the_offroad_flag(env):
+    """The force-feedback rumble has no other source for this, so the binding must export it."""
+    env.select_human_agent(0)
+    env.set_human_gearbox_mode(binding.GEARBOX_MODE_AUTOMATIC)
+    assert env.get_human_state()["offroad"] == 0.0
+
+    env.set_human_pedals(FULL_LOCK_STEERING_NORM, FULL_THROTTLE, 0.0, 0.0)
+    offroad_state = None
+    for _ in range(OFFROAD_MAX_STEPS):
+        env.step(env.action_space.sample() * 0)
+        state = env.get_human_state()
+        if state["offroad"] > 0.0:
+            offroad_state = state
+            break
+
+    assert offroad_state is not None, "full lock and full throttle never took the car off the road"
+    assert offroad_state["offroad"] == 1.0
+    # compute_metrics returns as soon as it flags offroad, so the two are mutually exclusive.
+    assert offroad_state["collision"] == 0.0
+
+
+def test_collision_and_offroad_are_per_step_flags_not_latched(env):
+    """The force-feedback loop jolts on a RISING collision edge, so a flag that stayed set once
+    the car was clear would mean no second jolt for the rest of the drive."""
+    env.select_human_agent(0)
+    env.set_human_gearbox_mode(binding.GEARBOX_MODE_AUTOMATIC)
+    env.set_human_pedals(FULL_LOCK_STEERING_NORM, FULL_THROTTLE, 0.0, 0.0)
+    collisions = []
+    for _ in range(OFFROAD_MAX_STEPS):
+        env.step(env.action_space.sample() * 0)
+        collisions.append(env.get_human_state()["collision"] > 0.0)
+
+    rising_edges = sum(1 for before, after in zip(collisions, collisions[1:]) if after and not before)
+    assert any(collisions), "the car never hit anything"
+    assert not all(collisions)
+    assert rising_edges >= 2, "a per-step flag must be able to rise more than once"
 
 
 # The sim holds every logged track, not just the one policy agent, so size generously.

@@ -179,7 +179,7 @@ class WheelDemoLoop:
             accel_lat_mps2=-human["accel_lat_mps2"],
             tire_grip_mps2=binding.HUMAN_TIRE_GRIP_MPS2,
             collision=human["collision"] > 0.0,
-            offroad=False,
+            offroad=human["offroad"] > 0.0,
         )
 
     def render_poses(self, substep_idx):

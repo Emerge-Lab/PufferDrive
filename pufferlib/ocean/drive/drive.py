@@ -915,6 +915,25 @@ class Drive(pufferlib.PufferEnv):
         past the tyre limit."""
         binding.vec_set_human_grip_mode(self.c_envs, int(grip_mode))
 
+    def set_reward_coef_bounds(self, min_values, max_values):
+        """shift the window agents draw reward conditioning from; traffic changes character."""
+        binding.vec_set_reward_coef_bounds(
+            self.c_envs,
+            np.ascontiguousarray(min_values, dtype=np.float32),
+            np.ascontiguousarray(max_values, dtype=np.float32),
+        )
+
+    def get_reward_coef_limits(self):
+        """the policy's trained coefficient window, as (min, max) float32 arrays."""
+        min_values = np.zeros(binding.NUM_REWARD_COEFS, dtype=np.float32)
+        max_values = np.zeros(binding.NUM_REWARD_COEFS, dtype=np.float32)
+        binding.vec_get_reward_coef_limits(self.c_envs, min_values, max_values)
+        return min_values, max_values
+
+    def resample_reward_coefs(self):
+        """redraw every policy car's coefficients from the current bounds; returns how many."""
+        return binding.vec_resample_reward_coefs(self.c_envs)
+
     def set_substepping(self, substep_mode, substeps_per_policy_step):
         """physics rate, independent of the policy's decision rate."""
         binding.vec_set_substepping(self.c_envs, int(substep_mode), int(substeps_per_policy_step))

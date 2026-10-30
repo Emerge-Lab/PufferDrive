@@ -52,6 +52,9 @@ class WheelCalibration:
     clutch_raw_rest: int = 255
     clutch_raw_floor: int = 0
     pedal_deadzone_norm: float = 0.02
+    # The G920 brake is a stiff progressive rubber stop, so linear travel puts most of the braking
+    # in the last part of the press. Below 1.0 this bends the curve so light presses bite harder.
+    brake_response_gamma: float = 0.6
 
     def __post_init__(self):
         if not self.steering_raw_min < self.steering_raw_center < self.steering_raw_max:
@@ -68,6 +71,8 @@ class WheelCalibration:
             raise ValueError(f"steering_deadzone_norm must be in [0, 1), got {self.steering_deadzone_norm}")
         if not 0.0 <= self.pedal_deadzone_norm < 1.0:
             raise ValueError(f"pedal_deadzone_norm must be in [0, 1), got {self.pedal_deadzone_norm}")
+        if not 0.0 < self.brake_response_gamma <= 1.0:
+            raise ValueError(f"brake_response_gamma must be in (0, 1], got {self.brake_response_gamma}")
 
     def steering_to_norm(self, raw):
         if raw >= self.steering_raw_center:
@@ -86,7 +91,10 @@ class WheelCalibration:
         norm = _clamp(norm, 0.0, 1.0)
         if norm <= self.pedal_deadzone_norm:
             return 0.0
-        return (norm - self.pedal_deadzone_norm) / (1.0 - self.pedal_deadzone_norm)
+        norm = (norm - self.pedal_deadzone_norm) / (1.0 - self.pedal_deadzone_norm)
+        if pedal == "brake":
+            return norm**self.brake_response_gamma
+        return norm
 
     def to_json(self, path):
         with open(path, "w") as handle:
