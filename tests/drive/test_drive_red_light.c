@@ -35,7 +35,7 @@ static Drive drive_test_light_env(TrafficControlElement *tc) {
     return env;
 }
 
-// Violation = front edge crossing the line; arguments are front-edge x. Stationary/backward motion never flags.
+// Violation = front or rear edge crossing the line on red; arguments are front-edge x (rear = front - 4 m).
 static Agent drive_test_driving_agent(float prev_front_x, float cur_front_x, float y) {
     Agent agent = drive_test_agent(prev_front_x - TEST_HALF_LENGTH_M, y, 0.0f);
     agent.sim_x = cur_front_x - TEST_HALF_LENGTH_M;
@@ -69,7 +69,7 @@ static int test_front_over_line_before_red_then_proceed_no_flag(void) {
     TrafficControlElement tc = drive_test_light();
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
-    // entry completed before the red phase; clearing the junction is not a violation
+    // front already past the line; the rear (front - 4 m) has not reached it yet
     Agent agent = drive_test_driving_agent(0.5f, 2.5f, 0.0f);
     env.agents = &agent;
     EXPECT_FALSE(check_red_light_violation(&env, 0));
@@ -83,10 +83,21 @@ static int test_green_crossing_then_red_inside_no_flag(void) {
     Agent agent = drive_test_driving_agent(-0.5f, 0.5f, 0.0f);
     env.agents = &agent;
     EXPECT_FALSE(check_red_light_violation(&env, 0));
-    // light turns red once the agent is fully inside the junction
+    // light turns red once the rear (front - 4 m) is past the line too: fully inside the junction
     set_light(TRAFFIC_CONTROL_STATE_RED);
-    agent = drive_test_driving_agent(3.5f, 4.5f, 0.0f);
+    agent = drive_test_driving_agent(5.5f, 6.5f, 0.0f);
     EXPECT_FALSE(check_red_light_violation(&env, 0));
+    return 0;
+}
+
+static int test_rear_crossing_on_red_flags(void) {
+    TrafficControlElement tc = drive_test_light();
+    Drive env = drive_test_light_env(&tc);
+    set_light(TRAFFIC_CONTROL_STATE_RED);
+    // entered on yellow, red while straddling: the rear (front - 4 m) clears the line on red
+    Agent agent = drive_test_driving_agent(3.5f, 4.5f, 0.0f);
+    env.agents = &agent;
+    EXPECT_TRUE(check_red_light_violation(&env, 0));
     return 0;
 }
 
@@ -220,6 +231,26 @@ static int test_training_margin_flags_before_line(void) {
     return 0;
 }
 
+static int test_training_margin_extends_rear(void) {
+    TrafficControlElement tc = drive_test_light();
+    Drive env = drive_test_light_env(&tc);
+    env.red_light_train_front_margin_m = 0.3f;
+    set_light(TRAFFIC_CONTROL_STATE_RED);
+    // rear -0.4 -> -0.2 keeps the margin point (rear - 0.3) before the line
+    Agent agent = drive_test_driving_agent(3.6f, 3.8f, 0.0f);
+    env.agents = &agent;
+    EXPECT_FALSE(check_red_light_violation(&env, 0));
+    // rear 0.2 -> 0.4 carries the margin point across
+    agent = drive_test_driving_agent(4.2f, 4.4f, 0.0f);
+    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    // eval semantics: the real rear edge itself has to cross
+    env.eval_mode = 1;
+    EXPECT_FALSE(check_red_light_violation(&env, 0));
+    agent = drive_test_driving_agent(3.9f, 4.1f, 0.0f);
+    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    return 0;
+}
+
 static int test_eval_semantics_drop_training_margin(void) {
     TrafficControlElement tc = drive_test_light();
     Drive env = drive_test_light_env(&tc);
@@ -262,6 +293,7 @@ int main(void) {
     RUN_TEST(test_center_crossing_with_front_already_past_no_flag);
     RUN_TEST(test_front_over_line_before_red_then_proceed_no_flag);
     RUN_TEST(test_green_crossing_then_red_inside_no_flag);
+    RUN_TEST(test_rear_crossing_on_red_flags);
     RUN_TEST(test_stationary_straddle_no_flag);
     RUN_TEST(test_crossing_fires_once);
     RUN_TEST(test_opposing_lane_bypass_flags);
@@ -273,6 +305,7 @@ int main(void) {
     RUN_TEST(test_no_lane_assignment_still_flags);
     RUN_TEST(test_turning_entry_uses_previous_heading);
     RUN_TEST(test_training_margin_flags_before_line);
+    RUN_TEST(test_training_margin_extends_rear);
     RUN_TEST(test_eval_semantics_drop_training_margin);
     RUN_TEST(test_perceived_size_margin_never_inflates_detection);
     return test_summary(failures);

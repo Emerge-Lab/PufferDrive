@@ -1777,19 +1777,48 @@ static bool check_corner_boxes_overlap(float corners_a[4][2], float corners_b[4]
     return true;
 }
 
-static float red_light_front_margin_m(Drive *env) {
+static float red_light_edge_margin_m(Drive *env) {
     bool eval_semantics = (env->eval_mode && !env->eval_training_render) || env->cosim_eval_semantics;
     return eval_semantics ? 0.0f : env->red_light_train_front_margin_m;
 }
 
+// moving point crosses the laterally extended stop line in its travel direction
+static bool point_crosses_stop_line(TrafficControlElement *tc, float prev_x, float prev_y, float cur_x, float cur_y) {
+    float mid_x = (tc->stop_line[0] + tc->stop_line[3]) * 0.5f;
+    float mid_y = (tc->stop_line[1] + tc->stop_line[4]) * 0.5f;
+    float line_dx = tc->stop_line[3] - tc->stop_line[0];
+    float line_dy = tc->stop_line[4] - tc->stop_line[1];
+    float line_len = sqrtf(line_dx * line_dx + line_dy * line_dy);
+    if (line_len <= 0.0f) {
+        return false;
+    }
+    float line_ux = line_dx / line_len, line_uy = line_dy / line_len;
+    // normal oriented along travel direction, so s < 0 is before the line
+    float normal_x = -line_uy, normal_y = line_ux;
+    if (normal_x * cosf(tc->heading) + normal_y * sinf(tc->heading) < 0.0f) {
+        normal_x = -normal_x;
+        normal_y = -normal_y;
+    }
+    float s_prev = (prev_x - mid_x) * normal_x + (prev_y - mid_y) * normal_y;
+    float s_cur = (cur_x - mid_x) * normal_x + (cur_y - mid_y) * normal_y;
+    if (!(s_prev < 0.0f && s_cur >= 0.0f)) {
+        return false;
+    }
+    float crossing_frac = s_prev / (s_prev - s_cur);
+    float cross_x = prev_x + crossing_frac * (cur_x - prev_x);
+    float cross_y = prev_y + crossing_frac * (cur_y - prev_y);
+    float lateral = (cross_x - mid_x) * line_ux + (cross_y - mid_y) * line_uy;
+    return fabsf(lateral) <= 0.5f * line_len + RED_LIGHT_LATERAL_EXTENSION_M;
+}
+
 static bool check_red_light_violation(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
-    // Front edge crosses on red; the extended line cannot be driven around, the heading gate exempts exiting traffic.
-    float front_offset_m = 0.5f * agent->sim_length + red_light_front_margin_m(env);
-    float front_x = agent->sim_x + front_offset_m * agent->cos_heading;
-    float front_y = agent->sim_y + front_offset_m * agent->sin_heading;
-    float prev_front_x = agent->prev_x + front_offset_m * agent->prev_cos_heading;
-    float prev_front_y = agent->prev_y + front_offset_m * agent->prev_sin_heading;
+    // Front or rear edge crosses on red: a yellow entry must clear the line before red (CARLA scores the tail)
+    float edge_offset_m = 0.5f * agent->sim_length + red_light_edge_margin_m(env);
+    float edge_dx = edge_offset_m * agent->cos_heading;
+    float edge_dy = edge_offset_m * agent->sin_heading;
+    float prev_edge_dx = edge_offset_m * agent->prev_cos_heading;
+    float prev_edge_dy = edge_offset_m * agent->prev_sin_heading;
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
         if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
@@ -1815,30 +1844,20 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
         if (fabsf(compute_heading_diff(agent->sim_heading, tc->heading)) >= RED_LIGHT_ENTER_HEADING_THRESHOLD) {
             continue;
         }
-
-        float line_dx = tc->stop_line[3] - tc->stop_line[0];
-        float line_dy = tc->stop_line[4] - tc->stop_line[1];
-        float line_len = sqrtf(line_dx * line_dx + line_dy * line_dy);
-        if (line_len <= 0.0f) {
-            continue;
+        if (point_crosses_stop_line(
+                tc,
+                agent->prev_x + prev_edge_dx,
+                agent->prev_y + prev_edge_dy,
+                agent->sim_x + edge_dx,
+                agent->sim_y + edge_dy)) {
+            return true;
         }
-        float line_ux = line_dx / line_len, line_uy = line_dy / line_len;
-        // normal oriented along travel direction, so s < 0 is before the line
-        float normal_x = -line_uy, normal_y = line_ux;
-        if (normal_x * cosf(tc->heading) + normal_y * sinf(tc->heading) < 0.0f) {
-            normal_x = -normal_x;
-            normal_y = -normal_y;
-        }
-        float s_prev = (prev_front_x - mid_x) * normal_x + (prev_front_y - mid_y) * normal_y;
-        float s_cur = (front_x - mid_x) * normal_x + (front_y - mid_y) * normal_y;
-        if (!(s_prev < 0.0f && s_cur >= 0.0f)) {
-            continue;
-        }
-        float crossing_frac = s_prev / (s_prev - s_cur);
-        float cross_x = prev_front_x + crossing_frac * (front_x - prev_front_x);
-        float cross_y = prev_front_y + crossing_frac * (front_y - prev_front_y);
-        float lateral = (cross_x - mid_x) * line_ux + (cross_y - mid_y) * line_uy;
-        if (fabsf(lateral) <= 0.5f * line_len + RED_LIGHT_LATERAL_EXTENSION_M) {
+        if (point_crosses_stop_line(
+                tc,
+                agent->prev_x - prev_edge_dx,
+                agent->prev_y - prev_edge_dy,
+                agent->sim_x - edge_dx,
+                agent->sim_y - edge_dy)) {
             return true;
         }
     }
@@ -3051,9 +3070,9 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
             continue;
         }
 
-        // inflated by the training margin so no spawn starts inside the front edge detector's dead band
+        // inflated by the training margin so no spawn starts inside the edge detectors' dead band
         Agent stop_line_probe = tmp_agent;
-        stop_line_probe.sim_length += 2.0f * red_light_front_margin_m(env);
+        stop_line_probe.sim_length += 2.0f * red_light_edge_margin_m(env);
         if (check_agent_on_stop_line(env, &stop_line_probe, true)) {
             env->spawn_reject_counts[SPAWN_REJECT_STOP_LINE]++;
             continue;

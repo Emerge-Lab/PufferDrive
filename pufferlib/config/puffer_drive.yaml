@@ -87,8 +87,9 @@ env:
   yield_signs_enabled: false
   # Skip red light violation detection (metrics, reward, behavior)
   disable_red_light_infractions: false
-  # Training-only: a red light violation fires once the front edge comes within this gap (m) of the stop line;
-  # eval and co-sim fire when the front edge crosses the line
+  # Training-only gap (m) around the ego for red light detection: fires once the front edge comes within it of the
+  # stop line, or once the rear edge still sits within it behind the line on red (a yellow entry must clear the line);
+  # eval and co-sim use the real front and rear edges
   red_light_train_front_margin_m: 0.3
   # Skip stop sign violation detection (metrics, reward, behavior); the sign obs still turn red/green
   disable_stop_sign_infractions: false
