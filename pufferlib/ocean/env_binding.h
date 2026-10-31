@@ -1189,6 +1189,61 @@ static PyObject *vec_set_human_grip_mode(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_set_assist_mode(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_assist_mode requires 3 arguments (vec_env, mode, blend_target)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int assist_mode = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
+    double blend_target = PyFloat_AsDouble(PyTuple_GetItem(args, 2));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (c_set_assist_mode((Drive *) vec->envs[0], assist_mode, (float) blend_target) != 0) {
+        char message[160];
+        snprintf(
+            message,
+            sizeof(message),
+            "vec_set_assist_mode: mode %d must be an ASSIST_MODE_* and blend_target %.3f must be in [0, 1]",
+            assist_mode,
+            blend_target);
+        PyErr_SetString(PyExc_ValueError, message);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_get_assist_state(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    Drive *drive = (Drive *) vec->envs[0];
+    float human_rad = human_steering_angle(drive);
+    return Py_BuildValue(
+        "{s:i,s:f,s:f,s:i,s:f,s:f,s:f,s:f}",
+        "mode",
+        drive->assist_mode,
+        "blend_target",
+        drive->assist_blend_target,
+        "blend_weight",
+        drive->assist_blend_weight,
+        "reference_valid",
+        drive->assist_reference_valid,
+        "reference_steering_rad",
+        drive->assist_reference_steering_rad,
+        "reference_accel_mps2",
+        drive->assist_reference_accel_mps2,
+        "human_steering_rad",
+        human_rad,
+        "commanded_steering_rad",
+        assisted_steering_angle(drive, human_rad));
+}
+
 static PyObject *vec_set_substepping(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 3) {
         PyErr_SetString(PyExc_TypeError, "vec_set_substepping requires 3 arguments (vec_env, mode, substeps)");
@@ -1273,6 +1328,10 @@ static int unpack_coef_array(PyObject *obj, const char *name, float **out) {
         PyErr_Format(PyExc_ValueError, "%s must be %d float32 values", name, NUM_REWARD_COEFS);
         return -1;
     }
+    if (!PyArray_IS_C_CONTIGUOUS(array) || !PyArray_ISWRITEABLE(array)) {
+        PyErr_Format(PyExc_ValueError, "%s must be a C-contiguous, writeable array", name);
+        return -1;
+    }
     *out = (float *) PyArray_DATA(array);
     return 0;
 }
@@ -1295,8 +1354,10 @@ static PyObject *vec_set_reward_coef_bounds(PyObject *self, PyObject *args) {
         if (c_set_reward_coef_bounds((Drive *) vec->envs[i], min_values, max_values) != 0) {
             PyErr_SetString(
                 PyExc_ValueError,
-                "vec_set_reward_coef_bounds: a bound is non-finite, inverted, or outside the policy's trained "
-                "window; outside it the conditioning signal saturates and the level would do nothing");
+                "vec_set_reward_coef_bounds: reward_randomization is off, or a bound is non-finite, inverted, "
+                "outside the policy's trained window (the conditioning would saturate), or narrows a "
+                "coefficient the sampler never reads (velocity, timestep, throttle, steer, acc, or goal speed "
+                "without goal_speed_randomization) -- any of which would make the level silently do nothing");
             return NULL;
         }
     }
@@ -1471,8 +1532,9 @@ static PyObject *vec_get_human_state(PyObject *self, PyObject *args) {
         Py_RETURN_NONE;
     }
     Agent *agent = &drive->agents[agent_idx];
+    float lane_speed_limit_mps = lane_speed_limit_target(drive, agent);
     return Py_BuildValue(
-        "{s:i,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:i,s:i,s:i,s:i,s:i,s:i}",
+        "{s:i,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:i,s:i,s:i,s:i,s:i,s:i,s:f,s:f,s:f,s:f,s:i}",
         "agent_idx",
         agent_idx,
         "sim_x",
@@ -1510,7 +1572,17 @@ static PyObject *vec_get_human_state(PyObject *self, PyObject *args) {
         "gearbox_mode",
         drive->human_gearbox_mode,
         "engine_stalled",
-        drive->human_engine_stalled);
+        drive->human_engine_stalled,
+        "lane_speed_limit_mps",
+        lane_speed_limit_mps,
+        "overspeed_tolerance_mps",
+        drive->overspeed_tolerance_mps,
+        "goal_x",
+        agent->current_goal_x + drive->world_mean_x,
+        "goal_y",
+        agent->current_goal_y + drive->world_mean_y,
+        "goal_idx",
+        agent->current_goal_idx);
 }
 
 static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {
@@ -1543,6 +1615,34 @@ static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {
             "vec_set_traffic_light_states: timestep outside the light state buffer or invalid state");
         return NULL;
     }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_get_traffic_light_states(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_traffic_light_states requires 2 arguments (vec_env, out)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    PyObject *out_arr = PyTuple_GetItem(args, 1);
+    if (!PyArray_Check(out_arr) || PyArray_TYPE((PyArrayObject *) out_arr) != NPY_INT32
+        || !PyArray_IS_C_CONTIGUOUS((PyArrayObject *) out_arr) || !PyArray_ISWRITEABLE((PyArrayObject *) out_arr)) {
+        PyErr_SetString(PyExc_TypeError, "out must be a writeable, C-contiguous int32 NumPy array");
+        return NULL;
+    }
+    Drive *drive = (Drive *) vec->envs[0];
+    if ((int) PyArray_SIZE((PyArrayObject *) out_arr) != drive->num_traffic_elements) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "vec_get_traffic_light_states: expected %d slots (one per traffic element), got %d",
+            drive->num_traffic_elements,
+            (int) PyArray_SIZE((PyArrayObject *) out_arr));
+        return NULL;
+    }
+    c_get_traffic_light_states(drive, (int *) PyArray_DATA((PyArrayObject *) out_arr));
     Py_RETURN_NONE;
 }
 
@@ -1955,6 +2055,8 @@ static PyMethodDef methods[]
         vec_set_human_input,
         METH_VARARGS,
         "Set the human car's steering_norm and longitudinal acceleration (wheel demo, env 0)"},
+       {"vec_set_assist_mode", vec_set_assist_mode, METH_VARARGS, "Steering assist mode and blend target (wheel demo)"},
+       {"vec_get_assist_state", vec_get_assist_state, METH_VARARGS, "Steering assist reference and blend (wheel demo)"},
        {"vec_set_human_grip_mode",
         vec_set_human_grip_mode,
         METH_VARARGS,
@@ -2004,6 +2106,10 @@ static PyMethodDef methods[]
         vec_get_human_state,
         METH_VARARGS,
         "Human car pose/dynamics for the HUD, or None when nobody is driving (wheel demo, env 0)"},
+       {"vec_get_traffic_light_states",
+        vec_get_traffic_light_states,
+        METH_VARARGS,
+        "Write every traffic element's current state into an int32 array"},
        {"vec_set_traffic_light_states",
         vec_set_traffic_light_states,
         METH_VARARGS,
@@ -2115,6 +2221,12 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddObject(m, "ENGINE_IDLE_RPM", PyFloat_FromDouble(ENGINE_IDLE_RPM));
     PyModule_AddObject(m, "CLUTCH_ENGAGE_FRACTION", PyFloat_FromDouble(CLUTCH_ENGAGE_FRACTION));
     PyModule_AddIntConstant(m, "GRIP_MODE_REALISTIC", GRIP_MODE_REALISTIC);
+    PyModule_AddIntConstant(m, "ASSIST_MODE_OFF", ASSIST_MODE_OFF);
+    PyModule_AddIntConstant(m, "ASSIST_MODE_DISPLAY", ASSIST_MODE_DISPLAY);
+    PyModule_AddIntConstant(m, "ASSIST_MODE_BLEND", ASSIST_MODE_BLEND);
+    PyModule_AddIntConstant(m, "ASSIST_MODE_NUDGE", ASSIST_MODE_NUDGE);
+    PyModule_AddIntConstant(m, "ASSIST_MODE_FULL", ASSIST_MODE_FULL);
+    PyModule_AddObject(m, "ASSIST_RAMP_SECONDS", PyFloat_FromDouble(ASSIST_RAMP_SECONDS));
     PyModule_AddIntConstant(m, "CONTROLLER_HUMAN", CONTROLLER_HUMAN);
     PyModule_AddObject(m, "HUMAN_WHEEL_RANGE_DEG", PyFloat_FromDouble(HUMAN_WHEEL_RANGE_DEG));
     PyModule_AddObject(m, "HUMAN_STEERING_LIMIT_RAD", PyFloat_FromDouble(HUMAN_STEERING_LIMIT_RAD));

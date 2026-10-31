@@ -12,6 +12,7 @@ gone down the wire, and assert the wheel gets pushed back TOWARDS CENTRE. An inv
 fails these tests.
 """
 
+import inspect
 import math
 import os
 import threading
@@ -22,10 +23,14 @@ import pytest
 
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
+from pufferlib.wheel_demo import ffb as ffb_module
 from pufferlib.wheel_demo.ffb import (
     ALIGN_TORQUE_GAIN,
-    CENTRING_GAIN,
-    CENTRING_SPEED_MPS,
+    ASSIST_FULL_FORCE,
+    ASSIST_FULL_FULL_ERROR_FRACTION,
+    ASSIST_NUDGE_FORCE,
+    ASSIST_NUDGE_FULL_ERROR_FRACTION,
+    DEFAULT_FORCE_GAIN,
     DAMPING_GAIN,
     DEVICE_FORCE_FULL_SCALE,
     FORCE_LIMIT,
@@ -37,6 +42,8 @@ from pufferlib.wheel_demo.ffb import (
     IMPACT_FORCE,
     IMPACT_WINDOW_SECONDS,
     OFFROAD_RUMBLE_FORCE,
+    OFFROAD_RUMBLE_MIN_SPEED_MPS,
+    STEADY_FORCE_LIMIT,
     CarFeel,
     ForceFeedbackLoop,
     G920ForceFeedback,
@@ -44,6 +51,7 @@ from pufferlib.wheel_demo.ffb import (
     centring_spring,
     compute_force,
     grip_utilisation,
+    saturated_grip_factor,
     self_aligning_torque,
 )
 from pufferlib.wheel_demo.loop import WheelDemoLoop
@@ -97,9 +105,8 @@ def sign_of(value):
 
 
 # ---------------------------------------------------------------------------------------------
-# Fake hardware. The class opens hid inside start(), so the interception is: swap hid.device for a
-# recorder and stub the two g920 helpers start() imports. No module code is edited and no HID
-# device is ever opened.
+# Fake hardware. start() opens whatever g920.hid_module() returns, so the interception is: swap
+# hid_module for a recorder and stub the g920 helpers start() imports. No HID device is ever opened.
 # ---------------------------------------------------------------------------------------------
 
 
@@ -140,6 +147,16 @@ class FakeHidDevice:
         return [f for f in self.written if f[0] == HIDPP_REPORT_LONG and f[3] == HIDPP_FF_DOWNLOAD_EFFECT]
 
 
+class FakeHidModule:
+    """What g920.hid_module() returns: hands out the one recording device."""
+
+    def __init__(self, device):
+        self._device = device
+
+    def device(self):
+        return self._device
+
+
 def decode_device_force(frame):
     """The signed 16-bit constant-force magnitude carried by a DOWNLOAD_EFFECT frame."""
     unsigned = (frame[DOWNLOAD_FORCE_HIGH_BYTE_IDX] << 8) | frame[DOWNLOAD_FORCE_LOW_BYTE_IDX]
@@ -149,12 +166,10 @@ def decode_device_force(frame):
 @pytest.fixture
 def fake_wheel(monkeypatch):
     """A started G920ForceFeedback whose transport is a recorder, via the real start() path."""
-    import hid
-
     from pufferlib.wheel_demo.input import g920
 
     device = FakeHidDevice()
-    monkeypatch.setattr(hid, "device", lambda: device)
+    monkeypatch.setattr(g920, "hid_module", lambda: FakeHidModule(device))
     monkeypatch.setattr(g920, "set_darwin_non_exclusive", lambda: None)
     monkeypatch.setattr(g920, "find_g920_interfaces", lambda: {"vendor": [b"fake-vendor-path"], "axes": b"fake-axes"})
     output = G920ForceFeedback(force_gain=TEST_FORCE_GAIN).start()
@@ -162,17 +177,41 @@ def fake_wheel(monkeypatch):
     output.stop()
 
 
+def sim_assist_state(mode=binding.ASSIST_MODE_OFF, reference_valid=0, reference_steering_rad=0.0):
+    """What env.get_assist_state() reports, in SIM signs: positive = LEFT."""
+    return {
+        "mode": mode,
+        "blend_target": 0.0,
+        "blend_weight": 0.0,
+        "reference_valid": reference_valid,
+        "reference_steering_rad": reference_steering_rad,
+        "reference_accel_mps2": 0.0,
+        "human_steering_rad": 0.0,
+        "commanded_steering_rad": 0.0,
+    }
+
+
 class FakeHumanEnv:
     """Stands in for the Drive env: returns one fixed SIM-convention human state."""
 
-    def __init__(self, human_state):
+    def __init__(self, human_state, assist_state=None):
         self.human_state = human_state
+        self.assist_state = assist_state if assist_state is not None else sim_assist_state()
 
     def get_human_state(self):
         return self.human_state
 
+    def get_assist_state(self):
+        return self.assist_state
 
-def sim_human_state(steering_angle_rad, accel_lat_mps2, speed_mps, collision=0.0, offroad=0.0):
+
+def sim_human_state(
+    steering_angle_rad,
+    accel_lat_mps2,
+    speed_mps,
+    collision=0.0,
+    offroad=0.0,
+):
     """A human state in the signs the sim actually reports: positive = LEFT."""
     return {
         "steering_angle_rad": steering_angle_rad,
@@ -183,23 +222,23 @@ def sim_human_state(steering_angle_rad, accel_lat_mps2, speed_mps, collision=0.0
     }
 
 
-def feel_from_sim_state(human_state):
+def feel_from_sim_state(human_state, assist_state=None):
     """Run the real WheelDemoLoop.car_feel over a fake env, with the steering rate settled to zero.
 
     car_feel is called twice so the second call differences the same angle against itself: the rate
     term then cannot mask the steering and lateral-acceleration signs this suite is pinning.
     """
     loop = WheelDemoLoop.__new__(WheelDemoLoop)
-    loop.env = FakeHumanEnv(human_state)
+    loop.env = FakeHumanEnv(human_state, assist_state)
     loop._last_steering_angle_rad = 0.0
     loop._last_feel_time_s = time.perf_counter()
     loop.car_feel()
     return loop.car_feel()
 
 
-def device_force_for_sim_state(output, device, human_state):
+def device_force_for_sim_state(output, device, human_state, assist_state=None):
     before = len(device.download_frames())
-    output.send(compute_force(feel_from_sim_state(human_state), STEERING_LIMIT_RAD))
+    output.send(compute_force(feel_from_sim_state(human_state, assist_state), STEERING_LIMIT_RAD))
     frames = device.download_frames()
     assert len(frames) == before + 1
     return decode_device_force(frames[-1])
@@ -237,7 +276,7 @@ def test_cornering_pushes_the_wheel_back_towards_centre(fake_wheel, turn):
 
 @pytest.mark.parametrize("turn", [SIM_LEFT, SIM_RIGHT], ids=["steered_left", "steered_right"])
 def test_parking_speed_self_centres_the_wheel(fake_wheel, turn):
-    """Below CENTRING_SPEED_MPS there is no lateral force, so this pins the steering sign alone."""
+    """At parking speed there is no lateral force, so this pins the steering sign alone."""
     output, device = fake_wheel
     human_state = sim_human_state(
         steering_angle_rad=turn * HELD_STEERING_RAD,
@@ -259,6 +298,33 @@ def test_straight_car_with_centred_wheel_sends_zero_force(fake_wheel):
 
 def test_straight_car_with_centred_wheel_computes_zero_force():
     assert compute_force(feel_from_sim_state(sim_human_state(0.0, 0.0, CORNERING_SPEED_MPS)), STEERING_LIMIT_RAD) == 0.0
+
+
+# Light enough that the spring stays below its saturation point and leaves the clamp headroom.
+LIGHT_STEERING_RAD = 0.02
+NOMINAL_WHEELBASE_M = 2.8
+
+
+@pytest.mark.parametrize("turn", [SIM_LEFT, SIM_RIGHT], ids=["left", "right"])
+def test_wheel_goes_light_once_the_front_lets_go_with_a_light_hand(fake_wheel, turn):
+    output, device = fake_wheel
+    at_limit = sim_human_state(turn * LIGHT_STEERING_RAD, turn * TIRE_GRIP_MPS2, CORNERING_SPEED_MPS)
+    past_limit = sim_human_state(turn * LIGHT_STEERING_RAD, turn * 1.5 * TIRE_GRIP_MPS2, CORNERING_SPEED_MPS)
+
+    force_at_limit = device_force_for_sim_state(output, device, at_limit)
+    force_past_limit = device_force_for_sim_state(output, device, past_limit)
+
+    assert abs(force_past_limit) < abs(force_at_limit)
+    assert wheel_push_direction(force_past_limit) == -driver_wheel_direction(turn * LIGHT_STEERING_RAD)
+
+
+@pytest.mark.parametrize("speed_mps", [8.0, 10.0, 15.0])
+def test_grip_loss_cue_survives_the_steering_a_real_corner_needs(speed_mps):
+    """Kinematic steering for a corner at the grip limit; past it the wheel must weigh less."""
+    steering_rad = math.atan(NOMINAL_WHEELBASE_M * TIRE_GRIP_MPS2 / speed_mps**2)
+    at_limit = CarFeel(steering_angle_rad=steering_rad, speed_mps=speed_mps, accel_lat_mps2=TIRE_GRIP_MPS2)
+    past_limit = replace(at_limit, accel_lat_mps2=1.5 * TIRE_GRIP_MPS2)
+    assert abs(compute_force(past_limit, STEERING_LIMIT_RAD)) < abs(compute_force(at_limit, STEERING_LIMIT_RAD))
 
 
 @pytest.mark.parametrize("turn", [SIM_LEFT, SIM_RIGHT], ids=["left", "right"])
@@ -303,12 +369,10 @@ def test_start_resolves_the_feature_index_and_opens_one_effect(fake_wheel):
 
 
 def test_stop_closes_the_device(monkeypatch):
-    import hid
-
     from pufferlib.wheel_demo.input import g920
 
     device = FakeHidDevice()
-    monkeypatch.setattr(hid, "device", lambda: device)
+    monkeypatch.setattr(g920, "hid_module", lambda: FakeHidModule(device))
     monkeypatch.setattr(g920, "set_darwin_non_exclusive", lambda: None)
     monkeypatch.setattr(g920, "find_g920_interfaces", lambda: {"vendor": [b"fake-vendor-path"]})
     G920ForceFeedback().start().stop()
@@ -385,78 +449,456 @@ def test_grip_utilisation_is_one_at_the_limit():
 
 
 # ---------------------------------------------------------------------------------------------
-# 3. centring_spring.
+# 3. The force model, pinned against an independent transcription of the contract.
 # ---------------------------------------------------------------------------------------------
 
+CONTRACT_ALIGN_TORQUE_GAIN = 0.55
+CONTRACT_GRIP_FALLOFF = 0.55
+CONTRACT_CENTRING_PEAK_FORCE = 0.7
+CONTRACT_CENTRING_SATURATION_FRACTION = 0.2
+CONTRACT_CENTRING_AT_SPEED_FRACTION = 0.3
+CONTRACT_CENTRING_FADE_SPEED_MPS = 10.0
+CONTRACT_DAMPING_GAIN = 0.10
+CONTRACT_STEADY_FORCE_LIMIT = 0.75
+CONTRACT_NUDGE_FORCE = 0.35
+CONTRACT_NUDGE_FULL_ERROR_FRACTION = 0.15
+CONTRACT_FULL_FORCE = 0.75
+CONTRACT_FULL_FULL_ERROR_FRACTION = 0.04
+CONTRACT_OFFROAD_RUMBLE_FORCE = 0.22
+CONTRACT_OFFROAD_RUMBLE_HZ = 22.0
+CONTRACT_OFFROAD_RUMBLE_MIN_SPEED_MPS = 0.5
+CONTRACT_DEFAULT_FORCE_GAIN = 0.7
+CENTRING_SPEEDS_MPS = (0.0, 1.0, 6.0, 12.0, 30.0, 60.0, -10.0)
+FULL_LOCK_RAD = STEERING_LIMIT_RAD
+# sin(2 pi f t) peaks at a quarter period and troughs at three quarters
+RUMBLE_PEAK_ELAPSED_S = 1.0 / (4.0 * CONTRACT_OFFROAD_RUMBLE_HZ)
+RUMBLE_TROUGH_ELAPSED_S = 3.0 / (4.0 * CONTRACT_OFFROAD_RUMBLE_HZ)
 
-def test_centring_spring_is_at_full_strength_at_rest():
-    assert centring_spring(STEERING_LIMIT_RAD, 0.0, STEERING_LIMIT_RAD) == pytest.approx(-CENTRING_GAIN)
-    assert centring_spring(-STEERING_LIMIT_RAD, 0.0, STEERING_LIMIT_RAD) == pytest.approx(CENTRING_GAIN)
+
+def contract_clamp(value, limit=1.0):
+    return max(-limit, min(limit, value))
 
 
-@pytest.mark.parametrize("speed", [CENTRING_SPEED_MPS, CENTRING_SPEED_MPS + 1.0, 30.0, -30.0])
-def test_centring_spring_has_faded_out_by_the_centring_speed(speed):
-    assert centring_spring(STEERING_LIMIT_RAD, speed, STEERING_LIMIT_RAD) == 0.0
+def contract_grip_factor(utilisation):
+    return 1.0 if utilisation <= 1.0 else max(0.0, 1.0 - CONTRACT_GRIP_FALLOFF * (utilisation - 1.0))
 
 
-def test_centring_spring_fades_monotonically_with_speed():
-    speeds = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, CENTRING_SPEED_MPS]
-    magnitudes = [abs(centring_spring(STEERING_LIMIT_RAD, s, STEERING_LIMIT_RAD)) for s in speeds]
+def contract_steady(feel, limit_rad):
+    utilisation = abs(feel.accel_lat_mps2) / feel.tire_grip_mps2
+    grip = contract_grip_factor(utilisation)
+    align_magnitude = utilisation if utilisation <= 1.0 else grip
+    steady = -math.copysign(CONTRACT_ALIGN_TORQUE_GAIN * align_magnitude, feel.accel_lat_mps2)
+    speed_scale = 1.0 - min(1.0, abs(feel.speed_mps) / CONTRACT_CENTRING_FADE_SPEED_MPS) * (
+        1.0 - CONTRACT_CENTRING_AT_SPEED_FRACTION
+    )
+    full = feel.assist_full and feel.assist_target_steering_rad is not None
+    spring_centre_rad = feel.assist_target_steering_rad if full else 0.0
+    steady += (
+        -CONTRACT_CENTRING_PEAK_FORCE
+        * speed_scale
+        * grip
+        * contract_clamp(
+            (feel.steering_angle_rad - spring_centre_rad) / (CONTRACT_CENTRING_SATURATION_FRACTION * limit_rad)
+        )
+    )
+    steady += -CONTRACT_DAMPING_GAIN * feel.steering_rate_rad_s
+    if feel.assist_target_steering_rad is not None:
+        pull = CONTRACT_FULL_FORCE if full else CONTRACT_NUDGE_FORCE
+        full_error_fraction = CONTRACT_FULL_FULL_ERROR_FRACTION if full else CONTRACT_NUDGE_FULL_ERROR_FRACTION
+        error = (feel.assist_target_steering_rad - feel.steering_angle_rad) / (full_error_fraction * limit_rad)
+        steady += pull * contract_clamp(error)
+    return steady
 
-    assert all(b < a for a, b in zip(magnitudes, magnitudes[1:]))
+
+def contract_force(feel, limit_rad, impact_age_s=None, elapsed_s=0.0):
+    steady = contract_steady(feel, limit_rad)
+    force = CONTRACT_STEADY_FORCE_LIMIT * math.tanh(steady / CONTRACT_STEADY_FORCE_LIMIT)
+    if feel.offroad and abs(feel.speed_mps) > CONTRACT_OFFROAD_RUMBLE_MIN_SPEED_MPS:
+        force += CONTRACT_OFFROAD_RUMBLE_FORCE * math.sin(2.0 * math.pi * CONTRACT_OFFROAD_RUMBLE_HZ * elapsed_s)
+    if impact_age_s is not None and impact_age_s >= 0.0:
+        direction = -1.0 if steady > 0.0 else 1.0
+        force += direction * IMPACT_FORCE * math.exp(-IMPACT_DECAY_PER_SECOND * impact_age_s)
+    return contract_clamp(force)
+
+
+def test_force_model_constants_match_the_contract():
+    assert ALIGN_TORQUE_GAIN == CONTRACT_ALIGN_TORQUE_GAIN
+    assert GRIP_FALLOFF == CONTRACT_GRIP_FALLOFF
+    assert STEADY_FORCE_LIMIT == CONTRACT_STEADY_FORCE_LIMIT
+    assert ASSIST_NUDGE_FORCE == CONTRACT_NUDGE_FORCE
+    assert ASSIST_NUDGE_FULL_ERROR_FRACTION == CONTRACT_NUDGE_FULL_ERROR_FRACTION
+    assert ASSIST_FULL_FORCE == CONTRACT_FULL_FORCE
+    assert ASSIST_FULL_FULL_ERROR_FRACTION == CONTRACT_FULL_FULL_ERROR_FRACTION
+    assert DAMPING_GAIN == CONTRACT_DAMPING_GAIN
+    assert OFFROAD_RUMBLE_FORCE == CONTRACT_OFFROAD_RUMBLE_FORCE
+    assert DEFAULT_FORCE_GAIN == CONTRACT_DEFAULT_FORCE_GAIN
+
+
+def test_the_overspeed_haptic_is_gone():
+    assert not [name for name in dir(ffb_module) if "OVERSPEED" in name.upper()]
+    assert not hasattr(ffb_module, "speed_excess_mps")
+    assert {field for field in CarFeel.__dataclass_fields__} == {
+        "steering_angle_rad",
+        "steering_rate_rad_s",
+        "speed_mps",
+        "accel_lat_mps2",
+        "tire_grip_mps2",
+        "collision",
+        "offroad",
+        "assist_target_steering_rad",
+        "assist_full",
+    }
+    assert CarFeel().assist_full is False
+
+
+def test_speeding_no_longer_moves_the_wheel():
+    for speed in (5.0, 30.0, 60.0):
+        assert rumble_samples(CarFeel(speed_mps=speed)) == [0.0] * RUMBLE_SAMPLE_COUNT
+
+
+@pytest.mark.parametrize(
+    "utilisation,expected",
+    [(0.0, 1.0), (0.5, 1.0), (1.0, 1.0), (1.5, 1.0 - 0.55 * 0.5), (2.0, 0.45), (1.0 + 1.0 / 0.55, 0.0), (9.0, 0.0)],
+)
+def test_saturated_grip_factor_follows_the_contract(utilisation, expected):
+    assert saturated_grip_factor(utilisation) == pytest.approx(expected, abs=1e-12)
+
+
+def test_centring_spring_takes_speed_and_grip():
+    assert list(inspect.signature(centring_spring).parameters) == [
+        "steering_angle_rad",
+        "steering_limit_rad",
+        "speed_mps",
+        "grip_factor",
+    ]
+
+
+@pytest.mark.parametrize("speed", CENTRING_SPEEDS_MPS)
+@pytest.mark.parametrize("lock_fraction", [-1.7, -1.0, -0.2, -0.13, -0.02, 0.0, 0.05, 0.1, 0.2, 0.5, 1.0, 1.7])
+@pytest.mark.parametrize("grip_factor", [1.0, 0.6, 0.0])
+def test_centring_spring_follows_the_contract(speed, lock_fraction, grip_factor):
+    angle = lock_fraction * STEERING_LIMIT_RAD
+    speed_scale = 1.0 - min(1.0, abs(speed) / CONTRACT_CENTRING_FADE_SPEED_MPS) * (1.0 - CONTRACT_CENTRING_AT_SPEED_FRACTION)
+    expected = (
+        -CONTRACT_CENTRING_PEAK_FORCE
+        * speed_scale
+        * grip_factor
+        * contract_clamp(lock_fraction / CONTRACT_CENTRING_SATURATION_FRACTION)
+    )
+    assert centring_spring(angle, STEERING_LIMIT_RAD, speed, grip_factor) == pytest.approx(expected, abs=1e-12)
+
+
+def test_centring_spring_is_full_at_rest_and_eases_to_its_at_speed_share():
+    at_rest = centring_spring(STEERING_LIMIT_RAD, STEERING_LIMIT_RAD, 0.0, 1.0)
+    at_speed = centring_spring(STEERING_LIMIT_RAD, STEERING_LIMIT_RAD, CONTRACT_CENTRING_FADE_SPEED_MPS, 1.0)
+    beyond = centring_spring(STEERING_LIMIT_RAD, STEERING_LIMIT_RAD, 3.0 * CONTRACT_CENTRING_FADE_SPEED_MPS, 1.0)
+    assert at_rest == pytest.approx(-CONTRACT_CENTRING_PEAK_FORCE)
+    assert at_speed == pytest.approx(-CONTRACT_CENTRING_PEAK_FORCE * CONTRACT_CENTRING_AT_SPEED_FRACTION)
+    assert beyond == at_speed
+    speeds = [0.5 * i for i in range(30)]
+    magnitudes = [abs(centring_spring(0.3, STEERING_LIMIT_RAD, s, 1.0)) for s in speeds]
+    assert all(later <= earlier for earlier, later in zip(magnitudes, magnitudes[1:]))
 
 
 @pytest.mark.parametrize("angle", [0.05, 0.2, 0.55, 1.0])
 def test_centring_spring_opposes_the_steering_angle(angle):
-    assert sign_of(centring_spring(angle, 0.0, STEERING_LIMIT_RAD)) == -1
-    assert sign_of(centring_spring(-angle, 0.0, STEERING_LIMIT_RAD)) == +1
-
-
-def test_centring_spring_is_zero_at_centre():
-    assert centring_spring(0.0, 0.0, STEERING_LIMIT_RAD) == 0.0
+    assert sign_of(centring_spring(angle, STEERING_LIMIT_RAD, 5.0, 1.0)) == -1
+    assert sign_of(centring_spring(-angle, STEERING_LIMIT_RAD, 5.0, 1.0)) == +1
 
 
 @pytest.mark.parametrize("limit", [0.0, -0.55])
 def test_centring_spring_rejects_non_positive_steering_limit(limit):
     with pytest.raises(ValueError):
-        centring_spring(0.1, 0.0, limit)
+        centring_spring(0.1, limit, 0.0, 1.0)
 
 
-# ---------------------------------------------------------------------------------------------
-# 4. compute_force.
-# ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("turn", [SIM_LEFT, SIM_RIGHT], ids=["steered_left", "steered_right"])
+def test_motorway_speed_still_self_centres_the_wheel(fake_wheel, turn):
+    """The spring eases with speed but never vanishes, so a held wheel is pulled back at any speed."""
+    output, device = fake_wheel
+    human_state = sim_human_state(steering_angle_rad=turn * HELD_STEERING_RAD, accel_lat_mps2=0.0, speed_mps=25.0)
+    device_force = device_force_for_sim_state(output, device, human_state)
+
+    assert wheel_push_direction(device_force) == -driver_wheel_direction(turn * HELD_STEERING_RAD)
 
 
-def test_compute_force_stays_inside_the_device_range_across_a_wide_sweep():
-    checked = 0
+def contract_sweep_feels():
     for speed in (0.0, 0.4, 3.0, 12.0, 30.0, 60.0):
         for accel_lat in (-40.0, -17.0, -8.5, -2.0, 0.0, 2.0, 8.5, 17.0, 40.0):
             for steering in (-1.2, -0.55, -0.1, 0.0, 0.1, 0.55, 1.2):
                 for steering_rate in (-40.0, -5.0, 0.0, 5.0, 40.0):
-                    for offroad in (False, True):
-                        feel = CarFeel(
-                            steering_angle_rad=steering,
-                            steering_rate_rad_s=steering_rate,
-                            speed_mps=speed,
-                            accel_lat_mps2=accel_lat,
-                            tire_grip_mps2=TIRE_GRIP_MPS2,
-                            offroad=offroad,
-                        )
-                        for impact_age in (None, 0.0, 0.05, 1.0):
-                            force = compute_force(feel, STEERING_LIMIT_RAD, impact_age_s=impact_age, elapsed_s=0.013)
-                            assert not math.isnan(force)
-                            assert -FORCE_LIMIT <= force <= FORCE_LIMIT
-                            checked += 1
+                    for nudge_target, assist_full in ((None, False), (None, True), (-0.6, False), (0.0, False),
+                                                      (0.3, False), (-0.6, True), (0.0, True), (0.3, True)):
+                        for offroad in (False, True):
+                            yield CarFeel(
+                                assist_full=assist_full,
+                                steering_angle_rad=steering,
+                                steering_rate_rad_s=steering_rate,
+                                speed_mps=speed,
+                                accel_lat_mps2=accel_lat,
+                                tire_grip_mps2=TIRE_GRIP_MPS2,
+                                offroad=offroad,
+                                assist_target_steering_rad=nudge_target,
+                            )
+
+
+def test_compute_force_matches_the_contract_model_everywhere():
+    checked = 0
+    for feel in contract_sweep_feels():
+        for impact_age in (None, 0.0, 0.05):
+            for elapsed in (0.0, RUMBLE_PEAK_ELAPSED_S, 0.013):
+                expected = contract_force(feel, STEERING_LIMIT_RAD, impact_age_s=impact_age, elapsed_s=elapsed)
+                actual = compute_force(feel, STEERING_LIMIT_RAD, impact_age_s=impact_age, elapsed_s=elapsed)
+                assert actual == pytest.approx(expected, abs=1e-12)
+                checked += 1
+    assert checked > 50_000
+
+
+def test_compute_force_stays_inside_the_device_range_across_a_wide_sweep():
+    checked = 0
+    for feel in contract_sweep_feels():
+        for impact_age in (None, 0.0, 0.05, 1.0):
+            force = compute_force(feel, STEERING_LIMIT_RAD, impact_age_s=impact_age, elapsed_s=0.013)
+            assert not math.isnan(force)
+            assert -FORCE_LIMIT <= force <= FORCE_LIMIT
+            checked += 1
     assert checked > 10_000
+
+
+def test_steady_force_never_reaches_the_soft_limit():
+    for feel in contract_sweep_feels():
+        if feel.offroad:
+            continue
+        assert abs(compute_force(feel, STEERING_LIMIT_RAD)) < STEADY_FORCE_LIMIT
+
+
+@pytest.mark.parametrize("speed_mps", [5.0, 10.0, 20.0, 30.0])
+@pytest.mark.parametrize("lock_fraction", [0.05, 0.3, 1.0])
+@pytest.mark.parametrize("turn", [SIM_LEFT, SIM_RIGHT], ids=["left", "right"])
+def test_grip_loss_lightens_a_held_wheel_monotonically(speed_mps, lock_fraction, turn):
+    """Past the limit, more demand must never feel heavier, even with the wheel held at lock."""
+    steering_rad = -turn * lock_fraction * STEERING_LIMIT_RAD
+    utilisations = [1.0 + 0.05 * i for i in range(60)]
+    forces = [
+        compute_force(
+            CarFeel(
+                steering_angle_rad=steering_rad,
+                speed_mps=speed_mps,
+                accel_lat_mps2=-turn * u * TIRE_GRIP_MPS2,
+                tire_grip_mps2=TIRE_GRIP_MPS2,
+            ),
+            STEERING_LIMIT_RAD,
+        )
+        for u in utilisations
+    ]
+    magnitudes = [abs(force) for force in forces]
+    gone_idx = next(i for i, u in enumerate(utilisations) if contract_grip_factor(u) == 0.0)
+    assert all(later < earlier for earlier, later in zip(magnitudes[: gone_idx + 1], magnitudes[1 : gone_idx + 1]))
+    assert all(magnitude == pytest.approx(0.0, abs=1e-12) for magnitude in magnitudes[gone_idx:])
+    assert magnitudes[0] - magnitudes[int(0.5 / 0.05)] > 0.05
+    assert all(sign_of(force) in (0, turn) for force in forces)
+
+
+@pytest.mark.parametrize("speed_mps", [2.0, 20.0])
+@pytest.mark.parametrize("driver_norm", [+1, -1], ids=["holding_right", "holding_left"])
+def test_offroad_rumble_keeps_full_peak_to_peak_at_full_lock(speed_mps, driver_norm):
+    loaded = CarFeel(
+        steering_angle_rad=driver_norm * FULL_LOCK_RAD,
+        speed_mps=speed_mps,
+        accel_lat_mps2=driver_norm * TIRE_GRIP_MPS2,
+        offroad=True,
+        steering_rate_rad_s=driver_norm * 3.0,
+    )
+    on_road = replace(loaded, offroad=False)
+    peak = compute_force(loaded, STEERING_LIMIT_RAD, elapsed_s=RUMBLE_PEAK_ELAPSED_S)
+    trough = compute_force(loaded, STEERING_LIMIT_RAD, elapsed_s=RUMBLE_TROUGH_ELAPSED_S)
+    steady = compute_force(on_road, STEERING_LIMIT_RAD)
+    assert abs(steady) > 0.5
+    assert peak - trough == pytest.approx(2.0 * CONTRACT_OFFROAD_RUMBLE_FORCE, abs=1e-9)
+    assert peak - steady == pytest.approx(CONTRACT_OFFROAD_RUMBLE_FORCE, abs=1e-9)
+
+
+@pytest.mark.parametrize("driver_norm", [+1, -1], ids=["holding_right", "holding_left"])
+def test_impact_jolt_is_felt_in_full_with_the_wheel_loaded_at_lock(driver_norm):
+    loaded = CarFeel(
+        steering_angle_rad=driver_norm * FULL_LOCK_RAD,
+        speed_mps=CORNERING_SPEED_MPS,
+        accel_lat_mps2=driver_norm * TIRE_GRIP_MPS2,
+    )
+    steady = compute_force(loaded, STEERING_LIMIT_RAD)
+    struck = compute_force(loaded, STEERING_LIMIT_RAD, impact_age_s=0.0)
+    assert abs(steady) > 0.5
+    assert struck - steady == pytest.approx(-sign_of(steady) * IMPACT_FORCE, abs=1e-12)
+    assert sign_of(struck) == -sign_of(steady)
+
+
+NUDGE_SPEED_MPS = 10.0
+
+
+def nudge_only(target_rad, current_rad=0.0):
+    """The nudge's share of the steady force: the same car with and without a target."""
+    with_target = CarFeel(steering_angle_rad=current_rad, speed_mps=NUDGE_SPEED_MPS, assist_target_steering_rad=target_rad)
+    steady_with = contract_steady(with_target, STEERING_LIMIT_RAD)
+    steady_without = contract_steady(replace(with_target, assist_target_steering_rad=None), STEERING_LIMIT_RAD)
+    return compute_force(with_target, STEERING_LIMIT_RAD), steady_with - steady_without
+
+
+def test_no_target_means_no_nudge():
+    feel = CarFeel(steering_angle_rad=0.1, speed_mps=NUDGE_SPEED_MPS)
+    assert feel.assist_target_steering_rad is None
+    assert compute_force(feel, STEERING_LIMIT_RAD) == pytest.approx(contract_force(feel, STEERING_LIMIT_RAD), abs=1e-12)
+
+
+@pytest.mark.parametrize("current_rad", [-0.3, 0.0, 0.2])
+def test_target_where_the_wheel_already_is_adds_nothing(current_rad):
+    feel = CarFeel(steering_angle_rad=current_rad, speed_mps=NUDGE_SPEED_MPS)
+    assert compute_force(replace(feel, assist_target_steering_rad=current_rad), STEERING_LIMIT_RAD) == compute_force(
+        feel, STEERING_LIMIT_RAD
+    )
+
+
+@pytest.mark.parametrize("error_share", [0.1, 0.5, 0.9])
+def test_nudge_is_linear_below_its_saturation(error_share):
+    error_rad = error_share * CONTRACT_NUDGE_FULL_ERROR_FRACTION * STEERING_LIMIT_RAD
+    _, nudge = nudge_only(error_rad)
+    assert nudge == pytest.approx(CONTRACT_NUDGE_FORCE * error_share)
+    _, nudge_left = nudge_only(-error_rad)
+    assert nudge_left == pytest.approx(-CONTRACT_NUDGE_FORCE * error_share)
+
+
+@pytest.mark.parametrize("error_multiple", [1.0, 2.0, 10.0])
+def test_nudge_saturates_at_its_force(error_multiple):
+    error_rad = error_multiple * CONTRACT_NUDGE_FULL_ERROR_FRACTION * STEERING_LIMIT_RAD
+    assert nudge_only(error_rad)[1] == pytest.approx(CONTRACT_NUDGE_FORCE)
+    assert nudge_only(-error_rad)[1] == pytest.approx(-CONTRACT_NUDGE_FORCE)
+
+
+def test_policy_wanting_further_right_pushes_clockwise():
+    """Driver terms: positive is RIGHT and a positive force turns the wheel clockwise."""
+    centred = CarFeel(speed_mps=NUDGE_SPEED_MPS)
+    wants_right = replace(centred, assist_target_steering_rad=0.2)
+    wants_left = replace(centred, assist_target_steering_rad=-0.2)
+    assert compute_force(wants_right, STEERING_LIMIT_RAD) > 0.0
+    assert compute_force(wants_left, STEERING_LIMIT_RAD) < 0.0
+
+
+def test_nudge_is_soft_limited_with_the_steady_force():
+    held_left = CarFeel(steering_angle_rad=-FULL_LOCK_RAD, speed_mps=0.0, assist_target_steering_rad=FULL_LOCK_RAD)
+    force = compute_force(held_left, STEERING_LIMIT_RAD)
+    assert force == pytest.approx(CONTRACT_STEADY_FORCE_LIMIT * math.tanh((0.7 + 0.35) / CONTRACT_STEADY_FORCE_LIMIT))
+    assert force < STEADY_FORCE_LIMIT
+
+
+def nudge_assist(reference_sim_rad, mode=binding.ASSIST_MODE_NUDGE, reference_valid=1):
+    return sim_assist_state(mode=mode, reference_valid=reference_valid, reference_steering_rad=reference_sim_rad)
+
+
+def test_car_feel_hands_the_policy_angle_over_in_driver_terms_only_when_nudging_or_full():
+    straight = sim_human_state(0.0, 0.0, NUDGE_SPEED_MPS)
+    policy_left_sim = SIM_LEFT * 0.12
+    for mode in (binding.ASSIST_MODE_NUDGE, binding.ASSIST_MODE_FULL):
+        feel = feel_from_sim_state(straight, nudge_assist(policy_left_sim, mode=mode))
+        assert feel.assist_target_steering_rad == -policy_left_sim
+        assert feel.assist_full == (mode == binding.ASSIST_MODE_FULL)
+        invalid = nudge_assist(policy_left_sim, mode=mode, reference_valid=0)
+        assert feel_from_sim_state(straight, invalid).assist_target_steering_rad is None
+    for mode in (binding.ASSIST_MODE_OFF, binding.ASSIST_MODE_DISPLAY, binding.ASSIST_MODE_BLEND):
+        feel = feel_from_sim_state(straight, nudge_assist(policy_left_sim, mode=mode))
+        assert feel.assist_target_steering_rad is None
+        assert feel.assist_full is False
+
+
+FULL_SPEEDS_MPS = (0.0, 3.0, NUDGE_SPEED_MPS, 30.0)
+FULL_TARGETS_RAD = (-0.4, -0.05, 0.0, 0.12, 0.4)
+
+
+def full_feel(target_rad, current_rad, speed_mps=NUDGE_SPEED_MPS):
+    return CarFeel(steering_angle_rad=current_rad, speed_mps=speed_mps, assist_target_steering_rad=target_rad,
+                   assist_full=True)
+
+
+@pytest.mark.parametrize("speed_mps", FULL_SPEEDS_MPS)
+@pytest.mark.parametrize("target_rad", FULL_TARGETS_RAD)
+def test_full_holds_the_wheel_at_the_target_with_zero_force(speed_mps, target_rad):
+    assert compute_force(full_feel(target_rad, target_rad, speed_mps), STEERING_LIMIT_RAD) == 0.0
+
+
+def test_full_without_a_target_is_the_plain_wheel():
+    plain = CarFeel(steering_angle_rad=0.2, speed_mps=NUDGE_SPEED_MPS)
+    assert compute_force(replace(plain, assist_full=True), STEERING_LIMIT_RAD) == compute_force(plain, STEERING_LIMIT_RAD)
+
+
+@pytest.mark.parametrize("speed_mps", FULL_SPEEDS_MPS)
+@pytest.mark.parametrize("target_rad", FULL_TARGETS_RAD)
+@pytest.mark.parametrize("offset_rad", [0.001, 0.01, 0.1, 0.5])
+def test_full_pulls_toward_the_target_from_both_sides(speed_mps, target_rad, offset_rad):
+    left_of_target = compute_force(full_feel(target_rad, target_rad - offset_rad, speed_mps), STEERING_LIMIT_RAD)
+    right_of_target = compute_force(full_feel(target_rad, target_rad + offset_rad, speed_mps), STEERING_LIMIT_RAD)
+    assert left_of_target > 0.0
+    assert right_of_target < 0.0
+
+
+@pytest.mark.parametrize("error_lock_fraction", [0.01, 0.04, 0.1, 0.3])
+@pytest.mark.parametrize("direction", [-1.0, 1.0])
+def test_full_pulls_harder_than_nudge_at_the_same_error(error_lock_fraction, direction):
+    target_rad = direction * error_lock_fraction * STEERING_LIMIT_RAD
+    full = compute_force(full_feel(target_rad, 0.0), STEERING_LIMIT_RAD)
+    nudge = compute_force(replace(full_feel(target_rad, 0.0), assist_full=False), STEERING_LIMIT_RAD)
+    assert sign_of(full) == sign_of(nudge) == sign_of(direction)
+    assert abs(full) > abs(nudge)
+
+
+@pytest.mark.parametrize("error_share", [0.25, 0.5, 1.0, 3.0])
+def test_full_pull_saturates_at_its_force_within_a_few_percent_of_lock(error_share):
+    error_rad = error_share * CONTRACT_FULL_FULL_ERROR_FRACTION * STEERING_LIMIT_RAD
+    held = CarFeel(speed_mps=NUDGE_SPEED_MPS, assist_full=True)
+    with_target = contract_steady(replace(held, assist_target_steering_rad=error_rad), STEERING_LIMIT_RAD)
+    spring_only = contract_steady(replace(held, steering_angle_rad=-error_rad), STEERING_LIMIT_RAD)
+    assert with_target - spring_only == pytest.approx(CONTRACT_FULL_FORCE * min(1.0, error_share))
+
+
+def test_full_spring_is_centred_on_the_target_not_on_zero():
+    target_rad = 0.3
+    nudge_at_target = CarFeel(steering_angle_rad=target_rad, speed_mps=NUDGE_SPEED_MPS,
+                              assist_target_steering_rad=target_rad)
+    assert compute_force(nudge_at_target, STEERING_LIMIT_RAD) < 0.0
+    assert compute_force(replace(nudge_at_target, assist_full=True), STEERING_LIMIT_RAD) == 0.0
+
+
+@pytest.mark.parametrize("turn", [SIM_LEFT, SIM_RIGHT], ids=["policy_left", "policy_right"])
+def test_full_turns_the_real_wheel_towards_the_policy(fake_wheel, turn):
+    output, device = fake_wheel
+    straight = sim_human_state(0.0, 0.0, NUDGE_SPEED_MPS)
+    full_force = device_force_for_sim_state(output, device, straight, nudge_assist(turn * 0.2, mode=binding.ASSIST_MODE_FULL))
+    nudge_force = device_force_for_sim_state(output, device, straight, nudge_assist(turn * 0.2))
+    assert wheel_push_direction(full_force) == driver_wheel_direction(turn * 0.2)
+    assert abs(full_force) > abs(nudge_force)
+
+
+@pytest.mark.parametrize("turn", [SIM_LEFT, SIM_RIGHT], ids=["policy_left", "policy_right"])
+def test_nudge_turns_the_real_wheel_towards_the_policy(fake_wheel, turn):
+    """Sim reference -> car_feel -> compute_force -> wire: the wheel moves the way the policy steers."""
+    output, device = fake_wheel
+    straight = sim_human_state(0.0, 0.0, NUDGE_SPEED_MPS)
+    device_force = device_force_for_sim_state(output, device, straight, nudge_assist(turn * 0.2))
+    assert device_force != 0
+    assert wheel_push_direction(device_force) == driver_wheel_direction(turn * 0.2)
 
 
 @pytest.mark.parametrize("steering_rate", [0.5, 2.0, 8.0])
 def test_damping_opposes_the_steering_rate(steering_rate):
     turning_one_way = compute_force(CarFeel(steering_rate_rad_s=steering_rate), STEERING_LIMIT_RAD)
     turning_the_other = compute_force(CarFeel(steering_rate_rad_s=-steering_rate), STEERING_LIMIT_RAD)
+    soft = CONTRACT_STEADY_FORCE_LIMIT * math.tanh(DAMPING_GAIN * steering_rate / CONTRACT_STEADY_FORCE_LIMIT)
 
-    assert turning_one_way == pytest.approx(-DAMPING_GAIN * steering_rate)
-    assert turning_the_other == pytest.approx(DAMPING_GAIN * steering_rate)
+    assert turning_one_way == pytest.approx(-soft)
+    assert turning_the_other == pytest.approx(soft)
+
+
+def test_offroad_threshold_is_unchanged():
+    assert OFFROAD_RUMBLE_MIN_SPEED_MPS == CONTRACT_OFFROAD_RUMBLE_MIN_SPEED_MPS
+    just_above = CarFeel(speed_mps=CONTRACT_OFFROAD_RUMBLE_MIN_SPEED_MPS + 0.01, offroad=True)
+    assert_oscillates(rumble_samples(just_above))
 
 
 def test_offroad_rumble_oscillates():
@@ -845,19 +1287,22 @@ def test_loop_adds_the_pulse_on_top_of_the_steady_force(monkeypatch):
     turning_and_struck = CarFeel(steering_rate_rad_s=2.0, speed_mps=CORNERING_SPEED_MPS, collision=True)
     sent = run_scripted_loop(monkeypatch, [turning, turning_and_struck])
 
-    assert sent[0] == pytest.approx(-DAMPING_GAIN * 2.0)
-    assert sent[1] == pytest.approx(-DAMPING_GAIN * 2.0 + IMPACT_FORCE)
+    soft_damping = -STEADY_FORCE_LIMIT * math.tanh(DAMPING_GAIN * 2.0 / STEADY_FORCE_LIMIT)
+    assert sent[0] == pytest.approx(soft_damping)
+    assert sent[1] == pytest.approx(soft_damping + IMPACT_FORCE)
 
 
 @pytest.mark.parametrize("driver_norm", [+1, -1], ids=["holding_right", "holding_left"])
-def test_impact_jolt_kicks_away_from_where_the_driver_holds_the_wheel(driver_norm):
-    """car_feel is in driver signs, so a positive steering angle is the driver holding RIGHT."""
-    feel = CarFeel(steering_angle_rad=driver_norm * HELD_STEERING_RAD, speed_mps=CORNERING_SPEED_MPS)
+@pytest.mark.parametrize("steering_rad", [LIGHT_STEERING_RAD, HELD_STEERING_RAD])
+def test_impact_jolt_kicks_against_the_steady_force(driver_norm, steering_rad):
+    """car_feel is in driver signs: a held-right wheel is centred leftwards, so the jolt kicks right."""
+    feel = CarFeel(steering_angle_rad=driver_norm * steering_rad, speed_mps=CORNERING_SPEED_MPS)
     steady = compute_force(feel, STEERING_LIMIT_RAD)
     jolt = compute_force(feel, STEERING_LIMIT_RAD, impact_age_s=0.0) - steady
 
-    assert sign_of(jolt) == -driver_norm
-    assert abs(jolt) == pytest.approx(IMPACT_FORCE)
+    assert sign_of(steady) == -driver_norm
+    assert sign_of(jolt) == driver_norm
+    assert jolt == pytest.approx(driver_norm * IMPACT_FORCE)
 
 
 def test_impact_jolt_treats_both_signed_zeroes_as_a_centred_wheel():

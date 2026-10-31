@@ -48,6 +48,8 @@ TOWN_OFFSETS = {
     "Town04": (-13.73, -10.49),
     "Town05": (49.04, 0.95),
     "Town06": (-150.93, 111.40),
+    # 2026-10-30, same grid search then calibrate_town_offset: lane-normal residual 0.005 m.
+    "Town07": (71.42, -50.67),
     "Town10HD": (8.13, 32.98),
 }
 

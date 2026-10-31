@@ -910,6 +910,15 @@ class Drive(pufferlib.PufferEnv):
         """steering_norm in [-1, 1] (full left to full right), longitudinal acceleration in m/s^2."""
         binding.vec_set_human_input(self.c_envs, float(steering_norm), float(accel_long_mps2))
 
+    def set_assist_mode(self, assist_mode, blend_target=0.0):
+        """ASSIST_MODE_OFF / DISPLAY / BLEND / NUDGE. Under BLEND the steering becomes
+        (1 - w) * yours + w * the policy's, with w easing to blend_target over ASSIST_RAMP_SECONDS."""
+        binding.vec_set_assist_mode(self.c_envs, int(assist_mode), float(blend_target))
+
+    def get_assist_state(self):
+        """The policy's reference steering/acceleration for the human car (sim sign: positive-left)."""
+        return binding.vec_get_assist_state(self.c_envs)
+
     def set_human_grip_mode(self, grip_mode):
         """GRIP_MODE_KINEMATIC follows the front wheels exactly; GRIP_MODE_REALISTIC understeers
         past the tyre limit."""
@@ -975,6 +984,11 @@ class Drive(pufferlib.PufferEnv):
     def get_human_state(self):
         """human car pose and dynamics for the HUD, or None when nobody is driving."""
         return binding.vec_get_human_state(self.c_envs)
+
+    def get_traffic_light_states(self, out):
+        """fill `out` (int32, length == num_traffic_elements) with each element's current state."""
+        binding.vec_get_traffic_light_states(self.c_envs, out)
+        return out
 
     def set_traffic_light_states(self, states):
         """override each traffic-light element's state at the current

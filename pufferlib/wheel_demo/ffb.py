@@ -8,16 +8,25 @@ lateral force, and -- crucially -- goes LIGHT once they saturate. That drop is t
 wheel can tell you the front has let go, and it is why the grip model exists at all.
 """
 
+import fcntl
 import math
+import os
+import struct
+import sys
 import threading
 import time
 from dataclasses import dataclass
 
+
 # Peak self-aligning torque, as a fraction of the device's full output, at the grip limit.
-ALIGN_TORQUE_GAIN = 0.85
-# Below this speed the aligning torque has nothing to work with, so a centring spring stands in.
-CENTRING_SPEED_MPS = 6.0
-CENTRING_GAIN = 0.28
+ALIGN_TORQUE_GAIN = 0.55
+# Saturating spring at every speed; output is this times the force gain (0.7 x 0.55 ~ 38% of full).
+CENTRING_PEAK_FORCE = 0.7
+# A quarter turn of the wheel (90 of 450 degrees) already reaches full centring.
+CENTRING_SATURATION_STEERING_FRACTION = 0.2
+# At speed the aligning torque carries the weight, so the spring eases back to this share of itself.
+CENTRING_AT_SPEED_FRACTION = 0.3
+CENTRING_FADE_SPEED_MPS = 10.0
 # Opposes rotation; without it the wheel oscillates around centre.
 DAMPING_GAIN = 0.10
 # Past the grip limit the tyre's self-aligning torque collapses rather than growing.
@@ -30,8 +39,18 @@ IMPACT_WINDOW_SECONDS = 1.0
 # Offroad is a buzz, not a push.
 OFFROAD_RUMBLE_FORCE = 0.22
 OFFROAD_RUMBLE_HZ = 22.0
+OFFROAD_RUMBLE_MIN_SPEED_MPS = 0.5
+# Assist NUDGE pulls the hands toward the policy's angle, saturating once the gap reaches this share of lock.
+ASSIST_NUDGE_FORCE = 0.35
+ASSIST_NUDGE_FULL_ERROR_FRACTION = 0.15
+# FULL is a position servo: full pull within a few percent of lock, strong enough to turn a free wheel.
+ASSIST_FULL_FORCE = 0.75
+ASSIST_FULL_FULL_ERROR_FRACTION = 0.04
 
 FORCE_LIMIT = 1.0
+# Centring, aligning torque and damping are soft-limited to this, leaving headroom so the rumble
+# and the impact jolt are still felt with the wheel loaded in a corner.
+STEADY_FORCE_LIMIT = 0.75
 
 
 @dataclass(frozen=True)
@@ -45,6 +64,10 @@ class CarFeel:
     tire_grip_mps2: float = 8.5
     collision: bool = False
     offroad: bool = False
+    # Steering assist: the policy's road-wheel angle in driver terms, or None when the assist is not steering.
+    assist_target_steering_rad: float = None
+    # FULL turns the wheel itself to the target: the spring re-centres on it and the pull is much stronger.
+    assist_full: bool = False
 
 
 def _clamp(value, limit=FORCE_LIMIT):
@@ -58,40 +81,58 @@ def grip_utilisation(accel_lat_mps2, tire_grip_mps2):
     return abs(accel_lat_mps2) / tire_grip_mps2
 
 
+def saturated_grip_factor(utilisation):
+    """1 up to the grip limit, then collapsing: a saturated front tyre stops pulling the wheel straight."""
+    if utilisation <= 1.0:
+        return 1.0
+    return max(0.0, 1.0 - GRIP_FALLOFF * (utilisation - 1.0))
+
+
 def self_aligning_torque(accel_lat_mps2, tire_grip_mps2):
     """Rises with lateral force, peaks at the limit, then falls away as the tyre saturates.
 
     The sign opposes the turn, which is what makes the wheel want to straighten itself.
     """
     utilisation = grip_utilisation(accel_lat_mps2, tire_grip_mps2)
-    if utilisation <= 1.0:
-        magnitude = utilisation
-    else:
-        magnitude = max(0.0, 1.0 - GRIP_FALLOFF * (utilisation - 1.0))
+    magnitude = utilisation if utilisation <= 1.0 else saturated_grip_factor(utilisation)
     return -math.copysign(ALIGN_TORQUE_GAIN * magnitude, accel_lat_mps2)
 
 
-def centring_spring(steering_angle_rad, speed_mps, steering_limit_rad):
-    """Stands in for aligning torque below CENTRING_SPEED_MPS, fading out as speed builds."""
+def centring_spring(steering_angle_rad, steering_limit_rad, speed_mps, grip_factor):
+    """Pulls the wheel back to centre: linear then flat past CENTRING_SATURATION_STEERING_FRACTION, full at
+    rest, easing to CENTRING_AT_SPEED_FRACTION by CENTRING_FADE_SPEED_MPS, and gone with the grip."""
     if steering_limit_rad <= 0.0:
         raise ValueError(f"steering_limit_rad must be positive, got {steering_limit_rad}")
-    blend = max(0.0, 1.0 - abs(speed_mps) / CENTRING_SPEED_MPS)
-    return -CENTRING_GAIN * blend * (steering_angle_rad / steering_limit_rad)
+    steering_fraction = steering_angle_rad / (CENTRING_SATURATION_STEERING_FRACTION * steering_limit_rad)
+    fade = min(1.0, abs(speed_mps) / CENTRING_FADE_SPEED_MPS)
+    speed_scale = 1.0 - fade * (1.0 - CENTRING_AT_SPEED_FRACTION)
+    return -CENTRING_PEAK_FORCE * speed_scale * grip_factor * _clamp(steering_fraction)
 
 
 def compute_force(feel, steering_limit_rad, impact_age_s=None, elapsed_s=0.0):
     """Signed device force in [-1, 1]. Positive pushes the wheel clockwise."""
-    force = self_aligning_torque(feel.accel_lat_mps2, feel.tire_grip_mps2)
-    force += centring_spring(feel.steering_angle_rad, feel.speed_mps, steering_limit_rad)
-    force += -DAMPING_GAIN * feel.steering_rate_rad_s
+    steady = self_aligning_torque(feel.accel_lat_mps2, feel.tire_grip_mps2)
+    grip_factor = saturated_grip_factor(grip_utilisation(feel.accel_lat_mps2, feel.tire_grip_mps2))
+    full = feel.assist_full and feel.assist_target_steering_rad is not None
+    spring_centre_rad = feel.assist_target_steering_rad if full else 0.0
+    steady += centring_spring(feel.steering_angle_rad - spring_centre_rad, steering_limit_rad, feel.speed_mps, grip_factor)
+    steady += -DAMPING_GAIN * feel.steering_rate_rad_s
+    if feel.assist_target_steering_rad is not None:
+        full_error_fraction = ASSIST_FULL_FULL_ERROR_FRACTION if full else ASSIST_NUDGE_FULL_ERROR_FRACTION
+        steering_error = (feel.assist_target_steering_rad - feel.steering_angle_rad) / (
+            full_error_fraction * steering_limit_rad
+        )
+        steady += (ASSIST_FULL_FORCE if full else ASSIST_NUDGE_FORCE) * _clamp(steering_error)
+    # tanh is linear near zero and monotone, so the grip-loss drop still reads through the limit
+    force = STEADY_FORCE_LIMIT * math.tanh(steady / STEADY_FORCE_LIMIT)
 
-    if feel.offroad and abs(feel.speed_mps) > 0.5:
+    if feel.offroad and abs(feel.speed_mps) > OFFROAD_RUMBLE_MIN_SPEED_MPS:
         force += OFFROAD_RUMBLE_FORCE * math.sin(2.0 * math.pi * OFFROAD_RUMBLE_HZ * elapsed_s)
 
     if impact_age_s is not None and impact_age_s >= 0.0:
         decay = math.exp(-IMPACT_DECAY_PER_SECOND * impact_age_s)
-        # The jolt kicks away from where the driver is holding the wheel; centred, it kicks right.
-        jolt_direction = -1.0 if feel.steering_angle_rad > 0.0 else 1.0
+        # Kicks against whatever the wheel is already pushing, so it is felt even when loaded.
+        jolt_direction = -1.0 if steady > 0.0 else 1.0
         force += jolt_direction * IMPACT_FORCE * decay
 
     return _clamp(force)
@@ -167,7 +208,7 @@ HIDPP_REPLY_TIMEOUT_S = 0.4
 DEVICE_FORCE_SIGN = -1
 # Full scale is 0x7FFF. The G920 is strong, so the demo opens well below it.
 DEVICE_FORCE_FULL_SCALE = 0x7FFF
-DEFAULT_FORCE_GAIN = 0.55
+DEFAULT_FORCE_GAIN = 0.7
 FFB_UPDATE_HZ = 200.0
 
 
@@ -205,15 +246,13 @@ class G920ForceFeedback(ForceFeedbackOutput):
         return None
 
     def start(self):
-        from pufferlib.wheel_demo.input.g920 import find_g920_interfaces, set_darwin_non_exclusive
-
-        import hid
+        from pufferlib.wheel_demo.input.g920 import find_g920_interfaces, hid_module, set_darwin_non_exclusive
 
         set_darwin_non_exclusive()
         interfaces = find_g920_interfaces()
         if not interfaces["vendor"]:
             raise RuntimeError("no Logitech vendor HID interface found; force feedback needs the G920 connected")
-        self._device = hid.device()
+        self._device = hid_module().device()
         self._device.open_path(interfaces["vendor"][0])
         self._device.set_nonblocking(True)
 
@@ -296,6 +335,128 @@ class G920ForceFeedback(ForceFeedbackOutput):
         self._device.close()
         self._device = None
         self._slot = None
+
+
+# ---------------------------------------------------------------------------------------------
+# Linux transport: the kernel's hid-logitech-hidpp driver owns HID++ and exposes force feedback on
+# the wheel's evdev node. Struct layouts and ioctl numbers checked against linux/input.h (x86_64).
+# ---------------------------------------------------------------------------------------------
+
+SYSFS_INPUT_DIR = "/sys/class/input"
+EVDEV_EV_FF = 0x15
+EVDEV_FF_CONSTANT = 0x52
+EVDEV_FF_GAIN = 0x60
+EVDEV_FF_AUTOCENTER = 0x61
+EVDEV_FF_GAIN_MAX = 0xFFFF
+EVDEV_EVIOCSFF = 0x40304580
+EVDEV_EVIOCRMFF = 0x40044581
+EVDEV_NEW_EFFECT_ID = -1
+EVDEV_EFFECT_PLAY = 1
+# struct ff_effect: type, id, direction, trigger(2), replay(2), pad, constant level + envelope(4), pad to 48
+EVDEV_FF_EFFECT_FORMAT = "=HhHHHHH2xh4H22x"
+EVDEV_INPUT_EVENT_FORMAT = "=qqHHi"
+# The driver scales a constant force by sin(direction); a quarter turn passes the level through unchanged.
+EVDEV_DIRECTION_PASS_THROUGH = 0x4000
+G920_EXPECTED_RANGE_DEG = 900
+
+
+def find_g920_event_device(sysfs_input_dir=SYSFS_INPUT_DIR):
+    """(/dev/input/eventN, sysfs range attribute path) of the G920, or None when it is not connected."""
+    for name in sorted(os.listdir(sysfs_input_dir)):
+        if not name.startswith("event"):
+            continue
+        id_dir = os.path.join(sysfs_input_dir, name, "device", "id")
+        with open(os.path.join(id_dir, "vendor")) as vendor_file, open(os.path.join(id_dir, "product")) as product_file:
+            vendor_id, product_id = int(vendor_file.read(), 16), int(product_file.read(), 16)
+        if (vendor_id, product_id) != (0x046D, 0xC262):
+            continue
+        range_path = os.path.join(sysfs_input_dir, name, "device", "device", "range")
+        return os.path.join("/dev/input", name), range_path
+    return None
+
+
+class EvdevForceFeedback(ForceFeedbackOutput):
+    """Holds one kernel constant-force effect open and rewrites its level as the car changes."""
+
+    def __init__(self, force_gain=DEFAULT_FORCE_GAIN, sysfs_input_dir=SYSFS_INPUT_DIR):
+        if not 0.0 < force_gain <= 1.0:
+            raise ValueError(f"force_gain must be in (0, 1], got {force_gain}")
+        self.force_gain = force_gain
+        self.sysfs_input_dir = sysfs_input_dir
+        self._fd = None
+        self._effect_id = None
+
+    def _write_event(self, code, value):
+        os.write(self._fd, struct.pack(EVDEV_INPUT_EVENT_FORMAT, 0, 0, EVDEV_EV_FF, code, value))
+
+    def _upload(self, effect_id, device_force):
+        effect = bytearray(
+            struct.pack(
+                EVDEV_FF_EFFECT_FORMAT,
+                EVDEV_FF_CONSTANT,
+                effect_id,
+                EVDEV_DIRECTION_PASS_THROUGH,
+                0,
+                0,
+                0,
+                0,
+                device_force,
+                0,
+                0,
+                0,
+                0,
+            )
+        )
+        fcntl.ioctl(self._fd, EVDEV_EVIOCSFF, effect, True)
+        return struct.unpack(EVDEV_FF_EFFECT_FORMAT, effect)[1]
+
+    def start(self):
+        found = find_g920_event_device(self.sysfs_input_dir)
+        if found is None:
+            raise RuntimeError("no G920 evdev node found; force feedback needs the wheel connected")
+        event_path, range_path = found
+        with open(range_path) as range_file:
+            range_deg = int(range_file.read())
+        if range_deg != G920_EXPECTED_RANGE_DEG:
+            raise RuntimeError(
+                f"the G920 rotation range is {range_deg} degrees but the steering calibration assumes "
+                f"{G920_EXPECTED_RANGE_DEG}; write {G920_EXPECTED_RANGE_DEG} to {range_path} as root"
+            )
+        self._fd = os.open(event_path, os.O_RDWR)
+        try:
+            self._write_event(EVDEV_FF_AUTOCENTER, 0)
+            self._write_event(EVDEV_FF_GAIN, EVDEV_FF_GAIN_MAX)
+            self._effect_id = self._upload(EVDEV_NEW_EFFECT_ID, 0)
+            self._write_event(self._effect_id, EVDEV_EFFECT_PLAY)
+        except OSError:
+            os.close(self._fd)
+            self._fd = None
+            self._effect_id = None
+            raise
+        return self
+
+    def send(self, force):
+        if self._fd is None or self._effect_id is None:
+            raise RuntimeError("EvdevForceFeedback.send() before start()")
+        if not -FORCE_LIMIT <= force <= FORCE_LIMIT:
+            raise ValueError(f"force {force} outside [-{FORCE_LIMIT}, {FORCE_LIMIT}]")
+        self._upload(self._effect_id, int(DEVICE_FORCE_SIGN * force * self.force_gain * DEVICE_FORCE_FULL_SCALE))
+
+    def stop(self):
+        if self._fd is None:
+            return
+        if self._effect_id is not None:
+            fcntl.ioctl(self._fd, EVDEV_EVIOCRMFF, self._effect_id)
+        os.close(self._fd)
+        self._fd = None
+        self._effect_id = None
+
+
+def platform_force_output(force_gain=DEFAULT_FORCE_GAIN):
+    """The wheel's force-feedback transport on this OS: the kernel driver on Linux, raw HID++ elsewhere."""
+    if sys.platform == "linux":
+        return EvdevForceFeedback(force_gain=force_gain)
+    return G920ForceFeedback(force_gain=force_gain, wheel_range_deg=G920_EXPECTED_RANGE_DEG)
 
 
 class ForceFeedbackLoop:

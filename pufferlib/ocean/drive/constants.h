@@ -135,6 +135,17 @@
 #define GRIP_MODE_KINEMATIC 0
 #define GRIP_MODE_REALISTIC 1
 
+// Steering assist. The reference is what the policy would steer from the human car's own state.
+// DISPLAY, NUDGE and FULL leave the sim untouched: NUDGE guides the hands through force feedback,
+// FULL turns the wheel itself to the policy's angle.
+#define ASSIST_MODE_OFF 0
+#define ASSIST_MODE_DISPLAY 1
+#define ASSIST_MODE_BLEND 2
+#define ASSIST_MODE_NUDGE 3
+#define ASSIST_MODE_FULL 4
+// The blend weight eases to its target over this long, so switching modes never jumps the wheels.
+#define ASSIST_RAMP_SECONDS 0.5f
+
 // =====================================================================================
 // 3. DYNAMICS
 // =====================================================================================
@@ -144,6 +155,10 @@
 static const float REAR_AXLE_RATIO = 0.5f;
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
 static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
+#define JERK_STEERING_RATE_LIMIT_RAD_PER_S 0.6f
+#define JERK_STEERING_LIMIT_RAD 0.55f
+// Below this speed curvature is taken against 1 m/s, so a_lat / v^2 cannot blow up at standstill.
+#define JERK_CURVATURE_MIN_SPEED_MPS 1.0f
 
 // Human-driven car: the wheel commands a road-wheel ANGLE, never a jerk. Half the wheel's
 // travel maps onto the road-wheel limit, giving a passenger-car steering ratio.
@@ -190,6 +205,8 @@ static const float HUMAN_ACCEL_LIMIT_MPS2[2] = {-9.0f, 4.0f};
 #define CLUTCH_ENGAGE_FRACTION 0.55f
 #define AUTO_UPSHIFT_RPM 2900.0f
 #define AUTO_DOWNSHIFT_RPM 1250.0f
+// The automatic's D/R selector (a paddle pull) only moves at a standstill, as a real shift lock does.
+#define AUTO_SELECTOR_MAX_SPEED_MPS 0.5f
 
 #define BRAKE_MAX_FORCE_N 12000.0f
 #define AERO_DRAG_N_PER_MPS2 0.40f // 0.5 * rho * Cd * A

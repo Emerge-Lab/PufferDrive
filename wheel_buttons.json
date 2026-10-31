@@ -1,4 +1,16 @@
 {
+  "a_bit": 0,
+  "b_bit": 1,
+  "dpad_down_hat": 4,
+  "dpad_left_hat": 6,
+  "dpad_right_hat": 2,
+  "dpad_up_hat": 0,
+  "lsb_bit": 9,
+  "menu_bit": 6,
+  "rsb_bit": 8,
   "shift_down_bit": 5,
-  "shift_up_bit": 4
+  "shift_up_bit": 4,
+  "view_bit": 7,
+  "x_bit": 2,
+  "y_bit": 3
 }

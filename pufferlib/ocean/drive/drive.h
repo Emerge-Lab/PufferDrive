@@ -262,6 +262,12 @@ struct Drive {
     float human_max_speed_mps;
     float human_steering_cmd_norm;
     float human_accel_long_cmd_mps2;
+    int assist_mode;
+    float assist_blend_target;
+    float assist_blend_weight; // eases toward assist_blend_target, never jumps
+    int assist_reference_valid;
+    float assist_reference_steering_rad; // sim sign: positive-left
+    float assist_reference_accel_mps2;
     int reset_accel_on_stop;
     int init_mode;
     int control_mode;
@@ -4304,6 +4310,19 @@ int c_set_traffic_light_states(Drive *env, const int *states) {
     return 0;
 }
 
+// Same state the observation reads; non-light elements report UNKNOWN.
+void c_get_traffic_light_states(const Drive *env, int *states) {
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        const TrafficControlElement *traffic = &env->traffic_elements[i];
+        if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
+            states[i] = TRAFFIC_CONTROL_STATE_UNKNOWN;
+            continue;
+        }
+        int has_state = traffic->states != NULL && env->timestep >= 0 && env->timestep < traffic->state_size;
+        states[i] = has_state ? traffic->states[env->timestep] : TRAFFIC_CONTROL_STATE_OFF;
+    }
+}
+
 // Co-sim: retire the map's stop signs in place (light indices stay valid) and append the external sim's own,
 // lines = count x [x1, y1, z1, x2, y2, z2] in world coordinates, headings = travel direction across each line.
 int c_set_stop_signs(Drive *env, int count, const float *lines, const float *headings) {
@@ -4526,6 +4545,15 @@ static void gather_road_observation_rows(
 // Core Simulation Functions
 // ========================================
 
+// The limit the overspeed metric scores against: the lane's own when known, else the default.
+static float lane_speed_limit_target(const Drive *env, const Agent *agent) {
+    int lane_idx = agent->current_lane_idx;
+    if (lane_idx != -1 && env->lane_speed_limit_mps[lane_idx] > 0) {
+        return env->lane_speed_limit_mps[lane_idx];
+    }
+    return UNKNOWN_LANE_SPEED_LIMIT_MPS;
+}
+
 static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     Agent *agent = &env->agents[agent_idx];
     Log *agent_log = &env->logs[log_idx];
@@ -4594,11 +4622,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     agent_log->avg_speed_per_agent += agent->sim_speed;
 
     // Speed limit metric (CUSTOM)
-    float target_speed = UNKNOWN_LANE_SPEED_LIMIT_MPS;
-    int current_lane_idx = agent->current_lane_idx;
-    if (current_lane_idx != -1 && env->lane_speed_limit_mps[current_lane_idx] > 0) {
-        target_speed = env->lane_speed_limit_mps[current_lane_idx];
-    }
+    float target_speed = lane_speed_limit_target(env, agent);
     agent->metrics_array[SPEED_LIMIT_IDX]
         = (agent->sim_speed > target_speed + env->overspeed_tolerance_mps) ? 1.0f : 0.0f;
     if (env->compute_eval_metrics) {
@@ -5399,6 +5423,121 @@ static void integrate_bicycle_arc(Agent *agent, float signed_curvature, float sp
     update_agent_speed(agent);
 }
 
+static void decode_jerk_action(const Drive *env, int action_idx, float *j_long_out, float *j_lat_out) {
+    if (env->action_type == ACTION_TYPE_DISCRETE) {
+        // Interpret action as a single integer: a = long_idx * num_lat + lat_idx
+        int *action_array = (int *) env->actions;
+        int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
+        int action_val = action_array[action_idx];
+        *j_long_out = JERK_LONG[action_val / num_lat];
+        *j_lat_out = JERK_LAT[action_val % num_lat];
+        return;
+    }
+    float (*action_array_f)[2] = (float (*)[2]) env->actions;
+    // Asymmetric scaling for longitudinal jerk to match discrete action space
+    // Discrete: JERK_LONG = [-15, -4, 0, 4] (more braking than acceleration)
+    float j_long_action = action_array_f[action_idx][0]; // [-1, 1]
+    if (j_long_action < 0) {
+        *j_long_out = j_long_action * (-JERK_LONG[0]); // Negative: [-1, 0] → [-15, 0] (braking)
+    } else {
+        *j_long_out = j_long_action * JERK_LONG[3]; // Positive: [0, 1] → [0, 4] (acceleration)
+    }
+    // Symmetric scaling for lateral jerk
+    *j_lat_out = action_array_f[action_idx][1] * JERK_LAT[2];
+}
+
+typedef struct {
+    float accel_long;
+    float accel_lat;
+    float jerk_long; // taken before the stop reset, which is what comfort scores
+    float speed_before_mps;
+    float speed_mps;
+    float steering_angle;
+    float signed_curvature;
+} JerkStep;
+
+// One jerk-dynamics step from the agent's current state. Pure: the agent is not written, so the
+// steering assist can ask what the policy would do from the human car without moving it.
+static JerkStep integrate_jerk(
+    const Drive *env,
+    const Agent *agent,
+    float j_long,
+    float j_lat,
+    float dt,
+    int phantom_braking) {
+    JerkStep step;
+    if ((env->eval_mode || env->cosim_eval_semantics) && agent->sim_speed < STANDSTILL_SPEED_EPSILON_MPS
+        && fabsf(j_long) < env->eval_standstill_jerk_deadband_mps3) {
+        j_long = 0.0f;
+    }
+
+    // Get dynamic conditioning coefficients
+    float c_throttle = agent->reward_coefs[REWARD_COEF_THROTTLE];
+    float c_steer = agent->reward_coefs[REWARD_COEF_STEER];
+    float c_acc = agent->reward_coefs[REWARD_COEF_ACC];
+
+    // Calculate new longitudinal acceleration from jerk (Eq. 1 in paper)
+    float a_long_new = agent->accel_long + c_throttle * j_long * dt;
+
+    // Zero-crossing: snap to 0 when crossing zero
+    if (agent->accel_long * a_long_new < 0) {
+        a_long_new = 0.0f;
+    } else {
+        a_long_new = clip(a_long_new, ACCEL_LONG_LIMIT[0], ACCEL_LONG_LIMIT[1] * c_acc);
+    }
+    step.jerk_long = (a_long_new - agent->accel_long) / dt;
+
+    // Calculate new lateral acceleration from jerk (Eq. 2 in paper)
+    float a_lat_new = agent->accel_lat + c_steer * j_lat * dt;
+
+    // Zero-crossing: snap to 0 when crossing zero
+    if (agent->accel_lat * a_lat_new < 0) {
+        a_lat_new = 0.0f;
+    } else {
+        a_lat_new = clip(a_lat_new, ACCEL_LAT_LIMIT[0], ACCEL_LAT_LIMIT[1]);
+    }
+
+    // Calculate new velocity using trapezoidal integration
+    float v_dot_heading = agent->sim_vx * agent->cos_heading + agent->sim_vy * agent->sin_heading;
+    float signed_v = copysignf(sqrtf(agent->sim_vx * agent->sim_vx + agent->sim_vy * agent->sim_vy), v_dot_heading);
+    float v_new = signed_v + 0.5f * (a_long_new + agent->accel_long) * dt;
+
+    // Zero-crossing: snap to 0 when crossing zero
+    if (signed_v * v_new < 0) {
+        v_new = 0.0f;
+        if (env->reset_accel_on_stop) {
+            a_long_new = 0.0f;
+            a_lat_new = 0.0f;
+        }
+    } else {
+        v_new = clip(v_new, MAX_BACKWARD_SPEED, env->base_max_speed_mps * agent->reward_coefs[REWARD_COEF_SPEED]);
+    }
+
+    // If phantom braking is active, prevent speed from going negative
+    if (phantom_braking && v_new < 0.0f) {
+        v_new = 0.0f;
+        a_long_new = 0.0f;
+    }
+
+    // GIGAFLOW paper approach: accel_lat → curvature → steering
+    float v_eff = fmaxf(fabsf(v_new), JERK_CURVATURE_MIN_SPEED_MPS);
+    float signed_curvature = a_lat_new / (v_eff * v_eff);
+    float steering_angle = atanf(signed_curvature * agent->wheelbase);
+    float delta_steer = clip(
+        steering_angle - agent->steering_angle,
+        -JERK_STEERING_RATE_LIMIT_RAD_PER_S * dt,
+        JERK_STEERING_RATE_LIMIT_RAD_PER_S * dt);
+    step.steering_angle = clip(agent->steering_angle + delta_steer, -JERK_STEERING_LIMIT_RAD, JERK_STEERING_LIMIT_RAD);
+
+    // Recalculate curvature and lateral acceleration from the limited steering
+    step.signed_curvature = tanf(step.steering_angle) / agent->wheelbase;
+    step.accel_lat = v_new * v_new * step.signed_curvature;
+    step.accel_long = a_long_new;
+    step.speed_before_mps = signed_v;
+    step.speed_mps = v_new;
+    return step;
+}
+
 static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     copy_pose_to_prev(agent);
@@ -5508,30 +5647,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->accel_long = new_a_long;
         agent->accel_lat = new_a_lat;
     } else if (env->dynamics_model == DYNAMICS_MODEL_JERK) {
-        // Extract jerk action components
         float j_long, j_lat;
-        if (env->action_type == ACTION_TYPE_DISCRETE) {
-            // Interpret action as a single integer: a = long_idx * num_lat + lat_idx
-            int *action_array = (int *) env->actions;
-            int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
-            int action_val = action_array[action_idx];
-            int j_long_idx = action_val / num_lat;
-            int j_lat_idx = action_val % num_lat;
-            j_long = JERK_LONG[j_long_idx];
-            j_lat = JERK_LAT[j_lat_idx];
-        } else {
-            float (*action_array_f)[2] = (float (*)[2]) env->actions;
-            // Asymmetric scaling for longitudinal jerk to match discrete action space
-            // Discrete: JERK_LONG = [-15, -4, 0, 4] (more braking than acceleration)
-            float j_long_action = action_array_f[action_idx][0]; // [-1, 1]
-            if (j_long_action < 0) {
-                j_long = j_long_action * (-JERK_LONG[0]); // Negative: [-1, 0] → [-15, 0] (braking)
-            } else {
-                j_long = j_long_action * JERK_LONG[3]; // Positive: [0, 1] → [0, 4] (acceleration)
-            }
-            // Symmetric scaling for lateral jerk
-            j_lat = action_array_f[action_idx][1] * JERK_LAT[2];
-        }
+        decode_jerk_action(env, action_idx, &j_long, &j_lat);
 
         if (agent->phantom_braking_counter > 0) {
             j_long = JERK_LONG[0]; // max braking jerk
@@ -5540,92 +5657,13 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             }
         }
 
-        if ((env->eval_mode || env->cosim_eval_semantics) && agent->sim_speed < STANDSTILL_SPEED_EPSILON_MPS
-            && fabsf(j_long) < env->eval_standstill_jerk_deadband_mps3) {
-            j_long = 0.0f;
-        }
-
-        // Get dynamic conditioning coefficients
-        float c_throttle = agent->reward_coefs[REWARD_COEF_THROTTLE];
-        float c_steer = agent->reward_coefs[REWARD_COEF_STEER];
-        float c_acc = agent->reward_coefs[REWARD_COEF_ACC];
-
-        // Calculate new longitudinal acceleration from jerk (Eq. 1 in paper)
-        float a_long_new = agent->accel_long + c_throttle * j_long * env->dt;
-
-        // Zero-crossing: snap to 0 when crossing zero
-        if (agent->accel_long * a_long_new < 0) {
-            a_long_new = 0.0f;
-        } else {
-            a_long_new = clip(a_long_new, ACCEL_LONG_LIMIT[0], ACCEL_LONG_LIMIT[1] * c_acc);
-        }
-        // Comfort scores the driver's jerk, so take it before the stop resets below zero the stored acceleration
-        float jerk_long_before_stop_reset = (a_long_new - agent->accel_long) / env->dt;
-
-        // Calculate new lateral acceleration from jerk (Eq. 2 in paper)
-        float a_lat_new = agent->accel_lat + c_steer * j_lat * env->dt;
-
-        // Zero-crossing: snap to 0 when crossing zero
-        if (agent->accel_lat * a_lat_new < 0) {
-            a_lat_new = 0.0f;
-        } else {
-            a_lat_new = clip(a_lat_new, ACCEL_LAT_LIMIT[0], ACCEL_LAT_LIMIT[1]);
-        }
-
-        float heading_x = agent->cos_heading;
-        float heading_y = agent->sin_heading;
-
-        // Calculate new velocity using trapezoidal integration
-        float v_dot_heading = agent->sim_vx * heading_x + agent->sim_vy * heading_y;
-        float signed_v = copysignf(sqrtf(agent->sim_vx * agent->sim_vx + agent->sim_vy * agent->sim_vy), v_dot_heading);
-        float v_new = signed_v + 0.5f * (a_long_new + agent->accel_long) * env->dt;
-
-        // Zero-crossing: snap to 0 when crossing zero
-        if (signed_v * v_new < 0) {
-            v_new = 0.0f;
-            if (env->reset_accel_on_stop) {
-                a_long_new = 0.0f;
-                a_lat_new = 0.0f;
-            }
-        } else {
-            v_new = clip(v_new, MAX_BACKWARD_SPEED, env->base_max_speed_mps * agent->reward_coefs[REWARD_COEF_SPEED]);
-        }
-
-        // If phantom braking is active, prevent speed from going negative
-        if (agent->phantom_braking_counter > 0) {
-            if (v_new < 0.0f) {
-                v_new = 0.0f;
-                a_long_new = 0.0f;
-            }
-        }
-
-        // GIGAFLOW paper approach: accel_lat → curvature → steering
-        // v_eff = max(|v|, 1.0) to avoid division issues at low speed
-        float v_eff = fmaxf(fabsf(v_new), 1.0f);
-        float signed_curvature = a_lat_new / (v_eff * v_eff);
-
-        // Convert curvature to steering angle
-        float steering_angle = atanf(signed_curvature * agent->wheelbase);
-
-        // Apply steering rate limit (±0.6 rad/s)
-        float delta_steer = clip(steering_angle - agent->steering_angle, -0.6f * env->dt, 0.6f * env->dt);
-
-        // Apply steering position limit (±0.55 rad)
-        float new_steering_angle = clip(agent->steering_angle + delta_steer, -0.55f, 0.55f);
-
-        // Recalculate curvature from limited steering
-        signed_curvature = tanf(new_steering_angle) / agent->wheelbase;
-
-        // Recalculate lateral acceleration from actual curvature
-        a_lat_new = v_new * v_new * signed_curvature;
-
-        integrate_bicycle_arc(agent, signed_curvature, v_new, signed_v, env->dt);
-        // Update jerk and acceleration
-        agent->jerk_long = jerk_long_before_stop_reset;
-        agent->jerk_lat = (a_lat_new - agent->accel_lat) / env->dt;
-        agent->accel_long = a_long_new;
-        agent->accel_lat = a_lat_new;
-        agent->steering_angle = new_steering_angle;
+        JerkStep step = integrate_jerk(env, agent, j_long, j_lat, env->dt, agent->phantom_braking_counter > 0);
+        integrate_bicycle_arc(agent, step.signed_curvature, step.speed_mps, step.speed_before_mps, env->dt);
+        agent->jerk_long = step.jerk_long;
+        agent->jerk_lat = (step.accel_lat - agent->accel_lat) / env->dt;
+        agent->accel_long = step.accel_long;
+        agent->accel_lat = step.accel_lat;
+        agent->steering_angle = step.steering_angle;
     }
 
     update_agent_z(env, agent);
@@ -5684,6 +5722,18 @@ static void apply_manual_shift_request(Drive *env, int shift_request) {
     env->human_engine_stalled = 0;
 }
 
+// Left paddle selects reverse, right paddle selects drive; refused unless the car is at rest.
+static void apply_automatic_selector_request(Drive *env, int shift_request, float speed_mps) {
+    if (shift_request == 0 || fabsf(speed_mps) > AUTO_SELECTOR_MAX_SPEED_MPS) {
+        return;
+    }
+    if (shift_request < 0 && env->human_gear != GEAR_REVERSE) {
+        env->human_gear = GEAR_REVERSE;
+    } else if (shift_request > 0 && env->human_gear == GEAR_REVERSE) {
+        env->human_gear = 1;
+    }
+}
+
 static void select_automatic_gear(Drive *env, float speed_mps) {
     if (env->human_gear == GEAR_REVERSE) {
         return; // the driver selected reverse; the box does not shift out of it
@@ -5703,6 +5753,7 @@ static void select_automatic_gear(Drive *env, float speed_mps) {
 static float human_powertrain_accel_mps2(Drive *env, Agent *agent, int shift_request) {
     float speed_mps = agent->sim_speed_signed;
     if (env->human_gearbox_mode == GEARBOX_MODE_AUTOMATIC) {
+        apply_automatic_selector_request(env, shift_request, speed_mps);
         select_automatic_gear(env, speed_mps);
     } else {
         apply_manual_shift_request(env, shift_request);
@@ -5809,6 +5860,61 @@ int c_set_human_gear(Drive *env, int gear) {
     return 0;
 }
 
+static float human_steering_angle(const Drive *env) {
+    return -env->human_steering_cmd_norm * HUMAN_STEERING_LIMIT_RAD;
+}
+
+// (1 - w) * human + w * reference: w = 0 is exactly the driver and w = 1 exactly the policy.
+static float assisted_steering_angle(const Drive *env, float human_steering_rad) {
+    if (!env->assist_reference_valid || env->assist_blend_weight == 0.0f) {
+        return human_steering_rad;
+    }
+    float weight = env->assist_blend_weight;
+    return (1.0f - weight) * human_steering_rad + weight * env->assist_reference_steering_rad;
+}
+
+// Refreshes what the policy would do from the human car's own state, once per policy step, and eases
+// the blend weight toward its target. The reference runs the policy's jerk chain one policy step on.
+// A reference only exists while it is kept fresh, and the weight only moves while one exists, so
+// turning the assist back on can never blend toward where the policy wanted to go some time ago.
+static void advance_assist(Drive *env, int action_idx, const Agent *agent, float policy_dt, float step_dt, int is_first) {
+    int wanted = env->assist_mode != ASSIST_MODE_OFF || env->assist_blend_weight > 0.0f;
+    if (!wanted) {
+        env->assist_reference_valid = 0;
+        return;
+    }
+    if (is_first) {
+        int has_reference = env->dynamics_model == DYNAMICS_MODEL_JERK && !agent->removed && !agent->stopped;
+        env->assist_reference_valid = has_reference;
+        if (has_reference) {
+            float j_long, j_lat;
+            decode_jerk_action(env, action_idx, &j_long, &j_lat);
+            JerkStep step = integrate_jerk(env, agent, j_long, j_lat, policy_dt, 0);
+            env->assist_reference_steering_rad = step.steering_angle;
+            env->assist_reference_accel_mps2 = step.accel_long;
+        }
+    }
+    if (!env->assist_reference_valid) {
+        env->assist_blend_weight = 0.0f;
+        return;
+    }
+    float target_weight = env->assist_mode == ASSIST_MODE_BLEND ? env->assist_blend_target : 0.0f;
+    float max_change = step_dt / ASSIST_RAMP_SECONDS;
+    env->assist_blend_weight += clip(target_weight - env->assist_blend_weight, -max_change, max_change);
+}
+
+int c_set_assist_mode(Drive *env, int assist_mode, float blend_target) {
+    if (assist_mode < ASSIST_MODE_OFF || assist_mode > ASSIST_MODE_FULL) {
+        return -1;
+    }
+    if (!isfinite(blend_target) || blend_target < 0.0f || blend_target > 1.0f) {
+        return -1;
+    }
+    env->assist_mode = assist_mode;
+    env->assist_blend_target = blend_target;
+    return 0;
+}
+
 // The human car runs no jerk integrator on either axis: the wheel sets the road-wheel angle and
 // the pedals set longitudinal acceleration. Only the arc integrator is shared with the jerk path.
 static void move_human(Drive *env, int agent_idx) {
@@ -5827,7 +5933,7 @@ static void move_human(Drive *env, int agent_idx) {
 
     // steering_norm is +1 at the wheel's RIGHT lock, but positive curvature turns the car LEFT
     // (constants.h: lane_curvature positive = left turn), so the command is negated here.
-    float steering_angle = -env->human_steering_cmd_norm * HUMAN_STEERING_LIMIT_RAD;
+    float steering_angle = assisted_steering_angle(env, human_steering_angle(env));
     float accel_long = (env->human_longitudinal_mode == HUMAN_LONGITUDINAL_POWERTRAIN)
         ? human_powertrain_accel_mps2(env, agent, env->human_shift_request)
         : clip(env->human_accel_long_cmd_mps2, HUMAN_ACCEL_LIMIT_MPS2[0], HUMAN_ACCEL_LIMIT_MPS2[1]);
@@ -5881,6 +5987,7 @@ int c_select_human_agent(Drive *env, int agent_idx) {
     env->human_agent_idx = agent_idx;
     env->human_steering_cmd_norm = 0.0f;
     env->human_accel_long_cmd_mps2 = 0.0f;
+    env->assist_reference_valid = 0; // the reference belonged to the previous car
     if (agent_idx < 0) {
         return 0;
     }
@@ -5903,7 +6010,26 @@ int c_select_human_agent(Drive *env, int agent_idx) {
 
 // Shifting the sampling bounds keeps the per-driver variety that makes traffic look alive, which
 // pinning every car to one coefficient vector would destroy.
+static int reward_coef_reads_bounds(const Drive *env, int coef_idx) {
+    switch (coef_idx) {
+    case REWARD_COEF_VELOCITY:
+    case REWARD_COEF_TIMESTEP:
+    case REWARD_COEF_THROTTLE:
+    case REWARD_COEF_STEER:
+    case REWARD_COEF_ACC:
+        return 0;
+    case REWARD_COEF_GOAL_SPEED:
+        return env->goal_speed_randomization;
+    default:
+        return 1;
+    }
+}
+
 int c_set_reward_coef_bounds(Drive *env, const float *min_values, const float *max_values) {
+    if (!env->reward_randomization) {
+        return -1;
+    }
+    int narrowed = 0;
     for (int c = 0; c < NUM_REWARD_COEFS; c++) {
         float limit_min, limit_max;
         reward_coef_limits(env, c, &limit_min, &limit_max);
@@ -5915,8 +6041,14 @@ int c_set_reward_coef_bounds(Drive *env, const float *min_values, const float *m
         if (min_values[c] < limit_min || max_values[c] > limit_max) {
             return -1;
         }
+        int is_trained_window = min_values[c] == limit_min && max_values[c] == limit_max;
+        if (!is_trained_window && !reward_coef_reads_bounds(env, c)) {
+            return -1;
+        }
+        narrowed |= !is_trained_window;
     }
-    env->reward_bounds_overridden = 1;
+    // The full trained window restores the training sampler, including C_vel's mixture.
+    env->reward_bounds_overridden = narrowed;
     for (int c = 0; c < NUM_REWARD_COEFS; c++) {
         env->reward_coef_min[c] = min_values[c];
         env->reward_coef_max[c] = max_values[c];
@@ -6012,6 +6144,8 @@ static void update_rollout_masks(Drive *env) {
 
 void c_reset(Drive *env) {
     env->substeps_taken = 0;
+    env->assist_reference_valid = 0; // a reference belongs to the episode it was computed in
+    env->assist_blend_weight = 0.0f;
     env->autoreset_pending = 0;
     env->episode_end_timestep = env->scenario_length;
     if (env->first_reset_pending) {
@@ -6215,6 +6349,9 @@ void c_substep(Drive *env) {
         if (env->substep_mode == SUBSTEP_MODE_HUMAN_ONLY && agent->controller != CONTROLLER_HUMAN) {
             continue;
         }
+        if (agent->controller == CONTROLLER_HUMAN) {
+            advance_assist(env, i, agent, policy_dt, env->dt, env->is_first_integration);
+        }
         move_agent_for_substep(env, i, agent_idx, keep_policy_step_prev);
         if (is_last_substep && agent->controller == CONTROLLER_POLICY && !agent->stopped && !agent->removed
             && (env->pose_noise_xy_m > 0.0f || env->pose_noise_yaw_rad > 0.0f)
@@ -6335,6 +6472,7 @@ void c_step(Drive *env) {
                 apply_pose_noise(env, agent);
             }
         } else if (agent->controller == CONTROLLER_HUMAN) {
+            advance_assist(env, i, agent, env->dt, env->dt, 1);
             move_human(env, agent_idx);
         } else if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, agent_idx);

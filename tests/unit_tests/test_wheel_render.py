@@ -72,6 +72,7 @@ class FakeWindow:
         self.poll_count = 0
         self.camera_modes_set = []
         self.night_toggles = 0
+        self.human_agents_set = []
 
     def poll(self):
         self.poll_count += 1
@@ -84,6 +85,9 @@ class FakeWindow:
     def toggle_night(self):
         self.night_mode = not self.night_mode
         self.night_toggles += 1
+
+    def set_human_agent(self, agent_idx):
+        self.human_agents_set.append(agent_idx)
 
 
 class FakeEnv:
@@ -217,6 +221,7 @@ def test_no_keys_changes_nothing(run_demo):
     assert window.night_toggles == 0
     assert loop.selected == []
     assert loop.env.engine_restarts == 0
+    assert window.human_agents_set == []
 
 
 def test_false_valued_keys_are_ignored(run_demo):
@@ -268,6 +273,7 @@ def test_next_agent_wraps_around_the_agent_count(run_demo):
         run_demo.apply_window_keys(window, loop)
     assert loop.selected == [1, 2, 3, 4, 0, 1]
     assert loop.human_agent_idx == 1
+    assert window.human_agents_set == loop.selected
 
 
 def test_next_agent_ring_is_sized_by_the_observation_rows(run_demo):
@@ -299,6 +305,121 @@ def test_one_press_can_do_several_things(run_demo):
     assert window.night_mode is True
     assert loop.env.engine_restarts == 1
     assert loop.selected == [0]
+    assert window.human_agents_set == [0]
+
+
+def test_next_agent_tells_the_window_the_index_the_loop_settled_on(run_demo):
+    window = FakeWindow(keys={"next_agent": True})
+    loop = FakeLoop(agent_count=4, human_agent_idx=1)
+    run_demo.apply_window_keys(window, loop)
+    assert window.human_agents_set == [loop.human_agent_idx] == [2]
+
+
+def test_restart_and_camera_keys_do_not_retarget_the_window(run_demo):
+    window = FakeWindow(keys={"restart_engine": True, "camera_driver": True, "toggle_night": True})
+    run_demo.apply_window_keys(window, FakeLoop())
+    assert window.human_agents_set == []
+
+
+def test_run_demo_camera_names_select_the_carla_scene_modes(run_demo):
+    from pufferlib.wheel_demo import carla_scene
+
+    names = run_demo.CAMERA_MODE_NAMES
+    assert names.index("chase") == carla_scene.CAMERA_MODE_CHASE
+    assert names.index("driver") == carla_scene.CAMERA_MODE_DRIVER
+    assert names.index("agent") == carla_scene.CAMERA_MODE_AGENT
+
+
+def test_run_demo_imports_without_carla_or_pygame():
+    """The CARLA client and pygame load only when a window is opened (beyond what the env already pulls in)."""
+    path = os.path.join(REPO_ROOT, "scripts", "wheel_demo", "run_demo.py")
+    probe = (
+        "import importlib.util, sys\n"
+        "import pufferlib.ocean.drive.drive\n"
+        "baseline = {name for name in ('carla', 'pygame') if name in sys.modules}\n"
+        f"spec = importlib.util.spec_from_file_location('probe_run_demo', {path!r})\n"
+        "module = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(module)\n"
+        "print(sorted(name for name in ('carla', 'pygame') if name in sys.modules and name not in baseline))\n"
+    )
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, cwd=REPO_ROOT)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == "[]"
+
+
+# ---- the terminal HUD ----
+
+TERMINAL_HUD_DT_S = 0.1
+
+
+class FakeWheelState:
+    def __init__(self, throttle_norm=0.0, brake_norm=0.0, steering_norm=0.37, clutch_norm=0.0):
+        self.throttle_norm = throttle_norm
+        self.brake_norm = brake_norm
+        self.steering_norm = steering_norm
+        self.clutch_norm = clutch_norm
+
+
+def terminal_human(**overrides):
+    human = {
+        "speed_mps": 10.0,
+        "gear": 3,
+        "gearbox_mode": 1,
+        "collision": 0.0,
+        "offroad": 0.0,
+        "engine_stalled": 0,
+        "engine_rpm": 4321.0,
+        "steering_angle_rad": 0.2,
+        "accel_long_mps2": 1.5,
+        "accel_lat_mps2": -2.5,
+    }
+    human.update(overrides)
+    return human
+
+
+def print_hud_line(run_demo, capsys, human, wheel_state):
+    run_demo.print_hud(7, wheel_state, human, TERMINAL_HUD_DT_S)
+    return capsys.readouterr().out
+
+
+def test_terminal_hud_shows_speed_gear_and_pedals(run_demo, capsys):
+    line = print_hud_line(run_demo, capsys, terminal_human(), FakeWheelState(throttle_norm=0.42, brake_norm=0.07))
+    assert "36.0 km/h" in line
+    assert "D3" in line
+    assert "throttle  42%" in line
+    assert "brake   7%" in line
+
+
+def test_terminal_hud_shows_reverse_speed_as_positive(run_demo, capsys):
+    line = print_hud_line(run_demo, capsys, terminal_human(speed_mps=-2.5, gear=-1), FakeWheelState())
+    assert "9.0 km/h" in line
+    assert "-9.0" not in line
+    assert " R " in line
+
+
+def test_terminal_hud_has_no_rpm_and_no_angles(run_demo, capsys):
+    line = print_hud_line(run_demo, capsys, terminal_human(), FakeWheelState(throttle_norm=0.5))
+    for banned in ("rpm", "4321", "deg", "a_lat", "a_long", "wheel"):
+        assert banned not in line.lower(), line
+
+
+def test_terminal_hud_lists_every_raised_flag(run_demo, capsys):
+    line = print_hud_line(
+        run_demo, capsys, terminal_human(collision=1.0, offroad=1.0, engine_stalled=1), FakeWheelState()
+    )
+    assert "COLLISION" in line and "OFF ROAD" in line and "STALLED" in line
+    quiet = print_hud_line(run_demo, capsys, terminal_human(), FakeWheelState())
+    assert "COLLISION" not in quiet and "OFF ROAD" not in quiet and "STALLED" not in quiet
+
+
+def test_terminal_hud_uses_the_manual_gear_label(run_demo, capsys):
+    line = print_hud_line(run_demo, capsys, terminal_human(gear=2, gearbox_mode=0), FakeWheelState())
+    assert "gear   2" in line
+    assert "D2" not in line
+
+
+def test_terminal_hud_reports_nobody_driving(run_demo, capsys):
+    assert "nobody is driving" in print_hud_line(run_demo, capsys, None, FakeWheelState())
 
 
 # ---- the sub-step callback, which is where the renderer draws ----

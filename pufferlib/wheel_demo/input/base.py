@@ -1,6 +1,7 @@
 """Wheel input interface shared by every backend (raw HID, SDL, recorded trace, synthetic)."""
 
 import json
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -54,7 +55,9 @@ class WheelCalibration:
     pedal_deadzone_norm: float = 0.02
     # The G920 brake is a stiff progressive rubber stop, so linear travel puts most of the braking
     # in the last part of the press. Below 1.0 this bends the curve so light presses bite harder.
-    brake_response_gamma: float = 0.6
+    brake_response_gamma: float = 0.4
+    # Above 1.0 part throttle gives proportionally less torque; full travel is still full throttle.
+    throttle_response_gamma: float = 1.6
 
     def __post_init__(self):
         if not self.steering_raw_min < self.steering_raw_center < self.steering_raw_max:
@@ -73,6 +76,8 @@ class WheelCalibration:
             raise ValueError(f"pedal_deadzone_norm must be in [0, 1), got {self.pedal_deadzone_norm}")
         if not 0.0 < self.brake_response_gamma <= 1.0:
             raise ValueError(f"brake_response_gamma must be in (0, 1], got {self.brake_response_gamma}")
+        if not 1.0 <= self.throttle_response_gamma < math.inf:
+            raise ValueError(f"throttle_response_gamma must be finite and >= 1, got {self.throttle_response_gamma}")
 
     def steering_to_norm(self, raw):
         if raw >= self.steering_raw_center:
@@ -94,6 +99,8 @@ class WheelCalibration:
         norm = (norm - self.pedal_deadzone_norm) / (1.0 - self.pedal_deadzone_norm)
         if pedal == "brake":
             return norm**self.brake_response_gamma
+        if pedal == "throttle":
+            return norm**self.throttle_response_gamma
         return norm
 
     def to_json(self, path):

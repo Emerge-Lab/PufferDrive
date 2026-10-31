@@ -1,11 +1,13 @@
-"""Drive one car among frozen-policy traffic. Terminal telemetry only until the renderer (M5).
+"""Drive one car among frozen-policy traffic, rendered by CARLA.
 
+    scripts/wheel_demo/start_carla.sh                          # once, in another terminal
     python scripts/wheel_demo/run_demo.py --render --ffb
     python scripts/wheel_demo/run_demo.py --input synthetic --steps 100
 
-With --input wheel it reads the real G920 and must run in the FOREGROUND (macOS attributes Input
-Monitoring to the responsible process). With --input synthetic it drives a scripted lap and needs
-no hardware, which is how the loop is exercised in CI.
+--render needs a running CARLA server and the CARLA Python client (Python 3.10-3.12). Without it the
+demo prints terminal telemetry. With --input wheel it reads the real G920 and must run in the
+FOREGROUND (macOS attributes Input Monitoring to the responsible process). With --input synthetic it
+drives a scripted lap and needs no hardware, which is how the loop is exercised in CI.
 """
 
 import argparse
@@ -13,6 +15,12 @@ import math
 import os
 import sys
 import time
+
+import torch
+
+# The demo imports the repo's top-level data_utils, which an editable install does not expose.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, REPO_ROOT)
 
 from pufferlib.ocean.drive import binding
 from pufferlib.wheel_demo.input.base import WheelCalibration
@@ -27,15 +35,39 @@ from pufferlib.wheel_demo.loop import (
     WheelDemoLoop,
 )
 from pufferlib.wheel_demo.calibrate import calibrate_interactively, validate_calibration
-from pufferlib.wheel_demo.ffb import ForceFeedbackLoop, G920ForceFeedback
+from pufferlib.wheel_demo.ffb import DEFAULT_FORCE_GAIN, ForceFeedbackLoop, platform_force_output
 from pufferlib.wheel_demo.levels import LEVELS, LEVEL_NAMES, apply_level, level_by_name
 from pufferlib.wheel_demo.maps import CARLA_TOWNS
-from pufferlib.wheel_demo.render import CAMERA_MODE_NAMES, DemoWindow
+from pufferlib.wheel_demo.carla_window import CAMERA_MODE_NAMES, CarlaDemoWindow
+from pufferlib.wheel_demo.hud import MPS_TO_KMH, gear_label
 
 # Shipped with the repo, so the demo runs with no flags. Overridable with --checkpoint.
 DEFAULT_CHECKPOINT = "weights/k_scaled_0050_1000/final_model.pt"
 
 HUD_EVERY_STEPS = 3
+CAMERA_MODE_COUNT = 3
+FFB_GAIN_STEP = 0.05
+FFB_GAIN_MIN = 0.05
+FFB_GAIN_MAX = 1.0
+ASSIST_MODES_BY_NAME = {
+    "off": binding.ASSIST_MODE_OFF,
+    "display": binding.ASSIST_MODE_DISPLAY,
+    "blend": binding.ASSIST_MODE_BLEND,
+    "nudge": binding.ASSIST_MODE_NUDGE,
+    "full": binding.ASSIST_MODE_FULL,
+}
+ASSIST_MODE_CYCLE = tuple(ASSIST_MODES_BY_NAME.values())
+# Wheel button -> demo command. The keyboard keys keep working alongside these.
+WHEEL_BUTTON_COMMANDS = {
+    "a": "cycle_camera",
+    "b": "toggle_night",
+    "x": "cycle_level",
+    "y": "next_agent",
+    "view": "restart_engine",
+    "menu": "cycle_assist",
+    "dpad_up": "ffb_gain_up",
+    "dpad_down": "ffb_gain_down",
+}
 SYNTHETIC_STEER_PERIOD_STEPS = 40.0
 
 
@@ -59,20 +91,18 @@ def drive_synthetic(wheel, step_idx):
 
 
 def print_hud(step_idx, wheel_state, human, dt):
+    """The same readout as the window: speed, gear, throttle and brake."""
     if human is None:
         print(f"step {step_idx:5d}  (nobody is driving)")
         return
-    # Driver-facing sign: positive is a RIGHT turn, matching the wheel in your hands and the
-    # window HUD. The sim's steering_angle is positive-left, so it is negated here too.
-    steering_deg = -math.degrees(human["steering_angle_rad"])
-    wheel_deg = steering_deg * binding.HUMAN_STEERING_RATIO
+    flags = [name for name, key in (("COLLISION", "collision"), ("OFF ROAD", "offroad")) if human[key] > 0.0]
+    if human["engine_stalled"]:
+        flags.append("STALLED")
     print(
-        f"t={step_idx * dt:6.1f}s  "
-        f"wheel {wheel_state.steering_norm:+.2f} ({wheel_deg:+7.1f}deg) -> road {steering_deg:+6.2f}deg  |  "
-        f"thr {wheel_state.throttle_norm:.2f} brk {wheel_state.brake_norm:.2f} clu {wheel_state.clutch_norm:.2f}  |  "
-        f"{human['speed_mps'] * 3.6:5.1f} km/h  g{human['gear']:+d} {human['engine_rpm']:5.0f}rpm"
-        f"{' STALL' if human['engine_stalled'] else '     '}  a_long {human['accel_long_mps2']:+5.2f}  "
-        f"a_lat {human['accel_lat_mps2']:+6.2f}" + ("  [COLLISION]" if human["collision"] > 0 else "")
+        f"t={step_idx * dt:6.1f}s  {abs(human['speed_mps']) * MPS_TO_KMH:5.1f} km/h  "
+        f"gear {gear_label(human['gear'], human['gearbox_mode']):>3s}  "
+        f"throttle {100 * wheel_state.throttle_norm:3.0f}%  brake {100 * wheel_state.brake_norm:3.0f}%  "
+        + "  ".join(flags)
     )
 
 
@@ -102,9 +132,46 @@ def cycle_level(loop, current_index):
     return next_index
 
 
-def apply_window_keys(window, loop, level_index=0):
-    """Window keys drive the demo: cameras, night, level, car takeover, engine restart."""
+def cycle_assist(loop, blend_target):
+    current = loop.env.get_assist_state()["mode"]
+    next_mode = ASSIST_MODE_CYCLE[(ASSIST_MODE_CYCLE.index(current) + 1) % len(ASSIST_MODE_CYCLE)]
+    loop.env.set_assist_mode(next_mode, blend_target)
+    print(f"  assist -> {next(name for name, mode in ASSIST_MODES_BY_NAME.items() if mode == next_mode)}")
+
+
+class WheelButtonCommands:
+    """Turns wheel buttons into demo commands on the press, so holding a button does not repeat it."""
+
+    def __init__(self, button_map):
+        self.button_map = button_map
+        self._held = frozenset()
+
+    def poll(self, wheel_state):
+        held = self.button_map.pressed(wheel_state.buttons, wheel_state.hat)
+        pressed_now, self._held = held - self._held, held
+        return {WHEEL_BUTTON_COMMANDS[name]: True for name in pressed_now if name in WHEEL_BUTTON_COMMANDS}
+
+
+def adjust_ffb_gain(force_loop, step):
+    if force_loop is None:
+        return
+    output = force_loop.output
+    output.force_gain = min(FFB_GAIN_MAX, max(FFB_GAIN_MIN, round(output.force_gain + step, 2)))
+    print(f"  force feedback gain -> {output.force_gain:.2f}")
+
+
+def apply_window_keys(window, loop, level_index=0, wheel_commands=None, force_loop=None, assist_blend=0.5):
+    """Window keys and wheel buttons drive the demo: cameras, night, level, assist, car takeover, engine restart."""
     keys = window.poll()
+    keys.update(wheel_commands or {})
+    if keys.get("cycle_assist"):
+        cycle_assist(loop, assist_blend)
+    if keys.get("cycle_camera"):
+        window.set_camera_mode((window.camera_mode + 1) % CAMERA_MODE_COUNT)
+    if keys.get("ffb_gain_up"):
+        adjust_ffb_gain(force_loop, FFB_GAIN_STEP)
+    if keys.get("ffb_gain_down"):
+        adjust_ffb_gain(force_loop, -FFB_GAIN_STEP)
     if keys.get("cycle_level"):
         level_index = cycle_level(loop, level_index)
     for name, camera_mode in (("camera_chase", 0), ("camera_driver", 1), ("camera_agent", 2)):
@@ -117,6 +184,7 @@ def apply_window_keys(window, loop, level_index=0):
     if keys.get("next_agent"):
         total = loop.observations.shape[0]
         loop.select_human_agent((loop.human_agent_idx + 1) % total)
+        window.set_human_agent(loop.human_agent_idx)
     return level_index
 
 
@@ -136,16 +204,19 @@ def main():
     parser.add_argument("--buttons", default="wheel_buttons.json")
     parser.add_argument("--steps", type=int, default=400)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--device", default="cpu")
-    parser.add_argument(
-        "--render", action="store_true", help="open a window (needs make -C pufferlib/ocean/drive/render)"
-    )
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu",
+                        help="where the traffic policy runs; the GPU removes a once-per-step render hitch")
+    parser.add_argument("--render", action="store_true", help="open the CARLA-rendered window (needs a CARLA server)")
+    parser.add_argument("--carla-host", default="localhost")
+    parser.add_argument("--carla-port", type=int, default=2000)
     parser.add_argument("--camera", default="chase", choices=CAMERA_MODE_NAMES)
     parser.add_argument("--night", action="store_true")
     parser.add_argument("--ffb", action="store_true", help="force feedback (needs the wheel connected)")
-    parser.add_argument("--ffb-gain", type=float, default=0.55, help="overall force strength, 0-1")
+    parser.add_argument("--ffb-gain", type=float, default=DEFAULT_FORCE_GAIN, help="overall force strength, 0-1")
     parser.add_argument("--calibrate", action="store_true", help="calibrate the wheel before driving")
     parser.add_argument("--level", default="normal", choices=LEVEL_NAMES, help="how the surrounding traffic behaves")
+    parser.add_argument("--assist", default="off", choices=tuple(ASSIST_MODES_BY_NAME), help="steering assist mode")
+    parser.add_argument("--assist-blend", type=float, default=0.5, help="blend mode: share of steering the policy gets")
     args = parser.parse_args()
 
     if args.calibrate:
@@ -158,7 +229,8 @@ def main():
     if args.input == "wheel" and calibration_path is None:
         print(f"warning: {args.calibration} not found, using default calibration", file=sys.stderr)
 
-    wheel, _ = build_wheel_input(args.input, calibration_path, button_map_path)
+    wheel, button_map = build_wheel_input(args.input, calibration_path, button_map_path)
+    wheel_buttons = WheelButtonCommands(button_map) if button_map is not None else None
     config = DemoConfig(
         checkpoint_path=os.path.expanduser(args.checkpoint),
         town=choose_town(args.town),
@@ -171,11 +243,23 @@ def main():
     )
 
     loop = WheelDemoLoop(config, wheel)
-    window = DemoWindow(CAMERA_MODE_NAMES.index(args.camera), args.night) if args.render else None
+    loop.env.set_assist_mode(ASSIST_MODES_BY_NAME[args.assist], args.assist_blend)
+    window = None
+    if args.render:
+        window = CarlaDemoWindow(
+            loop.env,
+            config.town,
+            loop.human_agent_idx,
+            loop.substep_dt,
+            camera_mode=CAMERA_MODE_NAMES.index(args.camera),
+            night_mode=args.night,
+            host=args.carla_host,
+            port=args.carla_port,
+        )
     force_loop = None
     if args.ffb:
         force_loop = ForceFeedbackLoop(
-            G920ForceFeedback(force_gain=args.ffb_gain, wheel_range_deg=900),
+            platform_force_output(force_gain=args.ffb_gain),
             loop.car_feel,
             binding.HUMAN_STEERING_LIMIT_RAD,
         ).start()
@@ -191,11 +275,21 @@ def main():
     changed = apply_level(loop.env, starting_level)
     print(f"level: {starting_level.name} - {starting_level.description} ({changed} cars)")
 
-    def on_substep(substep_idx, _wheel_state):
+    def on_substep(substep_idx, wheel_state):
         if window is None:
             return
-        window.draw(loop.env, substep_idx * loop.substep_dt)
-        state["level_index"] = apply_window_keys(window, loop, state["level_index"])
+        window.draw(
+            loop.human_state(),
+            wheel_state,
+            substep_idx * loop.substep_dt,
+            assist=loop.env.get_assist_state(),
+            level_name=LEVELS[state["level_index"]].name,
+            ffb_gain=force_loop.output.force_gain if force_loop is not None else None,
+        )
+        wheel_commands = wheel_buttons.poll(wheel_state) if wheel_buttons is not None else None
+        state["level_index"] = apply_window_keys(
+            window, loop, state["level_index"], wheel_commands, force_loop, args.assist_blend
+        )
 
     try:
         for step_idx in range(args.steps):

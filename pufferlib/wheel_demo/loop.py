@@ -166,6 +166,7 @@ class WheelDemoLoop:
         human = self.env.get_human_state()
         if human is None:
             return None
+        assist = self.env.get_assist_state()
         now_s = time.perf_counter()
         steering_angle_rad = -human["steering_angle_rad"]
         interval_s = max(now_s - self._last_feel_time_s, 1e-4)
@@ -180,7 +181,17 @@ class WheelDemoLoop:
             tire_grip_mps2=binding.HUMAN_TIRE_GRIP_MPS2,
             collision=human["collision"] > 0.0,
             offroad=human["offroad"] > 0.0,
+            assist_target_steering_rad=self._assist_wheel_target(assist),
+            assist_full=assist["mode"] == binding.ASSIST_MODE_FULL,
         )
+
+    @staticmethod
+    def _assist_wheel_target(assist):
+        """The policy's angle in driver terms when the assist acts through the wheel (NUDGE, FULL)."""
+        steers_the_wheel = assist["mode"] in (binding.ASSIST_MODE_NUDGE, binding.ASSIST_MODE_FULL)
+        if not steers_the_wheel or not assist["reference_valid"]:
+            return None
+        return -assist["reference_steering_rad"]
 
     def render_poses(self, substep_idx):
         """World poses for drawing. Under SUBSTEP_MODE_ALL these are the real poses; under

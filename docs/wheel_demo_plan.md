@@ -106,6 +106,7 @@ CI runs unit + eval + C-drive + notebooks on PRs into `3.0`.
 | D8 | **Native raylib renderer in C**, restored from `9f717623^:render.h`, as a demo-only build target kept out of the training extension | User decision. Lowest latency, and 1800 lines of working PufferDrive drawing code already exist in history. |
 | D9 | **Levels shift reward-coef *sampling bounds*, not fixed values** | Pinning every partner to one coef vector makes all traffic behave identically. Shifting the sampling window keeps driver-personality diversity while moving the mean. |
 | D10 | **Input layer behind one interface with swappable backends** (macOS IOKit, Linux evdev/SDL2, and a synthetic/replay source) | Mac dev + Linux/Windows demo. The synthetic source is also what makes the whole loop testable headless in CI. |
+| D11 | **CARLA renders the demo; supersedes D8** (2026-10-30) | User decision after driving it: real towns with buildings and trees give speed perception the road-only raylib view could not. The sim stays the only source of truth; CARLA actors are physics-less and posed from it each frame, CARLA's lights mirror the sim's, and heights come from CARLA's road surface for the render only. Needs Python <= 3.12 (CARLA client wheels). |
 
 ---
 

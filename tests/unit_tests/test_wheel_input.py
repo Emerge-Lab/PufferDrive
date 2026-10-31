@@ -57,6 +57,8 @@ READER_ERROR_TIMEOUT_SECONDS = 2.0
 READER_POLL_INTERVAL_SECONDS = 0.005
 
 PEDAL_NAMES = ("throttle", "brake", "clutch")
+CONTRACT_BRAKE_RESPONSE_GAMMA = 0.4
+CONTRACT_THROTTLE_RESPONSE_GAMMA = 1.6
 
 
 def _make_report(
@@ -185,7 +187,10 @@ def test_pedal_deadzone_zeroes_small_travel_and_rescales_to_full_range():
 
     assert calibration.pedal_to_norm(inside_deadzone_raw, "throttle") == 0.0
     assert calibration.pedal_to_norm(PEDAL_RAW_FLOORED, "throttle") == 1.0
-    assert calibration.pedal_to_norm(half_travel_raw, "throttle") == pytest.approx(0.5, abs=1e-2)
+    assert calibration.pedal_to_norm(half_travel_raw, "clutch") == pytest.approx(0.5, abs=1e-2)
+    assert calibration.pedal_to_norm(half_travel_raw, "throttle") == pytest.approx(
+        0.5**CONTRACT_THROTTLE_RESPONSE_GAMMA, abs=1e-2
+    )
 
 
 def test_pedal_with_non_inverted_calibration_still_maps_rest_to_zero():
@@ -194,7 +199,7 @@ def test_pedal_with_non_inverted_calibration_still_maps_rest_to_zero():
     assert calibration.pedal_to_norm(240, "brake") == 1.0
     # Half travel yields MORE than half braking: the brake curve is deliberately progressive
     # (brake_response_gamma), so a light press bites harder than a linear pedal would.
-    assert calibration.pedal_to_norm(126, "brake") == pytest.approx(0.5**0.6, abs=1e-2)
+    assert calibration.pedal_to_norm(126, "brake") == pytest.approx(0.5**CONTRACT_BRAKE_RESPONSE_GAMMA, abs=1e-2)
     assert calibration.pedal_to_norm(126, "brake") > 0.5
 
 
@@ -708,26 +713,91 @@ def test_g920_backend_constructs_without_touching_hardware():
     assert wheel._device is None
 
 
-def _g920_is_connected():
-    try:
-        import hid
-    except ImportError:
-        return None
-    try:
-        return bool(hid.enumerate(G920_VENDOR_ID, G920_PRODUCT_ID))
-    except Exception:
-        return None
+class EmptyHidModule:
+    """A hid backend that sees no devices and refuses to open one."""
+
+    def enumerate(self, vendor_id, product_id):
+        assert (vendor_id, product_id) == (G920_VENDOR_ID, G920_PRODUCT_ID)
+        return []
+
+    def device(self):
+        raise AssertionError("nothing may be opened when no wheel was found")
 
 
-def test_hid_backend_fails_fast_when_no_wheel_is_connected():
-    connected = _g920_is_connected()
-    if connected is None:
-        pytest.skip("hidapi is unavailable, so the raw-HID backend cannot be exercised")
-    if connected:
-        pytest.skip("a G920 is connected, so the absent-device path cannot be exercised")
+def test_hid_backend_fails_fast_when_no_wheel_is_connected(monkeypatch):
+    from pufferlib.wheel_demo.input import g920
 
-    from pufferlib.wheel_demo.input.g920 import G920HidInput, find_g920_interfaces
+    monkeypatch.setattr(g920, "hid_module", lambda: EmptyHidModule())
+    monkeypatch.setattr(g920, "set_darwin_non_exclusive", lambda: None)
 
-    assert find_g920_interfaces()["axes"] is None
+    assert g920.find_g920_interfaces()["axes"] is None
     with pytest.raises(RuntimeError, match="No G920 axis interface found"):
-        G920HidInput()._open()
+        g920.G920HidInput()._open()
+
+
+# ---- pedal response curves ----
+
+PEDAL_CURVE_SAMPLES = 64
+
+
+def raw_for_travel(travel_norm):
+    return PEDAL_RAW_RELEASED * (1.0 - travel_norm)
+
+
+def test_pedal_response_defaults():
+    calibration = WheelCalibration()
+    assert calibration.brake_response_gamma == CONTRACT_BRAKE_RESPONSE_GAMMA
+    assert calibration.throttle_response_gamma == CONTRACT_THROTTLE_RESPONSE_GAMMA
+
+
+@pytest.mark.parametrize("travel_norm", [0.1, 0.25, 0.5, 0.8])
+def test_each_pedal_follows_its_own_curve(travel_norm):
+    calibration = WheelCalibration(pedal_deadzone_norm=0.0)
+    raw = raw_for_travel(travel_norm)
+    assert calibration.pedal_to_norm(raw, "throttle") == pytest.approx(travel_norm**CONTRACT_THROTTLE_RESPONSE_GAMMA)
+    assert calibration.pedal_to_norm(raw, "brake") == pytest.approx(travel_norm**CONTRACT_BRAKE_RESPONSE_GAMMA)
+    assert calibration.pedal_to_norm(raw, "clutch") == pytest.approx(travel_norm)
+
+
+def test_part_throttle_gives_less_than_linear_and_full_is_still_full():
+    calibration = WheelCalibration(pedal_deadzone_norm=0.0)
+    assert calibration.pedal_to_norm(raw_for_travel(0.5), "throttle") < 0.5
+    assert calibration.pedal_to_norm(PEDAL_RAW_FLOORED, "throttle") == 1.0
+    assert calibration.pedal_to_norm(PEDAL_RAW_RELEASED, "throttle") == 0.0
+
+
+@pytest.mark.parametrize("pedal", PEDAL_NAMES)
+def test_pedal_curves_are_monotone(pedal):
+    calibration = WheelCalibration()
+    values = [calibration.pedal_to_norm(raw_for_travel(i / PEDAL_CURVE_SAMPLES), pedal) for i in range(PEDAL_CURVE_SAMPLES + 1)]
+    assert all(b >= a for a, b in zip(values, values[1:]))
+
+
+def test_throttle_gamma_is_configurable():
+    calibration = WheelCalibration(pedal_deadzone_norm=0.0, throttle_response_gamma=1.0)
+    assert calibration.pedal_to_norm(raw_for_travel(0.5), "throttle") == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("gamma", [0.99, 0.5, 0.0, -1.0, math.nan, math.inf])
+def test_throttle_gamma_must_be_finite_and_at_least_one(gamma):
+    with pytest.raises(ValueError):
+        WheelCalibration(throttle_response_gamma=gamma)
+
+
+@pytest.mark.parametrize("gamma", [1.0, 1.6, 3.0])
+def test_throttle_gamma_accepts_finite_values_from_one(gamma):
+    assert WheelCalibration(throttle_response_gamma=gamma).throttle_response_gamma == gamma
+
+
+def test_calibration_file_without_curve_keys_gets_the_default_curves(tmp_path):
+    path = tmp_path / "old_calibration.json"
+    path.write_text(json.dumps({"throttle_raw_rest": 255, "throttle_raw_floor": 0}))
+    calibration = WheelCalibration.from_json(path)
+    assert calibration.throttle_response_gamma == CONTRACT_THROTTLE_RESPONSE_GAMMA
+    assert calibration.brake_response_gamma == CONTRACT_BRAKE_RESPONSE_GAMMA
+
+
+def test_throttle_gamma_round_trips_through_json(tmp_path):
+    path = tmp_path / "calibration.json"
+    WheelCalibration(throttle_response_gamma=2.2).to_json(path)
+    assert WheelCalibration.from_json(path).throttle_response_gamma == 2.2

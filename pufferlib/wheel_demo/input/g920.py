@@ -28,26 +28,63 @@ BUTTON_NIBBLE_SHIFT = 4
 BUTTON_BYTE2_SHIFT = 4
 BUTTON_BYTE3_SHIFT = 12
 BUTTON_MASK_BIT_COUNT = 20
+HAT_DIRECTION_COUNT = 8
 
 HID_READ_BUFFER_BYTES = 64
 HID_POLL_INTERVAL_S = 0.001
 
 
+FACE_BUTTON_NAMES = ("a", "b", "x", "y", "view", "menu", "lsb", "rsb")
+DPAD_DIRECTION_NAMES = ("up", "right", "down", "left")
+
+
 @dataclass(frozen=True)
 class ButtonMap:
-    """Bit positions within the 20-bit button mask. None = not yet mapped on this unit."""
+    """Bit positions within the 20-bit button mask, and the hat value of each D-pad direction.
+    None = not yet mapped on this unit."""
 
     shift_up_bit: int = None
     shift_down_bit: int = None
+    a_bit: int = None
+    b_bit: int = None
+    x_bit: int = None
+    y_bit: int = None
+    view_bit: int = None
+    menu_bit: int = None
+    lsb_bit: int = None
+    rsb_bit: int = None
+    dpad_up_hat: int = None
+    dpad_right_hat: int = None
+    dpad_down_hat: int = None
+    dpad_left_hat: int = None
 
     def __post_init__(self):
-        for field_name in ("shift_up_bit", "shift_down_bit"):
+        bit_fields = ["shift_up_bit", "shift_down_bit"] + [f"{name}_bit" for name in FACE_BUTTON_NAMES]
+        for field_name in bit_fields:
             bit = getattr(self, field_name)
             if bit is not None and not 0 <= bit < BUTTON_MASK_BIT_COUNT:
                 raise ValueError(
                     f"{field_name}={bit} is outside the {BUTTON_MASK_BIT_COUNT}-bit button mask; "
-                    "such a bit can never match, so the shift would silently never fire"
+                    "such a bit can never match, so the control would silently never fire"
                 )
+        for direction in DPAD_DIRECTION_NAMES:
+            hat = getattr(self, f"dpad_{direction}_hat")
+            if hat is not None and not 0 <= hat < HAT_DIRECTION_COUNT:
+                raise ValueError(f"dpad_{direction}_hat={hat} is not a hat direction (0..{HAT_DIRECTION_COUNT - 1})")
+        mapped = [getattr(self, name) for name in bit_fields if getattr(self, name) is not None]
+        if len(mapped) != len(set(mapped)):
+            raise ValueError(f"two controls share one button bit: {mapped}")
+        hats = [getattr(self, f"dpad_{d}_hat") for d in DPAD_DIRECTION_NAMES if getattr(self, f"dpad_{d}_hat") is not None]
+        if len(hats) != len(set(hats)):
+            raise ValueError(f"two D-pad directions share one hat value: {hats}")
+
+    def pressed(self, buttons, hat):
+        """Names of the mapped face buttons and D-pad directions held in this report."""
+        names = [name for name in FACE_BUTTON_NAMES if getattr(self, f"{name}_bit") is not None
+                 and buttons & (1 << getattr(self, f"{name}_bit"))]
+        names += [f"dpad_{direction}" for direction in DPAD_DIRECTION_NAMES
+                  if getattr(self, f"dpad_{direction}_hat") == hat]
+        return frozenset(names)
 
     def require_shift_bits(self):
         if self.shift_up_bit is None or self.shift_down_bit is None:
@@ -96,6 +133,17 @@ def parse_g920_report(report, calibration):
     }
 
 
+def hid_module():
+    # On Linux pip's `hid` is the libusb backend: usages read 0 and opening detaches the kernel driver.
+    if sys.platform == "linux":
+        import hidraw
+
+        return hidraw
+    import hid
+
+    return hid
+
+
 def set_darwin_non_exclusive():
     """macOS hidapi seizes a device on open, which would make the axis interface and the HID++
     force-feedback interface mutually exclusive. The toggle is absent from the Python binding but
@@ -111,10 +159,8 @@ def set_darwin_non_exclusive():
 
 
 def find_g920_interfaces():
-    import hid
-
     found = {"axes": None, "vendor": []}
-    for entry in hid.enumerate(G920_VENDOR_ID, G920_PRODUCT_ID):
+    for entry in hid_module().enumerate(G920_VENDOR_ID, G920_PRODUCT_ID):
         if entry["usage_page"] == GENERIC_DESKTOP_USAGE_PAGE and entry["usage"] == JOYSTICK_USAGE:
             found["axes"] = entry["path"]
         elif entry["usage_page"] == LOGITECH_VENDOR_USAGE_PAGE:
@@ -131,16 +177,15 @@ class G920HidInput(WheelInput):
         self._device = None
 
     def _open(self):
-        import hid
-
         set_darwin_non_exclusive()
         interfaces = find_g920_interfaces()
         if interfaces["axes"] is None:
             raise RuntimeError(
                 f"No G920 axis interface found (vid=0x{G920_VENDOR_ID:04x} pid=0x{G920_PRODUCT_ID:04x}). "
-                "Check the wheel is connected and, on macOS, that Input Monitoring is granted."
+                "Check the wheel is connected and, on macOS, that Input Monitoring is granted; on Linux, "
+                "that the udev rule in docs/wheel_demo_setup.md is installed."
             )
-        self._device = hid.device()
+        self._device = hid_module().device()
         self._device.open_path(interfaces["axes"])
         self._device.set_nonblocking(True)
 

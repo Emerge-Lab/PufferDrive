@@ -41,6 +41,11 @@ HUMAN_STATE_KEYS = {
     "engine_rpm",
     "engine_stalled",
     "max_speed_mps",
+    "lane_speed_limit_mps",
+    "overspeed_tolerance_mps",
+    "goal_x",
+    "goal_y",
+    "goal_idx",
 }
 
 

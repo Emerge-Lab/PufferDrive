@@ -1,7 +1,8 @@
 # Wheel demo — setting up on a new machine (Linux)
 
 Everything needed to go from a bare Linux box to the steering-wheel demo running. Written for
-Ubuntu 22.04/24.04; adjust package names for other distributions.
+Ubuntu 22.04/24.04; adjust package names for other distributions. Verified end to end on Ubuntu
+24.04 with an RTX 4080 on 2026-10-30, without sudo for the working user.
 
 The companion documents are [`wheel_demo_plan.md`](wheel_demo_plan.md) (why the thing is built the
 way it is) and [`wheel_demo_handoff.md`](wheel_demo_handoff.md) (what state the work is in).
@@ -12,95 +13,86 @@ way it is) and [`wheel_demo_handoff.md`](wheel_demo_handoff.md) (what state the 
 
 **In git, nothing to do:**
 
-- All 8 CARLA towns (`pufferlib/resources/drive/binaries/carla/opendrive__Town*.bin`).
-- The recorded G920 traces used as test fixtures (`tests/fixtures/g920/`). These cost real time at
-  the wheel — they never need recording again.
-- The wheel calibration (`wheel_calibration.json`, `wheel_buttons.json` at the repo root). These
-  were untracked until now, which would have silently fallen back to defaults with an unreachable
-  brake floor. See §6.
-- Car models (`pufferlib/resources/drive/*.glb`).
-- **The trained policy**, at `weights/k_scaled_0050_1000/` — the frozen checkpoint that drives all
-  the traffic, plus the `config.yaml` the env is built from. `run_demo.py` defaults to it, so the
-  demo runs with no flags at all. Detail in §4a.
+- All 8 CARLA towns as sim maps (`pufferlib/resources/drive/binaries/carla/opendrive__Town*.bin`).
+- The recorded G920 traces used as test fixtures (`tests/fixtures/g920/`).
+- The wheel calibration and the full button map (`wheel_calibration.json`, `wheel_buttons.json` at
+  the repo root). The button map was captured on Linux and covers both paddles, A/B/X/Y, View, Menu,
+  LSB, RSB and the D-pad. See §6.
+- **The trained policy**, at `weights/k_scaled_0050_1000/`. `run_demo.py` defaults to it. Detail in §4a.
 
-**Not in git, you must bring or recreate:**
+**Not in git, you must bring:**
 
+- **A CARLA 0.9.16 server** — the demo renders through CARLA (§3). The base package has Towns 01-05
+  and 10HD; Town06 and Town07 come from the separate AdditionalMaps package.
 - `.claude/settings.local.json` if you want the same permission rules (it is gitignored).
-- The vendored raylib is **macOS only** (`extern/raylib-5.5_macos`). Linux builds its own (§3).
-
----
 
 ## 1. System packages
 
-```bash
-sudo apt update
-sudo apt install -y build-essential git cmake pkg-config \
-                    libhidapi-dev libhidapi-hidraw0 \
-                    libgl1-mesa-dev libx11-dev xorg-dev libasound2-dev \
-                    libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
-```
+Nothing beyond a C toolchain is required: the pip `hidapi` wheel bundles its own HID library and the
+renderer is CARLA. Root is only needed for the udev rule in §7.3.
 
-- `libhidapi-*` — the wheel is read over hidraw through the `hidapi` Python package.
-- The X11/GL/ALSA set are raylib's build dependencies.
+```bash
+sudo apt install -y build-essential git
+```
 
 ## 2. Python environment
 
-The project uses **Python 3.13.7** managed by [uv](https://docs.astral.sh/uv/). Matching the minor
-version matters: the renderer is compiled against the interpreter's ABI (`EXT_SUFFIX`).
+**The demo runs on Python 3.12.** CARLA's Python client ships wheels for 3.10-3.12 only, and the sim,
+the policy and the CARLA client share one process. Python 3.13 still works for everything except
+rendering (the test suite passes on both).
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh      # if uv is not installed
 cd /path/to/PufferDrive
-uv venv --python 3.13.7 .venv
-source .venv/bin/activate
+uv venv --python 3.12 .venv312
+source .venv312/bin/activate
+uv pip install "torch==2.8.0" "numpy==1.26.4" "setuptools<81" wheel "pyarrow<22"
+uv pip install --no-build-isolation -e .
+uv pip install hidapi pytest "carla==0.9.16" pygame    # NOT declared in setup.py
 ```
 
-Then the dependencies. **`setup.py` does not declare everything the demo needs** — `hidapi` and
-`pytest` were installed ad hoc on the original machine and are not in `install_requires`:
+- `pyarrow<22`: unpinned, pip pulls pyarrow 26, which requires numpy 2; numpy is pinned to 1.26.4.
+- On a machine with a CUDA toolkit matching torch's (12.8 for torch 2.8.0), `-e .` also builds the
+  CUDA extension. The demo runs the traffic policy on the GPU by default when one is present
+  (`--device`), which removes a once-per-policy-step render hitch.
+- `run_demo.py` puts the repo root on `sys.path` itself (it needs the top-level `data_utils`), so it
+  runs from any working directory.
+
+## 3. The CARLA server
+
+The demo renders through a CARLA 0.9.16 server. Only the server binary is needed; nothing is built.
 
 ```bash
-pip install -e .              # numpy, gymnasium==0.29.1, pyyaml, torch, hydra-core, omegaconf, ...
-pip install hidapi pytest     # NOT declared in setup.py — required for the wheel and the tests
+export CARLA_ROOT=~/carla-0.9.16          # the directory containing CarlaUE4.sh
+scripts/wheel_demo/start_carla.sh         # keep it running in its own terminal
 ```
 
-`hidapi` provides the module imported as `hid`. Installed versions on the reference machine:
-`hidapi 0.15.0`, `pytest 9.2.0`, `torch 2.8.0`, `numpy 1.26.4`, `gymnasium 0.29.1`.
+- **Use your own copy of CARLA.** A shared install you cannot write to cannot take AdditionalMaps.
+  Copying it (19 GB) is enough: `cp -a /path/to/shared/carla ~/carla-0.9.16`.
+- **Town06 and Town07** need AdditionalMaps (14.8 GB):
+  ```bash
+  curl -fL -o ~/carla-0.9.16/Import/AdditionalMaps_0.9.16.tar.gz \
+    https://carla-releases.s3.us-east-005.backblazeb2.com/Linux/AdditionalMaps_0.9.16.tar.gz
+  cd ~/carla-0.9.16 && ./ImportAssets.sh && rm Import/AdditionalMaps_0.9.16.tar.gz
+  ```
+- **On a CPU with integrated graphics, CARLA silently renders on the iGPU** (Vulkan device 0): 132 ms
+  per frame instead of 11 ms. `start_carla.sh` points `VK_ICD_FILENAMES` at the NVIDIA driver to
+  prevent this. Check with `nvidia-smi`: `CarlaUE4-Linux-Shipping` must be listed.
+- Only one client can drive the CARLA world. Do not run tests or scripts that connect to CARLA while
+  someone is driving.
 
-> `torch` on the old machine is a CPU build. If the Linux box has a GPU and you want CUDA, install
-> the matching wheel from the PyTorch index. The demo runs the policy on CPU by default
-> (`--device cpu`) and that is fast enough: policy inference measures ~23 ms against a 300 ms budget.
-
-Note `pufferlib` is **not** pip-installed as a package — extensions are built in place and imports
-resolve from the working directory. **Always run from the repo root.**
-
-## 3. raylib 5.5
-
-The render Makefile's Linux branch links `-lraylib` and includes `/usr/local/include`. Distribution
-packages are often too old (Ubuntu 24.04 ships raylib 4.5), and `render.h` is written against 5.5,
-so build from source — it installs to `/usr/local` which is exactly where the Makefile looks:
+## 4. Build the sim extension
 
 ```bash
-git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git /tmp/raylib
-cmake -S /tmp/raylib -B /tmp/raylib/build \
-      -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build /tmp/raylib/build -j"$(nproc)"
-sudo cmake --install /tmp/raylib/build
-sudo ldconfig
+python setup.py build_ext --inplace --force     # pufferlib/ocean/drive/binding*.so
 ```
 
-## 4. Build the two extensions
+It must finish with **zero warnings**. The extension is built per interpreter (`EXT_SUFFIX`), so a
+3.12 and a 3.13 venv in the same checkout each need their own build. Never rebuild while a demo is
+running: the build overwrites the `.so` the running process has loaded.
 
-Two separate shared objects, deliberately: the training extension never links raylib (see #593).
-
-```bash
-cd /path/to/PufferDrive
-source .venv/bin/activate
-
-python setup.py build_ext --inplace --force     # the sim: pufferlib/ocean/drive/binding*.so
-make -C pufferlib/ocean/drive/render            # the renderer: drive_render*.so
-```
-
-Both must finish with **zero warnings from our own code** (raylib's own build may warn).
+The old raylib renderer (`pufferlib/ocean/drive/render/`, `make -C pufferlib/ocean/drive/render`) is
+no longer used by the demo.
 
 ## 4a. The policy checkpoint
 
@@ -194,8 +186,9 @@ stale — do not "fix" it by editing the assertion.
 ### Other constraints
 
 - At least **2 agents** (`--agents`, default 64): you plus traffic. Fewer raises.
-- Runs on CPU by default (`--device cpu`) and that is fast enough — policy inference measures ~23 ms
-  against a 300 ms budget at 64 agents.
+- Runs on the GPU when one is present (`--device cuda`, ~3 ms per policy step) and on CPU otherwise
+  (~12-23 ms); both fit the 300 ms policy step. On CPU the forward pass causes a visible render hitch
+  once per policy step.
 - The map is passed separately (`--town`); it is not part of the checkpoint.
 
 ## 5. Verify without touching the wheel
@@ -204,166 +197,136 @@ In order — each step rules out a layer:
 
 ```bash
 # 1. C simulation tests
-make -C tests/drive                 # expect "All test groups passed", Failed: 0
+make -C tests/drive                 # expect "All test groups passed" from every binary, 0 warnings
 
-# 2. C renderer maths (headless; raylib calls are redirected to capture stubs)
-make -C tests/drive render          # expect 15 PASS
-
-# 3. Python suite
+# 2. Python suite (both venvs, if you keep both)
 python -m pytest -q tests/unit_tests
-#    expect ~509 passed, 22 skipped, and ONE pre-existing failure:
-#    test_action_selection.py::test_drive_mean_action_is_exact_in_physical_units
-#    (fused_slot_encoder needs triton; unrelated to the wheel demo)
 
-# 4. The demo itself, no hardware, scripted input, with a window
-python scripts/wheel_demo/run_demo.py \
-  --town Town01 --input synthetic --steps 40 --render --camera chase
+# 3. The demo itself: no hardware, scripted input, rendered through CARLA (server running, §3)
+python scripts/wheel_demo/run_demo.py --town Town03 --input synthetic --steps 40 --render --camera chase
 ```
 
-Step 4 opens a window, drives a scripted lap and exits 0. If it segfaults immediately with no
-output, the renderer is the problem, not the sim.
+Step 3 opens a window, drives a scripted lap in real time and exits 0. Tests that need a live CARLA
+server are skipped unless `WHEEL_DEMO_CARLA_TESTS=1`.
 
-## 6. Wheel calibration
+## 6. Wheel calibration and buttons
 
-The calibration is 13 numbers and is **committed to the repo**, so if you are using the same
-physical G920 there is nothing to do — `run_demo.py` picks up `wheel_calibration.json` from the
-working directory by default.
+The calibration (`wheel_calibration.json`) and the button map (`wheel_buttons.json`) are committed.
+For the same physical G920 there is nothing to do.
 
-```json
-{"steering_raw_min": 0, "steering_raw_center": 32767, "steering_raw_max": 65535,
- "steering_deadzone_norm": 0.0, "pedal_deadzone_norm": 0.02,
- "throttle_raw_rest": 255, "throttle_raw_floor": 0,
- "brake_raw_rest":    255, "brake_raw_floor":    53,
- "clutch_raw_rest":   255, "clutch_raw_floor":   0}
-```
+`wheel_buttons.json` maps every control the demo uses (bits within the report's 20-bit button mask,
+hat values for the D-pad): right paddle 4, left paddle 5, A 0, B 1, X 2, Y 3, Menu 6, View 7, RSB 8,
+LSB 9; D-pad up/right/down/left = hat 0/2/4/6.
 
-`wheel_buttons.json` is `{"shift_up_bit": 4, "shift_down_bit": 5}` — right paddle bit 4, left bit 5.
-
-Two things worth knowing about these numbers:
-
-- **The brake bottoms at 53, not 0.** It is a progressive rubber stop, so a hard press only covers
-  79% of the travel the other pedals do. This is why the brake felt weak, and why
-  `brake_response_gamma` (default 0.6) now bends the curve so light presses bite harder.
-- Steering and the other two pedals cover their full electrical range, so a lock-to-lock sweep was
-  genuinely captured.
-
-**For a different physical wheel**, recalibrate:
+To re-map, or to re-capture only the controls that failed (the probe refuses a control unless exactly
+one bit changes):
 
 ```bash
-python scripts/wheel_demo/run_demo.py --calibrate
+python scripts/wheel_demo/probe_g920.py buttons --out wheel_buttons.json
+python scripts/wheel_demo/probe_g920.py buttons --out wheel_buttons.json --only a_bit,shift_down_bit
 ```
 
-It walks you through a steering sweep and each pedal, then validates the result and prints warnings
-for the mistakes that have actually happened before (rest captured mid-press, a sweep that never
-reached the stops, a brake far shorter than the other pedals).
+The G920 only sends a report when something changes: press Enter first, then press and hold. A
+button already held when recording starts is never seen.
+
+For a different physical wheel, recalibrate with `run_demo.py --calibrate`. The brake bottoms at raw
+53 on the reference unit, not 0; `brake_response_gamma` (0.4) makes light presses bite and
+`throttle_response_gamma` (1.6) tames part throttle. Both are `WheelCalibration` defaults.
 
 ---
 
-## 7. Linux porting — what is genuinely untested
+## 7. Linux — how each porting risk was resolved
 
-The demo was built and verified on macOS (Apple Silicon). The code has Linux branches, but the
-following were **never exercised on Linux**. In rough order of risk:
+### 7.1 HID backend
 
-### 7.1 HID interface selection — the most likely thing to break
+On Linux the pip `hidapi` wheel's `import hid` is the **libusb** backend: it reports `usage_page 0`,
+gives USB bus paths, and opening a device detaches the kernel driver. `import hidraw` from the same
+wheel is the hidraw backend and reports the descriptor's usages correctly (all three collections —
+joystick `0x0001/0x0004` and vendor `0xff43/0x0602`, `0xff43/0x0604` — share one node,
+`/dev/hidraw*`). `g920.hid_module()` picks `hidraw` on Linux and `hid` elsewhere; every opener uses it.
+On Linux the axis report arrives at up to ~600 Hz, only when something changes.
 
-`find_g920_interfaces()` in `pufferlib/wheel_demo/input/g920.py` picks interfaces by
-`usage_page`/`usage`:
+### 7.2 Force feedback
 
-```python
-if entry["usage_page"] == 0x0001 and entry["usage"] == 0x0004:   # axes
-elif entry["usage_page"] == 0xFF43:                               # Logitech vendor (force feedback)
-```
-
-hidapi fills these reliably on macOS and Windows. On Linux's hidraw backend they are parsed out of
-the report descriptor and **may come back as 0**, in which case `axes` stays `None` and the demo
-aborts with "no G920 axis interface found".
-
-Diagnose first — do not guess:
-
-```bash
-python -c "
-import hid
-for e in hid.enumerate(0x046D, 0xC262):
-    print(f\"path={e['path']} iface={e['interface_number']} \"
-          f\"usage_page=0x{e['usage_page']:04x} usage=0x{e['usage']:04x}\")
-"
-```
-
-If `usage_page` is `0x0000` for every entry, select by `interface_number` instead. Keep the macOS
-path intact and branch on `sys.platform`; do not replace it.
-
-### 7.2 Kernel driver ownership
-
-The G920 is claimed by the in-tree `hid-logitech-hidpp` driver, which implements force feedback
-itself through evdev. Our force feedback talks HID++ feature `0x8123` directly over hidraw. The two
-may conflict — the kernel driver can swallow the vendor reports, or reset effects underneath us.
-
-If force feedback is silent on Linux while the axes read fine, that is the first suspect. Options,
-in increasing order of intrusiveness: check whether writes to the vendor interface return an error;
-try the evdev force-feedback API instead (`FF_CONSTANT` via `/dev/input/eventN`, which is the
-idiomatic Linux route and what the `ForceFeedbackOutput` interface was designed to allow as a second
-backend); or unbind the kernel driver.
-
-**There is no Linux force-feedback backend written.** `ffb.py` has exactly two real outputs:
-`G920ForceFeedback` (HID++ over hidapi) and `RecordingForceOutput` (used by tests). The docstring
-naming "evdev/SDL (Linux)" describes the intended shape of the interface, not something implemented.
-Budget for writing one.
+Force feedback goes through the kernel's own `hid-logitech-hidpp` driver: `EvdevForceFeedback` uploads
+one `FF_CONSTANT` effect to the wheel's `/dev/input/eventN` and rewrites its level. It needs no root
+(the joystick node is `uaccess` by default) and does not fight the kernel driver. It refuses to start
+unless the kernel reports a 900-degree range. Sign verified by hand. `G920ForceFeedback` (raw HID++)
+remains the macOS path; `platform_force_output()` chooses.
 
 ### 7.3 Permissions
 
-macOS needs Input Monitoring granted to the foreground terminal. Linux needs a udev rule instead,
-or you will be running as root:
+Wheel input reads `/dev/hidraw*`, which is root-only by default. Install a udev rule **numbered below
+73** — systemd applies `uaccess` in `73-seat-late.rules`, so a `99-` rule silently grants nothing:
 
 ```bash
-sudo tee /etc/udev/rules.d/99-logitech-g920.rules >/dev/null <<'EOF'
+sudo tee /etc/udev/rules.d/70-logitech-g920.rules >/dev/null <<'RULES'
 KERNEL=="hidraw*", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c262", MODE="0660", TAG+="uaccess"
 SUBSYSTEM=="input", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c262", MODE="0660", TAG+="uaccess"
-EOF
+RULES
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-Replug the wheel afterwards. `TAG+="uaccess"` grants the locally logged-in user access, which is
-preferable to a group.
-
-The macOS-only exclusivity workaround (`set_darwin_non_exclusive`, which lets the axis and vendor
-interfaces be open at once) already no-ops off Darwin — `g920.py:103` guards on
-`sys.platform != "darwin"`. Linux hidraw does not open exclusively, so nothing is needed there.
+`getfacl /dev/hidrawN` must then show `user:<you>:rw-`. Without sudo, ask an admin to run it from an
+interactive `su - <admin>` shell (`su -c 'sudo ...'` cannot prompt for the password).
 
 ### 7.4 Wheel mode
 
-The G920 has an Xbox mode and a PC mode. The report layout this code parses (byte 0 report id `0x01`,
-bytes 4–5 steering u16 LE, bytes 6/7/8 throttle/brake/clutch, all pedals inverted) was verified on
-hardware in PC mode. If the bytes look like nonsense, check the mode switch before changing the
-parser.
+Verified on Linux in PC mode: the report layout is byte-identical to macOS (report id `0x01`, steering
+u16 LE in bytes 4-5, throttle/brake/clutch in 6/7/8, all inverted).
 
 ### 7.5 Rendering
 
-The Makefile's Linux branch is written but never compiled. It links
-`-lraylib -lGL -lm -lpthread -ldl -lrt -lX11`. On Wayland you may need to force X11
-(`SDL_VIDEODRIVER=x11`, or run under XWayland) — raylib's default Linux backend is GLFW/X11.
+CARLA, see §3. At 1280x720 on an RTX 4080: chase and top-down hold 60 fps, the driver view (with
+mirrors, one extra camera) about 50 fps; the sim always runs in real time and drops frames rather than
+slowing down.
 
 ---
 
 ## 8. Running it
 
+**From the desktop:** install the launcher once, then double-click "PufferDrive Wheel Demo" (also in
+the app menu). On GNOME, right-click the desktop icon once and choose "Allow Launching".
+
 ```bash
-source .venv/bin/activate
-python scripts/wheel_demo/run_demo.py --town ask --render --ffb --camera chase --steps 4000
+.venv312/bin/python scripts/wheel_demo/install_launcher.py
 ```
 
-`--town ask` lists all 8 towns and prompts. `--steps 4000` is about 20 minutes at dt=0.3.
+The launcher shows every setting below with the defaults pre-selected (Town03), starts the CARLA
+server when it is not running (or restarts it from `CARLA_ROOT`, default `~/carla-0.9.16`, when the
+running server lacks the chosen town), opens the demo, and comes back when it exits. Logs go to
+`~/.cache/pufferdrive_wheel_demo/`.
+
+**From a terminal:**
+
+```bash
+source .venv312/bin/activate
+python scripts/wheel_demo/run_demo.py --town ask --render --ffb --camera chase --steps 4000
+```
 
 | flag | meaning |
 | --- | --- |
 | `--checkpoint PATH` | a different policy; defaults to `weights/k_scaled_0050_1000/final_model.pt` |
-| `--input synthetic` | scripted input, no hardware — how CI exercises the loop |
-| `--calibrate` | run calibration before driving |
+| `--input synthetic` | scripted input, no hardware |
 | `--camera chase\|driver\|agent` | starting view |
-| `--gearbox manual\|automatic` | manual uses the clutch and paddles |
-| `--grip realistic\|kinematic` | realistic enforces a tyre-grip limit |
+| `--gearbox automatic\|manual` | manual uses the clutch and paddles |
+| `--grip realistic\|kinematic` | realistic understeers past the tyre limit |
 | `--level calm\|normal\|aggressive` | how the surrounding traffic behaves |
-| `--ffb`, `--ffb-gain 0..1` | force feedback and its overall strength (default 0.55, **untuned**) |
-| `--night` | night lighting with headlights and brake lights |
+| `--assist off\|display\|blend\|nudge\|full`, `--assist-blend` | steering assist (M9) |
+| `--ffb`, `--ffb-gain 0..1` | force feedback and its strength (default 0.7) |
+| `--night` | night, with street lights and headlights |
+| `--carla-host`, `--carla-port` | where the CARLA server is |
 
-In the window: `1` chase, `2` driver, `3` top-down, `N` night, `L` cycle traffic level,
-`TAB` take over the next car, `R` restart a stalled engine.
+On the wheel (the keyboard keys `1 2 3 N L M TAB R Esc` still work too):
+
+| control | does |
+| --- | --- |
+| A | cycle camera: chase, driver, top-down |
+| B | night / day |
+| X | traffic level: calm, normal, aggressive |
+| Y | take over the next car |
+| View | restart a stalled engine |
+| Menu | steering assist: off, display, blend, nudge, full |
+| D-pad up / down | force feedback stronger / weaker |
+| Left paddle, stopped | reverse (automatic) / downshift (manual) |
+| Right paddle, stopped | drive (automatic) / upshift (manual) |

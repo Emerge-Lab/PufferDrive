@@ -9,7 +9,12 @@ while driving costs an afternoon.
 import time
 
 from pufferlib.wheel_demo.input.base import WheelCalibration
-from pufferlib.wheel_demo.input.g920 import G920_REPORT_LENGTH, find_g920_interfaces, set_darwin_non_exclusive
+from pufferlib.wheel_demo.input.g920 import (
+    G920_REPORT_LENGTH,
+    find_g920_interfaces,
+    hid_module,
+    set_darwin_non_exclusive,
+)
 
 PEDAL_BYTE_IDX = {"throttle": 6, "brake": 7, "clutch": 8}
 STEERING_LOW_BYTE, STEERING_HIGH_BYTE = 4, 5
@@ -42,8 +47,6 @@ def collect(device, seconds):
 
 
 def open_wheel():
-    import hid
-
     set_darwin_non_exclusive()
     interfaces = find_g920_interfaces()
     if interfaces["axes"] is None:
@@ -51,7 +54,7 @@ def open_wheel():
             "no G920 axis interface found. Connect the wheel; on macOS grant Input Monitoring to this "
             "terminal and run in the foreground."
         )
-    device = hid.device()
+    device = hid_module().device()
     device.open_path(interfaces["axes"])
     device.set_nonblocking(True)
     return device
