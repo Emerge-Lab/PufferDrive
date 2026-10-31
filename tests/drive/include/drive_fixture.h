@@ -38,6 +38,7 @@ static inline Agent drive_test_agent(float x, float y, float heading) {
     agent.sim_valid = 1;
     agent.current_lane_idx = 1;
     agent.previous_lane_idx = 1;
+    agent.red_light_latched_idx = -1;
     agent.wheelbase = 2.7f;
     copy_pose_to_prev(&agent);
     update_agent_radius(&agent);

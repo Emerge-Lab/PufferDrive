@@ -87,10 +87,12 @@ env:
   yield_signs_enabled: false
   # Skip red light violation detection (metrics, reward, behavior)
   disable_red_light_infractions: false
-  # Training-only gap (m) around the ego for red light detection: fires once the front edge comes within it of the
-  # stop line, or once the rear edge still sits within it behind the line on red (a yellow entry must clear the line);
-  # eval and co-sim use the real front and rear edges
+  # Red light violation = the stop line lies between the ego's tail clearance point (rear edge - 1 m, what CARLA's
+  # RunningRedLightTest scores) and its front edge while red, moving or standing: a yellow entry must clear the line
+  # by 1 m. Training-only margins (m): the front one makes the front edge stop that much earlier, the rear one covers
+  # exported lines sitting up to 1 m off CARLA's; eval and co-sim use the real edges
   red_light_train_front_margin_m: 0.3
+  red_light_train_rear_margin_m: 1.0
   # Skip stop sign violation detection (metrics, reward, behavior); the sign obs still turn red/green
   disable_stop_sign_infractions: false
   # Cycle the lights of a junction phase-by-phase (TLPHASE1 bins); false keeps independent lights (legacy)

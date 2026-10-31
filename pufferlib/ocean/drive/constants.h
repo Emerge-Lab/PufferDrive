@@ -193,6 +193,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define RED_LIGHT_TRIGGER_DIST_SQ (30.0f * 30.0f)
 #define RED_LIGHT_LATERAL_EXTENSION_M 15.0f // Beyond each stop line endpoint, so the line cannot be driven around
 #define RED_LIGHT_ENTER_HEADING_THRESHOLD (M_PI / 2.0f)
+#define RED_LIGHT_TAIL_CLEARANCE_M 1.0f // CARLA's RunningRedLightTest scores the tail down to 1 m behind the rear edge
 
 // Stop sign violation detection (CaRL RunStopSign2 semantics, trigger box centred on the stop line)
 #define STOP_SIGN_PROXIMITY_DIST_SQ (20.0f * 20.0f)

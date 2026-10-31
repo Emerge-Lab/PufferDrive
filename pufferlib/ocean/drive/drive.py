@@ -138,6 +138,7 @@ class Drive(pufferlib.PufferEnv):
         obs_norm_z_m=10.0,
         eval_perceived_size_margin_m=0.1,
         red_light_train_front_margin_m=0.3,
+        red_light_train_rear_margin_m=1.0,
         obs_partner_split_length_m=0.0,
         obs_lane_width_clip_min_m=0.0,
         obs_lane_width_clip_max_m=0.0,
@@ -336,6 +337,11 @@ class Drive(pufferlib.PufferEnv):
         if not np.isfinite(self.red_light_train_front_margin_m) or self.red_light_train_front_margin_m < 0.0:
             raise ValueError(
                 f"red_light_train_front_margin_m must be finite and >= 0. Got: {red_light_train_front_margin_m}"
+            )
+        self.red_light_train_rear_margin_m = float(red_light_train_rear_margin_m)
+        if not np.isfinite(self.red_light_train_rear_margin_m) or self.red_light_train_rear_margin_m < 0.0:
+            raise ValueError(
+                f"red_light_train_rear_margin_m must be finite and >= 0. Got: {red_light_train_rear_margin_m}"
             )
         self.obs_partner_split_length_m = float(obs_partner_split_length_m)
         if not np.isfinite(self.obs_partner_split_length_m) or self.obs_partner_split_length_m < 0.0:
@@ -669,6 +675,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_norm_z_m": self.obs_norm_z_m,
             "eval_perceived_size_margin_m": self.eval_perceived_size_margin_m,
             "red_light_train_front_margin_m": self.red_light_train_front_margin_m,
+            "red_light_train_rear_margin_m": self.red_light_train_rear_margin_m,
             "obs_partner_split_length_m": self.obs_partner_split_length_m,
             "obs_lane_width_clip_min_m": self.obs_lane_width_clip_min_m,
             "obs_lane_width_clip_max_m": self.obs_lane_width_clip_max_m,

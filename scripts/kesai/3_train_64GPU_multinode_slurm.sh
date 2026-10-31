@@ -24,7 +24,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=${RUN_NAME:-k_scaled_0065_${SEED}}
+export RUN_NAME=${RUN_NAME:-k_scaled_0066_${SEED}}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -54,9 +54,11 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # Blocking env workers: kesai nodes give 60 threads per rank (--exclusive); vec.num_envs=60 is one worker per thread (0053/0059,
 # ~25 M SPS vs ~21.5 M with 32). 0063 ran 256 workers per rank (4.3x oversubscribed, 75 GB per GPU): +18% SPS from the worker count
 # but ~55% sample efficiency on goals/speed at 1e12 steps, so 60 stays the default. GPU memory ~21 GB fixed + 0.22 GB per 1024-agent worker (fp16).
-# A second instance needs its own RUN_NAME (plain VAR=... sbatch did not propagate on kesai): sbatch --export=ALL,RUN_NAME=k_scaled_0066_1000 scripts/kesai/3_train_64GPU_multinode_slurm.sh
-# 0065 = 0064 (the 0059 config, puffer_drive.yaml defaults, float16 rollout buffer) + rear-edge red light detection: 0064 drove through
-# LB1's 2 s yellow traps at 5-6 m/s (64 red lights on longest6 v1). Other overrides are run identity, logging, maps and hardware.
+# A second instance needs its own RUN_NAME (plain VAR=... sbatch did not propagate on kesai): sbatch --export=ALL,RUN_NAME=k_scaled_0067_1000 scripts/kesai/3_train_64GPU_multinode_slurm.sh
+# 0066 = 0065 (the 0059 config, puffer_drive.yaml defaults, float16 rollout buffer) with the red light test rewritten as CARLA's
+# static footprint test (line between tail clearance point and front edge on red): 0065's rear-edge crossing test let it park with
+# its tail on the line at yellow and creep on red (longest6 v1 66.2, v2 55.5, 70 red lights). Other overrides are run identity,
+# logging, maps and hardware.
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
