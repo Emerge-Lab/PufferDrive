@@ -49,6 +49,7 @@ DEFAULTS = {
     "grip": "realistic",
     "input": "wheel",
     "minutes": 20,
+    "window": "fullscreen",
 }
 
 COLOR_BG = "#14161b"
@@ -119,6 +120,8 @@ def demo_command(settings):
     ]
     if settings["night"] == "night":
         command.append("--night")
+    if settings["window"] == "fullscreen":
+        command.append("--fullscreen")
     if settings["ffb"] and settings["input"] == "wheel":
         command += ["--ffb", "--ffb-gain", f"{settings['ffb_gain'] / 100.0:.2f}"]
     return command
@@ -194,6 +197,8 @@ class Launcher:
             ("Camera", lambda r: self._segmented(settings, "camera", (("chase", "Chase"), ("driver", "Driver"),
                                                                        ("agent", "Top-down")), r, 1)),
             ("Time of day", lambda r: self._segmented(settings, "night", (("day", "Day"), ("night", "Night")), r, 1)),
+            ("Window", lambda r: self._segmented(settings, "window", (("fullscreen", "Full screen"),
+                                                                       ("windowed", "Windowed")), r, 1)),
             ("Traffic", lambda r: self._segmented(settings, "level", (("calm", "Calm"), ("normal", "Normal"),
                                                                        ("aggressive", "Aggressive")), r, 1)),
             ("Steering assist", lambda r: self._segmented(settings, "assist", (("off", "Off"), ("display", "Display"),

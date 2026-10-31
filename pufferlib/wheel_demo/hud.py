@@ -88,6 +88,8 @@ COLOR_WHEEL_HUB = (30, 31, 35)
 COLOR_WHEEL_BADGE = (176, 180, 188)
 COLOR_WHEEL_STRIPE = (214, 40, 36)
 COLOR_GOAL_BEACON = (255, 200, 60)
+PEDAL_MARKER_OVERHANG_PX = 4
+PEDAL_MARKER_THICKNESS_PX = 3
 COLOR_LEVEL = {"calm": (110, 210, 120), "normal": (240, 242, 245), "aggressive": (255, 90, 70)}
 
 
@@ -169,6 +171,22 @@ def ring_segment(center, outer_radius_px, inner_radius_px, start_deg, stop_deg, 
     outer = [clockwise_point(center, outer_radius_px, angle) for angle in angles]
     inner = [clockwise_point(center, inner_radius_px, angle) for angle in reversed(angles)]
     return outer + inner
+
+
+def policy_pedal_targets(reference_accel_mps2, accel_min_mps2, accel_max_mps2):
+    """Where the policy would have the pedals, as (throttle, brake) fractions of the car's full accel/decel."""
+    if reference_accel_mps2 >= 0.0:
+        return min(1.0, reference_accel_mps2 / accel_max_mps2), 0.0
+    return 0.0, min(1.0, reference_accel_mps2 / accel_min_mps2)
+
+
+def policy_drives_speed(assist, wheel_state, gear, full_mode, pedal_released_fraction):
+    """FULL, a forward gear and both feet off the pedals: the policy is driving the car's speed. Compared
+    in float32, as the sim compares them, so the HUD and the car agree at the threshold."""
+    if assist is None or assist["mode"] != full_mode or not assist["reference_valid"] or gear < 1:
+        return False
+    threshold = np.float32(pedal_released_fraction)
+    return np.float32(wheel_state.throttle_norm) < threshold and np.float32(wheel_state.brake_norm) < threshold
 
 
 @dataclass(frozen=True)
@@ -259,7 +277,7 @@ class Hud:
         self._draw_info(surface, info, assist)
         self._draw_speed_limit(surface, human, width, elapsed_s)
         self._draw_minimap(surface, human, width, height)
-        self._draw_panel(surface, human, wheel_state, height)
+        self._draw_panel(surface, human, wheel_state, height, assist if assist_active else None)
         self._text(surface, self.font_small, info.help_text, (width // 2, height - 8), anchor="midbottom")
 
     def _draw_info(self, surface, info, assist):
@@ -429,8 +447,15 @@ class Hud:
         pygame.draw.circle(surface, COLOR_MINIMAP_EGO, ego, MINIMAP_EGO_RADIUS_PX)
         pygame.draw.line(surface, COLOR_MINIMAP_EGO, ego, nose, 3)
 
-    def _draw_panel(self, surface, human, wheel_state, height):
+    def _draw_panel(self, surface, human, wheel_state, height, assist=None):
+        from pufferlib.ocean.drive import binding
+
         pygame = self.pygame
+        targets = None
+        if assist is not None:
+            targets = policy_pedal_targets(
+                assist["reference_accel_mps2"], binding.HUMAN_ACCEL_MIN_MPS2, binding.HUMAN_ACCEL_MAX_MPS2
+            )
         panel_height = PEDAL_BAR_HEIGHT_PX + 2 * PANEL_MARGIN_PX
         panel_width = 330
         panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
@@ -451,6 +476,10 @@ class Hud:
         flags = [name for name, key in (("COLLISION", "collision"), ("OFF ROAD", "offroad")) if human[key] > 0.0]
         if human["engine_stalled"]:
             flags.append("STALLED - press R")
+        if policy_drives_speed(
+            assist, wheel_state, human["gear"], binding.ASSIST_MODE_FULL, binding.ASSIST_PEDAL_RELEASED_FRACTION
+        ):
+            flags.append("POLICY DRIVING SPEED")
         if flags:
             self._text(
                 surface,
@@ -469,6 +498,11 @@ class Hud:
             pygame.draw.rect(surface, COLOR_BAR_TRACK, (x, bar_top, PEDAL_BAR_WIDTH_PX, PEDAL_BAR_HEIGHT_PX - 18))
             fill = int(pedal_fraction(value) * (PEDAL_BAR_HEIGHT_PX - 18))
             pygame.draw.rect(surface, color, (x, bar_top + PEDAL_BAR_HEIGHT_PX - 18 - fill, PEDAL_BAR_WIDTH_PX, fill))
+            if targets is not None:
+                marker_y = bar_top + PEDAL_BAR_HEIGHT_PX - 18 - int(targets[idx] * (PEDAL_BAR_HEIGHT_PX - 18))
+                pygame.draw.line(surface, COLOR_ASSIST_POLICY, (x - PEDAL_MARKER_OVERHANG_PX, marker_y),
+                                 (x + PEDAL_BAR_WIDTH_PX + PEDAL_MARKER_OVERHANG_PX, marker_y),
+                                 PEDAL_MARKER_THICKNESS_PX)
             percent = f"{round(100 * pedal_fraction(value))}"
             self._text(
                 surface, self.font_small, percent, (x + PEDAL_BAR_WIDTH_PX // 2, bar_top - 2), anchor="midbottom"

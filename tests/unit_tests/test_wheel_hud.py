@@ -694,3 +694,221 @@ def test_goal_beacon_is_drawn_from_base_to_top(pygame_headless, town_hud):
 
 def test_no_goal_beacon_without_a_marker(pygame_headless, town_hud):
     assert len(beacon_pixels(pygame_headless, town_hud, None)) == 0
+
+
+# ---------------------------------------------------------------------------------------------
+# Policy pedal targets on the THR/BRK bars and the FULL speed flag.
+# ---------------------------------------------------------------------------------------------
+
+POLICY_SPEED_FLAG = "POLICY DRIVING SPEED"
+FORWARD_GEAR = 2
+# rounds to float32(0.05), so the sim (float32 compare) treats it as pressed
+ROUNDS_TO_THRESHOLD_NORM = 0.0500000003
+THROTTLE_BAR_IDX = 0
+BRAKE_BAR_IDX = 1
+
+
+@pytest.mark.parametrize(
+    "accel_mps2,expected",
+    [(0.0, (0.0, 0.0)), (2.0, (0.5, 0.0)), (4.0, (1.0, 0.0)), (10.0, (1.0, 0.0)), (-4.5, (0.0, 0.5)),
+     (-9.0, (0.0, 1.0)), (-20.0, (0.0, 1.0)), (-0.9, (0.0, 0.1))],
+)
+def test_policy_pedal_targets_split_accel_onto_throttle_and_brake(accel_mps2, expected):
+    targets = hud.policy_pedal_targets(accel_mps2, binding.HUMAN_ACCEL_MIN_MPS2, binding.HUMAN_ACCEL_MAX_MPS2)
+    assert targets == pytest.approx(expected, abs=1e-12)
+    assert min(targets) == 0.0
+
+
+def hud_assist_accel(mode, accel_mps2, reference_valid=1):
+    assist = hud_assist(mode, reference_valid=reference_valid)
+    assist["reference_accel_mps2"] = accel_mps2
+    return assist
+
+
+@pytest.mark.parametrize(
+    "assist,throttle,brake,expected",
+    [
+        (None, 0.0, 0.0, False),
+        (hud_assist(binding.ASSIST_MODE_FULL), 0.0, 0.0, True),
+        (hud_assist(binding.ASSIST_MODE_FULL), 0.0499, 0.0499, True),
+        (hud_assist(binding.ASSIST_MODE_FULL), 0.05, 0.0, False),
+        (hud_assist(binding.ASSIST_MODE_FULL), 0.0, 0.05, False),
+        (hud_assist(binding.ASSIST_MODE_FULL), ROUNDS_TO_THRESHOLD_NORM, 0.0, False),
+        (hud_assist(binding.ASSIST_MODE_FULL), 0.0, ROUNDS_TO_THRESHOLD_NORM, False),
+        (hud_assist(binding.ASSIST_MODE_FULL), 0.0501, 0.0, False),
+        (hud_assist(binding.ASSIST_MODE_FULL), 0.0, 0.0501, False),
+        (hud_assist(binding.ASSIST_MODE_FULL), 1.0, 0.0, False),
+        (hud_assist(binding.ASSIST_MODE_FULL, reference_valid=0), 0.0, 0.0, False),
+        (hud_assist(binding.ASSIST_MODE_BLEND), 0.0, 0.0, False),
+        (hud_assist(binding.ASSIST_MODE_DISPLAY), 0.0, 0.0, False),
+        (hud_assist(binding.ASSIST_MODE_NUDGE), 0.0, 0.0, False),
+        (hud_assist(binding.ASSIST_MODE_OFF), 0.0, 0.0, False),
+    ],
+)
+def test_policy_drives_speed_only_under_full_with_both_feet_off(assist, throttle, brake, expected):
+    wheel_state = WheelStateStub(throttle_norm=throttle, brake_norm=brake)
+    drives = hud.policy_drives_speed(
+        assist, wheel_state, FORWARD_GEAR, binding.ASSIST_MODE_FULL, binding.ASSIST_PEDAL_RELEASED_FRACTION
+    )
+    assert bool(drives) == expected
+
+
+@pytest.mark.parametrize(
+    "gear,expected",
+    [(binding.GEAR_REVERSE, False), (binding.GEAR_NEUTRAL, False), (1, True), (binding.GEARBOX_FORWARD_GEAR_COUNT, True)],
+)
+def test_policy_drives_speed_only_in_a_forward_gear(gear, expected):
+    drives = hud.policy_drives_speed(hud_assist(binding.ASSIST_MODE_FULL), WheelStateStub(0.0, 0.0), gear,
+                                     binding.ASSIST_MODE_FULL, binding.ASSIST_PEDAL_RELEASED_FRACTION)
+    assert bool(drives) == expected
+
+
+@pytest.mark.parametrize("pedal_norm", [0.0, 0.03, 0.0499999, 0.05, ROUNDS_TO_THRESHOLD_NORM, 0.0500001, 0.2])
+def test_policy_drives_speed_agrees_with_the_sims_float32_threshold(pedal_norm):
+    sim_released = np.float32(pedal_norm) < np.float32(binding.ASSIST_PEDAL_RELEASED_FRACTION)
+    for throttle, brake in ((pedal_norm, 0.0), (0.0, pedal_norm)):
+        drives = hud.policy_drives_speed(hud_assist(binding.ASSIST_MODE_FULL), WheelStateStub(throttle, brake),
+                                         FORWARD_GEAR, binding.ASSIST_MODE_FULL, binding.ASSIST_PEDAL_RELEASED_FRACTION)
+        assert bool(drives) == bool(sim_released)
+
+
+def panel_pixels(pygame, town_hud, assist, wheel_state):
+    surface = pygame.Surface(SCREEN_SIZE_PX)
+    surface.fill((0, 0, 0))
+    town_hud.draw(surface, hud_human(accel_long_mps2=0.0, steering_angle_rad=0.0), wheel_state, HudInfo(), 0.0,
+                  assist=assist)
+    return pygame.surfarray.array3d(surface)
+
+
+def bar_tracks(pygame, town_hud):
+    """(left, right, top, bottom) of each pedal track, read off a frame with both pedals up."""
+    pixels = panel_pixels(pygame, town_hud, None, WheelStateStub(0.0, 0.0))
+    found = np.argwhere(np.all(pixels == np.array(hud.COLOR_BAR_TRACK), axis=-1))
+    found = found[found[:, 1] > SCREEN_SIZE_PX[1] // 2]
+    split_x = (found[:, 0].min() + found[:, 0].max()) / 2.0
+    tracks = []
+    for side in (found[found[:, 0] < split_x], found[found[:, 0] > split_x]):
+        tracks.append((side[:, 0].min(), side[:, 0].max(), side[:, 1].min(), side[:, 1].max()))
+    return tracks
+
+
+def marker_rows(pixels, track):
+    left, right, top, bottom = track
+    reach = hud.PEDAL_MARKER_OVERHANG_PX + 2
+    window = pixels[left - reach : right + reach + 1, top - reach : bottom + reach + 1]
+    found = np.argwhere(np.all(window == np.array(hud.COLOR_ASSIST_POLICY), axis=-1))
+    return found[:, 0] + left - reach, found[:, 1] + top - reach
+
+
+def expected_marker_row(track, fraction):
+    _, _, top, bottom = track
+    track_height_px = bottom - top + 1
+    return top + track_height_px - int(fraction * track_height_px)
+
+
+@pytest.mark.parametrize(
+    "mode", [binding.ASSIST_MODE_DISPLAY, binding.ASSIST_MODE_BLEND, binding.ASSIST_MODE_NUDGE, binding.ASSIST_MODE_FULL]
+)
+@pytest.mark.parametrize("accel_mps2", [2.0, 3.0, 10.0, -4.5, -2.25, -20.0, 0.0])
+def test_policy_marker_sits_at_the_policys_pedal_target(pygame_headless, town_hud, mode, accel_mps2):
+    tracks = bar_tracks(pygame_headless, town_hud)
+    pixels = panel_pixels(pygame_headless, town_hud, hud_assist_accel(mode, accel_mps2), WheelStateStub(0.3, 0.6))
+    targets = hud.policy_pedal_targets(accel_mps2, binding.HUMAN_ACCEL_MIN_MPS2, binding.HUMAN_ACCEL_MAX_MPS2)
+    for bar_idx in (THROTTLE_BAR_IDX, BRAKE_BAR_IDX):
+        columns, rows = marker_rows(pixels, tracks[bar_idx])
+        assert len(rows) > 0
+        assert np.median(rows) == pytest.approx(expected_marker_row(tracks[bar_idx], targets[bar_idx]), abs=1)
+        assert rows.max() - rows.min() + 1 == hud.PEDAL_MARKER_THICKNESS_PX
+        assert columns.min() == tracks[bar_idx][0] - hud.PEDAL_MARKER_OVERHANG_PX
+        assert tracks[bar_idx][1] + hud.PEDAL_MARKER_OVERHANG_PX <= columns.max() <= tracks[bar_idx][1] + hud.PEDAL_MARKER_OVERHANG_PX + 1
+
+
+def test_policy_marker_climbs_the_bar_as_the_policy_asks_for_more(pygame_headless, town_hud):
+    tracks = bar_tracks(pygame_headless, town_hud)
+    throttle_rows, brake_rows = [], []
+    for accel_mps2 in (0.5, 1.5, 3.0):
+        pixels = panel_pixels(pygame_headless, town_hud, hud_assist_accel(binding.ASSIST_MODE_DISPLAY, accel_mps2),
+                              WheelStateStub(0.0, 0.0))
+        throttle_rows.append(np.median(marker_rows(pixels, tracks[THROTTLE_BAR_IDX])[1]))
+    for accel_mps2 in (-1.0, -4.0, -8.0):
+        pixels = panel_pixels(pygame_headless, town_hud, hud_assist_accel(binding.ASSIST_MODE_DISPLAY, accel_mps2),
+                              WheelStateStub(0.0, 0.0))
+        brake_rows.append(np.median(marker_rows(pixels, tracks[BRAKE_BAR_IDX])[1]))
+    assert throttle_rows[0] > throttle_rows[1] > throttle_rows[2]
+    assert brake_rows[0] > brake_rows[1] > brake_rows[2]
+
+
+def test_policy_marker_is_cyan():
+    red, green, blue = hud.COLOR_ASSIST_POLICY
+    assert blue > red and green > red
+    assert hud.COLOR_ASSIST_POLICY not in (hud.COLOR_THROTTLE, hud.COLOR_BRAKE, hud.COLOR_BAR_TRACK)
+
+
+@pytest.mark.parametrize(
+    "assist",
+    [None, hud_assist_accel(binding.ASSIST_MODE_OFF, 2.0), hud_assist_accel(binding.ASSIST_MODE_FULL, 2.0, 0),
+     hud_assist_accel(binding.ASSIST_MODE_DISPLAY, -3.0, 0)],
+    ids=["no_assist", "off", "full_invalid", "display_invalid"],
+)
+def test_no_policy_marker_without_an_active_valid_assist(pygame_headless, town_hud, assist):
+    tracks = bar_tracks(pygame_headless, town_hud)
+    pixels = panel_pixels(pygame_headless, town_hud, assist, WheelStateStub(0.3, 0.6))
+    for track in tracks:
+        assert len(marker_rows(pixels, track)[1]) == 0
+
+
+@pytest.fixture
+def panel_texts(pygame_headless, town_hud, monkeypatch):
+    texts = []
+    real_text = town_hud._text
+
+    def text(surface, font, message, position, color=hud.COLOR_TEXT, anchor="topleft"):
+        texts.append(message)
+        return real_text(surface, font, message, position, color, anchor)
+
+    monkeypatch.setattr(town_hud, "_text", text)
+    return texts
+
+
+@pytest.mark.parametrize(
+    "assist,throttle,brake,expected",
+    [
+        (hud_assist(binding.ASSIST_MODE_FULL), 0.0, 0.0, True),
+        (hud_assist(binding.ASSIST_MODE_FULL), 0.04, 0.01, True),
+        (hud_assist(binding.ASSIST_MODE_FULL), 0.05, 0.0, False),
+        (hud_assist(binding.ASSIST_MODE_FULL), 0.0501, 0.0, False),
+        (hud_assist(binding.ASSIST_MODE_FULL), 0.0, 0.3, False),
+        (hud_assist(binding.ASSIST_MODE_FULL, reference_valid=0), 0.0, 0.0, False),
+        (hud_assist(binding.ASSIST_MODE_BLEND), 0.0, 0.0, False),
+        (hud_assist(binding.ASSIST_MODE_NUDGE), 0.0, 0.0, False),
+        (None, 0.0, 0.0, False),
+    ],
+)
+def test_policy_speed_flag_is_shown_exactly_when_the_policy_drives_the_speed(
+    pygame_headless, town_hud, panel_texts, assist, throttle, brake, expected
+):
+    surface = pygame_headless.Surface(SCREEN_SIZE_PX)
+    town_hud.draw(surface, hud_human(accel_long_mps2=0.0, steering_angle_rad=0.0), WheelStateStub(throttle, brake),
+                  HudInfo(), 0.0, assist=assist)
+    assert any(POLICY_SPEED_FLAG in message for message in panel_texts) == expected
+
+
+@pytest.mark.parametrize(
+    "gear,gearbox_mode,expected",
+    [(binding.GEAR_REVERSE, binding.GEARBOX_MODE_AUTOMATIC, False), (binding.GEAR_NEUTRAL, binding.GEARBOX_MODE_MANUAL, False),
+     (1, binding.GEARBOX_MODE_MANUAL, True), (3, binding.GEARBOX_MODE_AUTOMATIC, True)],
+)
+def test_no_policy_speed_flag_in_reverse_or_neutral(pygame_headless, town_hud, panel_texts, gear, gearbox_mode, expected):
+    surface = pygame_headless.Surface(SCREEN_SIZE_PX)
+    human = hud_human(accel_long_mps2=0.0, steering_angle_rad=0.0, gear=gear, gearbox_mode=gearbox_mode)
+    town_hud.draw(surface, human, WheelStateStub(0.0, 0.0), HudInfo(), 0.0, assist=hud_assist(binding.ASSIST_MODE_FULL))
+    assert any(POLICY_SPEED_FLAG in message for message in panel_texts) == expected
+
+
+def test_policy_speed_flag_joins_the_other_warnings(pygame_headless, town_hud, panel_texts):
+    surface = pygame_headless.Surface(SCREEN_SIZE_PX)
+    town_hud.draw(surface, hud_human(accel_long_mps2=0.0, steering_angle_rad=0.0, collision=1.0), WheelStateStub(0.0, 0.0),
+                  HudInfo(), 0.0, assist=hud_assist(binding.ASSIST_MODE_FULL))
+    flag_lines = [message for message in panel_texts if POLICY_SPEED_FLAG in message]
+    assert len(flag_lines) == 1
+    assert "COLLISION" in flag_lines[0]

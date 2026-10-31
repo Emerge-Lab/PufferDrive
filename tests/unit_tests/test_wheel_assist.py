@@ -28,6 +28,7 @@ ASSIST_STATE_KEYS = {
     "reference_valid",
     "reference_steering_rad",
     "reference_accel_mps2",
+    "reference_speed_mps",
     "human_steering_rad",
     "commanded_steering_rad",
 }
@@ -289,3 +290,195 @@ def test_reset_clears_the_reference_and_the_weight(env):
     env.reset()
     state = env.get_assist_state()
     assert (state["reference_valid"], state["blend_weight"]) == (0, 0.0)
+
+
+# ---------------------------------------------------------------------------------------------
+# Longitudinal assist: BLEND shares the speed command, FULL drives it while both feet are off.
+# ---------------------------------------------------------------------------------------------
+
+CONTRACT_PEDAL_RELEASED_FRACTION = 0.05
+CONTRACT_ACCEL_MIN_MPS2 = -9.0
+CONTRACT_ACCEL_MAX_MPS2 = 4.0
+JUST_RELEASED_NORM = 0.0499
+CONTRACT_STOP_DECEL_MPS2 = 3.0
+CREEP_THROTTLE_NORM = 0.06
+CREEP_STEP_COUNT = 3
+HOLD_STEP_COUNT = 20
+HELD_THROTTLE_NORM = 0.5
+LONG_STEP_COUNT = 15
+
+
+def test_longitudinal_assist_constants_are_exported():
+    assert binding.ASSIST_PEDAL_RELEASED_FRACTION == pytest.approx(CONTRACT_PEDAL_RELEASED_FRACTION)
+    assert (binding.HUMAN_ACCEL_MIN_MPS2, binding.HUMAN_ACCEL_MAX_MPS2) == (CONTRACT_ACCEL_MIN_MPS2, CONTRACT_ACCEL_MAX_MPS2)
+    assert binding.ASSIST_STOP_DECEL_MPS2 == CONTRACT_STOP_DECEL_MPS2
+
+
+def clipped_reference(state):
+    return float(np.float32(min(max(state["reference_accel_mps2"], CONTRACT_ACCEL_MIN_MPS2), CONTRACT_ACCEL_MAX_MPS2)))
+
+
+def assisted_reference(state, speed_before_mps):
+    reference = clipped_reference(state)
+    if state["reference_speed_mps"] == 0.0 and speed_before_mps > 0.0:
+        reference = min(reference, -CONTRACT_STOP_DECEL_MPS2)
+    if speed_before_mps <= 0.0:
+        reference = max(reference, 0.0)
+    return reference
+
+
+def accel_follows_the_reference(env, state):
+    human = env.get_human_state()
+    stopped_by_zero_crossing = human["speed_mps"] == 0.0 and human["accel_long_mps2"] == 0.0
+    return human["accel_long_mps2"] == clipped_reference(state) or stopped_by_zero_crossing
+
+
+def pedal_step(env, throttle_norm, brake_norm, steering_norm=DRIVER_STEERING_NORM):
+    env.set_human_pedals(steering_norm, throttle_norm, brake_norm, 0.0)
+    env.step(policy_actions(env))
+    return env.get_assist_state()
+
+
+def test_full_with_feet_off_drives_the_clipped_reference_accel(env):
+    env.set_assist_mode(binding.ASSIST_MODE_FULL, 1.0)
+    for step_idx in range(LONG_STEP_COUNT):
+        state = pedal_step(env, JUST_RELEASED_NORM, JUST_RELEASED_NORM, steering_norm=math.sin(0.3 * step_idx))
+        assert state["reference_valid"] == 1
+        assert env.get_human_state()["gear"] >= 1
+        assert accel_follows_the_reference(env, state)
+        assert state["commanded_steering_rad"] == state["human_steering_rad"]
+
+
+def human_trajectory(assist_mode, throttle_norm, brake_norm, blend_target=1.0, reverse=False):
+    drive_env = make_env()
+    try:
+        if reverse:
+            drive_env.set_human_pedals(0.0, 0.0, 1.0, 0.0, -1)
+            drive_env.step(policy_actions(drive_env))
+            assert drive_env.get_human_state()["gear"] == binding.GEAR_REVERSE
+        drive_env.set_assist_mode(assist_mode, blend_target)
+        trajectory = []
+        for step_idx in range(LONG_STEP_COUNT):
+            pedal_step(drive_env, throttle_norm, brake_norm, steering_norm=math.sin(0.3 * step_idx))
+            human = drive_env.get_human_state()
+            trajectory.append((human["sim_x"], human["sim_y"], human["speed_mps"], human["accel_long_mps2"], human["gear"]))
+        return trajectory
+    finally:
+        drive_env.close()
+
+
+@pytest.mark.parametrize(
+    "throttle_norm,brake_norm",
+    [(HELD_THROTTLE_NORM, 0.0), (CONTRACT_PEDAL_RELEASED_FRACTION, 0.0), (0.0, CONTRACT_PEDAL_RELEASED_FRACTION)],
+    ids=["throttle_held", "throttle_at_threshold", "brake_at_threshold"],
+)
+def test_full_with_a_pedal_pressed_drives_exactly_like_off(throttle_norm, brake_norm):
+    off = human_trajectory(binding.ASSIST_MODE_OFF, throttle_norm, brake_norm)
+    full = human_trajectory(binding.ASSIST_MODE_FULL, throttle_norm, brake_norm)
+    assert full == off
+
+
+@pytest.mark.parametrize("mode", [binding.ASSIST_MODE_DISPLAY, binding.ASSIST_MODE_NUDGE])
+def test_display_and_nudge_never_touch_the_speed_with_feet_off(mode):
+    assert human_trajectory(mode, 0.0, 0.0) == human_trajectory(binding.ASSIST_MODE_OFF, 0.0, 0.0)
+
+
+def test_full_with_feet_off_differs_from_off():
+    assert human_trajectory(binding.ASSIST_MODE_FULL, 0.0, 0.0) != human_trajectory(binding.ASSIST_MODE_OFF, 0.0, 0.0)
+
+
+def test_full_in_reverse_with_feet_off_is_the_driver():
+    full = human_trajectory(binding.ASSIST_MODE_FULL, 0.0, 0.0, reverse=True)
+    assert {gear for *_, gear in full} == {binding.GEAR_REVERSE}
+    assert full == human_trajectory(binding.ASSIST_MODE_OFF, 0.0, 0.0, reverse=True)
+
+
+def test_blend_at_one_drives_the_clipped_reference_accel_after_the_ramp(env):
+    env.set_assist_mode(binding.ASSIST_MODE_BLEND, 1.0)
+    ramp_steps = math.ceil(CONTRACT_RAMP_SECONDS / POLICY_DT_SECONDS)
+    for step_idx in range(ramp_steps + 10):
+        state = pedal_step(env, HELD_THROTTLE_NORM, 0.0)
+        if step_idx + 1 < ramp_steps:
+            continue
+        assert state["blend_weight"] == 1.0
+        assert accel_follows_the_reference(env, state)
+
+
+POLICY_BRAKE_ACTION = (-1.0, 0.0)
+POLICY_PULL_AWAY_ACTION = (1.0, 0.0)
+STOP_STEP_COUNT = 30
+
+
+def longitudinal_actions(env, action):
+    actions = np.zeros_like(env.actions)
+    actions[HUMAN_ACTION_ROW] = action
+    return actions
+
+
+def brake_to_rest(env):
+    for _ in range(STOP_STEP_COUNT):
+        env.set_human_pedals(0.0, 0.0, 1.0, 0.0)
+        env.step(longitudinal_actions(env, POLICY_BRAKE_ACTION))
+        if env.get_human_state()["speed_mps"] == 0.0:
+            return
+    pytest.fail("the brake pedal never brought the car to rest")
+
+
+@pytest.mark.parametrize("mode", [binding.ASSIST_MODE_FULL, binding.ASSIST_MODE_BLEND])
+def test_a_braking_policy_holds_a_car_at_rest_and_never_reverses_it(env, mode):
+    brake_to_rest(env)
+    env.set_assist_mode(mode, 1.0)
+    braked_at_rest_count = 0
+    for _ in range(LONG_STEP_COUNT):
+        speed_before_mps = env.get_human_state()["speed_mps"]
+        env.set_human_pedals(0.0, 0.0, 0.0, 0.0)
+        env.step(longitudinal_actions(env, POLICY_BRAKE_ACTION))
+        human = env.get_human_state()
+        assert human["gear"] >= 1
+        assert human["speed_mps"] >= 0.0
+        state = env.get_assist_state()
+        braked_at_rest_count += speed_before_mps == 0.0 and state["reference_accel_mps2"] < 0.0
+    assert braked_at_rest_count > 0
+    if mode == binding.ASSIST_MODE_FULL:
+        assert env.get_human_state()["speed_mps"] == 0.0
+
+
+@pytest.mark.parametrize("mode", [binding.ASSIST_MODE_FULL, binding.ASSIST_MODE_BLEND])
+def test_a_pulling_away_policy_still_accelerates_from_rest(env, mode):
+    brake_to_rest(env)
+    env.set_assist_mode(mode, 1.0)
+    for _ in range(LONG_STEP_COUNT):
+        env.set_human_pedals(0.0, 0.0, 0.0, 0.0)
+        env.step(longitudinal_actions(env, POLICY_PULL_AWAY_ACTION))
+    assert env.get_human_state()["speed_mps"] > 1.0
+
+
+@pytest.mark.parametrize("mode", [binding.ASSIST_MODE_FULL, binding.ASSIST_MODE_BLEND])
+def test_a_creeping_car_whose_policy_chose_to_stop_comes_to_rest_and_holds(env, mode):
+    env.set_assist_mode(mode, 1.0)
+    speeds = []
+    for step_idx in range(CREEP_STEP_COUNT + LONG_STEP_COUNT + HOLD_STEP_COUNT):
+        throttle_norm = CREEP_THROTTLE_NORM if step_idx < CREEP_STEP_COUNT else 0.0
+        env.set_human_pedals(0.0, throttle_norm, 0.0, 0.0)
+        env.step(longitudinal_actions(env, POLICY_BRAKE_ACTION))
+        speeds.append(env.get_human_state()["speed_mps"])
+    assert min(speeds) >= 0.0
+    assert speeds[-HOLD_STEP_COUNT:] == [0.0] * HOLD_STEP_COUNT
+
+
+def test_reference_speed_is_reported_and_drives_the_stop_rule(env):
+    env.set_assist_mode(binding.ASSIST_MODE_FULL, 1.0)
+    saw_stop = False
+    for step_idx in range(CREEP_STEP_COUNT + LONG_STEP_COUNT):
+        speed_before_mps = env.get_human_state()["speed_mps"]
+        throttle_norm = CREEP_THROTTLE_NORM if step_idx < CREEP_STEP_COUNT else 0.0
+        env.set_human_pedals(0.0, throttle_norm, 0.0, 0.0)
+        env.step(longitudinal_actions(env, POLICY_BRAKE_ACTION))
+        state = env.get_assist_state()
+        human = env.get_human_state()
+        assert math.isfinite(state["reference_speed_mps"])
+        if throttle_norm > 0.0 or human["speed_mps"] == 0.0:
+            continue
+        assert human["accel_long_mps2"] == pytest.approx(assisted_reference(state, speed_before_mps), abs=1e-6)
+        saw_stop |= state["reference_speed_mps"] == 0.0
+    assert saw_stop or env.get_human_state()["speed_mps"] == 0.0

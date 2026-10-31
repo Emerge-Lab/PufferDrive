@@ -136,8 +136,8 @@
 #define GRIP_MODE_REALISTIC 1
 
 // Steering assist. The reference is what the policy would steer from the human car's own state.
-// DISPLAY, NUDGE and FULL leave the sim untouched: NUDGE guides the hands through force feedback,
-// FULL turns the wheel itself to the policy's angle.
+// DISPLAY and NUDGE leave the sim untouched (NUDGE guides the hands through force feedback). FULL
+// turns the wheel itself to the policy's angle and drives the speed while both pedals are released.
 #define ASSIST_MODE_OFF 0
 #define ASSIST_MODE_DISPLAY 1
 #define ASSIST_MODE_BLEND 2
@@ -145,6 +145,11 @@
 #define ASSIST_MODE_FULL 4
 // The blend weight eases to its target over this long, so switching modes never jumps the wheels.
 #define ASSIST_RAMP_SECONDS 0.5f
+// Under FULL the policy drives the car's speed while both pedals are below this; touching one takes over.
+#define ASSIST_PEDAL_RELEASED_FRACTION 0.05f
+// When the policy would come to rest within its step, the assist brakes at least this hard until it does;
+// the jerk chain zeroes the acceleration on a stop, which alone would leave a slow car creeping.
+#define ASSIST_STOP_DECEL_MPS2 3.0f
 
 // =====================================================================================
 // 3. DYNAMICS

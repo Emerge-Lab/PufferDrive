@@ -555,3 +555,115 @@ def test_a_failed_recapture_of_an_unmapped_field_leaves_it_unmapped(scripted_pro
     ButtonMap(shift_up_bit=4, shift_down_bit=5).to_json(path)
     probe.probe_buttons(operator, path, only={"x_bit", "a_bit"})
     assert ButtonMap.from_json(path) == ButtonMap(shift_up_bit=4, shift_down_bit=5, a_bit=11)
+
+
+# ---------------------------------------------------------------------------------------------
+# Full screen: the flag, its forwarding into the window, and the set_mode flags. No real window.
+# ---------------------------------------------------------------------------------------------
+
+
+def test_fullscreen_flag_is_off_unless_given(demo_parser):
+    assert demo_parser.parse_args([]).fullscreen is False
+    assert demo_parser.parse_args(["--fullscreen"]).fullscreen is True
+    with pytest.raises(SystemExit):
+        demo_parser.parse_args(["--fullscreen", "yes"])
+
+
+class WindowBuilt(Exception):
+    pass
+
+
+class FakeDemoLoop:
+    def __init__(self, config, wheel):
+        self.env = AssistEnv()
+        self.human_agent_idx = 0
+        self.substep_dt = 0.05
+
+
+@pytest.mark.parametrize("extra_args,expected", [(["--fullscreen"], True), ([], False)])
+def test_main_forwards_fullscreen_to_the_window(run_demo, monkeypatch, tmp_path, extra_args, expected):
+    built = {}
+
+    def fake_window(*args, **kwargs):
+        built.update(kwargs)
+        raise WindowBuilt
+
+    monkeypatch.setattr(run_demo, "build_wheel_input", lambda *args: (object(), None))
+    monkeypatch.setattr(run_demo, "WheelDemoLoop", FakeDemoLoop)
+    monkeypatch.setattr(run_demo, "choose_town", lambda town: town or "Town01")
+    monkeypatch.setattr(run_demo, "CarlaDemoWindow", fake_window)
+    argv = ["run_demo.py", "--input", "synthetic", "--render", "--town", "Town01", "--calibration",
+            str(tmp_path / "none.json"), "--buttons", str(tmp_path / "none_buttons.json")] + extra_args
+    monkeypatch.setattr(run_demo.sys, "argv", argv)
+    with pytest.raises(WindowBuilt):
+        run_demo.main()
+    assert built["fullscreen"] is expected
+
+
+class FakeScene:
+    instances = []
+
+    def __init__(self, carla, town, env, human_agent_idx, substep_dt_s, host, port, image_size_px):
+        self.closed = False
+        self.camera_mode = None
+        FakeScene.instances.append(self)
+
+    def set_night(self, night):
+        self.night = night
+
+    def set_camera_mode(self, camera_mode):
+        self.camera_mode = camera_mode
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def headless_window_module(monkeypatch):
+    import sys
+    import types
+
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    pygame = pytest.importorskip("pygame")
+    from pufferlib.wheel_demo import carla_window
+
+    calls = []
+
+    def set_mode(size_px, flags=0, *args, **kwargs):
+        calls.append((tuple(size_px), flags))
+        return pygame.Surface(size_px)
+
+    monkeypatch.setitem(sys.modules, "carla", types.ModuleType("carla"))
+    monkeypatch.setattr(carla_window, "CarlaScene", FakeScene)
+    monkeypatch.setattr(pygame.display, "set_mode", set_mode)
+    monkeypatch.setattr(pygame.display, "set_caption", lambda *args: None)
+    FakeScene.instances.clear()
+    return carla_window, pygame, calls
+
+
+@pytest.mark.parametrize("fullscreen", [True, False])
+def test_window_asks_for_scaled_full_screen_only_when_told(headless_window_module, fullscreen):
+    carla_window, pygame, calls = headless_window_module
+    window = carla_window.CarlaDemoWindow(object(), "Town01", 0, 0.05, fullscreen=fullscreen)
+    expected_flags = pygame.FULLSCREEN | pygame.SCALED if fullscreen else 0
+    assert calls == [(carla_window.DEFAULT_WINDOW_SIZE_PX, expected_flags)]
+    assert window.screen.get_size() == carla_window.DEFAULT_WINDOW_SIZE_PX
+    assert not FakeScene.instances[-1].closed
+
+
+def test_window_defaults_to_windowed(headless_window_module):
+    carla_window, _pygame, calls = headless_window_module
+    carla_window.CarlaDemoWindow(object(), "Town01", 0, 0.05)
+    assert calls[-1][1] == 0
+
+
+def test_window_closes_the_scene_when_full_screen_fails(headless_window_module, monkeypatch):
+    carla_window, pygame, _calls = headless_window_module
+
+    def refuse(*args, **kwargs):
+        raise pygame.error("no full-screen mode")
+
+    monkeypatch.setattr(pygame.display, "set_mode", refuse)
+    with pytest.raises(pygame.error):
+        carla_window.CarlaDemoWindow(object(), "Town01", 0, 0.05, fullscreen=True)
+    assert FakeScene.instances[-1].closed

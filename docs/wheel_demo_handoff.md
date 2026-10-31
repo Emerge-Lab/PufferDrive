@@ -110,7 +110,14 @@ acts on a stale target. Modes (Menu button): OFF; DISPLAY (HUD only); BLEND stee
 wheels to `(1 - w) * yours + w * policy`, `w` easing in and out over 0.5 s (your physical wheel does not
 move); NUDGE adds a gentle force toward the policy's angle; FULL re-centres the spring on the policy's
 angle and adds a strong servo pull, so hands-off the wheel turns itself and steers the car along the
-policy's line (the driver overrides by holding it). Steering only: the pedals are not motorised.
+policy's line (the driver overrides by holding it).
+
+The assist covers speed too, from the same reference: BLEND shares the longitudinal command like the
+steering; FULL lets the policy drive the speed while both pedals are released (under 5%) in a forward
+gear, and either pedal takes over instantly; DISPLAY/NUDGE mark the policy's throttle or brake on the
+HUD's pedal bars. Two rules keep it physical: braking holds a car at rest and never drives it backwards,
+and when the policy's own step ends stopped (the jerk chain zeroes the acceleration on a stop) the
+assist brakes at 3 m/s^2 until the car is at rest, so it never creeps through a stop.
 
 ### Launcher and towns
 
@@ -122,6 +129,7 @@ policy's line (the driver overrides by holding it). Steering only: the pedals ar
 - Goals are drawn in the 3D view: each CARLA image carries the camera pose it was rendered from, so
   the goal is projected into exactly the frame on screen.
 - Driver view draws a steering wheel on the driver's side at the angle of the driver's hands.
+- Full screen (`--fullscreen`, the launcher's default): the GPU scales the frame, no frame-rate cost.
 
 ---
 
@@ -150,6 +158,8 @@ F10 (every jolt saturates) is resolved: the jolt now opposes the steady force, w
 - `launcher.py` repeats the 0.3 s policy step to turn minutes into steps; it would drift if the
   checkpoint's `dt` changed.
 - Wheel buttons are only polled with `--render` (the headless loop is for tests).
+- `c_set_human_input` (direct longitudinal mode) does not reset the pedal or gear state, so FULL could
+  read stale pedals there. The demo always uses the pedal path; latent only.
 
 - `drive_test_env_config` leaves `max_speed_mps` and `conditioning_accel_scale` at 0.
 - `reset_accel_on_stop` default differs between the YAML and `drive.py`.

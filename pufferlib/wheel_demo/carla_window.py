@@ -42,6 +42,7 @@ class CarlaDemoWindow:
         host="localhost",
         port=2000,
         size_px=DEFAULT_WINDOW_SIZE_PX,
+        fullscreen=False,
     ):
         import carla
         import pygame
@@ -54,7 +55,9 @@ class CarlaDemoWindow:
         )
         try:
             pygame.init()
-            self.screen = pygame.display.set_mode(size_px)
+            # SCALED lets the GPU stretch the 1280x720 frame to the monitor, so full screen costs no frame rate
+            flags = pygame.FULLSCREEN | pygame.SCALED if fullscreen else 0
+            self.screen = pygame.display.set_mode(size_px, flags)
             pygame.display.set_caption(WINDOW_TITLE)
             self.hud = Hud(pygame, carla_bridge.bin_path_for_town(town))
             self.night_mode = bool(night_mode)

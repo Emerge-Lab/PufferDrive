@@ -29,6 +29,7 @@ CONTRACT_DEFAULTS = {
     "grip": "realistic",
     "input": "wheel",
     "minutes": 20,
+    "window": "fullscreen",
 }
 CONTRACT_POLICY_STEP_SECONDS = 0.3
 SECONDS_PER_MINUTE = 60
@@ -105,6 +106,7 @@ def test_default_command_runs_run_demo_with_this_interpreter(launcher):
     assert "--render" in command
     assert flag_value(command, "--town") == "Town03"
     assert "--night" not in command
+    assert command.count("--fullscreen") == 1
     assert flag_value(command, "--ffb-gain") == "0.70"
     assert "--ffb" in command
     assert flag_value(command, "--assist") == "off"
@@ -160,10 +162,11 @@ def every_launcher_choice():
         ("wheel", "synthetic"),
         ("automatic", "manual"),
         ("realistic", "kinematic"),
+        ("fullscreen", "windowed"),
     )
-    for camera, night, level, assist, ffb, input_name, gearbox, grip in choices:
+    for camera, night, level, assist, ffb, input_name, gearbox, grip, window in choices:
         yield settings_with(camera=camera, night=night, level=level, assist=assist, ffb=ffb, input=input_name,
-                            gearbox=gearbox, grip=grip, ffb_gain=45, assist_blend=80, minutes=7)
+                            gearbox=gearbox, grip=grip, window=window, ffb_gain=45, assist_blend=80, minutes=7)
 
 
 def test_run_demo_accepts_every_command_the_launcher_can_build(launcher, demo_parser):
@@ -176,13 +179,90 @@ def test_run_demo_accepts_every_command_the_launcher_can_build(launcher, demo_pa
         )
         assert args.town == settings["town"] and args.render
         assert args.night == (settings["night"] == "night")
+        assert args.fullscreen == (settings["window"] == "fullscreen")
         assert args.ffb == (settings["ffb"] and settings["input"] == "wheel")
         assert args.assist_blend == pytest.approx(0.8)
         assert args.steps == 1400
         if args.ffb:
             assert args.ffb_gain == pytest.approx(0.45)
         checked += 1
-    assert checked == 3 * 2 * 3 * 5 * 2 * 2 * 2 * 2
+    assert checked == 3 * 2 * 3 * 5 * 2 * 2 * 2 * 2 * 2
+
+
+@pytest.mark.parametrize("window,expected", [("fullscreen", True), ("windowed", False)])
+def test_fullscreen_flag_only_for_full_screen(launcher, window, expected):
+    command = launcher.demo_command(settings_with(window=window))
+    assert command.count("--fullscreen") == (1 if expected else 0)
+
+
+class FakeVar:
+    def __init__(self, value):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+
+class FakeWidget:
+    created = []
+
+    def __init__(self, *args, **kwargs):
+        self.kwargs = kwargs
+        FakeWidget.created.append(self)
+
+    def __getitem__(self, key):
+        return self.kwargs.get(key, "#000000")
+
+    def grid(self, *args, **kwargs):
+        pass
+
+    def pack(self, *args, **kwargs):
+        pass
+
+    def bind(self, *args, **kwargs):
+        pass
+
+    def configure(self, *args, **kwargs):
+        self.kwargs.update(kwargs)
+
+    def columnconfigure(self, *args, **kwargs):
+        pass
+
+
+class FakeTk:
+    Frame = Label = Button = Radiobutton = Scale = FakeWidget
+
+
+@pytest.fixture
+def built_launcher(launcher, monkeypatch):
+    """Runs the launcher's layout against stand-in widgets, so no Tk window is ever created."""
+    FakeWidget.created.clear()
+    monkeypatch.setattr(launcher, "tk", FakeTk)
+    app = launcher.Launcher.__new__(launcher.Launcher)
+    app.root = FakeWidget(bg="#000000")
+    app.vars = {key: FakeVar(value) for key, value in launcher.DEFAULTS.items()}
+    app.town_cards = {}
+    monkeypatch.setattr(app, "_on_change", lambda: None, raising=False)
+    app._build()
+    return app
+
+
+def segment_options(key, app):
+    return [(w.kwargs["value"], w.kwargs["text"]) for w in FakeWidget.created
+            if "value" in w.kwargs and w.kwargs.get("variable") is app.vars[key]]
+
+
+def test_launcher_has_a_window_row_offering_full_screen_and_windowed(built_launcher):
+    assert "Window" in built_launcher.widgets
+    labels = [w.kwargs.get("text") for w in FakeWidget.created]
+    assert "Window" in labels
+    assert segment_options("window", built_launcher) == [("fullscreen", "Full screen"), ("windowed", "Windowed")]
+
+
+def test_every_setting_has_a_control(built_launcher, launcher):
+    controlled = {key for key, var in built_launcher.vars.items()
+                  if any(w.kwargs.get("variable") is var for w in FakeWidget.created)}
+    assert controlled == set(launcher.DEFAULTS) - {"town"}
 
 
 def make_maps_dir(root):

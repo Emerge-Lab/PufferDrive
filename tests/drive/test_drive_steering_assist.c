@@ -18,6 +18,17 @@
 #define SELECTOR_REFUSED_SPEED_MPS 4.0f
 #define SELECTOR_SETTLE_STEP_COUNT 30
 #define OFF_WINDOW_STEERING_NORM -0.4f
+#define HUMAN_INPUT_DIRECT 0
+#define HUMAN_INPUT_PEDAL_AT_THRESHOLD 1
+#define HUMAN_INPUT_FEET_OFF 2
+#define HELD_THROTTLE_NORM 0.3f
+#define JUST_RELEASED_NORM 0.0499f
+#define LONG_BENCH_SPEED_MPS 10.0f
+#define CONTRACT_ACCEL_MIN_MPS2 -9.0f
+#define CONTRACT_ACCEL_MAX_MPS2 4.0f
+#define CONTRACT_STOP_DECEL_MPS2 3.0f
+// any nonzero end-of-step speed: the policy did not choose to stop
+#define MOVING_REFERENCE_SPEED_MPS 7.0f
 
 typedef struct {
     Drive env;
@@ -96,14 +107,31 @@ static unsigned long long hash_motion(unsigned long long hash, const Drive *env)
     return hash;
 }
 
-static unsigned long long drive_with_assist(int assist_mode, float blend_target, int substeps, int *saw_valid_out) {
+static void set_human_command(Drive *env, int step, int human_input) {
+    float steering_norm = 0.8f * sinf(0.2f * (float) step);
+    if (human_input == HUMAN_INPUT_DIRECT) {
+        c_set_human_input(env, steering_norm, 1.0f);
+        return;
+    }
+    if (human_input == HUMAN_INPUT_FEET_OFF) {
+        c_set_human_pedals(env, steering_norm, JUST_RELEASED_NORM, JUST_RELEASED_NORM, 0.0f, 0);
+        return;
+    }
+    // alternate feet so each pedal alone, held exactly at the threshold, must take over
+    int on_throttle = step % 2 == 0;
+    float threshold = ASSIST_PEDAL_RELEASED_FRACTION;
+    c_set_human_pedals(env, steering_norm, on_throttle ? threshold : 0.0f, on_throttle ? 0.0f : threshold, 0.0f, 0);
+}
+
+static unsigned long long drive_with_assist_input(
+    int assist_mode, float blend_target, int substeps, int human_input, int *saw_valid_out) {
     Drive env = assist_full_env(DYNAMICS_MODEL_JERK, substeps);
     c_set_assist_mode(&env, assist_mode, blend_target);
     unsigned long long hash = 1469598103934665603ULL;
     *saw_valid_out = 0;
     for (int step = 0; step < ASSIST_TEST_STEP_COUNT; step++) {
         set_actions(&env, step);
-        c_set_human_input(&env, 0.8f * sinf(0.2f * (float) step), 1.0f);
+        set_human_command(&env, step, human_input);
         for (int s = 0; s < env.substeps_per_policy_step && substeps > 1; s++) {
             c_substep(&env);
             hash = hash_motion(hash, &env);
@@ -114,6 +142,10 @@ static unsigned long long drive_with_assist(int assist_mode, float blend_target,
     }
     free_allocated(&env);
     return hash;
+}
+
+static unsigned long long drive_with_assist(int assist_mode, float blend_target, int substeps, int *saw_valid_out) {
+    return drive_with_assist_input(assist_mode, blend_target, substeps, HUMAN_INPUT_DIRECT, saw_valid_out);
 }
 
 static int test_integrate_jerk_does_not_write_the_agent(void) {
@@ -202,6 +234,7 @@ static int test_default_assist_is_off_and_commands_exactly_the_driver(void) {
     return 0;
 }
 
+// direct input never leaves neutral, so FULL has no forward gear to drive here
 static int test_display_nudge_and_zero_blend_leave_the_sim_bit_identical_to_off(void) {
     int substep_counts[] = {1, 6};
     for (int k = 0; k < 2; k++) {
@@ -803,6 +836,566 @@ static int test_manual_gearbox_ignores_the_selector(void) {
     return 0;
 }
 
+
+// --- Longitudinal assist ---
+
+#define LONG_REFERENCE_COUNT 8
+static const float LONG_REFERENCES_MPS2[LONG_REFERENCE_COUNT] = {-20.0f, -9.0f, -3.3f, 0.0f, 0.7f, 2.5f, 4.0f, 10.0f};
+// the reference clipped to the human car's [-9, 4] m/s^2 envelope
+static const float LONG_REFERENCES_CLIPPED_MPS2[LONG_REFERENCE_COUNT] = {-9.0f, -9.0f, -3.3f, 0.0f, 0.7f, 2.5f, 4.0f, 4.0f};
+#define LONG_HUMAN_COUNT 5
+static const float LONG_HUMANS_MPS2[LONG_HUMAN_COUNT] = {0.0f, -0.0f, 1.7f, -8.9f, 1e-8f};
+
+static void long_bench_init(AssistBench *bench, int assist_mode, float weight, float throttle, float brake, int gear) {
+    assist_bench_init(bench, LONG_BENCH_SPEED_MPS);
+    bench->env.assist_mode = assist_mode;
+    bench->env.assist_blend_weight = weight;
+    bench->env.assist_reference_valid = 1;
+    bench->env.assist_reference_speed_mps = MOVING_REFERENCE_SPEED_MPS;
+    bench->env.human_throttle_norm = throttle;
+    bench->env.human_brake_norm = brake;
+    bench->env.human_gear = gear;
+}
+
+static int same_bits(float a, float b) {
+    return memcmp(&a, &b, sizeof(float)) == 0;
+}
+
+static int test_long_assist_without_a_reference_is_the_driver_bit_for_bit(void) {
+    float weights[] = {0.0f, 0.5f, 1.0f};
+    int gears[] = {GEAR_REVERSE, GEAR_NEUTRAL, 1, GEARBOX_FORWARD_GEAR_COUNT};
+    for (int mode = ASSIST_MODE_OFF; mode <= ASSIST_MODE_FULL; mode++) {
+        for (int w = 0; w < 3; w++) {
+            for (int g = 0; g < 4; g++) {
+                AssistBench bench;
+                long_bench_init(&bench, mode, weights[w], 0.0f, 0.0f, gears[g]);
+                bench.env.assist_reference_valid = 0;
+                bench.env.assist_reference_accel_mps2 = 3.0f;
+                for (int h = 0; h < LONG_HUMAN_COUNT; h++) {
+                    EXPECT_TRUE(same_bits(assisted_accel(&bench.env, LONG_HUMANS_MPS2[h], LONG_BENCH_SPEED_MPS), LONG_HUMANS_MPS2[h]));
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static int test_full_with_feet_off_in_a_forward_gear_drives_the_clipped_reference(void) {
+    float released[][2] = {{0.0f, 0.0f}, {JUST_RELEASED_NORM, 0.0f}, {0.0f, JUST_RELEASED_NORM},
+                           {JUST_RELEASED_NORM, JUST_RELEASED_NORM}};
+    float weights[] = {0.0f, 0.4f, 1.0f};
+    for (int gear = 1; gear <= GEARBOX_FORWARD_GEAR_COUNT; gear++) {
+        for (int p = 0; p < 4; p++) {
+            for (int w = 0; w < 3; w++) {
+                AssistBench bench;
+                long_bench_init(&bench, ASSIST_MODE_FULL, weights[w], released[p][0], released[p][1], gear);
+                for (int r = 0; r < LONG_REFERENCE_COUNT; r++) {
+                    bench.env.assist_reference_accel_mps2 = LONG_REFERENCES_MPS2[r];
+                    for (int h = 0; h < LONG_HUMAN_COUNT; h++) {
+                        EXPECT_TRUE(assisted_accel(&bench.env, LONG_HUMANS_MPS2[h], LONG_BENCH_SPEED_MPS) == LONG_REFERENCES_CLIPPED_MPS2[r]);
+                    }
+                }
+            }
+        }
+    }
+    EXPECT_NEAR(ASSIST_PEDAL_RELEASED_FRACTION, 0.05f, EXACT_TOLERANCE);
+    EXPECT_NEAR(HUMAN_ACCEL_LIMIT_MPS2[0], CONTRACT_ACCEL_MIN_MPS2, EXACT_TOLERANCE);
+    EXPECT_NEAR(HUMAN_ACCEL_LIMIT_MPS2[1], CONTRACT_ACCEL_MAX_MPS2, EXACT_TOLERANCE);
+    return 0;
+}
+
+static int test_full_hands_back_on_either_pedal_or_outside_a_forward_gear(void) {
+    float threshold = ASSIST_PEDAL_RELEASED_FRACTION;
+    float pedals_gears[][3] = {{threshold, 0.0f, 1}, {0.0f, threshold, 1}, {1.0f, 0.0f, 3}, {0.0f, 1.0f, 3},
+                               {threshold, threshold, 2}, {0.0f, 0.0f, GEAR_NEUTRAL}, {0.0f, 0.0f, GEAR_REVERSE},
+                               {1.0f, 0.0f, GEAR_REVERSE}};
+    float weights[] = {0.0f, 0.6f, 1.0f};
+    for (int k = 0; k < 8; k++) {
+        for (int w = 0; w < 3; w++) {
+            AssistBench bench;
+            long_bench_init(&bench, ASSIST_MODE_FULL, weights[w], pedals_gears[k][0], pedals_gears[k][1],
+                            (int) pedals_gears[k][2]);
+            for (int r = 0; r < LONG_REFERENCE_COUNT; r++) {
+                bench.env.assist_reference_accel_mps2 = LONG_REFERENCES_MPS2[r];
+                for (int h = 0; h < LONG_HUMAN_COUNT; h++) {
+                    EXPECT_TRUE(same_bits(assisted_accel(&bench.env, LONG_HUMANS_MPS2[h], LONG_BENCH_SPEED_MPS), LONG_HUMANS_MPS2[h]));
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static int test_blend_shares_the_longitudinal_command_with_the_clipped_reference(void) {
+    for (int r = 0; r < LONG_REFERENCE_COUNT; r++) {
+        for (int h = 0; h < LONG_HUMAN_COUNT; h++) {
+            AssistBench bench;
+            long_bench_init(&bench, ASSIST_MODE_BLEND, 0.0f, 0.0f, 0.0f, 1);
+            bench.env.assist_reference_accel_mps2 = LONG_REFERENCES_MPS2[r];
+            float human = LONG_HUMANS_MPS2[h];
+            EXPECT_TRUE(same_bits(assisted_accel(&bench.env, human, LONG_BENCH_SPEED_MPS), human));
+            bench.env.assist_blend_weight = 1.0f;
+            EXPECT_TRUE(assisted_accel(&bench.env, human, LONG_BENCH_SPEED_MPS) == LONG_REFERENCES_CLIPPED_MPS2[r]);
+            bench.env.assist_blend_weight = 0.25f;
+            EXPECT_NEAR(assisted_accel(&bench.env, human, LONG_BENCH_SPEED_MPS), 0.75f * human + 0.25f * LONG_REFERENCES_CLIPPED_MPS2[r], 1e-6f);
+            bench.env.human_throttle_norm = 1.0f;
+            bench.env.human_gear = GEAR_REVERSE;
+            EXPECT_NEAR(assisted_accel(&bench.env, human, LONG_BENCH_SPEED_MPS), 0.75f * human + 0.25f * LONG_REFERENCES_CLIPPED_MPS2[r], 1e-6f);
+        }
+    }
+    return 0;
+}
+
+static int test_display_and_nudge_leave_the_longitudinal_command_alone_once_ramped_out(void) {
+    int modes[] = {ASSIST_MODE_OFF, ASSIST_MODE_DISPLAY, ASSIST_MODE_NUDGE};
+    for (int m = 0; m < 3; m++) {
+        AssistBench bench;
+        long_bench_init(&bench, modes[m], 0.0f, 0.0f, 0.0f, 1);
+        for (int r = 0; r < LONG_REFERENCE_COUNT; r++) {
+            bench.env.assist_reference_accel_mps2 = LONG_REFERENCES_MPS2[r];
+            for (int h = 0; h < LONG_HUMAN_COUNT; h++) {
+                EXPECT_TRUE(same_bits(assisted_accel(&bench.env, LONG_HUMANS_MPS2[h], LONG_BENCH_SPEED_MPS), LONG_HUMANS_MPS2[h]));
+            }
+        }
+        // a weight still easing out of BLEND keeps blending, exactly as the steering does
+        bench.env.assist_blend_weight = 0.5f;
+        bench.env.assist_reference_accel_mps2 = 2.0f;
+        EXPECT_NEAR(assisted_accel(&bench.env, -2.0f, LONG_BENCH_SPEED_MPS), 0.0f, 1e-6f);
+    }
+    return 0;
+}
+
+static void long_selector_bench(SelectorBench *bench, float speed_mps, int gearbox_mode, int gear, int assist_mode,
+                                float throttle, float brake, float reference_mps2) {
+    selector_bench_init(bench, speed_mps, gearbox_mode, gear);
+    bench->env.assist_mode = assist_mode;
+    bench->env.assist_reference_valid = 1;
+    bench->env.assist_reference_accel_mps2 = reference_mps2;
+    bench->env.assist_reference_speed_mps = MOVING_REFERENCE_SPEED_MPS;
+    bench->env.human_throttle_norm = throttle;
+    bench->env.human_brake_norm = brake;
+}
+
+static int test_full_with_feet_off_moves_the_car_on_the_reference(void) {
+    const float *expected_accels = LONG_REFERENCES_CLIPPED_MPS2;
+    int start_gears[] = {GEAR_NEUTRAL, 1, 3};
+    for (int g = 0; g < 3; g++) {
+        for (int r = 0; r < LONG_REFERENCE_COUNT; r++) {
+            SelectorBench bench;
+            long_selector_bench(&bench, LONG_BENCH_SPEED_MPS, GEARBOX_MODE_AUTOMATIC, start_gears[g], ASSIST_MODE_FULL,
+                                0.0f, 0.0f, LONG_REFERENCES_MPS2[r]);
+            move_human(&bench.env, 0);
+            EXPECT_TRUE(bench.env.human_gear >= 1);
+            EXPECT_TRUE(bench.agent.accel_long == expected_accels[r]);
+            EXPECT_NEAR(bench.agent.sim_speed_signed, LONG_BENCH_SPEED_MPS + 0.5f * expected_accels[r] * ASSIST_TEST_DT_SECONDS,
+                        SPEED_TOLERANCE_MPS);
+        }
+    }
+    return 0;
+}
+
+static int expect_same_motion_as_off(float speed_mps, int gearbox_mode, int gear, int assist_mode, float throttle,
+                                     float brake, float weight) {
+    SelectorBench assisted;
+    SelectorBench off;
+    long_selector_bench(&assisted, speed_mps, gearbox_mode, gear, assist_mode, throttle, brake, 3.0f);
+    long_selector_bench(&off, speed_mps, gearbox_mode, gear, ASSIST_MODE_OFF, throttle, brake, 3.0f);
+    assisted.env.assist_blend_weight = weight;
+    off.env.assist_reference_valid = 0;
+    for (int step = 0; step < SELECTOR_SETTLE_STEP_COUNT; step++) {
+        move_human(&assisted.env, 0);
+        move_human(&off.env, 0);
+        EXPECT_TRUE(memcmp(&assisted.agent, &off.agent, sizeof(Agent)) == 0);
+        EXPECT_EQ_INT(assisted.env.human_gear, off.env.human_gear);
+        EXPECT_TRUE(same_bits(assisted.env.human_engine_rpm, off.env.human_engine_rpm));
+    }
+    return 0;
+}
+
+static int test_full_with_a_pedal_or_outside_drive_moves_the_car_exactly_like_off(void) {
+    float threshold = ASSIST_PEDAL_RELEASED_FRACTION;
+    EXPECT_FALSE(expect_same_motion_as_off(LONG_BENCH_SPEED_MPS, GEARBOX_MODE_AUTOMATIC, 1, ASSIST_MODE_FULL, 0.6f, 0.0f, 0.0f));
+    EXPECT_FALSE(expect_same_motion_as_off(LONG_BENCH_SPEED_MPS, GEARBOX_MODE_AUTOMATIC, 1, ASSIST_MODE_FULL, threshold, 0.0f, 0.0f));
+    EXPECT_FALSE(expect_same_motion_as_off(LONG_BENCH_SPEED_MPS, GEARBOX_MODE_AUTOMATIC, 2, ASSIST_MODE_FULL, 0.0f, threshold, 0.0f));
+    EXPECT_FALSE(expect_same_motion_as_off(-1.0f, GEARBOX_MODE_AUTOMATIC, GEAR_REVERSE, ASSIST_MODE_FULL, 0.0f, 0.0f, 0.0f));
+    EXPECT_FALSE(expect_same_motion_as_off(LONG_BENCH_SPEED_MPS, GEARBOX_MODE_MANUAL, GEAR_NEUTRAL, ASSIST_MODE_FULL, 0.0f, 0.0f, 0.0f));
+    EXPECT_FALSE(expect_same_motion_as_off(LONG_BENCH_SPEED_MPS, GEARBOX_MODE_AUTOMATIC, 1, ASSIST_MODE_DISPLAY, 0.0f, 0.0f, 0.0f));
+    EXPECT_FALSE(expect_same_motion_as_off(LONG_BENCH_SPEED_MPS, GEARBOX_MODE_AUTOMATIC, 1, ASSIST_MODE_NUDGE, 0.0f, 0.0f, 0.0f));
+    EXPECT_FALSE(expect_same_motion_as_off(LONG_BENCH_SPEED_MPS, GEARBOX_MODE_AUTOMATIC, 1, ASSIST_MODE_BLEND, 0.0f, 0.0f, 0.0f));
+    SelectorBench feet_off;
+    long_selector_bench(&feet_off, LONG_BENCH_SPEED_MPS, GEARBOX_MODE_AUTOMATIC, 1, ASSIST_MODE_FULL, 0.0f, 0.0f, 3.0f);
+    move_human(&feet_off.env, 0);
+    EXPECT_TRUE(feet_off.agent.accel_long == 3.0f);
+    return 0;
+}
+
+static int test_speed_clip_and_zero_crossing_still_apply_to_the_assisted_command(void) {
+    SelectorBench bench;
+    long_selector_bench(&bench, 0.2f, GEARBOX_MODE_AUTOMATIC, 1, ASSIST_MODE_FULL, 0.0f, 0.0f, -9.0f);
+    move_human(&bench.env, 0);
+    EXPECT_TRUE(bench.agent.sim_speed_signed == 0.0f);
+    EXPECT_TRUE(bench.agent.accel_long == 0.0f);
+    float top_speed_mps = ASSIST_TEST_MAX_SPEED_MPS * ASSIST_TEST_SPEED_SCALE;
+    long_selector_bench(&bench, top_speed_mps - 0.01f, GEARBOX_MODE_MANUAL, GEARBOX_FORWARD_GEAR_COUNT,
+                        ASSIST_MODE_FULL, 0.0f, 0.0f, 4.0f);
+    move_human(&bench.env, 0);
+    EXPECT_NEAR(bench.agent.sim_speed_signed, top_speed_mps, SPEED_TOLERANCE_MPS);
+    EXPECT_TRUE(bench.agent.accel_long == 4.0f);
+    return 0;
+}
+
+static int test_full_with_feet_off_differs_from_off_but_a_pedal_at_the_threshold_does_not(void) {
+    int substep_counts[] = {1, 6};
+    for (int k = 0; k < 2; k++) {
+        int saw_valid = 0;
+        int n = substep_counts[k];
+        unsigned long long off_held = drive_with_assist_input(ASSIST_MODE_OFF, 0.0f, n, HUMAN_INPUT_PEDAL_AT_THRESHOLD, &saw_valid);
+        unsigned long long full_held = drive_with_assist_input(ASSIST_MODE_FULL, 1.0f, n, HUMAN_INPUT_PEDAL_AT_THRESHOLD, &saw_valid);
+        EXPECT_EQ_INT(saw_valid, 1);
+        EXPECT_TRUE(full_held == off_held);
+        unsigned long long off_free = drive_with_assist_input(ASSIST_MODE_OFF, 0.0f, n, HUMAN_INPUT_FEET_OFF, &saw_valid);
+        unsigned long long full_free = drive_with_assist_input(ASSIST_MODE_FULL, 1.0f, n, HUMAN_INPUT_FEET_OFF, &saw_valid);
+        unsigned long long display_free = drive_with_assist_input(ASSIST_MODE_DISPLAY, 1.0f, n, HUMAN_INPUT_FEET_OFF, &saw_valid);
+        unsigned long long nudge_free = drive_with_assist_input(ASSIST_MODE_NUDGE, 1.0f, n, HUMAN_INPUT_FEET_OFF, &saw_valid);
+        unsigned long long zero_blend_free = drive_with_assist_input(ASSIST_MODE_BLEND, 0.0f, n, HUMAN_INPUT_FEET_OFF, &saw_valid);
+        EXPECT_TRUE(full_free != off_free);
+        EXPECT_TRUE(display_free == off_free);
+        EXPECT_TRUE(nudge_free == off_free);
+        EXPECT_TRUE(zero_blend_free == off_free);
+    }
+    return 0;
+}
+
+static int accel_follows_clipped_reference(const Drive *env) {
+    const Agent *agent = &env->agents[env->active_agent_indices[HUMAN_ACTIVE_IDX]];
+    float clipped = fminf(fmaxf(env->assist_reference_accel_mps2, CONTRACT_ACCEL_MIN_MPS2), CONTRACT_ACCEL_MAX_MPS2);
+    int stopped_by_zero_crossing = agent->sim_speed_signed == 0.0f && agent->accel_long == 0.0f;
+    return agent->accel_long == clipped || stopped_by_zero_crossing;
+}
+
+static int test_full_feet_off_drives_the_reference_accel_but_never_blends_steering(void) {
+    Drive env = assist_full_env(DYNAMICS_MODEL_JERK, 1);
+    c_set_assist_mode(&env, ASSIST_MODE_FULL, 1.0f);
+    int followed_count = 0;
+    for (int step = 0; step < ASSIST_TEST_STEP_COUNT; step++) {
+        set_actions(&env, step);
+        set_human_command(&env, step, HUMAN_INPUT_FEET_OFF);
+        c_step(&env);
+        EXPECT_EQ_INT(env.assist_reference_valid, 1);
+        EXPECT_TRUE(human_agent(&env)->steering_angle == -env.human_steering_cmd_norm * HUMAN_STEERING_LIMIT_RAD);
+        EXPECT_TRUE(accel_follows_clipped_reference(&env));
+        followed_count += human_agent(&env)->accel_long != 0.0f;
+    }
+    EXPECT_TRUE(followed_count > 0);
+    free_allocated(&env);
+    return 0;
+}
+
+static int test_blend_at_one_drives_the_reference_accel_after_the_ramp(void) {
+    Drive env = assist_full_env(DYNAMICS_MODEL_JERK, 1);
+    c_set_assist_mode(&env, ASSIST_MODE_BLEND, 1.0f);
+    int ramp_steps = (int) ceilf(ASSIST_RAMP_SECONDS / env.dt) + 1;
+    int followed_count = 0;
+    for (int step = 0; step < ASSIST_TEST_STEP_COUNT; step++) {
+        set_actions(&env, step);
+        c_set_human_pedals(&env, 0.4f, 0.8f, 0.0f, 0.0f, 0);
+        c_step(&env);
+        if (step < ramp_steps) {
+            continue;
+        }
+        EXPECT_NEAR(env.assist_blend_weight, 1.0f, EXACT_TOLERANCE);
+        EXPECT_TRUE(accel_follows_clipped_reference(&env));
+        followed_count += human_agent(&env)->accel_long != 0.0f;
+    }
+    EXPECT_TRUE(followed_count > 0);
+    free_allocated(&env);
+    return 0;
+}
+
+
+#define REST_SPEED_COUNT 3
+static const float REST_SPEEDS_MPS[REST_SPEED_COUNT] = {0.0f, -0.0f, -1.0f};
+
+static int test_a_reference_never_brakes_a_car_at_rest_into_reverse(void) {
+    for (int k = 0; k < REST_SPEED_COUNT; k++) {
+        float speed_mps = REST_SPEEDS_MPS[k];
+        for (int r = 0; r < LONG_REFERENCE_COUNT; r++) {
+            float held = fmaxf(LONG_REFERENCES_CLIPPED_MPS2[r], 0.0f);
+            AssistBench bench;
+            long_bench_init(&bench, ASSIST_MODE_FULL, 0.0f, 0.0f, 0.0f, 1);
+            bench.env.assist_reference_accel_mps2 = LONG_REFERENCES_MPS2[r];
+            EXPECT_TRUE(assisted_accel(&bench.env, -5.0f, speed_mps) == held);
+            bench.env.assist_mode = ASSIST_MODE_BLEND;
+            bench.env.assist_blend_weight = 1.0f;
+            EXPECT_TRUE(assisted_accel(&bench.env, -5.0f, speed_mps) == held);
+            bench.env.assist_blend_weight = 0.5f;
+            EXPECT_NEAR(assisted_accel(&bench.env, -3.0f, speed_mps), -1.5f + 0.5f * held, 1e-6f);
+        }
+    }
+    return 0;
+}
+
+static int test_the_drivers_own_command_at_rest_is_untouched(void) {
+    for (int k = 0; k < REST_SPEED_COUNT; k++) {
+        AssistBench bench;
+        long_bench_init(&bench, ASSIST_MODE_FULL, 0.0f, 0.0f, 1.0f, 1);
+        bench.env.assist_reference_accel_mps2 = -4.0f;
+        for (int h = 0; h < LONG_HUMAN_COUNT; h++) {
+            EXPECT_TRUE(same_bits(assisted_accel(&bench.env, LONG_HUMANS_MPS2[h], REST_SPEEDS_MPS[k]), LONG_HUMANS_MPS2[h]));
+        }
+        bench.env.assist_mode = ASSIST_MODE_BLEND;
+        EXPECT_TRUE(same_bits(assisted_accel(&bench.env, -8.9f, REST_SPEEDS_MPS[k]), -8.9f));
+        bench.env.assist_reference_valid = 0;
+        bench.env.assist_blend_weight = 1.0f;
+        EXPECT_TRUE(same_bits(assisted_accel(&bench.env, -8.9f, REST_SPEEDS_MPS[k]), -8.9f));
+    }
+    return 0;
+}
+
+static int test_a_negative_reference_still_brakes_a_car_rolling_forward(void) {
+    float rolling_speeds_mps[] = {1e-6f, 0.2f, LONG_BENCH_SPEED_MPS};
+    for (int k = 0; k < 3; k++) {
+        AssistBench bench;
+        long_bench_init(&bench, ASSIST_MODE_FULL, 0.0f, 0.0f, 0.0f, 1);
+        bench.env.assist_reference_accel_mps2 = -20.0f;
+        EXPECT_TRUE(assisted_accel(&bench.env, 1.0f, rolling_speeds_mps[k]) == CONTRACT_ACCEL_MIN_MPS2);
+        bench.env.assist_mode = ASSIST_MODE_BLEND;
+        bench.env.assist_blend_weight = 1.0f;
+        EXPECT_TRUE(assisted_accel(&bench.env, 1.0f, rolling_speeds_mps[k]) == CONTRACT_ACCEL_MIN_MPS2);
+    }
+    return 0;
+}
+
+static int expect_held_at_rest(int assist_mode, float reference_mps2) {
+    SelectorBench bench;
+    long_selector_bench(&bench, 0.0f, GEARBOX_MODE_AUTOMATIC, 1, assist_mode, 0.0f, 0.0f, reference_mps2);
+    bench.env.assist_blend_weight = 1.0f;
+    for (int step = 0; step < SELECTOR_SETTLE_STEP_COUNT; step++) {
+        move_human(&bench.env, 0);
+        EXPECT_TRUE(bench.env.human_gear >= 1);
+        EXPECT_TRUE(bench.agent.sim_speed_signed == 0.0f);
+    }
+    return 0;
+}
+
+static int test_feet_off_at_rest_with_a_braking_policy_holds_the_car(void) {
+    float references[] = {-0.01f, -1.5f, -9.0f, -20.0f};
+    for (int r = 0; r < 4; r++) {
+        EXPECT_FALSE(expect_held_at_rest(ASSIST_MODE_FULL, references[r]));
+        EXPECT_FALSE(expect_held_at_rest(ASSIST_MODE_BLEND, references[r]));
+    }
+    return 0;
+}
+
+static int test_a_braking_policy_never_speeds_up_a_car_rolling_back_in_drive(void) {
+    int modes[] = {ASSIST_MODE_FULL, ASSIST_MODE_BLEND};
+    for (int m = 0; m < 2; m++) {
+        SelectorBench bench;
+        long_selector_bench(&bench, -0.3f, GEARBOX_MODE_AUTOMATIC, 1, modes[m], 0.0f, 0.0f, -3.0f);
+        bench.env.assist_blend_weight = 1.0f;
+        for (int step = 0; step < SELECTOR_SETTLE_STEP_COUNT; step++) {
+            move_human(&bench.env, 0);
+            EXPECT_TRUE(bench.env.human_gear >= 1);
+            EXPECT_TRUE(bench.agent.sim_speed_signed >= -0.3f);
+        }
+    }
+    return 0;
+}
+
+static int test_a_positive_reference_still_pulls_away_from_rest(void) {
+    int modes[] = {ASSIST_MODE_FULL, ASSIST_MODE_BLEND};
+    for (int m = 0; m < 2; m++) {
+        SelectorBench bench;
+        long_selector_bench(&bench, 0.0f, GEARBOX_MODE_AUTOMATIC, 1, modes[m], 0.0f, 0.0f, 2.0f);
+        bench.env.assist_blend_weight = 1.0f;
+        move_human(&bench.env, 0);
+        EXPECT_TRUE(bench.agent.accel_long == 2.0f);
+        EXPECT_NEAR(bench.agent.sim_speed_signed, 0.5f * 2.0f * ASSIST_TEST_DT_SECONDS, SPEED_TOLERANCE_MPS);
+    }
+    return 0;
+}
+
+static int test_braking_to_a_stop_then_staying_stopped(void) {
+    SelectorBench bench;
+    long_selector_bench(&bench, 0.5f, GEARBOX_MODE_AUTOMATIC, 1, ASSIST_MODE_FULL, 0.0f, 0.0f, -9.0f);
+    float previous_speed_mps = bench.agent.sim_speed_signed;
+    int stopped = 0;
+    for (int step = 0; step < SELECTOR_SETTLE_STEP_COUNT; step++) {
+        move_human(&bench.env, 0);
+        EXPECT_TRUE(bench.agent.sim_speed_signed >= 0.0f);
+        EXPECT_TRUE(bench.agent.sim_speed_signed <= previous_speed_mps);
+        previous_speed_mps = bench.agent.sim_speed_signed;
+        stopped |= bench.agent.sim_speed_signed == 0.0f;
+    }
+    EXPECT_TRUE(stopped);
+    EXPECT_TRUE(bench.agent.sim_speed_signed == 0.0f);
+    return 0;
+}
+
+static int expect_braking_policy_never_reverses_the_car(int assist_mode) {
+    Drive env = assist_full_env(DYNAMICS_MODEL_JERK, 1);
+    c_set_assist_mode(&env, assist_mode, 1.0f);
+    float (*actions)[2] = (float (*)[2]) env.actions;
+    int saw_rest = 0;
+    for (int step = 0; step < ASSIST_TEST_STEP_COUNT; step++) {
+        for (int i = 0; i < env.active_agent_count; i++) {
+            actions[i][0] = -1.0f;
+            actions[i][1] = 0.0f;
+        }
+        c_set_human_pedals(&env, 0.0f, 0.0f, 0.0f, 0.0f, 0);
+        c_step(&env);
+        EXPECT_TRUE(human_agent(&env)->sim_speed_signed >= 0.0f);
+        saw_rest |= human_agent(&env)->sim_speed_signed == 0.0f && env.assist_reference_valid;
+    }
+    free_allocated(&env);
+    // BLEND ramps in over idle creep, so only FULL is sure to be at rest with a live reference
+    EXPECT_TRUE(saw_rest || assist_mode != ASSIST_MODE_FULL);
+    return 0;
+}
+
+static int test_a_braking_policy_never_reverses_the_human_car(void) {
+    EXPECT_FALSE(expect_braking_policy_never_reverses_the_car(ASSIST_MODE_FULL));
+    EXPECT_FALSE(expect_braking_policy_never_reverses_the_car(ASSIST_MODE_BLEND));
+    return 0;
+}
+
+
+#define FORWARD_SPEED_COUNT 3
+static const float FORWARD_SPEEDS_MPS[FORWARD_SPEED_COUNT] = {1e-6f, 0.06f, LONG_BENCH_SPEED_MPS};
+
+static float stop_rule_reference(int r) {
+    return fminf(LONG_REFERENCES_CLIPPED_MPS2[r], -CONTRACT_STOP_DECEL_MPS2);
+}
+
+static int test_a_policy_that_chose_to_stop_brakes_a_moving_car_at_least_the_stop_decel(void) {
+    float stop_speeds[] = {0.0f, -0.0f};
+    for (int z = 0; z < 2; z++) {
+        for (int k = 0; k < FORWARD_SPEED_COUNT; k++) {
+            for (int r = 0; r < LONG_REFERENCE_COUNT; r++) {
+                AssistBench bench;
+                long_bench_init(&bench, ASSIST_MODE_FULL, 0.0f, 0.0f, 0.0f, 1);
+                bench.env.assist_reference_speed_mps = stop_speeds[z];
+                bench.env.assist_reference_accel_mps2 = LONG_REFERENCES_MPS2[r];
+                EXPECT_TRUE(assisted_accel(&bench.env, 1.0f, FORWARD_SPEEDS_MPS[k]) == stop_rule_reference(r));
+                bench.env.assist_mode = ASSIST_MODE_BLEND;
+                bench.env.assist_blend_weight = 1.0f;
+                EXPECT_TRUE(assisted_accel(&bench.env, 1.0f, FORWARD_SPEEDS_MPS[k]) == stop_rule_reference(r));
+                bench.env.assist_blend_weight = 0.5f;
+                EXPECT_NEAR(assisted_accel(&bench.env, 1.0f, FORWARD_SPEEDS_MPS[k]), 0.5f + 0.5f * stop_rule_reference(r), 1e-6f);
+            }
+        }
+    }
+    EXPECT_NEAR(ASSIST_STOP_DECEL_MPS2, CONTRACT_STOP_DECEL_MPS2, EXACT_TOLERANCE);
+    return 0;
+}
+
+static int test_the_stop_rule_never_brakes_harder_than_a_stronger_reference(void) {
+    float strong_references[] = {-3.0f, -5.5f, -9.0f, -20.0f};
+    float expected[] = {-3.0f, -5.5f, -9.0f, -9.0f};
+    for (int r = 0; r < 4; r++) {
+        AssistBench bench;
+        long_bench_init(&bench, ASSIST_MODE_FULL, 0.0f, 0.0f, 0.0f, 1);
+        bench.env.assist_reference_speed_mps = 0.0f;
+        bench.env.assist_reference_accel_mps2 = strong_references[r];
+        EXPECT_TRUE(assisted_accel(&bench.env, 0.0f, LONG_BENCH_SPEED_MPS) == expected[r]);
+    }
+    return 0;
+}
+
+static int test_the_stop_rule_needs_an_exact_zero_reference_speed(void) {
+    float near_zero_speeds[] = {1e-6f, -1e-6f, 0.5f, -2.0f};
+    for (int z = 0; z < 4; z++) {
+        for (int r = 0; r < LONG_REFERENCE_COUNT; r++) {
+            AssistBench bench;
+            long_bench_init(&bench, ASSIST_MODE_FULL, 0.0f, 0.0f, 0.0f, 1);
+            bench.env.assist_reference_speed_mps = near_zero_speeds[z];
+            bench.env.assist_reference_accel_mps2 = LONG_REFERENCES_MPS2[r];
+            EXPECT_TRUE(assisted_accel(&bench.env, 1.0f, LONG_BENCH_SPEED_MPS) == LONG_REFERENCES_CLIPPED_MPS2[r]);
+        }
+    }
+    return 0;
+}
+
+static int test_the_stop_rule_leaves_a_car_at_rest_and_the_driver_alone(void) {
+    for (int r = 0; r < LONG_REFERENCE_COUNT; r++) {
+        for (int k = 0; k < REST_SPEED_COUNT; k++) {
+            AssistBench bench;
+            long_bench_init(&bench, ASSIST_MODE_FULL, 0.0f, 0.0f, 0.0f, 1);
+            bench.env.assist_reference_speed_mps = 0.0f;
+            bench.env.assist_reference_accel_mps2 = LONG_REFERENCES_MPS2[r];
+            EXPECT_TRUE(assisted_accel(&bench.env, -5.0f, REST_SPEEDS_MPS[k]) == fmaxf(LONG_REFERENCES_CLIPPED_MPS2[r], 0.0f));
+            bench.env.human_brake_norm = 1.0f;
+            EXPECT_TRUE(same_bits(assisted_accel(&bench.env, 1.7f, LONG_BENCH_SPEED_MPS), 1.7f));
+            bench.env.assist_mode = ASSIST_MODE_BLEND;
+            EXPECT_TRUE(same_bits(assisted_accel(&bench.env, 1.7f, LONG_BENCH_SPEED_MPS), 1.7f));
+        }
+    }
+    return 0;
+}
+
+static int expect_creep_stops_and_holds(int assist_mode) {
+    SelectorBench bench;
+    long_selector_bench(&bench, 0.06f, GEARBOX_MODE_AUTOMATIC, 1, assist_mode, 0.0f, 0.0f, 0.0f);
+    bench.env.assist_reference_speed_mps = 0.0f;
+    bench.env.assist_blend_weight = 1.0f;
+    move_human(&bench.env, 0);
+    EXPECT_TRUE(bench.agent.sim_speed_signed == 0.0f);
+    for (int step = 0; step < SELECTOR_SETTLE_STEP_COUNT; step++) {
+        move_human(&bench.env, 0);
+        EXPECT_TRUE(bench.agent.sim_speed_signed == 0.0f);
+    }
+    return 0;
+}
+
+static int test_a_creeping_car_whose_policy_chose_to_stop_reaches_zero_and_holds(void) {
+    EXPECT_FALSE(expect_creep_stops_and_holds(ASSIST_MODE_FULL));
+    EXPECT_FALSE(expect_creep_stops_and_holds(ASSIST_MODE_BLEND));
+    return 0;
+}
+
+static int test_the_reference_speed_is_the_policy_steps_end_speed(void) {
+    float speeds[] = {8.0f, 0.03f, 0.0f};
+    for (int k = 0; k < 3; k++) {
+        AssistBench bench;
+        assist_bench_init(&bench, speeds[k]);
+        bench.env.assist_mode = ASSIST_MODE_DISPLAY;
+        bench.env.assist_reference_speed_mps = REFERENCE_SENTINEL_RAD;
+        bench.actions[0][0] = -1.0f;
+        advance_assist(&bench.env, 0, &bench.agent, ASSIST_TEST_POLICY_DT_SECONDS, ASSIST_TEST_DT_SECONDS, 1);
+        float j_long, j_lat;
+        decode_jerk_action(&bench.env, 0, &j_long, &j_lat);
+        JerkStep expected = integrate_jerk(&bench.env, &bench.agent, j_long, j_lat, ASSIST_TEST_POLICY_DT_SECONDS, 0);
+        EXPECT_TRUE(bench.env.assist_reference_speed_mps == expected.speed_mps);
+    }
+    return 0;
+}
+
+static int expect_full_sim_creep_comes_to_rest(int assist_mode) {
+    Drive env = assist_full_env(DYNAMICS_MODEL_JERK, 1);
+    c_set_assist_mode(&env, assist_mode, 1.0f);
+    float (*actions)[2] = (float (*)[2]) env.actions;
+    int rest_step_count = 0;
+    for (int step = 0; step < 2 * ASSIST_TEST_STEP_COUNT; step++) {
+        for (int i = 0; i < env.active_agent_count; i++) {
+            actions[i][0] = -1.0f;
+            actions[i][1] = 0.0f;
+        }
+        c_set_human_pedals(&env, 0.0f, step < 3 ? 0.06f : 0.0f, 0.0f, 0.0f, 0);
+        c_step(&env);
+        EXPECT_TRUE(human_agent(&env)->sim_speed_signed >= 0.0f);
+        rest_step_count = human_agent(&env)->sim_speed_signed == 0.0f ? rest_step_count + 1 : 0;
+    }
+    free_allocated(&env);
+    EXPECT_TRUE(rest_step_count >= ASSIST_TEST_STEP_COUNT);
+    return 0;
+}
+
+static int test_a_braking_policy_brings_a_creeping_human_car_to_rest(void) {
+    EXPECT_FALSE(expect_full_sim_creep_comes_to_rest(ASSIST_MODE_FULL));
+    EXPECT_FALSE(expect_full_sim_creep_comes_to_rest(ASSIST_MODE_BLEND));
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_integrate_jerk_does_not_write_the_agent);
@@ -837,5 +1430,31 @@ int main(void) {
     RUN_TEST(test_refused_selector_request_is_not_remembered);
     RUN_TEST(test_reverse_selected_by_paddle_drives_backwards_and_stays_in_reverse);
     RUN_TEST(test_manual_gearbox_ignores_the_selector);
+    RUN_TEST(test_long_assist_without_a_reference_is_the_driver_bit_for_bit);
+    RUN_TEST(test_full_with_feet_off_in_a_forward_gear_drives_the_clipped_reference);
+    RUN_TEST(test_full_hands_back_on_either_pedal_or_outside_a_forward_gear);
+    RUN_TEST(test_blend_shares_the_longitudinal_command_with_the_clipped_reference);
+    RUN_TEST(test_display_and_nudge_leave_the_longitudinal_command_alone_once_ramped_out);
+    RUN_TEST(test_full_with_feet_off_moves_the_car_on_the_reference);
+    RUN_TEST(test_full_with_a_pedal_or_outside_drive_moves_the_car_exactly_like_off);
+    RUN_TEST(test_speed_clip_and_zero_crossing_still_apply_to_the_assisted_command);
+    RUN_TEST(test_full_with_feet_off_differs_from_off_but_a_pedal_at_the_threshold_does_not);
+    RUN_TEST(test_full_feet_off_drives_the_reference_accel_but_never_blends_steering);
+    RUN_TEST(test_blend_at_one_drives_the_reference_accel_after_the_ramp);
+    RUN_TEST(test_a_reference_never_brakes_a_car_at_rest_into_reverse);
+    RUN_TEST(test_the_drivers_own_command_at_rest_is_untouched);
+    RUN_TEST(test_a_negative_reference_still_brakes_a_car_rolling_forward);
+    RUN_TEST(test_feet_off_at_rest_with_a_braking_policy_holds_the_car);
+    RUN_TEST(test_a_braking_policy_never_speeds_up_a_car_rolling_back_in_drive);
+    RUN_TEST(test_a_positive_reference_still_pulls_away_from_rest);
+    RUN_TEST(test_braking_to_a_stop_then_staying_stopped);
+    RUN_TEST(test_a_braking_policy_never_reverses_the_human_car);
+    RUN_TEST(test_a_policy_that_chose_to_stop_brakes_a_moving_car_at_least_the_stop_decel);
+    RUN_TEST(test_the_stop_rule_never_brakes_harder_than_a_stronger_reference);
+    RUN_TEST(test_the_stop_rule_needs_an_exact_zero_reference_speed);
+    RUN_TEST(test_the_stop_rule_leaves_a_car_at_rest_and_the_driver_alone);
+    RUN_TEST(test_a_creeping_car_whose_policy_chose_to_stop_reaches_zero_and_holds);
+    RUN_TEST(test_the_reference_speed_is_the_policy_steps_end_speed);
+    RUN_TEST(test_a_braking_policy_brings_a_creeping_human_car_to_rest);
     return test_summary(failures);
 }

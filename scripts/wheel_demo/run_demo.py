@@ -211,6 +211,7 @@ def main():
     parser.add_argument("--carla-port", type=int, default=2000)
     parser.add_argument("--camera", default="chase", choices=CAMERA_MODE_NAMES)
     parser.add_argument("--night", action="store_true")
+    parser.add_argument("--fullscreen", action="store_true", help="fill the screen (Esc quits)")
     parser.add_argument("--ffb", action="store_true", help="force feedback (needs the wheel connected)")
     parser.add_argument("--ffb-gain", type=float, default=DEFAULT_FORCE_GAIN, help="overall force strength, 0-1")
     parser.add_argument("--calibrate", action="store_true", help="calibrate the wheel before driving")
@@ -255,6 +256,7 @@ def main():
             night_mode=args.night,
             host=args.carla_host,
             port=args.carla_port,
+            fullscreen=args.fullscreen,
         )
     force_loop = None
     if args.ffb:

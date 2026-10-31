@@ -1225,7 +1225,7 @@ static PyObject *vec_get_assist_state(PyObject *self, PyObject *args) {
     Drive *drive = (Drive *) vec->envs[0];
     float human_rad = human_steering_angle(drive);
     return Py_BuildValue(
-        "{s:i,s:f,s:f,s:i,s:f,s:f,s:f,s:f}",
+        "{s:i,s:f,s:f,s:i,s:f,s:f,s:f,s:f,s:f}",
         "mode",
         drive->assist_mode,
         "blend_target",
@@ -1238,6 +1238,8 @@ static PyObject *vec_get_assist_state(PyObject *self, PyObject *args) {
         drive->assist_reference_steering_rad,
         "reference_accel_mps2",
         drive->assist_reference_accel_mps2,
+        "reference_speed_mps",
+        drive->assist_reference_speed_mps,
         "human_steering_rad",
         human_rad,
         "commanded_steering_rad",
@@ -2227,11 +2229,15 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "ASSIST_MODE_NUDGE", ASSIST_MODE_NUDGE);
     PyModule_AddIntConstant(m, "ASSIST_MODE_FULL", ASSIST_MODE_FULL);
     PyModule_AddObject(m, "ASSIST_RAMP_SECONDS", PyFloat_FromDouble(ASSIST_RAMP_SECONDS));
+    PyModule_AddObject(m, "ASSIST_PEDAL_RELEASED_FRACTION", PyFloat_FromDouble(ASSIST_PEDAL_RELEASED_FRACTION));
+    PyModule_AddObject(m, "ASSIST_STOP_DECEL_MPS2", PyFloat_FromDouble(ASSIST_STOP_DECEL_MPS2));
     PyModule_AddIntConstant(m, "CONTROLLER_HUMAN", CONTROLLER_HUMAN);
     PyModule_AddObject(m, "HUMAN_WHEEL_RANGE_DEG", PyFloat_FromDouble(HUMAN_WHEEL_RANGE_DEG));
     PyModule_AddObject(m, "HUMAN_STEERING_LIMIT_RAD", PyFloat_FromDouble(HUMAN_STEERING_LIMIT_RAD));
     PyModule_AddObject(m, "HUMAN_STEERING_RATIO", PyFloat_FromDouble(HUMAN_STEERING_RATIO));
     PyModule_AddObject(m, "HUMAN_TIRE_GRIP_MPS2", PyFloat_FromDouble(HUMAN_TIRE_GRIP_MPS2));
+    PyModule_AddObject(m, "HUMAN_ACCEL_MIN_MPS2", PyFloat_FromDouble(HUMAN_ACCEL_LIMIT_MPS2[0]));
+    PyModule_AddObject(m, "HUMAN_ACCEL_MAX_MPS2", PyFloat_FromDouble(HUMAN_ACCEL_LIMIT_MPS2[1]));
     PyModule_AddIntConstant(m, "GOAL_FEATURES", GOAL_FEATURES);
     PyModule_AddIntConstant(m, "MAX_GOALS", MAX_GOALS);
     PyModule_AddIntConstant(m, "AGENT_F32_FIELDS", AGENT_F32_FIELDS);

@@ -268,6 +268,7 @@ struct Drive {
     int assist_reference_valid;
     float assist_reference_steering_rad; // sim sign: positive-left
     float assist_reference_accel_mps2;
+    float assist_reference_speed_mps; // where the policy's own step ends; 0 means it chose to stop
     int reset_accel_on_stop;
     int init_mode;
     int control_mode;
@@ -5873,6 +5874,32 @@ static float assisted_steering_angle(const Drive *env, float human_steering_rad)
     return (1.0f - weight) * human_steering_rad + weight * env->assist_reference_steering_rad;
 }
 
+// BLEND shares the longitudinal command like the steering; FULL hands it to the policy while both pedals
+// are released and the car is in a forward gear.
+static float assisted_accel(const Drive *env, float human_accel_mps2, float speed_mps) {
+    if (!env->assist_reference_valid) {
+        return human_accel_mps2;
+    }
+    float reference = clip(env->assist_reference_accel_mps2, HUMAN_ACCEL_LIMIT_MPS2[0], HUMAN_ACCEL_LIMIT_MPS2[1]);
+    if (env->assist_reference_speed_mps == 0.0f && speed_mps > 0.0f) {
+        reference = fminf(reference, -ASSIST_STOP_DECEL_MPS2);
+    }
+    // braking holds a car at rest; the zero-crossing check below cannot catch a start from exactly zero
+    if (speed_mps <= 0.0f) {
+        reference = fmaxf(reference, 0.0f);
+    }
+    if (env->assist_mode == ASSIST_MODE_FULL) {
+        int feet_off = env->human_throttle_norm < ASSIST_PEDAL_RELEASED_FRACTION
+            && env->human_brake_norm < ASSIST_PEDAL_RELEASED_FRACTION;
+        return (feet_off && env->human_gear >= 1) ? reference : human_accel_mps2;
+    }
+    if (env->assist_blend_weight == 0.0f) {
+        return human_accel_mps2;
+    }
+    float weight = env->assist_blend_weight;
+    return (1.0f - weight) * human_accel_mps2 + weight * reference;
+}
+
 // Refreshes what the policy would do from the human car's own state, once per policy step, and eases
 // the blend weight toward its target. The reference runs the policy's jerk chain one policy step on.
 // A reference only exists while it is kept fresh, and the weight only moves while one exists, so
@@ -5892,6 +5919,7 @@ static void advance_assist(Drive *env, int action_idx, const Agent *agent, float
             JerkStep step = integrate_jerk(env, agent, j_long, j_lat, policy_dt, 0);
             env->assist_reference_steering_rad = step.steering_angle;
             env->assist_reference_accel_mps2 = step.accel_long;
+            env->assist_reference_speed_mps = step.speed_mps;
         }
     }
     if (!env->assist_reference_valid) {
@@ -5938,6 +5966,7 @@ static void move_human(Drive *env, int agent_idx) {
         ? human_powertrain_accel_mps2(env, agent, env->human_shift_request)
         : clip(env->human_accel_long_cmd_mps2, HUMAN_ACCEL_LIMIT_MPS2[0], HUMAN_ACCEL_LIMIT_MPS2[1]);
     env->human_shift_request = 0; // a paddle pull is consumed by exactly one step
+    accel_long = assisted_accel(env, accel_long, agent->sim_speed_signed);
 
     float speed_old = agent->sim_speed_signed;
     float speed_new = speed_old + 0.5f * (accel_long + agent->accel_long) * env->dt;

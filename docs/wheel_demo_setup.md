@@ -315,6 +315,7 @@ python scripts/wheel_demo/run_demo.py --town ask --render --ffb --camera chase -
 | `--assist off\|display\|blend\|nudge\|full`, `--assist-blend` | steering assist (M9) |
 | `--ffb`, `--ffb-gain 0..1` | force feedback and its strength (default 0.7) |
 | `--night` | night, with street lights and headlights |
+| `--fullscreen` | fill the screen (the 1280x720 frame is scaled by the GPU; Esc quits) |
 | `--carla-host`, `--carla-port` | where the CARLA server is |
 
 On the wheel (the keyboard keys `1 2 3 N L M TAB R Esc` still work too):
