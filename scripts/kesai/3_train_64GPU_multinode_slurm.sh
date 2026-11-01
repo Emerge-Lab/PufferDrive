@@ -24,7 +24,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=${RUN_NAME:-k_scaled_0067_${SEED}}
+export RUN_NAME=${RUN_NAME:-k_scaled_0068_${SEED}}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -78,7 +78,7 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
-    vec.num_envs=60 \
+    vec.num_envs=128 \
     train.rollout_dtype=float16 \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
