@@ -243,6 +243,9 @@ struct Drive {
     int disable_red_light_infractions;
     int disable_stop_sign_infractions;
     int traffic_light_junction_phases;
+    float traffic_light_green_min_s;  // training cycles: green ~ U(min, TL_DEFAULT_GREEN_DURATION)
+    float traffic_light_yellow_min_s; // training cycles: yellow ~ U(min, max)
+    float traffic_light_yellow_max_s;
     int stop_sign_behavior;
     int sdc_controller;
     int non_sdc_controller;
@@ -2716,9 +2719,8 @@ static TrafficLightCycle sample_traffic_light_cycle(Drive *env, int junction_id,
         dur_yellow = TL_DEFAULT_YELLOW_DURATION;
         dur_red = TL_DEFAULT_RED_DURATION;
     } else {
-        dur_green = sample_uniform(&env->rng_state, 0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
-        dur_yellow
-            = sample_uniform(&env->rng_state, 0.5f * TL_DEFAULT_YELLOW_DURATION, 0.75f * TL_DEFAULT_YELLOW_DURATION);
+        dur_green = sample_uniform(&env->rng_state, env->traffic_light_green_min_s, TL_DEFAULT_GREEN_DURATION);
+        dur_yellow = sample_uniform(&env->rng_state, env->traffic_light_yellow_min_s, env->traffic_light_yellow_max_s);
         dur_red = sample_uniform(&env->rng_state, 0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
     }
     TrafficLightCycle cycle;

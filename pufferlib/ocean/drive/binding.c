@@ -2023,6 +2023,18 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->disable_red_light_infractions = (int) unpack(kwargs, "disable_red_light_infractions");
     env->disable_stop_sign_infractions = (int) unpack(kwargs, "disable_stop_sign_infractions");
     env->traffic_light_junction_phases = (int) unpack(kwargs, "traffic_light_junction_phases");
+    env->traffic_light_green_min_s = (float) unpack(kwargs, "traffic_light_green_min_s");
+    env->traffic_light_yellow_min_s = (float) unpack(kwargs, "traffic_light_yellow_min_s");
+    env->traffic_light_yellow_max_s = (float) unpack(kwargs, "traffic_light_yellow_max_s");
+    if (!(env->traffic_light_green_min_s > 0.0f) || env->traffic_light_green_min_s > TL_DEFAULT_GREEN_DURATION
+        || !(env->traffic_light_yellow_min_s > 0.0f)
+        || !(env->traffic_light_yellow_max_s >= env->traffic_light_yellow_min_s)
+        || !isfinite(env->traffic_light_yellow_max_s)) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "traffic light cycle: need 0 < green_min <= 10 and 0 < yellow_min <= yellow_max");
+        return -1;
+    }
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
     env->stop_sign_behavior = (int) unpack(kwargs, "stop_sign_behavior");
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");

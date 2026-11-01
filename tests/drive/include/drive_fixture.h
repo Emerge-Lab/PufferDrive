@@ -92,6 +92,9 @@ static inline Drive drive_test_env_config(
     env.obs_partner_relative_velocity = 0;
     env.obs_slots_traffic_controls_n = 4;
     env.traffic_lights_enabled = 1;
+    env.traffic_light_green_min_s = 3.0f;
+    env.traffic_light_yellow_min_s = 2.0f;
+    env.traffic_light_yellow_max_s = 3.0f;
     env.stop_signs_enabled = 0;
     env.yield_signs_enabled = 0;
     env.dt = 0.1f;

@@ -47,6 +47,9 @@ class Drive(pufferlib.PufferEnv):
         disable_red_light_infractions=False,
         disable_stop_sign_infractions=False,
         traffic_light_junction_phases=False,
+        traffic_light_green_min_s=3.0,
+        traffic_light_yellow_min_s=2.0,
+        traffic_light_yellow_max_s=3.0,
         stop_sign_behavior="ignore",
         use_map_cache=False,
         preload_map_cache=False,
@@ -138,7 +141,7 @@ class Drive(pufferlib.PufferEnv):
         obs_norm_z_m=10.0,
         eval_perceived_size_margin_m=0.1,
         red_light_train_front_margin_m=0.3,
-        red_light_train_rear_margin_m=1.0,
+        red_light_train_rear_margin_m=0.0,
         obs_partner_split_length_m=0.0,
         obs_lane_width_clip_min_m=0.0,
         obs_lane_width_clip_max_m=0.0,
@@ -256,6 +259,17 @@ class Drive(pufferlib.PufferEnv):
         self.disable_red_light_infractions = bool(disable_red_light_infractions)
         self.disable_stop_sign_infractions = bool(disable_stop_sign_infractions)
         self.traffic_light_junction_phases = bool(traffic_light_junction_phases)
+        self.traffic_light_green_min_s = float(traffic_light_green_min_s)
+        self.traffic_light_yellow_min_s = float(traffic_light_yellow_min_s)
+        self.traffic_light_yellow_max_s = float(traffic_light_yellow_max_s)
+        if not (0.0 < self.traffic_light_green_min_s <= 10.0) or not (
+            0.0 < self.traffic_light_yellow_min_s <= self.traffic_light_yellow_max_s < float("inf")
+        ):
+            raise ValueError(
+                "traffic light cycle: need 0 < traffic_light_green_min_s <= 10 and "
+                f"0 < yellow_min <= yellow_max. Got: {traffic_light_green_min_s}, {traffic_light_yellow_min_s}, "
+                f"{traffic_light_yellow_max_s}"
+            )
         if replay_expert_agents not in (0, 1):
             raise ValueError(f"replay_expert_agents must be 0 or 1. Got: {replay_expert_agents}")
         self.replay_expert_agents = replay_expert_agents
@@ -598,6 +612,9 @@ class Drive(pufferlib.PufferEnv):
             "disable_red_light_infractions": self.disable_red_light_infractions,
             "disable_stop_sign_infractions": self.disable_stop_sign_infractions,
             "traffic_light_junction_phases": self.traffic_light_junction_phases,
+            "traffic_light_green_min_s": self.traffic_light_green_min_s,
+            "traffic_light_yellow_min_s": self.traffic_light_yellow_min_s,
+            "traffic_light_yellow_max_s": self.traffic_light_yellow_max_s,
             "stop_sign_behavior": self.stop_sign_behavior,
             "use_map_cache": self.use_map_cache,
             "use_neighbor_cache": self.use_neighbor_cache,
