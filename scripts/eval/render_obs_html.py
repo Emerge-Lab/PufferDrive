@@ -9,11 +9,12 @@ Selection: aggregated score < --max-score OR any --metric < 1 OR explicitly list
 Pages are named s<score>_<flags>_<scenario_type>_<token>.html so the gallery lists the worst first
 (flags: COL at-fault collision, OFF drivable area, DIR driving direction, STALL no progress). Every violated
 metric links to the replay step of its first violation (collisions: the shadow env's own flag).
---prune deletes the .replay.zlib of every scenario that was not selected.
+--prune deletes every .replay.zlib afterwards: a rendered page embeds the same bytes and is the source of a
+later re-render (e.g. after a viewer change), the other replays belong to unselected scenarios. Works on fresh
+runs and on runs tidied by tidy_nuplan_run.py.
 """
 
 import argparse
-import glob
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -26,6 +27,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 from pufferlib import viz  # noqa: E402
 
+import nuplan_run_layout  # noqa: E402
+
+REPLAY_SUFFIX = ".replay.zlib"
+GALLERY_INDEX = "index.html"
 FLAG_METRICS = (
     ("COL", "no_ego_at_fault_collisions"),
     ("OFF", "drivable_area_compliance"),
@@ -74,14 +79,15 @@ VIOLATION_SERIES = (  # scored metric, parquet with its per-step series, (lower,
 
 
 def scenario_rows(group_dir):
-    """token -> aggregator row (score + per-metric values) over every challenge of the run."""
-    rows = {}
-    for csv in glob.glob(f"{group_dir}/simulation/*/20*/aggregator_metric/*_weighted_average_metrics_*.csv"):
-        agg = pd.read_csv(csv)
-        per_scenario = agg[(agg["scenario_type"] != "final_score") & (agg["scenario"] != agg["scenario_type"])]
-        for _, row in per_scenario.iterrows():
-            rows[str(row["scenario"])] = row
-    return rows
+    """token -> aggregator row (score + per-metric values); {} for a run that was never scored."""
+    try:
+        csv = nuplan_run_layout.aggregated_metrics_csv(group_dir)
+    except FileNotFoundError as error:
+        print(f"[render_obs_html] no aggregator table, pages named by token only: {error}")
+        return {}
+    agg = pd.read_csv(csv)
+    per_scenario = agg[(agg["scenario_type"] != "final_score") & (agg["scenario"] != agg["scenario_type"])]
+    return {str(row["scenario"]): row for _, row in per_scenario.iterrows()}
 
 
 def first_out_of_bounds(values, lower=None, upper=None):
@@ -102,13 +108,10 @@ def step_link(step):
 
 def violation_steps(group_dir):
     """token -> {scored metric: first violating step} from the per-step time series nuPlan writes per metric."""
-    series_files = [
-        (metric, Path(sim_dir) / "metrics" / f"{parquet_name}.parquet", lower, upper)
-        for sim_dir in glob.glob(f"{group_dir}/simulation/*/20*")
-        for metric, parquet_name, lower, upper in VIOLATION_SERIES
-    ]
+    metrics_dir = nuplan_run_layout.metrics_dir(group_dir)
     out = {}
-    for metric, parquet_path, lower, upper in series_files:
+    for metric, parquet_name, lower, upper in VIOLATION_SERIES:
+        parquet_path = metrics_dir / f"{parquet_name}.parquet"
         if not parquet_path.exists():
             continue
         for _, r in pd.read_parquet(parquet_path).iterrows():
@@ -128,24 +131,24 @@ def replay_collision_step(replay_path):
 
 def comfort_failures(group_dir):
     """token -> ['ego_lon_jerk -2.7..5.0', ...]: nuPlan's own out-of-bound comfort sub-metrics."""
+    metrics_dir = nuplan_run_layout.metrics_dir(group_dir)
     out = {}
-    for sim_dir in glob.glob(f"{group_dir}/simulation/*/20*"):
-        for name in COMFORT_METRICS:
-            f = Path(sim_dir) / "metrics" / f"{name}.parquet"
-            if not f.exists():
-                continue
-            df = pd.read_parquet(f)
-            flag = [c for c in df.columns if c.endswith("within_bounds_stat_value")]
-            if not flag:
-                continue
-            lower, upper, bound_label = COMFORT_BOUNDS[name]
-            for _, r in df[~df[flag[0]].astype(bool)].iterrows():
-                step = first_out_of_bounds(r["time_series_values"], lower, upper)
-                step_html = "" if step is None else f" &middot; {step_link(step)}"
-                out.setdefault(str(r["scenario_name"]), []).append(
-                    f"{name} {float(r[f'min_{name}_stat_value']):.2f}..{float(r[f'max_{name}_stat_value']):.2f} "
-                    f"(bound {bound_label}){step_html}"
-                )
+    for name in COMFORT_METRICS:
+        f = metrics_dir / f"{name}.parquet"
+        if not f.exists():
+            continue
+        df = pd.read_parquet(f)
+        flag = [c for c in df.columns if c.endswith("within_bounds_stat_value")]
+        if not flag:
+            continue
+        lower, upper, bound_label = COMFORT_BOUNDS[name]
+        for _, r in df[~df[flag[0]].astype(bool)].iterrows():
+            step = first_out_of_bounds(r["time_series_values"], lower, upper)
+            step_html = "" if step is None else f" &middot; {step_link(step)}"
+            out.setdefault(str(r["scenario_name"]), []).append(
+                f"{name} {float(r[f'min_{name}_stat_value']):.2f}..{float(r[f'max_{name}_stat_value']):.2f} "
+                f"(bound {bound_label}){step_html}"
+            )
     return out
 
 
@@ -201,6 +204,20 @@ def page_name(token, row):
     return f"s{row['score']:.2f}_{flags}{row['scenario_type']}_{token}.html"
 
 
+def page_token(page_path):
+    """-> scenario token of a rendered page: the last underscore-separated part of its name."""
+    return Path(page_path).stem.rsplit("_", 1)[-1]
+
+
+def replay_sources(obs_dir):
+    """token -> its .replay.zlib, or its rendered page once the replay was pruned (the page embeds the payload)."""
+    sources = {path.name[: -len(REPLAY_SUFFIX)]: path for path in obs_dir.glob(f"*{REPLAY_SUFFIX}")}
+    for page in obs_dir.glob("*.html"):
+        if page.name != GALLERY_INDEX and page_token(page) not in sources:
+            sources[page_token(page)] = page
+    return sources
+
+
 def gallery_metrics(row):
     """Failure flags in the names the self-play gallery filters on (rate > 0 = flagged)."""
     if row is None:
@@ -223,43 +240,45 @@ def main():
     ap.add_argument("--workers", type=int, default=min(16, os.cpu_count() or 1))
     args = ap.parse_args()
     obs_dir = Path(args.group_dir) / "obs_html"
-    replays = {p.name[: -len(".replay.zlib")]: p for p in obs_dir.glob("*.replay.zlib")}
-    if not replays:
-        raise SystemExit(f"no obs_html/*.replay.zlib under {args.group_dir}")
+    sources = replay_sources(obs_dir)
+    if not sources:
+        raise SystemExit(f"no obs_html/*{REPLAY_SUFFIX} or rendered pages under {args.group_dir}")
     rows = scenario_rows(args.group_dir)
     comfort = comfort_failures(args.group_dir)
     steps = violation_steps(args.group_dir)
     wanted = selected_tokens(rows, args.max_score, args.metric) | set(args.tokens)
     jobs = [
-        (token, replays[token], obs_dir / page_name(token, rows.get(token)))
+        (token, sources[token], obs_dir / page_name(token, rows.get(token)))
         for token in sorted(wanted)
-        if token in replays
+        if token in sources
     ]
 
     def render(job):
-        token, replay, html_path = job
+        token, source, html_path = job
         row = rows.get(token)
         token_steps = dict(steps.get(token, {}))
         collision_failed = row is not None and float(row[COLLISION_METRIC]) < 1.0
-        collision_step = replay_collision_step(replay) if collision_failed else None
+        collision_step = replay_collision_step(source) if collision_failed else None
         if collision_step is not None:
             token_steps[COLLISION_METRIC] = collision_step
-        render_page(replay, html_path, score_panel(token, row, comfort.get(token, []), token_steps))
+        render_page(source, html_path, score_panel(token, row, comfort.get(token, []), token_steps))
+        if source.suffix == ".html" and source != html_path:
+            source.unlink()  # re-rendered under a new name: the old page would stay in the gallery
 
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
         list(pool.map(render, jobs))
     file_metrics = {html.name: gallery_metrics(rows.get(token)) for token, _, html in jobs}
     pruned = 0
     if args.prune:
-        for token, path in replays.items():
-            if token not in wanted:
+        for path in sources.values():
+            if path.suffix == ".zlib":
                 path.unlink()
                 pruned += 1
     if jobs:
         viz.build_gallery_index(str(obs_dir), file_metrics=file_metrics)
     missing = len(wanted) - len(jobs)
     print(
-        f"[render_obs_html] {len(replays)} replays, {len(wanted)} scenarios selected, {len(jobs)} pages rendered"
+        f"[render_obs_html] {len(sources)} replays, {len(wanted)} scenarios selected, {len(jobs)} pages rendered"
         f"{f', {missing} selected without a replay' if missing else ''}{f', {pruned} replays pruned' if pruned else ''}"
         f" -> {obs_dir / 'index.html'}"
     )

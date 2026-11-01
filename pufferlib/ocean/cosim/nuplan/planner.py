@@ -48,6 +48,7 @@ NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2 = 2.40  # ego_lon_acceleration_statistics.yaml
 TRAJECTORY_TAIL_SPACING_S = 0.5  # constant-velocity tail past the integrated step; the controller only reads t+dt
 COMFORT_ACCEL_MARGIN = 0.96  # nuPlan Savitzky-Golay-smooths the reported accel and overshoots a hard cap by ~0.5%
 ROADBLOCK_GOAL_MARGIN_M = 5.0  # first roadblock goal sits at least this far beyond the goal radius ahead of the ego
+LOG_EXCLUDED_STATE = ("_env", "_policy", "_goal_window", "_obs_replay")  # per-scenario runtime, never pickled
 
 
 def startup_jerk_action_bounds(accel_cap_mps3: float, brake_cap_mps3: float):
@@ -323,6 +324,13 @@ class PufferDrivePlanner(AbstractPlanner):
         self._policy = None
         self._obs_replay = None
         return report
+
+    def __getstate__(self):
+        # nuPlan pickles the planner into every simulation log: 30 MB of policy weights per scenario without this
+        state = dict(self.__dict__)
+        for name in LOG_EXCLUDED_STATE:
+            state[name] = None
+        return state
 
     # --- whole-city map-only bins -------------------------------------------
     def _find_city_bin(self) -> Path:

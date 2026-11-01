@@ -68,10 +68,12 @@
 #             scenario. failures (default): only scenarios scoring below
 #             COSIM_OBS_HTML_MAX_SCORE (default 0.9). infractions: only scenarios with an
 #             at-fault collision, drivable-area or driving-direction violation, or no
-#             progress. Non-selected replays are deleted after the run. 0: off.
-#   (nuPlan's own ground-truth video is always requested via
-#    carl_visualization_callback in the callback list below -- one .avi per
-#    scenario under $GROUP/simulation/<challenge>/<run_ts>/visualization/)
+#             progress. Every .replay.zlib is deleted after rendering (the pages embed them). 0: off.
+#   TIDY=1    scripts/eval/tidy_nuplan_run.py then flattens $GROUP to overview.csv, scenarios.csv, obs_html/
+#             and details/ (metrics, the aggregator table, config, nuPlan's log) and keeps the simulation
+#             logs and ground-truth videos (carl_visualization_callback's .avi, re-encoded to .mp4) of the
+#             scenarios COSIM_OBS_HTML selects (infractions when it is 0). TIDY=0 leaves nuPlan's
+#             simulation/<challenge>/<run_ts> tree with every log and video (45 GB per Val14 run).
 if [ -z "$INSIDE_PUFFER_CONTAINER" ] && [ -f /share/apps/images/slurm-ib-bind-apptainer.sh ]; then
     source /share/apps/images/slurm-ib-bind-apptainer.sh
     export APPTAINERENV_PREPEND_PATH=/share/apps/apptainer/bin:$APPTAINERENV_PREPEND_PATH
@@ -169,6 +171,13 @@ elif [ "$OBS_HTML" = "infractions" ]; then
         --metric no_ego_at_fault_collisions --metric drivable_area_compliance \
         --metric driving_direction_compliance --metric ego_is_making_progress
 fi
+TIDY_KEEP=$OBS_HTML
+[ "$OBS_HTML" = "0" ] && TIDY_KEEP=infractions
+if [ "${TIDY:-1}" = "1" ]; then
+    "$PY" "$PD/scripts/eval/tidy_nuplan_run.py" "$GROUP" \
+        --keep "$TIDY_KEEP" --max-score "${COSIM_OBS_HTML_MAX_SCORE:-0.9}" \
+        || echo "tidy failed (results above are unaffected)"
+fi
 
 echo "=========== SUMMARY ==========="
 rc=0
@@ -178,4 +187,5 @@ for c in "${!STATUS[@]}"; do
 done
 echo "group -> $GROUP"
 [ -f "$GROUP/obs_html/index.html" ] && echo "obs replays -> $GROUP/obs_html/index.html"
+[ -f "$GROUP/overview.csv" ] && echo "overview -> $GROUP/overview.csv"
 exit $rc

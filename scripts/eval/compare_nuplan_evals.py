@@ -2,19 +2,20 @@
 
 usage: python scripts/eval/compare_nuplan_evals.py <baseline_group_dir> <candidate_group_dir> [--worst N]
 
-Each group dir is a run_simulation.py `group` directory (scripts/kesai/9_nuPlan.sh writes them under
-$RUN_DIR/eval); its aggregator_metric/scenarios.csv is compared on the scenarios both runs contain. The city of
+Each group dir is a run_simulation.py `group` directory (scripts/kesai/9_nuPlan.sh writes them under $RUN_DIR/eval,
+tidy_nuplan_run.py flattens them); its scenarios.csv is compared on the scenarios both runs contain. The city of
 a scenario is read from the nuPlan log database under $NUPLAN_DATA_ROOT/nuplan-v1.1/splits/val when that exists.
 """
 
 import argparse
 import functools
-import glob
 import os
 import sqlite3
 
 import numpy as np
 import pandas as pd
+
+import nuplan_run_layout
 
 METRICS = (
     "score",
@@ -44,10 +45,7 @@ def city_of_log(log_name):
 
 
 def load_scenarios(group_dir):
-    paths = glob.glob(os.path.join(group_dir, "simulation", "*", "*", "aggregator_metric", "scenarios.csv"))
-    if len(paths) != 1:
-        raise FileNotFoundError(f"expected one aggregator_metric/scenarios.csv under {group_dir}, found {paths}")
-    scenarios = pd.read_csv(paths[0])
+    scenarios = pd.read_csv(nuplan_run_layout.scenarios_csv(group_dir))
     scenarios["city"] = scenarios["log_name"].map(city_of_log)
     return scenarios.set_index("scenario")
 

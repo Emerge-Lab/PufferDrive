@@ -105,20 +105,28 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   Found via `hydra.searchpath=[pkg://pufferlib.ocean.cosim.nuplan.config, ...]`.
   Use city bins
 
-## Visualization
+## Visualization and run layout
 
-- `COSIM_OBS_HTML=all|failures|0` (default `failures`): one interactive pufferlib.viz
+- `COSIM_OBS_HTML=all|failures|infractions|0` (script 9: `infractions`): one interactive pufferlib.viz
   replay per scenario -> `$GROUP/obs_html/<token>.html`, showing the exact observation
   vector the policy received each step (partner/lane/boundary/light slots, goals), its
   action/value/entropy/probabilities and the encoder max-pool winners. This is what the
   agent saw; road geometry is cropped to 250 m around the driven path. `failures` renders
-  (and keeps) only scenarios scoring below `COSIM_OBS_HTML_MAX_SCORE` (default 0.9);
-  `all` renders every scenario, `infractions` only collision / drivable-area / direction /
-  no-progress failures. `obs_html/index.html` is the same navigator as the self-play eval
-  replays (pages named `s<score>_<flags>_<type>_<token>.html`, worst first). Pages can be
-  rendered later from the saved `.replay.zlib` files with `scripts/eval/render_obs_html.py`.
-- nuPlan ground truth: `carl_visualization_callback` in `CALLBACKS`, or nuBoard on the
-  simulation logs (`scripts/eval/nuboard_failures.py` builds a failures-only nuBoard folder).
+  only scenarios scoring below `COSIM_OBS_HTML_MAX_SCORE` (default 0.9), `all` every
+  scenario, `infractions` only collision / drivable-area / direction / no-progress failures.
+  `obs_html/index.html` is the same navigator as the self-play eval replays (pages named
+  `s<score>_<flags>_<type>_<token>.html`, worst first). Every `.replay.zlib` is deleted after
+  rendering: a page embeds its replay, `scripts/eval/render_obs_html.py` re-renders pages from
+  themselves and `pufferlib.viz.read_replay_zlib` reads a page like a `.replay.zlib`.
+- nuPlan ground truth: `carl_visualization_callback` in `CALLBACKS`, one `.avi` per scenario.
+- After the run `scripts/eval/tidy_nuplan_run.py` (runner env `TIDY`, default on) flattens `$GROUP` to
+  `overview.csv` (CLS, sub-metrics, loss importance), `scenarios.csv` (per scenario, worst first), `obs_html/`
+  and `details/` (`aggregated_metrics.csv`, `metrics/` parquets, `config.yaml`, `overrides.yaml`, `log.txt`,
+  `runner_report.parquet`, the SLURM log, and `simulation_log/<token>.msgpack.xz` + `videos/<token>.mp4` of
+  the scenarios `COSIM_OBS_HTML` selects). A Val14 run shrinks from 45 GB and 2300 files to ~0.1 GB. The
+  planner no longer pickles its policy into the simulation logs (28 MB -> 0.2 MB each); `--strip-planner`
+  rewrites the kept logs of older runs. `scripts/eval/nuplan_run_layout.py` resolves both layouts for
+  `compare_nuplan_evals.py`, `nuplan_comfort_breakdown.py`, `analyze_nuplan_cosim.py` and the renderer.
 
 ## How to run
 

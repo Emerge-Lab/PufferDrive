@@ -8,6 +8,7 @@ from matplotlib.collections import LineCollection, PatchCollection, PolyCollecti
 from matplotlib.patches import Circle
 import os
 import json
+import re
 import zlib
 import base64
 import struct
@@ -80,6 +81,9 @@ PAYLOAD_CHUNK_SIZE = 4 * 1024 * 1024
 OBS_QUANTIZE_FRAME_CHUNK = 64
 REPLAY_COMPRESSION_LEVEL = 1
 REPLAY_HEADER_PROBE_BYTES = 1 << 16
+PAYLOAD_CHUNK_PATTERN = re.compile(
+    rb'<script type="application/octet-stream" class="payload-chunk">([A-Za-z0-9+/=]*)</script>'
+)
 REPLAY_INFLATE_MAX_ROUNDS = 1 << 12
 SIMULATOR_FIGSIZE = (20.0, 20.0)
 SIMULATOR_DPI = 100
@@ -2005,10 +2009,21 @@ def save_interactive_replay_zlib(scenario, replay, filename):
     return compressed_payload
 
 
+def read_replay_source(path):
+    """-> the compressed replay bytes of a .replay.zlib, or of a rendered page (its base64 payload chunks)."""
+    with open(path, "rb") as source_file:
+        data = source_file.read()
+    if not str(path).endswith(".html"):
+        return data
+    chunks = PAYLOAD_CHUNK_PATTERN.findall(data)
+    if not chunks:
+        raise ValueError(f"{path}: no replay payload chunks in the page")
+    return b"".join(base64.b64decode(chunk) for chunk in chunks)
+
+
 def render_interactive_replay_zlib(replay_path, filename):
-    with open(replay_path, "rb") as replay_file:
-        compressed_payload = replay_file.read()
-    _render_interactive_replay_payload(compressed_payload, filename)
+    """replay_path: a .replay.zlib, or a rendered page whose embedded payload is rendered again."""
+    _render_interactive_replay_payload(read_replay_source(replay_path), filename)
 
 
 def replay_step_link(step, seconds=None):
@@ -2042,10 +2057,9 @@ def _inflate_replay_prefix(compressed, chunk_names):
 
 
 def read_replay_zlib(replay_path, chunk_names=None):
-    """-> (header dict, chunk name -> ndarray view) of a saved .replay.zlib; chunk_names limits the chunks
-    returned and the inflated prefix of the stream."""
-    with open(replay_path, "rb") as replay_file:
-        compressed = replay_file.read()
+    """-> (header dict, chunk name -> ndarray view) of a saved .replay.zlib or of a rendered page; chunk_names
+    limits the chunks returned and the inflated prefix of the stream."""
+    compressed = read_replay_source(replay_path)
     raw = zlib.decompress(compressed) if chunk_names is None else _inflate_replay_prefix(compressed, chunk_names)
     header_len = struct.unpack("<I", raw[:4])[0]
     header = json.loads(raw[4 : 4 + header_len])

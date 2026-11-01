@@ -1,15 +1,17 @@
 """Which ego_is_comfortable sub-metric fails how often in nuPlan closed-loop eval runs of the PufferDrive planner.
 usage: python scripts/eval/nuplan_comfort_breakdown.py <group_dir> [<group_dir> ...]
-Each group dir is a run_simulation.py `group` directory; the per-scenario metric parquets under
-simulation/<challenge>/<ts>/metrics are read. nuPlan's longitudinal acceleration is taken at the vehicle center,
+Each group dir is a run_simulation.py `group` directory, fresh or tidied by tidy_nuplan_run.py; the per-scenario
+metric parquets under details/metrics (simulation/<challenge>/<ts>/metrics before the tidy) are read. nuPlan's
+longitudinal acceleration is taken at the vehicle center,
 which the devkit computes as rear-axle accel + d*yaw_rate^2 + d*yaw_accel (d = rear axle to center), so a yaw
 acceleration while accelerating reads as longitudinal acceleration.
 """
 
-import glob
 import sys
 
 import pandas as pd
+
+import nuplan_run_layout
 
 SUBMETRICS = (
     "ego_lon_acceleration",
@@ -24,11 +26,10 @@ LON_ACCEL_MAX_MPS2 = 2.40  # ego_lon_acceleration_statistics.yaml
 
 def main() -> None:
     for group in sys.argv[1:]:
-        metrics_dirs = glob.glob(f"{group}/simulation/*/20*/metrics")
-        if not metrics_dirs:
+        metrics_dir = nuplan_run_layout.metrics_dir(group)
+        if not metrics_dir.is_dir():
             print(f"{group}: no metrics directory")
             continue
-        metrics_dir = metrics_dirs[0]
         comfortable = pd.read_parquet(f"{metrics_dir}/ego_is_comfortable.parquet")
         failed = int((comfortable["metric_score"] < 1).sum())
         print(f"{group.rstrip('/').split('/')[-1]}")

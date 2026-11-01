@@ -179,3 +179,53 @@ def test_nuplan_score_panel_links_violated_metrics_only():
     assert 'onclick="step=12;' in panel
     assert 'onclick="step=40;' in panel and "(shadow env flag)" in panel
     assert 'onclick="step=3;' not in panel
+
+
+def _aggregator_csv(group_dir, scenarios):
+    """scenarios: token -> (score, at-fault collision value); every other scored metric compliant."""
+    sim = group_dir / "simulation" / "closed_loop" / "2026.01.01.00.00.00"
+    (sim / "aggregator_metric").mkdir(parents=True, exist_ok=True)
+    (sim / "metrics").mkdir(exist_ok=True)
+    table = []
+    for token, (score, collision) in scenarios.items():
+        row = {"scenario": token, "log_name": "log", "scenario_type": "turn", "score": score}
+        row.update({metric: 1.0 for metric, _, _ in nuplan_render.SCORED_METRICS})
+        row[nuplan_render.COLLISION_METRIC] = collision
+        table.append(row)
+    table.append({"scenario": "final_score", "scenario_type": "final_score", "score": 0.5})
+    pd.DataFrame(table).to_csv(sim / "aggregator_metric" / "closed_loop_weighted_average_metrics_2026.csv", index=False)
+
+
+def test_page_payload_matches_the_replay_file(tmp_path):
+    replay_path = tmp_path / "tok.replay.zlib"
+    viz.save_interactive_replay_zlib({}, _replay(_straight_ego_xy(), collision_frames=(7,)), str(replay_path))
+    page = tmp_path / "tok.html"
+    viz.render_interactive_replay_zlib(str(replay_path), str(page))
+    assert viz.read_replay_source(page) == replay_path.read_bytes()
+    header, chunks = viz.read_replay_zlib(page, chunk_names=("metrics_f32",))
+    header_from_file, chunks_from_file = viz.read_replay_zlib(replay_path)
+    assert header == header_from_file
+    assert np.array_equal(chunks["metrics_f32"], chunks_from_file["metrics_f32"])
+    assert nuplan_render.replay_collision_step(page) == 7
+
+
+def test_render_prune_deletes_every_replay_and_pages_re_render_from_themselves(tmp_path, monkeypatch):
+    colliding, clean = "aaaa0000000000ad", "aaaa00000000900d"
+    obs_dir = tmp_path / "obs_html"
+    obs_dir.mkdir()
+    _aggregator_csv(tmp_path, {colliding: (0.0, 0.0), clean: (1.0, 1.0)})
+    for token in (colliding, clean):
+        replay = _replay(np.zeros((FRAMES, 2)), collision_frames=(40,))
+        viz.save_interactive_replay_zlib({}, replay, str(obs_dir / f"{token}.replay.zlib"))
+    argv = ["render_obs_html", str(tmp_path), "--max-score", "0", "--metric", nuplan_render.COLLISION_METRIC, "--prune"]
+    monkeypatch.setattr(sys, "argv", argv)
+    nuplan_render.main()
+    page = obs_dir / f"s0.00_COL_turn_{colliding}.html"
+    assert sorted(p.name for p in obs_dir.iterdir()) == ["index.html", page.name]
+    assert nuplan_render.replay_sources(obs_dir) == {colliding: page}
+    assert nuplan_render.replay_collision_step(page) == 40
+    payload = viz.read_replay_source(page)
+    nuplan_render.main()
+    assert sorted(p.name for p in obs_dir.iterdir()) == ["index.html", page.name]
+    assert viz.read_replay_source(page) == payload
+    assert 'onclick="step=40;' in page.read_text()

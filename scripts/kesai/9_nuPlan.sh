@@ -43,7 +43,7 @@ export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_TH
 # ray worker, 256 workers oversubscribing the node (80% CPU, load 1400, clock throttled) once videos start.
 export OPENCV_FOR_THREADS_NUM=1
 export COSIM_OBS_HTML=infractions  # obs replays (what the policy saw) only for collision/offroad/wrong-way/no-progress scenarios; all|failures|infractions|0
-# carl_visualization_callback: nuPlan ground-truth video per scenario -> $GROUP/simulation/<challenge>/<ts>/visualization
+# carl_visualization_callback: nuPlan ground-truth video per scenario; tidy keeps the selected ones in details/videos/
 export CALLBACKS="[simulation_log_callback, carl_visualization_callback]"
 export WORKER=ray_distributed
 # Per-worker memory is small now (1 policy agent + partner slots, light buffers sized to the scenario), so this is CPU-bound.
@@ -127,7 +127,7 @@ fi
 [ -n "$EGO_ACCEL_CAP_MPS2" ] && ABLATION_TAG="${ABLATION_TAG}_acap${EGO_ACCEL_CAP_MPS2}"
 [ -n "$PARTNER_SPLIT_MAX_LENGTH_M" ] && ABLATION_TAG="${ABLATION_TAG}_split${PARTNER_SPLIT_MAX_LENGTH_M}"
 [ -n "$STANDSTILL_JERK_DEADBAND" ] && ABLATION_TAG="${ABLATION_TAG}_deadband${STANDSTILL_JERK_DEADBAND}"
-# results live in the model's own eval folder, next to the PufferDrive benchmark evals
+# results: the model's own eval folder, next to the PufferDrive benchmark evals (overview.csv, obs_html/, details/)
 export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}_${GOAL_SOURCE}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
 # NO_TRAIN skips the training-only CUDA extension (_C, never imported by the planner): the cp39 nuPlan env builds only
@@ -142,3 +142,10 @@ case "$IMPORTED_PLANNER" in
 esac
 
 bash "$PD/pufferlib/ocean/cosim/nuplan/run_nuplan_planner.sh"
+RUNNER_STATUS=$?
+# the job's own log next to the results (the SBATCH --output of this script or of 13_nuPlan_nonreactive.sh)
+JOB_LOGS=(experiments/logs/nuPlan_*_"${SLURM_JOB_ID:-none}".out experiments/logs/nuPlan_*_"${SLURM_JOB_ID:-none}".err)
+for job_log in "${JOB_LOGS[@]}"; do
+    [ -f "$job_log" ] && [ -d "$GROUP/details" ] && cp "$job_log" "$GROUP/details/"
+done
+exit $RUNNER_STATUS
