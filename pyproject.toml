@@ -101,6 +101,13 @@ kinetix = [
     'kinetix-env',
 ]
 
+lanelet2 = [
+    'pyproj>=3.0',
+    'shapely>=2.0',
+    'matplotlib>=3.7',
+    'imageio>=2.31',
+]
+
 magent = [
     'gym==0.23',
     'gymnasium==0.29.1',
