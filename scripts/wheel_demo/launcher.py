@@ -8,15 +8,26 @@ Install the desktop icon with scripts/wheel_demo/install_launcher.py.
 """
 
 import os
+import queue
+import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import tkinter as tk
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RUN_DEMO = os.path.join(REPO_ROOT, "scripts", "wheel_demo", "run_demo.py")
 START_CARLA = os.path.join(REPO_ROOT, "scripts", "wheel_demo", "start_carla.sh")
+# run_demo.py reads these (relative to REPO_ROOT, where the launcher runs it) on every start
+CALIBRATION_PATH = os.path.join(REPO_ROOT, "wheel_calibration.json")
+BUTTON_MAP_PATH = os.path.join(REPO_ROOT, "wheel_buttons.json")
+CALIBRATION_BACKUP_SUFFIX = ".previous.json"
+BUTTON_SETTLE_SECONDS = 1.0
+BUTTON_CAPTURE_SECONDS = 4.0
+WIZARD_POLL_MS = 50
+WIZARD_TEXT_WRAP_PX = 520
 DEFAULT_CARLA_ROOT = os.path.expanduser("~/carla-0.9.16")
 LOG_DIR = os.path.expanduser("~/.cache/pufferdrive_wheel_demo")
 CARLA_HOST = "localhost"
@@ -43,6 +54,8 @@ DEFAULTS = {
     "level": "normal",
     "assist": "off",
     "assist_blend": 50,
+    "full_steering": "car",
+    "driving_style": "off",
     "ffb": True,
     "ffb_gain": 70,
     "gearbox": "automatic",
@@ -113,6 +126,8 @@ def demo_command(settings):
         "--level", settings["level"],
         "--assist", settings["assist"],
         "--assist-blend", f"{settings['assist_blend'] / 100.0:.2f}",
+        "--full-steering", settings["full_steering"],
+        "--driving-style", settings["driving_style"],
         "--gearbox", settings["gearbox"],
         "--grip", settings["grip"],
         "--input", settings["input"],
@@ -206,12 +221,19 @@ class Launcher:
                                                                                ("full", "Full")),
                                                           r, 1)),
             ("Blend share", lambda r: self._slider(settings, "assist_blend", 0, 100, "%", r, 1)),
+            ("Full steering", lambda r: self._segmented(settings, "full_steering", (("car", "Car steers, wheel shows"),
+                                                                                     ("wheel", "Wheel steers")), r, 1)),
+            ("Your style", lambda r: self._segmented(settings, "driving_style", (("off", "Off"), ("calm", "Calm"),
+                                                                                  ("normal", "Normal"),
+                                                                                  ("aggressive", "Aggressive")), r, 1)),
             ("Force feedback", lambda r: self._segmented(settings, "ffb", ((True, "On"), (False, "Off")), r, 1)),
             ("Strength", lambda r: self._slider(settings, "ffb_gain", 5, 100, "%", r, 1)),
             ("Gearbox", lambda r: self._segmented(settings, "gearbox", (("automatic", "Automatic"),
-                                                                         ("manual", "Manual")), r, 1)),
+                                                                         ("manual", "Manual"),
+                                                                         ("none", "None (policy's model)")), r, 1)),
             ("Grip", lambda r: self._segmented(settings, "grip", (("realistic", "Realistic"),
-                                                                   ("kinematic", "Kinematic")), r, 1)),
+                                                                   ("kinematic", "Kinematic"),
+                                                                   ("skid", "Skid (can spin)")), r, 1)),
             ("Input", lambda r: self._segmented(settings, "input", (("wheel", "G920 wheel"),
                                                                      ("synthetic", "Scripted (no wheel)")), r, 1)),
             ("Duration", lambda r: self._slider(settings, "minutes", 1, 60, " min", r, 1)),
@@ -229,7 +251,12 @@ class Launcher:
             footer, text="Drive  ▶", font=FONT_BUTTON, fg=COLOR_BG, bg=COLOR_GO, activebackground=COLOR_GO_ACTIVE,
             activeforeground=COLOR_BG, relief="flat", bd=0, padx=28, pady=10, cursor="hand2", command=self._drive,
         )
-        self.drive_button.grid(row=0, column=1, sticky="e")
+        self.drive_button.grid(row=0, column=2, sticky="e")
+        self.calibrate_button = tk.Button(
+            footer, text="Calibrate wheel", font=FONT_BODY, fg=COLOR_TEXT, bg=COLOR_CARD, activebackground=COLOR_CARD_SELECTED,
+            activeforeground=COLOR_TEXT, relief="flat", bd=0, padx=16, pady=10, cursor="hand2", command=self._calibrate,
+        )
+        self.calibrate_button.grid(row=0, column=1, sticky="e", padx=(0, PAD))
         self.root.bind("<Return>", lambda _event: self._drive())
         self._on_change()
 
@@ -272,12 +299,30 @@ class Launcher:
             body.configure(bg=background, fg=COLOR_DISABLED if unavailable else COLOR_MUTED)
         if hasattr(self, "widgets"):
             self.widgets["Blend share"].configure(state="normal" if self.vars["assist"].get() == "blend" else "disabled")
+            full_state = "normal" if self.vars["assist"].get() == "full" else "disabled"
+            for name in ("Full steering", "Your style"):
+                for button in self.widgets[name].winfo_children():
+                    button.configure(state=full_state)
             wheel = self.vars["input"].get() == "wheel"
             self.widgets["Strength"].configure(state="normal" if self.vars["ffb"].get() and wheel else "disabled")
 
     def _set_status(self, text, color=COLOR_MUTED):
         self.status.configure(text=text, fg=color)
         self.root.update_idletasks()
+
+    # ----- calibration -----
+
+    def _calibrate(self):
+        self.drive_button.configure(state="disabled")
+        self.calibrate_button.configure(state="disabled")
+        CalibrationWizard(self.root, on_close=self._calibration_closed)
+
+    def _calibration_closed(self, saved_paths):
+        self.drive_button.configure(state="normal")
+        self.calibrate_button.configure(state="normal")
+        if saved_paths:
+            self._set_status("Saved " + " and ".join(os.path.basename(path) for path in saved_paths)
+                             + "; the next drive uses them.")
 
     # ----- running -----
 
@@ -331,6 +376,224 @@ class Launcher:
         with open(log_path) as run_log:
             tail = "".join(run_log.readlines()[-LOG_TAIL_LINES:]).strip()
         self._set_status(f"The demo stopped with an error (exit {process.returncode}):\n{tail}", COLOR_ERROR)
+
+
+def save_with_backup(write, path):
+    """Keep the file being replaced next to it, so a bad recalibration can be undone by hand."""
+    if os.path.exists(path):
+        shutil.copyfile(path, path[: -len(".json")] + CALIBRATION_BACKUP_SUFFIX)
+    write(path)
+
+
+class CalibrationCancelled(Exception):
+    pass
+
+
+class CalibrationWizard:
+    """Recalibrates the wheel from the launcher: the same capture and checks as `run_demo.py --calibrate`
+    and `probe_g920.py buttons`, one instruction at a time. The capture runs on a worker thread; the window
+    only reacts to the messages it posts, because Tk must only be touched from its own thread."""
+
+    def __init__(self, root, on_close):
+        from pufferlib.wheel_demo import calibrate
+
+        self.calibrate = calibrate
+        self.on_close = on_close
+        self.messages = queue.Queue()
+        self.ready = threading.Event()
+        self.cancelled = False
+        self.closed = False
+        self.map_buttons = True  # read from the checkbox on the window thread when the capture starts
+        self.result = None
+        self.window = tk.Toplevel(root, bg=COLOR_BG, padx=2 * PAD, pady=2 * PAD)
+        self.window.title("Calibrate wheel")
+        self.window.transient(root)
+        self.window.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.include_buttons = tk.BooleanVar(value=True)
+        self._build()
+        self.window.grab_set()
+
+    def _build(self):
+        window = self.window
+        tk.Label(window, text="Calibrate wheel", font=FONT_TITLE, fg=COLOR_TEXT, bg=COLOR_BG).grid(row=0, column=0, sticky="w")
+        self.step_label = tk.Label(window, text="", font=FONT_SECTION, fg=COLOR_MUTED, bg=COLOR_BG, anchor="w")
+        self.step_label.grid(row=1, column=0, sticky="w", pady=(PAD, 0))
+        self.instruction = tk.Label(
+            window, font=FONT_SUBTITLE, fg=COLOR_TEXT, bg=COLOR_BG, justify="left", anchor="w", wraplength=WIZARD_TEXT_WRAP_PX,
+            text=("Records your wheel's steering range, pedal travel and button layout, and saves them for the demo "
+                  f"({os.path.basename(CALIBRATION_PATH)}, {os.path.basename(BUTTON_MAP_PATH)}; the old files are kept "
+                  f"as *{CALIBRATION_BACKUP_SUFFIX}). Close the demo first: only one program can use the wheel."),
+        )
+        self.instruction.grid(row=2, column=0, sticky="w", pady=(4, PAD))
+        self.buttons_check = tk.Checkbutton(
+            window, text="Also map the buttons, paddles and D-pad", variable=self.include_buttons, font=FONT_BODY,
+            fg=COLOR_TEXT, bg=COLOR_BG, selectcolor=COLOR_CARD, activebackground=COLOR_BG, activeforeground=COLOR_TEXT,
+        )
+        self.buttons_check.grid(row=3, column=0, sticky="w")
+        self.status = tk.Label(window, text="", font=FONT_BODY, fg=COLOR_ACCENT, bg=COLOR_BG, justify="left", anchor="w",
+                               wraplength=WIZARD_TEXT_WRAP_PX)
+        self.status.grid(row=4, column=0, sticky="w", pady=(PAD, 0))
+        self.log = tk.Text(window, width=72, height=10, font=FONT_SMALL, fg=COLOR_MUTED, bg=COLOR_CARD, relief="flat",
+                           state="disabled")
+        self.log.grid(row=5, column=0, sticky="ew", pady=(PAD, PAD))
+        actions = tk.Frame(window, bg=COLOR_BG)
+        actions.grid(row=6, column=0, sticky="e")
+        self.cancel_button = self._action(actions, "Cancel", self._cancel, COLOR_CARD, COLOR_TEXT)
+        self.save_button = self._action(actions, "Save", self._save, COLOR_GO, COLOR_BG)
+        self.start_button = self._action(actions, "Start", self._start, COLOR_ACCENT, COLOR_BG)
+        self.save_button.pack_forget()
+
+    def _action(self, parent, text, command, background, foreground):
+        button = tk.Button(parent, text=text, font=FONT_BODY, fg=foreground, bg=background, activebackground=background,
+                           activeforeground=foreground, relief="flat", bd=0, padx=18, pady=8, cursor="hand2",
+                           command=command)
+        button.pack(side="left", padx=(PAD, 0))
+        return button
+
+    # ----- window thread -----
+
+    def _start(self):
+        self.start_button.configure(state="disabled")
+        if self.result is None and not hasattr(self, "worker"):
+            self.buttons_check.configure(state="disabled")
+            self.map_buttons = self.include_buttons.get()
+            self.phase_seconds = self._phase_seconds()
+            self.phase_idx = -1
+            self.worker = threading.Thread(target=self._run, name="calibration", daemon=True)
+            self.worker.start()
+            self.window.after(WIZARD_POLL_MS, self._poll)
+            return
+        self._recording_started_s = time.monotonic()
+        self.ready.set()
+
+    def _phase_seconds(self):
+        """How long each prompt's recording lasts, in the order the capture asks for them, for the countdown."""
+        calibrate = self.calibrate
+        seconds = [calibrate.SETTLE_SECONDS + 2 * calibrate.CAPTURE_SECONDS]
+        seconds += [calibrate.SETTLE_SECONDS + calibrate.CAPTURE_SECONDS] * len(calibrate.PEDAL_BYTE_IDX)
+        if self.map_buttons:
+            button_prompts = 1 + len(calibrate.BUTTON_CONTROLS) + len(calibrate.DPAD_DIRECTION_NAMES)
+            seconds += [BUTTON_SETTLE_SECONDS + BUTTON_CAPTURE_SECONDS] * button_prompts
+        return seconds
+
+    def _poll(self):
+        if self.closed:
+            return
+        while not self.messages.empty():
+            kind, payload = self.messages.get()
+            if kind == "prompt":
+                self.phase_idx += 1
+                self.step_label.configure(text=f"STEP {self.phase_idx + 1} OF {len(self.phase_seconds)}")
+                self.instruction.configure(text=payload)
+                self.status.configure(text="Get ready, then press Start and do it.", fg=COLOR_ACCENT)
+                self._recording_started_s = None
+                self.start_button.configure(state="normal")
+            elif kind == "log":
+                self._append_log(payload)
+            elif kind == "error":
+                self._finish_with_error(payload)
+                return
+            elif kind == "done":
+                self._show_result(payload)
+                return
+        started_s = getattr(self, "_recording_started_s", None)
+        if started_s is not None and 0 <= self.phase_idx < len(self.phase_seconds):
+            remaining_s = max(0.0, self.phase_seconds[self.phase_idx] - (time.monotonic() - started_s))
+            self.status.configure(text=f"Recording ... {remaining_s:.0f} s", fg=COLOR_GO)
+        self.window.after(WIZARD_POLL_MS, self._poll)
+
+    def _append_log(self, line):
+        self.log.configure(state="normal")
+        self.log.insert("end", line.rstrip() + "\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+
+    def _finish_with_error(self, message):
+        self.step_label.configure(text="CALIBRATION STOPPED")
+        self.instruction.configure(text=message)
+        self.status.configure(text="Nothing was saved.", fg=COLOR_ERROR)
+        self.start_button.pack_forget()
+        self.cancel_button.configure(text="Close")
+
+    def _show_result(self, result):
+        self.result = result
+        calibration, problems, button_map = result
+        self.step_label.configure(text="DONE")
+        lines = [f"Steering {calibration.steering_raw_min} .. {calibration.steering_raw_max}, pedals recorded."]
+        if button_map is not None:
+            unmapped = [name for name, value in button_map.__dict__.items() if value is None]
+            lines.append("Buttons: all mapped." if not unmapped else f"Buttons not mapped: {', '.join(unmapped)}.")
+            if button_map.shift_up_bit is None or button_map.shift_down_bit is None:
+                lines.append("The paddles are unmapped: gear and reverse selection will not work.")
+        self.instruction.configure(text="\n".join(lines))
+        if problems:
+            self.status.configure(text="Check before saving:\n- " + "\n- ".join(problems), fg=COLOR_ERROR)
+        else:
+            self.status.configure(text="No problems found. Save to use it on the next drive.", fg=COLOR_GO)
+        self.start_button.pack_forget()
+        self.save_button.pack(side="left", padx=(PAD, 0))
+        self.cancel_button.configure(text="Discard")
+
+    def _save(self):
+        calibration, _problems, button_map = self.result
+        saved = []
+        save_with_backup(calibration.to_json, CALIBRATION_PATH)
+        saved.append(CALIBRATION_PATH)
+        if button_map is not None:
+            save_with_backup(button_map.to_json, BUTTON_MAP_PATH)
+            saved.append(BUTTON_MAP_PATH)
+        self._close(saved)
+
+    def _cancel(self):
+        self.cancelled = True
+        self.ready.set()
+        self._close([])
+
+    def _close(self, saved_paths):
+        self.closed = True
+        self.window.grab_release()
+        self.window.destroy()
+        self.on_close(saved_paths)
+
+    # ----- worker thread -----
+
+    def _prompt(self, instruction):
+        self.messages.put(("prompt", instruction))
+        self.ready.wait()
+        self.ready.clear()
+        if self.cancelled:
+            raise CalibrationCancelled()
+
+    def _button_prompt(self, instruction):
+        self._prompt(instruction)
+        time.sleep(BUTTON_SETTLE_SECONDS)
+
+    def _log(self, line):
+        self.messages.put(("log", line))
+
+    def _run(self):
+        calibrate = self.calibrate
+        try:
+            device = calibrate.open_wheel()
+        except Exception as error:
+            self.messages.put(("error", f"Could not open the wheel: {error}"))
+            return
+        try:
+            calibration = calibrate.capture_calibration(device, prompt=self._prompt, log=self._log)
+            problems = calibrate.validate_calibration(calibration)
+            button_map = None
+            if self.map_buttons:
+                button_map = calibrate.capture_button_map(
+                    device, self._button_prompt, lambda reader: calibrate.collect(reader, BUTTON_CAPTURE_SECONDS),
+                    log=self._log,
+                )
+            self.messages.put(("done", (calibration, problems, button_map)))
+        except CalibrationCancelled:
+            return
+        except Exception as error:
+            self.messages.put(("error", str(error)))
+        finally:
+            device.close()
 
 
 def main():

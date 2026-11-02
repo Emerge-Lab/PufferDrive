@@ -68,6 +68,8 @@ class CarFeel:
     assist_target_steering_rad: float = None
     # FULL turns the wheel itself to the target: the spring re-centres on it and the pull is much stronger.
     assist_full: bool = False
+    # How fast the target is moving, driver terms; under FULL damping resists only motion relative to it.
+    assist_target_rate_rad_s: float = 0.0
 
 
 def _clamp(value, limit=FORCE_LIMIT):
@@ -116,7 +118,8 @@ def compute_force(feel, steering_limit_rad, impact_age_s=None, elapsed_s=0.0):
     full = feel.assist_full and feel.assist_target_steering_rad is not None
     spring_centre_rad = feel.assist_target_steering_rad if full else 0.0
     steady += centring_spring(feel.steering_angle_rad - spring_centre_rad, steering_limit_rad, feel.speed_mps, grip_factor)
-    steady += -DAMPING_GAIN * feel.steering_rate_rad_s
+    target_rate_rad_s = feel.assist_target_rate_rad_s if full else 0.0
+    steady += -DAMPING_GAIN * (feel.steering_rate_rad_s - target_rate_rad_s)
     if feel.assist_target_steering_rad is not None:
         full_error_fraction = ASSIST_FULL_FULL_ERROR_FRACTION if full else ASSIST_NUDGE_FULL_ERROR_FRACTION
         steering_error = (feel.assist_target_steering_rad - feel.steering_angle_rad) / (

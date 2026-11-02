@@ -9,6 +9,7 @@ which steps at lane boundaries. The sim's z only picks WHICH surface (bridge or 
 
 import math
 import queue
+from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
@@ -33,8 +34,33 @@ GROUND_SMOOTHING_SECONDS = 0.12
 # A jump this large is a respawn or takeover, so the render snaps instead of easing.
 GROUND_SNAP_DISTANCE_M = 4.0
 GROUND_CLEARANCE_M = 0.03
+# Rendered x, y and yaw track the sim through a critically damped type-2 loop: no lag at constant speed
+# and turn rate, while the corners at each 0.3 s policy decision are rounded off.
+POSE_SMOOTHING_SECONDS = 0.2
 # Below this the front wheels are not re-sent: each steer update is a blocking server call.
 WHEEL_STEER_RESEND_DEG = 0.2
+# CARLA's wheel pitch falls as a car rolls forward; its physics control gives wheel radii in centimetres.
+WHEEL_SPIN_FORWARD_SIGN = -1.0
+CM_PER_M = 100.0
+# Skid marks (render only): strips behind each tyre while your rendered car slides sideways faster than this. They
+# are drawn over the camera image (CARLA's debug lines render unlit, brighter than the road at any colour), and a
+# depth camera hides every part that something nearer covers, so they sit on the road like paint.
+SKID_MARK_SIDE_SPEED_MPS = 1.0
+SKID_MARK_MIN_SPEED_MPS = 2.0
+SKID_MARK_WIDTH_M = 0.12
+SKID_MARK_LIFETIME_S = 20.0
+SKID_MARK_ROAD_CLEARANCE_M = 0.02
+# 4 tyres x 60 frames x the lifetime: the oldest drop off first
+SKID_MARK_MAX_SEGMENTS = 4800
+# A mark is visible where nothing is nearer than it by more than this (the road under it reads about level)
+SKID_MARK_DEPTH_TOLERANCE_M = 0.25
+SKID_MARK_DEPTH_TOLERANCE_FRACTION = 0.01
+# CARLA's depth camera packs depth / DEPTH_CAMERA_FAR_M into 24 bits of R, G, B
+DEPTH_CAMERA_FAR_M = 1000.0
+DEPTH_CAMERA_SCALE = 256.0**3 - 1.0
+# Tyre contact patches as fractions of the car's bounding-box half-length and half-width.
+SKID_MARK_AXLE_FRACTION = 0.62
+SKID_MARK_TRACK_FRACTION = 0.82
 
 BRAKE_LIGHT_DECEL_MPS2 = 1.0
 BRAKE_LIGHT_PEDAL = 0.05
@@ -123,6 +149,41 @@ def ease_toward(current, target, dt_s, time_constant_s):
     return current + blend * (target - current)
 
 
+@dataclass
+class SmoothedPose:
+    x: float
+    y: float
+    yaw_deg: float
+    vx: float = 0.0
+    vy: float = 0.0
+    yaw_rate_deg: float = 0.0
+
+
+def smooth_pose(previous, x, y, yaw_deg, dt_s, time_constant_s):
+    """Render-only pose one frame on; snaps on a respawn or takeover, or a gap the loop cannot follow."""
+    natural_rate = 2.0 / time_constant_s
+    if (
+        previous is None
+        or math.hypot(x - previous.x, y - previous.y) > GROUND_SNAP_DISTANCE_M
+        or natural_rate * dt_s > 1.0
+    ):
+        return SmoothedPose(x, y, yaw_deg)
+    predicted_x = previous.x + previous.vx * dt_s
+    predicted_y = previous.y + previous.vy * dt_s
+    predicted_yaw = previous.yaw_deg + previous.yaw_rate_deg * dt_s
+    error_x, error_y = x - predicted_x, y - predicted_y
+    error_yaw = (yaw_deg - predicted_yaw + 180.0) % 360.0 - 180.0
+    position_gain, rate_gain = 2.0 * natural_rate * dt_s, natural_rate * natural_rate * dt_s
+    return SmoothedPose(
+        predicted_x + position_gain * error_x,
+        predicted_y + position_gain * error_y,
+        predicted_yaw + position_gain * error_yaw,
+        previous.vx + rate_gain * error_x,
+        previous.vy + rate_gain * error_y,
+        previous.yaw_rate_deg + rate_gain * error_yaw,
+    )
+
+
 def nearest_blueprint(blueprint_sizes, length_m, width_m, agent_idx):
     """Closest box among the blueprints, rotating through near-ties so traffic is not all one model."""
     errors = [abs(length - length_m) + abs(width - width_m) for _, length, width in blueprint_sizes]
@@ -177,9 +238,21 @@ class CarlaScene:
         self._light_states = {}
         self._vehicle_light_states = {}
         self._ground = {}
+        self._poses = {}
         self._last_speed = {}
         self._box_centers = {}
+        self._wheel_radius_m = {}
+        self._wheel_spin_deg = {}
+        self._vehicles = {}
+        wheel = carla.VehicleWheelLocation
+        self._wheel_locations = (wheel.FL_Wheel, wheel.FR_Wheel, wheel.BL_Wheel, wheel.BR_Wheel)
         self._sent_steer_deg = math.inf
+        self._skid_mark_points = None
+        self._skid_marks = deque(maxlen=SKID_MARK_MAX_SEGMENTS)
+        self._depth_camera = None
+        self._next_depth_image = None
+        self._main_rig = None
+        self._scene_time_s = 0.0
         try:
             self._spawn_traffic()
             self._spawn_ego()
@@ -248,6 +321,8 @@ class CarlaScene:
         self._actor_ids = [r.actor_id for r in results]
         for actor in self.world.get_actors(self._actor_ids):
             self._box_centers[actor.id] = (actor.bounding_box.location.x, actor.bounding_box.location.y)
+            self._wheel_radius_m[actor.id] = actor.get_physics_control().wheels[0].radius / CM_PER_M
+            self._vehicles[actor.id] = actor
 
     def _spawn_ego(self):
         carla = self.carla
@@ -259,6 +334,8 @@ class CarlaScene:
         self.ego_half_length_m = box.extent.x
         self.ego_half_width_m = box.extent.y
         self._box_centers[self.ego.id] = (box.location.x, box.location.y)
+        self._wheel_radius_m[self.ego.id] = self.ego.get_physics_control().wheels[0].radius / CM_PER_M
+        self._vehicles[self.ego.id] = self.ego
 
     def _setup_traffic_lights(self, town_bin):
         lights = sorted(self.world.get_actors().filter("traffic.traffic_light"), key=lambda light: light.id)
@@ -274,13 +351,18 @@ class CarlaScene:
     def set_human_agent(self, agent_idx):
         self.human_agent_idx = agent_idx
         self._ground.pop(("ego",), None)
+        self._poses.pop(("ego",), None)
+        self._skid_mark_points = None
 
     def set_camera_mode(self, camera_mode):
         if camera_mode == self._camera_mode:
             return
         self._destroy_cameras()
         rig = main_camera_rig(camera_mode)
+        self._main_rig = rig
         self._camera = self._spawn_camera(rig, self.image_size_px, "main", 0.0)
+        if self._skid_marks:
+            self._spawn_depth_camera()
         if camera_mode == CAMERA_MODE_DRIVER:
             self._mirrors["rear"] = self._spawn_camera(
                 rear_camera_rig(self.ego_half_length_m),
@@ -291,17 +373,18 @@ class CarlaScene:
         self._camera_mode = camera_mode
         self._pending_frame_id = None
 
-    def _spawn_camera(self, rig, size_px, name, sensor_tick_s):
+    def _spawn_camera(self, rig, size_px, name, sensor_tick_s, blueprint="sensor.camera.rgb"):
         carla = self.carla
-        bp = self.world.get_blueprint_library().find("sensor.camera.rgb")
+        bp = self.world.get_blueprint_library().find(blueprint)
         bp.set_attribute("image_size_x", str(size_px[0]))
         bp.set_attribute("image_size_y", str(size_px[1]))
         bp.set_attribute("fov", str(rig.fov_deg))
         bp.set_attribute("sensor_tick", str(sensor_tick_s))
-        if self.night:
+        is_colour = blueprint == "sensor.camera.rgb"  # a depth camera has no exposure
+        if is_colour and self.night:
             bp.set_attribute("exposure_min_bright", str(NIGHT_EXPOSURE_MIN_EV))
             bp.set_attribute("exposure_max_bright", str(NIGHT_EXPOSURE_MAX_EV))
-        elif name == "rear":
+        elif is_colour and name == "rear":
             bp.set_attribute("exposure_compensation", str(DAY_MIRROR_EXPOSURE_COMPENSATION_EV))
         transform = carla.Transform(
             carla.Location(x=rig.x, y=rig.y, z=rig.z), carla.Rotation(pitch=rig.pitch_deg, yaw=rig.yaw_deg)
@@ -312,12 +395,20 @@ class CarlaScene:
         self._frames[name] = frames
         return camera
 
+    def _spawn_depth_camera(self):
+        """Exactly the main camera's view in depth, for hiding the parts of skid marks that something covers."""
+        self._depth_camera = self._spawn_camera(
+            self._main_rig, self.image_size_px, "depth", 0.0, blueprint="sensor.camera.depth"
+        )
+
     def _destroy_cameras(self):
-        for camera in [self._camera, *self._mirrors.values()]:
+        for camera in [self._camera, self._depth_camera, *self._mirrors.values()]:
             if camera is not None:
                 camera.stop()
                 camera.destroy()
         self._camera = None
+        self._depth_camera = None
+        self._next_depth_image = None
         self._mirrors = {}
         self._frames = {}
         self._latest_mirror = {}
@@ -356,8 +447,12 @@ class CarlaScene:
 
     def _actor_transform(self, key, box_center_xy, bx, by, bz, heading, dt_s):
         carla = self.carla
-        x, y = self.transform.bin_to_loc(bx, by)
-        yaw = self.transform.bin_heading_to_yaw(heading)
+        sim_x, sim_y = self.transform.bin_to_loc(bx, by)
+        pose = smooth_pose(
+            self._poses.get(key), sim_x, sim_y, self.transform.bin_heading_to_yaw(heading), dt_s, POSE_SMOOTHING_SECONDS
+        )
+        self._poses[key] = pose
+        x, y, yaw = pose.x, pose.y, pose.yaw_deg
         z, pitch = self._ground_pose(key, x, y, yaw, self.transform.z_to_carla(bz), dt_s)
         cos_yaw, sin_yaw = math.cos(math.radians(yaw)), math.sin(math.radians(yaw))
         origin_x = x - (box_center_xy[0] * cos_yaw - box_center_xy[1] * sin_yaw)
@@ -366,9 +461,106 @@ class CarlaScene:
             carla.Location(x=origin_x, y=origin_y, z=z + GROUND_CLEARANCE_M), carla.Rotation(yaw=yaw, pitch=pitch)
         )
 
+    def _spin_wheels(self, actor_id, key, dt_s):
+        """Roll the wheels by the distance the rendered car moved along its own heading (render only)."""
+        pose = self._poses[key]
+        yaw_rad = math.radians(pose.yaw_deg)
+        forward_mps = pose.vx * math.cos(yaw_rad) + pose.vy * math.sin(yaw_rad)
+        roll_deg = WHEEL_SPIN_FORWARD_SIGN * math.degrees(forward_mps * dt_s / self._wheel_radius_m[actor_id])
+        spin_deg = (self._wheel_spin_deg.get(actor_id, 0.0) + roll_deg) % 360.0
+        self._wheel_spin_deg[actor_id] = spin_deg
+        for wheel in self._wheel_locations:
+            self._vehicles[actor_id].set_wheel_pitch_angle(wheel, spin_deg)
+
+    def _lay_skid_marks(self, ego_transform):
+        """Extend a strip behind each tyre while the rendered car slides sideways; a gap when it stops sliding."""
+        pose = self._poses[("ego",)]
+        yaw_rad = math.radians(pose.yaw_deg)
+        side_mps = -pose.vx * math.sin(yaw_rad) + pose.vy * math.cos(yaw_rad)
+        sliding = abs(side_mps) > SKID_MARK_SIDE_SPEED_MPS and math.hypot(pose.vx, pose.vy) > SKID_MARK_MIN_SPEED_MPS
+        if not sliding:
+            self._skid_mark_points = None
+            return
+        carla = self.carla
+        center_x, center_y = self._box_centers[self.ego.id]
+        axle_m = SKID_MARK_AXLE_FRACTION * self.ego_half_length_m
+        track_m = SKID_MARK_TRACK_FRACTION * self.ego_half_width_m
+        # the actor's origin sits GROUND_CLEARANCE_M above the road
+        height_m = SKID_MARK_ROAD_CLEARANCE_M - GROUND_CLEARANCE_M
+        points = []
+        for along_m in (axle_m, -axle_m):
+            for across_m in (-track_m, track_m):
+                world = ego_transform.transform(carla.Location(x=center_x + along_m, y=center_y + across_m, z=height_m))
+                points.append((world.x, world.y, world.z))
+        previous_points = self._skid_mark_points
+        self._skid_mark_points = points
+        if previous_points is None:
+            return
+        for start, end in zip(previous_points, points):
+            if math.dist(start, end) <= GROUND_SNAP_DISTANCE_M:  # a longer jump is a respawn, not a slide
+                self._skid_marks.append((start, end, self._scene_time_s))
+        if self._skid_marks and self._depth_camera is None and self._main_rig is not None:
+            self._spawn_depth_camera()  # only once there is something to hide: driving without skids costs nothing
+
+    def skid_marks(self, image, depth_image):
+        """(start_px, end_px, width_px, age_fraction) of every live mark in this camera image, oldest first, keeping
+        only those the depth image shows to be the nearest surface. None of them before there is a depth image."""
+        while self._skid_marks and self._scene_time_s - self._skid_marks[0][2] > SKID_MARK_LIFETIME_S:
+            self._skid_marks.popleft()
+        if not self._skid_marks or depth_image is None:
+            return []
+        starts = np.array([mark[0] for mark in self._skid_marks])
+        ends = np.array([mark[1] for mark in self._skid_marks])
+        ages = (self._scene_time_s - np.array([mark[2] for mark in self._skid_marks])) / SKID_MARK_LIFETIME_S
+        world_to_camera = np.array(image.transform.get_inverse_matrix())
+        focal_px = image.width / (2.0 * math.tan(math.radians(image.fov) / 2.0))
+
+        def to_camera(points):
+            return np.c_[points, np.ones(len(points))] @ world_to_camera.T
+
+        def to_pixels(cam):
+            return np.c_[
+                image.width / 2.0 + focal_px * cam[:, 1] / cam[:, 0],
+                image.height / 2.0 - focal_px * cam[:, 2] / cam[:, 0],
+            ]
+
+        start_cam, end_cam = to_camera(starts), to_camera(ends)
+        in_front = (start_cam[:, 0] > 0.0) & (end_cam[:, 0] > 0.0)
+        start_cam, end_cam, ages = start_cam[in_front], end_cam[in_front], ages[in_front]
+        middle_cam = 0.5 * (start_cam + end_cam)
+        middle_px = np.round(to_pixels(middle_cam)).astype(int)
+        on_screen = (
+            (middle_px[:, 0] >= 0)
+            & (middle_px[:, 0] < image.width)
+            & (middle_px[:, 1] >= 0)
+            & (middle_px[:, 1] < image.height)
+        )
+        visible = np.zeros(len(middle_cam), dtype=bool)
+        if on_screen.any():
+            bgra = np.frombuffer(depth_image.raw_data, dtype=np.uint8).reshape(depth_image.height, depth_image.width, 4)
+            column, row = middle_px[on_screen, 0], middle_px[on_screen, 1]
+            texel = bgra[row, column].astype(np.float64)
+            scene_depth_m = (
+                DEPTH_CAMERA_FAR_M * (texel[:, 2] + 256.0 * texel[:, 1] + 65536.0 * texel[:, 0]) / DEPTH_CAMERA_SCALE
+            )
+            mark_depth_m = middle_cam[on_screen, 0]
+            tolerance_m = SKID_MARK_DEPTH_TOLERANCE_M + SKID_MARK_DEPTH_TOLERANCE_FRACTION * mark_depth_m
+            visible[on_screen] = mark_depth_m <= scene_depth_m + tolerance_m
+        marks = []
+        for start, end, age in zip(start_cam[visible], end_cam[visible], ages[visible]):
+            start_px = (
+                image.width / 2.0 + focal_px * start[1] / start[0],
+                image.height / 2.0 - focal_px * start[2] / start[0],
+            )
+            end_px = (image.width / 2.0 + focal_px * end[1] / end[0], image.height / 2.0 - focal_px * end[2] / end[0])
+            width_px = max(1, round(focal_px * SKID_MARK_WIDTH_M / (0.5 * (start[0] + end[0]))))
+            marks.append((start_px, end_px, width_px, float(age)))
+        return marks
+
     def update(self, human, wheel_state, dt_s):
         """Pose every actor from the sim, mirror the lights, tick, and return the camera images."""
         carla = self.carla
+        self._scene_time_s += dt_s
         state = self.env.get_global_agent_state()
         commands = []
         light_commands = []
@@ -391,14 +583,18 @@ class CarlaScene:
                 dt_s,
             )
             commands.append(carla.command.ApplyTransform(actor_id, transform))
+            self._spin_wheels(actor_id, agent_idx, dt_s)
             light_commands.extend(self._traffic_car_light_command(agent_idx, actor_id, transform.location, dt_s))
         ego_idx = self.human_agent_idx
         ego_transform = self._actor_transform(
             ("ego",), self._box_centers[self.ego.id], xs[ego_idx], ys[ego_idx], zs[ego_idx], headings[ego_idx], dt_s
         )
         commands.append(carla.command.ApplyTransform(self.ego.id, ego_transform))
+        self._spin_wheels(self.ego.id, ("ego",), dt_s)
+        self._lay_skid_marks(ego_transform)
         light_commands.extend(self._ego_light_command(human, wheel_state))
-        self.client.apply_batch(commands + light_commands)
+        # fire-and-forget apply_batch can land after the tick, rendering a frame at the previous pose
+        self.client.apply_batch_sync(commands + light_commands, False)
         steer_deg = front_wheel_steer_deg(human["steering_angle_rad"])
         if abs(steer_deg - self._sent_steer_deg) >= WHEEL_STEER_RESEND_DEG:
             self.ego.set_wheel_steer_direction(carla.VehicleWheelLocation.FL_Wheel, steer_deg)
@@ -477,6 +673,8 @@ class CarlaScene:
 
     def _collect_images(self, frame_id):
         images = {"main": self._wait_for_frame(self._frames["main"], frame_id)}
+        if self._depth_camera is not None:
+            images["depth"] = self._depth_for_frame(frame_id)
         for name in self._mirrors:
             frames = self._frames[name]
             latest = self._latest_mirror.get(name)
@@ -485,6 +683,14 @@ class CarlaScene:
             self._latest_mirror[name] = latest
             images[name] = latest
         return images
+
+    def _depth_for_frame(self, frame_id):
+        """The depth image of exactly this frame, or None when the depth camera only started after it."""
+        depth = self._next_depth_image
+        while depth is None or depth.frame < frame_id:
+            depth = self._frames["depth"].get(timeout=FRAME_TIMEOUT_S)
+        self._next_depth_image = depth  # a later frame is kept for the update that shows it
+        return depth if depth.frame == frame_id else None
 
     @staticmethod
     def _wait_for_frame(frames, frame_id):

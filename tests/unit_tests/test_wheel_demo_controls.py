@@ -34,6 +34,8 @@ CONTRACT_COMMANDS = {
     "menu": "cycle_assist",
     "dpad_up": "ffb_gain_up",
     "dpad_down": "ffb_gain_down",
+    "dpad_right": "cycle_style",
+    "dpad_left": "cycle_full_steering",
 }
 CONTRACT_GAIN_STEP = 0.05
 CONTRACT_GAIN_MIN = 0.05
@@ -225,7 +227,7 @@ def test_dpad_sweeping_up_to_down_fires_each_direction(run_demo):
 
 def test_unbound_buttons_and_paddles_emit_nothing(run_demo):
     commands = run_demo.WheelButtonCommands(TEST_BUTTON_MAP)
-    assert commands.poll(wheel_with("lsb", "rsb", "dpad_left")) == {}
+    assert commands.poll(wheel_with("lsb", "rsb")) == {}
     paddles = (1 << TEST_BUTTON_MAP.shift_up_bit) | (1 << TEST_BUTTON_MAP.shift_down_bit)
     assert commands.poll(WheelState(buttons=paddles)) == {}
 
@@ -667,3 +669,311 @@ def test_window_closes_the_scene_when_full_screen_fails(headless_window_module, 
     with pytest.raises(pygame.error):
         carla_window.CarlaDemoWindow(object(), "Town01", 0, 0.05, fullscreen=True)
     assert FakeScene.instances[-1].closed
+
+
+# ---------------------------------------------------------------------------------------------
+# Driving style and FULL steering presets: cycled from the wheel, refused outside FULL.
+# ---------------------------------------------------------------------------------------------
+
+CONTRACT_DRIVING_STYLES = ("off", "calm", "normal", "aggressive")
+CONTRACT_FULL_STEERING_PRESETS = {
+    "car": (binding.FULL_ASSIST_DYNAMICS_SET_STEERING, 0.6),
+    "wheel": (binding.FULL_ASSIST_DYNAMICS_JERK_SPEED, 0.9),
+}
+STYLE_LIMIT_LOW = 0.0
+STYLE_LIMIT_HIGH = 1.0
+
+
+class StyleEnv(AssistEnv):
+    def __init__(self, mode):
+        super().__init__()
+        self.mode = mode
+        self.style_calls = []
+
+    def get_reward_coef_limits(self):
+        import numpy as np
+
+        return (np.full(binding.NUM_REWARD_COEFS, STYLE_LIMIT_LOW, dtype=np.float32),
+                np.full(binding.NUM_REWARD_COEFS, STYLE_LIMIT_HIGH, dtype=np.float32))
+
+    def set_human_driving_style(self, min_values=None, max_values=None):
+        self.style_calls.append(None if min_values is None else (min_values.copy(), max_values.copy()))
+
+
+class StyleLoop:
+    def __init__(self, mode):
+        self.env = StyleEnv(mode)
+        self.human_agent_idx = 0
+        self.full_steering = "car"
+        self.full_steering_calls = []
+
+    def set_full_steering(self, full_assist_dynamics, lookahead_window_seconds):
+        self.full_steering_calls.append((full_assist_dynamics, lookahead_window_seconds))
+        self.full_steering = next((name for name, preset in CONTRACT_FULL_STEERING_PRESETS.items()
+                                   if preset == (full_assist_dynamics, lookahead_window_seconds)), "custom")
+
+
+def test_driving_styles_are_off_then_the_levels(run_demo):
+    assert run_demo.DRIVING_STYLES == CONTRACT_DRIVING_STYLES
+
+
+def test_driving_style_cycles_off_calm_normal_aggressive_off_under_full(run_demo):
+    from pufferlib.wheel_demo import levels
+
+    loop = StyleLoop(binding.ASSIST_MODE_FULL)
+    style_state = {"index": 0}
+    seen = []
+    for _ in range(len(CONTRACT_DRIVING_STYLES)):
+        run_demo.cycle_driving_style(loop, style_state)
+        seen.append(run_demo.DRIVING_STYLES[style_state["index"]])
+    assert seen == ["calm", "normal", "aggressive", "off"]
+    assert loop.env.style_calls[-1] is None
+    for call, name in zip(loop.env.style_calls[:3], seen[:3]):
+        low, high = levels.level_bounds(loop.env, levels.level_by_name(name))
+        assert (call[0] == low).all() and (call[1] == high).all()
+
+
+@pytest.mark.parametrize(
+    "mode", [binding.ASSIST_MODE_OFF, binding.ASSIST_MODE_DISPLAY, binding.ASSIST_MODE_BLEND, binding.ASSIST_MODE_NUDGE]
+)
+def test_driving_style_is_refused_outside_full(run_demo, mode, capsys):
+    loop = StyleLoop(mode)
+    style_state = {"index": 1}
+    run_demo.cycle_driving_style(loop, style_state)
+    assert style_state == {"index": 1}
+    assert loop.env.style_calls == []
+    assert "FULL" in capsys.readouterr().out
+
+
+def test_full_steering_presets_are_the_contract():
+    from pufferlib.wheel_demo import loop as loop_module
+
+    assert loop_module.FULL_STEERING_PRESETS == CONTRACT_FULL_STEERING_PRESETS
+    assert loop_module.DEFAULT_FULL_STEERING == "car"
+
+
+@pytest.mark.parametrize("start,expected", [("car", "wheel"), ("wheel", "car"), ("custom", "car")])
+def test_full_steering_cycles_through_the_presets_under_full(run_demo, start, expected):
+    loop = StyleLoop(binding.ASSIST_MODE_FULL)
+    loop.full_steering = start
+    run_demo.cycle_full_steering(loop)
+    assert loop.full_steering_calls == [CONTRACT_FULL_STEERING_PRESETS[expected]]
+    assert loop.full_steering == expected
+
+
+@pytest.mark.parametrize(
+    "mode", [binding.ASSIST_MODE_OFF, binding.ASSIST_MODE_DISPLAY, binding.ASSIST_MODE_BLEND, binding.ASSIST_MODE_NUDGE]
+)
+def test_full_steering_is_refused_outside_full(run_demo, mode, capsys):
+    loop = StyleLoop(mode)
+    run_demo.cycle_full_steering(loop)
+    assert loop.full_steering_calls == []
+    assert loop.full_steering == "car"
+    assert "FULL" in capsys.readouterr().out
+
+
+def test_window_keys_route_style_and_full_steering(run_demo):
+    loop = StyleLoop(binding.ASSIST_MODE_FULL)
+    style_state = {"index": 0}
+    run_demo.apply_window_keys(FakeWindow(), loop, 0, {"cycle_style": True, "cycle_full_steering": True}, None, 0.5,
+                               style_state)
+    assert style_state == {"index": 1}
+    assert loop.full_steering_calls == [CONTRACT_FULL_STEERING_PRESETS["wheel"]]
+
+
+def test_window_keys_without_style_state_still_work(run_demo):
+    loop = StyleLoop(binding.ASSIST_MODE_FULL)
+    run_demo.apply_window_keys(FakeWindow({"cycle_style": True}), loop, 0, {"cycle_assist": True}, None, 0.5)
+    assert loop.env.style_calls == []
+    assert loop.env.calls == [(binding.ASSIST_MODE_OFF, 0.5)]
+
+
+def test_full_steering_style_and_gearbox_flags(demo_parser, run_demo):
+    defaults = demo_parser.parse_args([])
+    assert defaults.full_steering == "car"
+    assert defaults.full_assist_dynamics is None
+    assert defaults.lookahead_window is None
+    assert defaults.driving_style == "off"
+    assert defaults.gearbox == "automatic"
+    actions = {a.dest: a for a in demo_parser._actions}
+    assert set(actions["full_steering"].choices) == set(CONTRACT_FULL_STEERING_PRESETS)
+    assert tuple(actions["driving_style"].choices) == CONTRACT_DRIVING_STYLES
+    assert set(actions["gearbox"].choices) == {"automatic", "manual", "none"}
+    assert run_demo.GEARBOX_MODES_BY_NAME == {
+        "automatic": binding.GEARBOX_MODE_AUTOMATIC,
+        "manual": binding.GEARBOX_MODE_MANUAL,
+        "none": binding.GEARBOX_MODE_NONE,
+    }
+    with pytest.raises(SystemExit):
+        demo_parser.parse_args(["--driving-style", "reckless"])
+
+
+class ConfigCaptured(Exception):
+    pass
+
+
+def captured_demo_config(run_demo, monkeypatch, tmp_path, extra_args):
+    captured = {}
+
+    def capture_loop(config, wheel):
+        captured["config"] = config
+        raise ConfigCaptured
+
+    monkeypatch.setattr(run_demo, "build_wheel_input", lambda *args: (object(), None))
+    monkeypatch.setattr(run_demo, "WheelDemoLoop", capture_loop)
+    monkeypatch.setattr(run_demo, "choose_town", lambda town: town or "Town01")
+    argv = ["run_demo.py", "--input", "synthetic", "--town", "Town01", "--calibration", str(tmp_path / "none.json"),
+            "--buttons", str(tmp_path / "none_buttons.json")] + extra_args
+    monkeypatch.setattr(run_demo.sys, "argv", argv)
+    with pytest.raises(ConfigCaptured):
+        run_demo.main()
+    return captured["config"]
+
+
+@pytest.mark.parametrize("preset", sorted(CONTRACT_FULL_STEERING_PRESETS))
+def test_full_steering_preset_sets_dynamics_and_window(run_demo, monkeypatch, tmp_path, preset):
+    config = captured_demo_config(run_demo, monkeypatch, tmp_path, ["--full-steering", preset])
+    assert (config.full_assist_dynamics, config.lookahead_window_seconds) == CONTRACT_FULL_STEERING_PRESETS[preset]
+
+
+@pytest.mark.parametrize(
+    "name,dynamics",
+    [("jerk-speed", binding.FULL_ASSIST_DYNAMICS_JERK_SPEED), ("bicycle", binding.FULL_ASSIST_DYNAMICS_HUMAN),
+     ("jerk", binding.FULL_ASSIST_DYNAMICS_JERK), ("lookahead", binding.FULL_ASSIST_DYNAMICS_SET_STEERING)],
+)
+def test_explicit_dynamics_and_window_override_the_preset(run_demo, monkeypatch, tmp_path, name, dynamics):
+    config = captured_demo_config(run_demo, monkeypatch, tmp_path,
+                                  ["--full-steering", "car", "--full-assist-dynamics", name, "--lookahead-window", "1.5"])
+    assert (config.full_assist_dynamics, config.lookahead_window_seconds) == (dynamics, 1.5)
+
+
+@pytest.mark.parametrize(
+    "name,grip_mode",
+    [("realistic", binding.GRIP_MODE_REALISTIC), ("kinematic", binding.GRIP_MODE_KINEMATIC), ("skid", binding.GRIP_MODE_SKID)],
+)
+def test_grip_flag_reaches_the_config(run_demo, monkeypatch, tmp_path, name, grip_mode):
+    from pufferlib.wheel_demo import loop as loop_module
+
+    assert loop_module.GRIP_MODE_SKID == binding.GRIP_MODE_SKID
+    assert run_demo.GRIP_MODES_BY_NAME[name] == grip_mode
+    config = captured_demo_config(run_demo, monkeypatch, tmp_path, ["--grip", name])
+    assert config.grip_mode == grip_mode
+
+
+def test_grip_flag_offers_skid_and_defaults_to_realistic(demo_parser, run_demo):
+    action = next(a for a in demo_parser._actions if a.dest == "grip")
+    assert tuple(action.choices) == ("realistic", "kinematic", "skid")
+    assert action.default == "realistic"
+    assert "spin" in action.help
+    with pytest.raises(SystemExit):
+        demo_parser.parse_args(["--grip", "drift"])
+
+
+def test_gearless_flag_reaches_the_config(run_demo, monkeypatch, tmp_path):
+    config = captured_demo_config(run_demo, monkeypatch, tmp_path, ["--gearbox", "none"])
+    assert config.gearbox_mode == binding.GEARBOX_MODE_NONE
+
+
+def test_window_binds_s_and_f_and_documents_the_dpad():
+    from pufferlib.wheel_demo import carla_window
+
+    source = open(carla_window.__file__).read()
+    assert "pygame.K_s: \"cycle_style\"" in source
+    assert "pygame.K_f: \"cycle_full_steering\"" in source
+    assert "D-pad right style" in carla_window.HELP_TEXT
+    assert "D-pad left full steering" in carla_window.HELP_TEXT
+
+
+class FakeFrameClock:
+    def __init__(self):
+        self.now_s = 0.0
+
+    def perf_counter(self):
+        return self.now_s
+
+    def sleep(self, seconds):
+        self.now_s += seconds
+
+
+WINDOW_SUBSTEP_SECONDS = 0.05
+SKID_MARK_DRAWN = ((1.0, 2.0), (3.0, 4.0), 2, 0.5)
+
+
+@pytest.fixture
+def drawing_window(headless_window_module, monkeypatch):
+    carla_window, pygame, _calls = headless_window_module
+    clock = FakeFrameClock()
+    monkeypatch.setattr(carla_window, "time", clock)
+    monkeypatch.setattr(pygame.display, "flip", lambda: None)
+    window = carla_window.CarlaDemoWindow(object(), "Town01", 0, WINDOW_SUBSTEP_SECONDS)
+    drawn = {"infos": [], "update_dts": [], "skid_queries": [], "skid_marks": []}
+
+    def update(human, wheel_state, dt_s):
+        drawn["update_dts"].append(dt_s)
+        return {"main": None}
+
+    window.scene.update = update
+    window.scene.goal_marker = lambda human, image: None
+    window.scene.skid_marks = lambda image, depth_image: drawn["skid_queries"].append((image, depth_image)) or [
+        SKID_MARK_DRAWN]
+    window._surface = lambda image: pygame.Surface((1, 1))
+    window._mirror_layout = lambda images: []
+
+    def hud_draw(surface, human, wheel_state, info, elapsed, **kwargs):
+        drawn["infos"].append(info)
+        drawn["skid_marks"].append(kwargs.get("skid_marks"))
+
+    window.hud.draw = hud_draw
+    return window, clock, drawn
+
+
+def test_draw_passes_the_style_and_full_steering_to_the_hud(drawing_window):
+    window, _clock, drawn = drawing_window
+    assert window.draw({}, WheelState(), 0.0, driving_style="calm", full_steering="wheel")
+    info = drawn["infos"][-1]
+    assert (info.driving_style, info.full_steering) == ("calm", "wheel")
+    window.draw({}, WheelState(), 0.0)
+    assert (drawn["infos"][-1].driving_style, drawn["infos"][-1].full_steering) == ("off", "car")
+
+
+def test_a_late_frame_is_skipped_and_the_next_one_covers_the_gap(drawing_window):
+    window, clock, drawn = drawing_window
+    window.draw({}, WheelState(), 0.0)
+    clock.now_s += 10.0 * WINDOW_SUBSTEP_SECONDS
+    assert window.draw({}, WheelState(), 0.0) is False
+    assert window.frames_skipped == 1
+    clock.now_s = window._next_frame_s
+    assert window.draw({}, WheelState(), 0.0) is True
+    assert drawn["update_dts"][-1] == pytest.approx(2.0 * WINDOW_SUBSTEP_SECONDS)
+
+
+def test_lockstep_never_skips_a_frame(drawing_window):
+    window, clock, drawn = drawing_window
+    window.lockstep = True
+    for _ in range(5):
+        clock.now_s += 10.0 * WINDOW_SUBSTEP_SECONDS
+        assert window.draw({}, WheelState(), 0.0) is True
+    assert window.frames_skipped == 0
+    assert drawn["update_dts"] == [pytest.approx(WINDOW_SUBSTEP_SECONDS)] * 5
+
+
+def test_recording_turns_on_lockstep(headless_window_module, monkeypatch, tmp_path):
+    carla_window, _pygame, _calls = headless_window_module
+    started = []
+    monkeypatch.setattr(carla_window.CarlaDemoWindow, "_start_recorder", lambda self, path: started.append(path))
+    record_path = str(tmp_path / "demo.mp4")
+    assert carla_window.CarlaDemoWindow(object(), "Town01", 0, WINDOW_SUBSTEP_SECONDS, record_path=record_path).lockstep
+    assert started == [record_path]
+    assert not carla_window.CarlaDemoWindow(object(), "Town01", 0, WINDOW_SUBSTEP_SECONDS).lockstep
+
+
+def test_draw_hands_the_scenes_skid_marks_for_the_main_and_depth_images_to_the_hud(drawing_window):
+    window, _clock, drawn = drawing_window
+    images = {"main": "main image", "depth": "depth image"}
+    window.scene.update = lambda human, wheel_state, dt_s: images
+    window.draw({}, WheelState(), 0.0)
+    assert drawn["skid_queries"] == [("main image", "depth image")]
+    assert drawn["skid_marks"] == [[SKID_MARK_DRAWN]]
+    images.pop("depth")
+    window.draw({}, WheelState(), 0.0)
+    assert drawn["skid_queries"][-1] == ("main image", None)

@@ -38,6 +38,7 @@ static void convention_bench_init(ConventionBench *bench, float speed_mps, int d
     bench->env.grid_map = &bench->offgrid_map;
     bench->env.dt = CONVENTION_TEST_DT_SECONDS;
     bench->env.base_max_speed_mps = CONVENTION_TEST_BASE_SPEED_MPS;
+    bench->env.human_max_speed_mps = CONVENTION_TEST_BASE_SPEED_MPS;
     bench->env.conditioning_speed_scale = CONVENTION_TEST_SPEED_SCALE;
     bench->env.action_type = ACTION_TYPE_CONTINUOUS;
     bench->env.dynamics_model = dynamics_model;
@@ -57,7 +58,7 @@ static int expect_turn_direction(ConventionBench *bench, int use_human_path, int
     for (int step = 0; step < TURN_DIRECTION_STEP_COUNT; step++) {
         float heading_before_rad = bench->agent.sim_heading;
         if (use_human_path) {
-            move_human(&bench->env, 0);
+            move_human(&bench->env, 0, 0);
         } else {
             move_dynamics(&bench->env, 0, 0);
         }
@@ -160,7 +161,7 @@ static int test_every_path_shares_one_physical_convention(void) {
         ConventionBench bench;
         convention_bench_init(&bench, 10.0f, DYNAMICS_MODEL_JERK);
         EXPECT_EQ_INT(c_set_human_input(&bench.env, -1.0f, 0.0f), 0);
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_TRUE(bench.agent.steering_angle > 0.0f);
         EXPECT_TRUE(bench.agent.yaw_rate > 0.0f);
         EXPECT_TRUE(bench.agent.accel_lat > 0.0f);

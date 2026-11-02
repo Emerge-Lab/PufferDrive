@@ -134,6 +134,8 @@
 // Tyre model for the human-driven car
 #define GRIP_MODE_KINEMATIC 0
 #define GRIP_MODE_REALISTIC 1
+// Dynamic bicycle: the tyres saturate and then slide, so the car can understeer, oversteer and spin
+#define GRIP_MODE_SKID 2
 
 // Steering assist. The reference is what the policy would steer from the human car's own state.
 // DISPLAY and NUDGE leave the sim untouched (NUDGE guides the hands through force feedback). FULL
@@ -143,6 +145,11 @@
 #define ASSIST_MODE_BLEND 2
 #define ASSIST_MODE_NUDGE 3
 #define ASSIST_MODE_FULL 4
+// Under FULL with pedals released (speed / steering): jerk / wheel, powertrain / wheel, jerk / jerk, jerk / set angle
+#define FULL_ASSIST_DYNAMICS_JERK_SPEED 0
+#define FULL_ASSIST_DYNAMICS_HUMAN 1
+#define FULL_ASSIST_DYNAMICS_JERK 2
+#define FULL_ASSIST_DYNAMICS_SET_STEERING 3
 // The blend weight eases to its target over this long, so switching modes never jumps the wheels.
 #define ASSIST_RAMP_SECONDS 0.5f
 // Under FULL the policy drives the car's speed while both pedals are below this; touching one takes over.
@@ -171,6 +178,24 @@ static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 #define HUMAN_STEERING_LIMIT_RAD 0.55f
 #define HUMAN_STEERING_RATIO (HUMAN_WHEEL_RANGE_DEG * (float) M_PI / 360.0f / HUMAN_STEERING_LIMIT_RAD)
 #define HUMAN_TIRE_GRIP_MPS2 8.5f
+// GRIP_MODE_SKID: axle peak side force is its load times HUMAN_TIRE_GRIP_MPS2 / g, less what braking or drive uses
+#define HUMAN_CG_TO_FRONT_AXLE_FRACTION 0.5f // of the wheelbase; the rest is the rear axle's arm
+// CG height and yaw inertia scale with the wheelbase: a fixed 0.55 m on the 1.35 m sim box spins under ordinary braking
+#define HUMAN_CG_HEIGHT_PER_WHEELBASE 0.19f
+#define GRAVITY_MPS2 9.81f
+#define HUMAN_FRONT_CORNERING_STIFFNESS_N_PER_RAD 92000.0f
+#define HUMAN_REAR_CORNERING_STIFFNESS_N_PER_RAD 110000.0f
+// Pacejka shape factor above 1: past its peak the side force falls to sin(C * pi / 2) ~ 0.89 of it when sliding
+#define HUMAN_TIRE_SHAPE_FACTOR 1.3f
+#define HUMAN_BRAKE_FRONT_SHARE 0.6f // braking force on the front axle; drive force is all rear (rear-wheel drive)
+// Total speed band over which the tyre model takes over from the kinematic arc (slip is meaningless near standstill)
+#define SKID_BLEND_LOW_MPS 2.0f
+#define SKID_BLEND_HIGH_MPS 5.0f
+#define SKID_INTEGRATION_STEPS 4 // per physics step: the lateral dynamics are stiff at low speed
+// A tyre sliding straight sideways has no rolling speed; its slip is taken against at least this
+#define SKID_SLIP_SPEED_FLOOR_MPS 0.5f
+// Below the blend band a slide decays at the sliding deceleration and the yaw rate settles onto the arc over this
+#define SKID_LOW_SPEED_YAW_SETTLE_SECONDS 0.1f
 #define BICYCLE_ARC_EPSILON 1e-5f
 
 // Human powertrain. DIRECT takes a longitudinal acceleration straight from the caller (M2);
@@ -180,6 +205,8 @@ static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 
 #define GEARBOX_MODE_MANUAL 0
 #define GEARBOX_MODE_AUTOMATIC 1
+// No gears: the pedals drive the policy's own jerk model (its acceleration and jerk limits), D or R by paddle
+#define GEARBOX_MODE_NONE 2
 
 #define GEAR_REVERSE (-1)
 #define GEAR_NEUTRAL 0

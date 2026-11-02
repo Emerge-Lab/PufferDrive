@@ -13,29 +13,17 @@ import argparse
 import sys
 import time
 
+from pufferlib.wheel_demo.calibrate import capture_button_map
 from pufferlib.wheel_demo.input.base import WheelCalibration
 from pufferlib.wheel_demo.input.g920 import (
-    DPAD_DIRECTION_NAMES,
     G920_REPORT_LENGTH,
-    HAT_MASK,
     ButtonMap,
-    decode_button_mask,
     find_g920_interfaces,
     hid_module,
     set_darwin_non_exclusive,
 )
 
 SETTLE_SECONDS = 1.0
-FACE_BUTTON_LABELS = (
-    ("a", "A button (green)"),
-    ("b", "B button (red)"),
-    ("x", "X button (blue)"),
-    ("y", "Y button (yellow)"),
-    ("view", "VIEW button (two overlapping squares, left of centre)"),
-    ("menu", "MENU button (three lines, right of centre)"),
-    ("lsb", "LSB button (round, lower left)"),
-    ("rsb", "RSB button (round, lower right)"),
-)
 CAPTURE_SECONDS = 4.0
 POLL_INTERVAL_S = 0.002
 
@@ -74,13 +62,6 @@ def require_reports(reports):
         )
 
 
-def most_common(values):
-    counts = {}
-    for value in values:
-        counts[value] = counts.get(value, 0) + 1
-    return max(counts, key=counts.get)
-
-
 def prompt(message):
     input(f"\n>>> {message}\n    press Enter when ready, then do it for {CAPTURE_SECONDS:.0f}s ...")
     time.sleep(SETTLE_SECONDS)
@@ -88,46 +69,14 @@ def prompt(message):
 
 def probe_buttons(device, out_path, only=None):
     """only: field names to re-capture; the rest of an existing map at out_path is kept."""
-    prompt("Rock the wheel gently left and right, touching NO buttons or paddles")
-    baseline_reports = collect(device, CAPTURE_SECONDS)
-    require_reports(baseline_reports)
-    baseline = most_common(decode_button_mask(r) for r in baseline_reports)
-    print(f"    baseline button mask = 0x{baseline:05x}")
-
-    assigned = {}
-    if only:
-        # a failed re-capture keeps the previous value rather than unmapping a working control
-        assigned = {name: value for name, value in ButtonMap.from_json(out_path).__dict__.items() if value is not None}
-    controls = [("shift_up_bit", "RIGHT paddle (upshift)"), ("shift_down_bit", "LEFT paddle (downshift)")]
-    controls += [(f"{name}_bit", label) for name, label in FACE_BUTTON_LABELS]
-    controls = [(field_name, label) for field_name, label in controls if not only or field_name in only]
-    for field_name, control in controls:
-        prompt(f"Hold the {control}")
-        masks = [decode_button_mask(r) for r in collect(device, CAPTURE_SECONDS)]
-        changed = 0
-        for mask in masks:
-            changed |= mask ^ baseline
-        bits = [b for b in range(20) if changed & (1 << b)]
-        print(f"    bits that changed: {bits if bits else 'NONE'}")
-        if len(bits) != 1:
-            print(f"    !! expected exactly one bit for {control}, got {len(bits)} -- not assigning")
-            continue
-        assigned[field_name] = bits[0]
-
-    baseline_hat = most_common(r[1] & HAT_MASK for r in baseline_reports)
-    for direction in DPAD_DIRECTION_NAMES:
-        if only and f"dpad_{direction}_hat" not in only:
-            continue
-        prompt(f"Hold the D-pad {direction.upper()}")
-        hats = [r[1] & HAT_MASK for r in collect(device, CAPTURE_SECONDS)]
-        held = [hat for hat in hats if hat != baseline_hat]
-        if not held:
-            print(f"    !! the hat never left neutral for D-pad {direction} -- not assigning")
-            continue
-        assigned[f"dpad_{direction}_hat"] = most_common(held)
-        print(f"    hat value = {assigned[f'dpad_{direction}_hat']}")
-
-    button_map = ButtonMap(**assigned)
+    # a failed re-capture keeps the previous value rather than unmapping a working control
+    existing = ButtonMap.from_json(out_path) if only else None
+    try:
+        button_map = capture_button_map(
+            device, prompt, lambda reader: collect(reader, CAPTURE_SECONDS), print, only=only, existing=existing
+        )
+    except RuntimeError as error:
+        sys.exit(str(error))
     button_map.to_json(out_path)
     print(f"\nwrote {out_path}: {button_map}")
     if button_map.shift_up_bit is None or button_map.shift_down_bit is None:

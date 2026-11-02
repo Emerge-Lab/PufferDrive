@@ -37,7 +37,8 @@ POLICY_STEER_ACTION = (0.3, 1.0)
 DRIVER_STEERING_NORM = 0.5
 
 
-def make_env():
+def make_env(full_assist_dynamics=binding.FULL_ASSIST_DYNAMICS_HUMAN):
+    """FULL on your own powertrain by default: the pedal-release, stop and reverse rules below are that path's."""
     env = Drive(
         num_agents=1,
         min_agents_per_env=1,
@@ -61,6 +62,7 @@ def make_env():
     )
     env.reset()
     env.select_human_agent(0)
+    env.set_full_assist_dynamics(full_assist_dynamics)
     return env
 
 
@@ -302,6 +304,7 @@ CONTRACT_ACCEL_MAX_MPS2 = 4.0
 JUST_RELEASED_NORM = 0.0499
 CONTRACT_STOP_DECEL_MPS2 = 3.0
 CREEP_THROTTLE_NORM = 0.06
+AUTO_SELECTOR_MAX_SPEED_MPS = 0.5
 CREEP_STEP_COUNT = 3
 HOLD_STEP_COUNT = 20
 HELD_THROTTLE_NORM = 0.5
@@ -318,12 +321,14 @@ def clipped_reference(state):
     return float(np.float32(min(max(state["reference_accel_mps2"], CONTRACT_ACCEL_MIN_MPS2), CONTRACT_ACCEL_MAX_MPS2)))
 
 
-def assisted_reference(state, speed_before_mps):
+def assisted_reference(state, speed_before_mps, gear):
+    """The stop and hold rules, written for the direction the selected gear drives."""
+    direction = -1.0 if gear == binding.GEAR_REVERSE else 1.0
     reference = clipped_reference(state)
-    if state["reference_speed_mps"] == 0.0 and speed_before_mps > 0.0:
-        reference = min(reference, -CONTRACT_STOP_DECEL_MPS2)
-    if speed_before_mps <= 0.0:
-        reference = max(reference, 0.0)
+    if state["reference_speed_mps"] == 0.0 and direction * speed_before_mps > 0.0:
+        reference = direction * min(direction * reference, -CONTRACT_STOP_DECEL_MPS2)
+    if direction * speed_before_mps <= 0.0:
+        reference = direction * max(direction * reference, 0.0)
     return reference
 
 
@@ -387,10 +392,14 @@ def test_full_with_feet_off_differs_from_off():
     assert human_trajectory(binding.ASSIST_MODE_FULL, 0.0, 0.0) != human_trajectory(binding.ASSIST_MODE_OFF, 0.0, 0.0)
 
 
-def test_full_in_reverse_with_feet_off_is_the_driver():
+def test_full_in_reverse_with_feet_off_follows_a_forward_policy_back_into_drive():
     full = human_trajectory(binding.ASSIST_MODE_FULL, 0.0, 0.0, reverse=True)
-    assert {gear for *_, gear in full} == {binding.GEAR_REVERSE}
-    assert full == human_trajectory(binding.ASSIST_MODE_OFF, 0.0, 0.0, reverse=True)
+    off = human_trajectory(binding.ASSIST_MODE_OFF, 0.0, 0.0, reverse=True)
+    assert {gear for *_, gear in off} == {binding.GEAR_REVERSE}
+    assert full[0][-1] >= 1
+    assert all(gear >= 1 for *_, gear in full)
+    assert all(speed_mps >= 0.0 for _, _, speed_mps, _, _ in full)
+    assert full[-1][2] > 0.0
 
 
 def test_blend_at_one_drives_the_clipped_reference_accel_after_the_ramp(env):
@@ -424,8 +433,8 @@ def brake_to_rest(env):
     pytest.fail("the brake pedal never brought the car to rest")
 
 
-@pytest.mark.parametrize("mode", [binding.ASSIST_MODE_FULL, binding.ASSIST_MODE_BLEND])
-def test_a_braking_policy_holds_a_car_at_rest_and_never_reverses_it(env, mode):
+def test_a_braking_policy_holds_a_car_at_rest_and_never_reverses_it_under_blend(env):
+    mode = binding.ASSIST_MODE_BLEND
     brake_to_rest(env)
     env.set_assist_mode(mode, 1.0)
     braked_at_rest_count = 0
@@ -439,8 +448,40 @@ def test_a_braking_policy_holds_a_car_at_rest_and_never_reverses_it(env, mode):
         state = env.get_assist_state()
         braked_at_rest_count += speed_before_mps == 0.0 and state["reference_accel_mps2"] < 0.0
     assert braked_at_rest_count > 0
-    if mode == binding.ASSIST_MODE_FULL:
-        assert env.get_human_state()["speed_mps"] == 0.0
+
+
+def full_braking_drive(env, creep_step_count):
+    """FULL with feet off under a braking policy: (speed before, speed after, gear after) per step."""
+    env.set_assist_mode(binding.ASSIST_MODE_FULL, 1.0)
+    drive = []
+    for step_idx in range(creep_step_count + LONG_STEP_COUNT + HOLD_STEP_COUNT):
+        speed_before_mps = env.get_human_state()["speed_mps"]
+        throttle_norm = CREEP_THROTTLE_NORM if step_idx < creep_step_count else 0.0
+        env.set_human_pedals(0.0, throttle_norm, 0.0, 0.0)
+        env.step(longitudinal_actions(env, POLICY_BRAKE_ACTION))
+        human = env.get_human_state()
+        drive.append((speed_before_mps, human["speed_mps"], human["gear"]))
+    return drive
+
+
+def assert_stops_then_reverses(drive):
+    speeds_mps = [drive[0][0]] + [speed_mps for _, speed_mps, _ in drive]
+    first_rest_idx = speeds_mps.index(0.0)
+    assert all(speed_mps >= 0.0 for speed_mps in speeds_mps[:first_rest_idx])
+    assert all(speed_mps <= 0.0 for speed_mps in speeds_mps[first_rest_idx:])
+    previous_gear = drive[0][2]
+    for speed_before_mps, _, gear in drive:
+        if gear != previous_gear:
+            assert abs(speed_before_mps) <= AUTO_SELECTOR_MAX_SPEED_MPS
+        previous_gear = gear
+    reversing = [(speed_mps, gear) for _, speed_mps, gear in drive if speed_mps < 0.0]
+    assert reversing
+    assert {gear for _, gear in reversing} == {binding.GEAR_REVERSE}
+
+
+def test_a_braking_policy_under_full_brings_the_car_to_rest_then_reverses_it(env):
+    brake_to_rest(env)
+    assert_stops_then_reverses(full_braking_drive(env, creep_step_count=0))
 
 
 @pytest.mark.parametrize("mode", [binding.ASSIST_MODE_FULL, binding.ASSIST_MODE_BLEND])
@@ -453,9 +494,12 @@ def test_a_pulling_away_policy_still_accelerates_from_rest(env, mode):
     assert env.get_human_state()["speed_mps"] > 1.0
 
 
-@pytest.mark.parametrize("mode", [binding.ASSIST_MODE_FULL, binding.ASSIST_MODE_BLEND])
-def test_a_creeping_car_whose_policy_chose_to_stop_comes_to_rest_and_holds(env, mode):
-    env.set_assist_mode(mode, 1.0)
+def test_a_creeping_car_whose_policy_chose_to_stop_comes_to_rest_then_reverses_under_full(env):
+    assert_stops_then_reverses(full_braking_drive(env, CREEP_STEP_COUNT))
+
+
+def test_a_creeping_car_whose_policy_chose_to_stop_comes_to_rest_and_holds_under_blend(env):
+    env.set_assist_mode(binding.ASSIST_MODE_BLEND, 1.0)
     speeds = []
     for step_idx in range(CREEP_STEP_COUNT + LONG_STEP_COUNT + HOLD_STEP_COUNT):
         throttle_norm = CREEP_THROTTLE_NORM if step_idx < CREEP_STEP_COUNT else 0.0
@@ -469,6 +513,7 @@ def test_a_creeping_car_whose_policy_chose_to_stop_comes_to_rest_and_holds(env, 
 def test_reference_speed_is_reported_and_drives_the_stop_rule(env):
     env.set_assist_mode(binding.ASSIST_MODE_FULL, 1.0)
     saw_stop = False
+    saw_rest = False
     for step_idx in range(CREEP_STEP_COUNT + LONG_STEP_COUNT):
         speed_before_mps = env.get_human_state()["speed_mps"]
         throttle_norm = CREEP_THROTTLE_NORM if step_idx < CREEP_STEP_COUNT else 0.0
@@ -477,8 +522,149 @@ def test_reference_speed_is_reported_and_drives_the_stop_rule(env):
         state = env.get_assist_state()
         human = env.get_human_state()
         assert math.isfinite(state["reference_speed_mps"])
+        saw_rest |= human["speed_mps"] == 0.0
         if throttle_norm > 0.0 or human["speed_mps"] == 0.0:
             continue
-        assert human["accel_long_mps2"] == pytest.approx(assisted_reference(state, speed_before_mps), abs=1e-6)
+        expected_mps2 = assisted_reference(state, speed_before_mps, human["gear"])
+        assert human["accel_long_mps2"] == pytest.approx(expected_mps2, abs=1e-6)
         saw_stop |= state["reference_speed_mps"] == 0.0
-    assert saw_stop or env.get_human_state()["speed_mps"] == 0.0
+    # the car may stop on the step the rule fires, then the policy reverses it from rest
+    assert saw_stop or saw_rest
+
+
+# ---------------------------------------------------------------------------------------------
+# FULL dynamics, the look-ahead preview and the driving style through the binding.
+# ---------------------------------------------------------------------------------------------
+
+FULL_DYNAMICS = (
+    binding.FULL_ASSIST_DYNAMICS_JERK_SPEED,
+    binding.FULL_ASSIST_DYNAMICS_HUMAN,
+    binding.FULL_ASSIST_DYNAMICS_JERK,
+    binding.FULL_ASSIST_DYNAMICS_SET_STEERING,
+)
+PREVIEW_PIECE_COUNT = 30
+PREVIEW_STEP_COUNT = 3
+
+
+def test_full_assist_dynamics_constants_are_exported():
+    assert FULL_DYNAMICS == (0, 1, 2, 3)
+
+
+@pytest.mark.parametrize("dynamics", FULL_DYNAMICS)
+def test_set_full_assist_dynamics_accepts_every_mode(env, dynamics):
+    env.set_full_assist_dynamics(dynamics)
+
+
+@pytest.mark.parametrize("dynamics", [-1, binding.FULL_ASSIST_DYNAMICS_SET_STEERING + 1, 99])
+def test_set_full_assist_dynamics_rejects_unknown_modes(env, dynamics):
+    with pytest.raises(ValueError):
+        env.set_full_assist_dynamics(dynamics)
+
+
+@pytest.mark.parametrize("steering_rad", [math.nan, math.inf, -math.inf])
+def test_set_assist_steering_rejects_a_non_finite_angle(env, steering_rad):
+    with pytest.raises(ValueError):
+        env.set_assist_steering(steering_rad)
+
+
+def test_set_assist_steering_accepts_an_angle_or_none(env):
+    env.set_assist_steering(0.1)
+    env.set_assist_steering(None)
+
+
+def snapshot(env):
+    human = env.get_human_state()
+    return dict(human), env.observations.copy()
+
+
+def test_preview_returns_the_human_slot_and_restores_the_env(env):
+    env.step(policy_actions(env))
+    human_before, observations_before = snapshot(env)
+    slot = env.begin_preview()
+    assert slot == HUMAN_ACTION_ROW
+    assert env.begin_preview() == -1
+    steering_rad = np.zeros(PREVIEW_PIECE_COUNT, dtype=np.float32)
+    for _ in range(PREVIEW_STEP_COUNT):
+        env.preview_step(steering_rad)
+    assert np.all(np.isfinite(steering_rad))
+    assert env.get_human_state() != human_before
+    env.end_preview()
+    human_after, observations_after = snapshot(env)
+    assert human_after == human_before
+    np.testing.assert_array_equal(observations_after, observations_before)
+
+
+def test_preview_step_without_a_preview_raises(env):
+    with pytest.raises(RuntimeError):
+        env.preview_step(np.zeros(PREVIEW_PIECE_COUNT, dtype=np.float32))
+    env.end_preview()
+
+
+@pytest.mark.parametrize(
+    "steering_out",
+    [np.zeros(PREVIEW_PIECE_COUNT, dtype=np.float64), np.zeros(2 * PREVIEW_PIECE_COUNT, dtype=np.float32)[::2]],
+    ids=["float64", "strided"],
+)
+def test_preview_step_rejects_an_unsafe_buffer(env, steering_out):
+    assert env.begin_preview() == HUMAN_ACTION_ROW
+    try:
+        with pytest.raises(TypeError):
+            env.preview_step(steering_out)
+    finally:
+        env.end_preview()
+
+
+def test_preview_step_rejects_an_empty_buffer(env):
+    assert env.begin_preview() == HUMAN_ACTION_ROW
+    try:
+        with pytest.raises(RuntimeError):
+            env.preview_step(np.zeros(0, dtype=np.float32))
+    finally:
+        env.end_preview()
+
+
+def test_preview_is_refused_without_a_human_car(env):
+    env.select_human_agent(-1)
+    assert env.begin_preview() == -1
+
+
+def drive_with_optional_previews(with_previews):
+    drive_env = make_env()
+    try:
+        drive_env.set_assist_mode(binding.ASSIST_MODE_FULL, 1.0)
+        trajectory = []
+        for step_idx in range(LONG_STEP_COUNT):
+            actions = policy_actions(drive_env)
+            if with_previews and drive_env.begin_preview() >= 0:
+                drive_env.actions[:] = actions
+                drive_env.preview_step(np.zeros(PREVIEW_PIECE_COUNT, dtype=np.float32))
+                drive_env.end_preview()
+            pedal_step(drive_env, 0.0, 0.0, steering_norm=math.sin(0.3 * step_idx))
+            trajectory.append((dict(drive_env.get_human_state()), drive_env.observations.copy()))
+        return trajectory
+    finally:
+        drive_env.close()
+
+
+def test_previews_leave_the_drive_identical():
+    with_previews = drive_with_optional_previews(True)
+    without_previews = drive_with_optional_previews(False)
+    for (human_a, obs_a), (human_b, obs_b) in zip(with_previews, without_previews):
+        assert human_a == human_b
+        np.testing.assert_array_equal(obs_a, obs_b)
+
+
+@pytest.mark.parametrize("bound_name", ["min", "max"])
+def test_set_human_driving_style_rejects_a_window_outside_the_trained_one(env, bound_name):
+    low, high = env.get_reward_coef_limits()
+    if bound_name == "min":
+        low[binding.REWARD_COEF_COLLISION] -= 1.0
+    else:
+        high[binding.REWARD_COEF_COLLISION] += 1.0
+    with pytest.raises(ValueError):
+        env.set_human_driving_style(low, high)
+
+
+def test_set_human_driving_style_accepts_the_trained_window_and_clears(env):
+    env.set_human_driving_style(*env.get_reward_coef_limits())
+    env.set_human_driving_style()

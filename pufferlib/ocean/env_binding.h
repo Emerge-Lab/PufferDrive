@@ -1217,6 +1217,47 @@ static PyObject *vec_set_assist_mode(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_set_full_assist_dynamics(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_full_assist_dynamics requires 2 arguments (vec_env, dynamics)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int dynamics = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (c_set_full_assist_dynamics((Drive *) vec->envs[0], dynamics) != 0) {
+        PyErr_Format(PyExc_ValueError, "vec_set_full_assist_dynamics: %d must be a FULL_ASSIST_DYNAMICS_*", dynamics);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_set_assist_steering(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_assist_steering requires 3 arguments (vec_env, valid, steering_rad)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int valid = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
+    double steering_rad = PyFloat_AsDouble(PyTuple_GetItem(args, 2));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (c_set_assist_steering((Drive *) vec->envs[0], valid, (float) steering_rad) != 0) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_assist_steering: steering_rad must be finite");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyObject *vec_get_assist_state(PyObject *self, PyObject *args) {
     VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
@@ -1320,6 +1361,45 @@ static PyObject *vec_get_render_poses(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_begin_preview(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    return PyLong_FromLong(c_begin_preview((Drive *) vec->envs[0]));
+}
+
+static PyObject *vec_preview_step(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_preview_step requires 2 arguments (vec_env, steering_out)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    PyArrayObject *steering = (PyArrayObject *) PyTuple_GetItem(args, 1);
+    if (!PyArray_Check(steering) || PyArray_TYPE(steering) != NPY_FLOAT32 || !PyArray_IS_C_CONTIGUOUS(steering)) {
+        PyErr_SetString(PyExc_TypeError, "vec_preview_step: steering_out must be a contiguous float32 NumPy array");
+        return NULL;
+    }
+    int substep_count = (int) PyArray_SIZE(steering);
+    if (c_preview_step((Drive *) vec->envs[0], substep_count, (float *) PyArray_DATA(steering)) != 0) {
+        PyErr_SetString(PyExc_RuntimeError, "vec_preview_step: no look-ahead running, or steering_out is empty");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_end_preview(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    c_end_preview((Drive *) vec->envs[0]);
+    Py_RETURN_NONE;
+}
+
 static int unpack_coef_array(PyObject *obj, const char *name, float **out) {
     if (!PyArray_Check(obj)) {
         PyErr_Format(PyExc_TypeError, "%s must be a float32 NumPy array", name);
@@ -1383,6 +1463,35 @@ static PyObject *vec_get_reward_coef_limits(PyObject *self, PyObject *args) {
     Drive *drive = (Drive *) vec->envs[0];
     for (int c = 0; c < NUM_REWARD_COEFS; c++) {
         reward_coef_limits(drive, c, &min_values[c], &max_values[c]);
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_set_human_driving_style(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 4) {
+        PyErr_SetString(
+            PyExc_TypeError,
+            "vec_set_human_driving_style requires 4 arguments (vec_env, active, min, max)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int active = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    float *min_values, *max_values;
+    if (unpack_coef_array(PyTuple_GetItem(args, 2), "min", &min_values) != 0
+        || unpack_coef_array(PyTuple_GetItem(args, 3), "max", &max_values) != 0) {
+        return NULL;
+    }
+    if (c_set_human_driving_style((Drive *) vec->envs[0], active, min_values, max_values) != 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "vec_set_human_driving_style: bounds must be finite, ordered and inside the trained window");
+        return NULL;
     }
     Py_RETURN_NONE;
 }
@@ -2058,11 +2167,19 @@ static PyMethodDef methods[]
         METH_VARARGS,
         "Set the human car's steering_norm and longitudinal acceleration (wheel demo, env 0)"},
        {"vec_set_assist_mode", vec_set_assist_mode, METH_VARARGS, "Steering assist mode and blend target (wheel demo)"},
+       {"vec_set_full_assist_dynamics",
+        vec_set_full_assist_dynamics,
+        METH_VARARGS,
+        "What moves your car under FULL: the policy's jerk model or your own dynamics (wheel demo)"},
+       {"vec_set_assist_steering",
+        vec_set_assist_steering,
+        METH_VARARGS,
+        "Steering angle for FULL_ASSIST_DYNAMICS_SET_STEERING, sim sign (wheel demo)"},
        {"vec_get_assist_state", vec_get_assist_state, METH_VARARGS, "Steering assist reference and blend (wheel demo)"},
        {"vec_set_human_grip_mode",
         vec_set_human_grip_mode,
         METH_VARARGS,
-        "Select GRIP_MODE_KINEMATIC or GRIP_MODE_REALISTIC (wheel demo, env 0)"},
+        "Select GRIP_MODE_KINEMATIC, GRIP_MODE_REALISTIC or GRIP_MODE_SKID (wheel demo, env 0)"},
        {"vec_substep", vec_substep, METH_VARARGS, "Advance one physics sub-step (wheel demo)"},
        {"vec_set_substepping",
         vec_set_substepping,
@@ -2072,10 +2189,17 @@ static PyMethodDef methods[]
         vec_get_render_poses,
         METH_VARARGS,
         "Poses for drawing; dead-reckons partners under SUBSTEP_MODE_HUMAN_ONLY (wheel demo)"},
+       {"vec_begin_preview", vec_begin_preview, METH_VARARGS, "Start a look-ahead of the human car (wheel demo)"},
+       {"vec_preview_step", vec_preview_step, METH_VARARGS, "One imagined policy step of the human car (wheel demo)"},
+       {"vec_end_preview", vec_end_preview, METH_VARARGS, "Restore the human car after a look-ahead (wheel demo)"},
        {"vec_set_reward_coef_bounds",
         vec_set_reward_coef_bounds,
         METH_VARARGS,
         "Shift the window agents draw their reward conditioning from (wheel demo levels)"},
+       {"vec_set_human_driving_style",
+        vec_set_human_driving_style,
+        METH_VARARGS,
+        "Your car's personality under FULL: the centre of a level's window, or off (wheel demo)"},
        {"vec_get_reward_coef_limits",
         vec_get_reward_coef_limits,
         METH_VARARGS,
@@ -2095,7 +2219,7 @@ static PyMethodDef methods[]
        {"vec_set_human_gearbox_mode",
         vec_set_human_gearbox_mode,
         METH_VARARGS,
-        "GEARBOX_MODE_MANUAL or GEARBOX_MODE_AUTOMATIC (wheel demo, env 0)"},
+        "GEARBOX_MODE_MANUAL, GEARBOX_MODE_AUTOMATIC or GEARBOX_MODE_NONE (wheel demo, env 0)"},
        {"vec_set_human_gear",
         vec_set_human_gear,
         METH_VARARGS,
@@ -2216,6 +2340,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "GRIP_MODE_KINEMATIC", GRIP_MODE_KINEMATIC);
     PyModule_AddIntConstant(m, "GEARBOX_MODE_MANUAL", GEARBOX_MODE_MANUAL);
     PyModule_AddIntConstant(m, "GEARBOX_MODE_AUTOMATIC", GEARBOX_MODE_AUTOMATIC);
+    PyModule_AddIntConstant(m, "GEARBOX_MODE_NONE", GEARBOX_MODE_NONE);
     PyModule_AddIntConstant(m, "GEAR_REVERSE", GEAR_REVERSE);
     PyModule_AddIntConstant(m, "GEAR_NEUTRAL", GEAR_NEUTRAL);
     PyModule_AddIntConstant(m, "GEARBOX_FORWARD_GEAR_COUNT", GEARBOX_FORWARD_GEAR_COUNT);
@@ -2223,11 +2348,16 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddObject(m, "ENGINE_IDLE_RPM", PyFloat_FromDouble(ENGINE_IDLE_RPM));
     PyModule_AddObject(m, "CLUTCH_ENGAGE_FRACTION", PyFloat_FromDouble(CLUTCH_ENGAGE_FRACTION));
     PyModule_AddIntConstant(m, "GRIP_MODE_REALISTIC", GRIP_MODE_REALISTIC);
+    PyModule_AddIntConstant(m, "GRIP_MODE_SKID", GRIP_MODE_SKID);
     PyModule_AddIntConstant(m, "ASSIST_MODE_OFF", ASSIST_MODE_OFF);
     PyModule_AddIntConstant(m, "ASSIST_MODE_DISPLAY", ASSIST_MODE_DISPLAY);
     PyModule_AddIntConstant(m, "ASSIST_MODE_BLEND", ASSIST_MODE_BLEND);
     PyModule_AddIntConstant(m, "ASSIST_MODE_NUDGE", ASSIST_MODE_NUDGE);
     PyModule_AddIntConstant(m, "ASSIST_MODE_FULL", ASSIST_MODE_FULL);
+    PyModule_AddIntConstant(m, "FULL_ASSIST_DYNAMICS_JERK_SPEED", FULL_ASSIST_DYNAMICS_JERK_SPEED);
+    PyModule_AddIntConstant(m, "FULL_ASSIST_DYNAMICS_HUMAN", FULL_ASSIST_DYNAMICS_HUMAN);
+    PyModule_AddIntConstant(m, "FULL_ASSIST_DYNAMICS_JERK", FULL_ASSIST_DYNAMICS_JERK);
+    PyModule_AddIntConstant(m, "FULL_ASSIST_DYNAMICS_SET_STEERING", FULL_ASSIST_DYNAMICS_SET_STEERING);
     PyModule_AddObject(m, "ASSIST_RAMP_SECONDS", PyFloat_FromDouble(ASSIST_RAMP_SECONDS));
     PyModule_AddObject(m, "ASSIST_PEDAL_RELEASED_FRACTION", PyFloat_FromDouble(ASSIST_PEDAL_RELEASED_FRACTION));
     PyModule_AddObject(m, "ASSIST_STOP_DECEL_MPS2", PyFloat_FromDouble(ASSIST_STOP_DECEL_MPS2));

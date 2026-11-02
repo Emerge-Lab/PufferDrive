@@ -915,6 +915,16 @@ class Drive(pufferlib.PufferEnv):
         (1 - w) * yours + w * the policy's, with w easing to blend_target over ASSIST_RAMP_SECONDS."""
         binding.vec_set_assist_mode(self.c_envs, int(assist_mode), float(blend_target))
 
+    def set_full_assist_dynamics(self, full_assist_dynamics):
+        """under FULL: FULL_ASSIST_DYNAMICS_JERK_SPEED (jerk speed, wheel steers), _HUMAN (your powertrain, wheel steers)
+        or _JERK (jerk speed and steering), or _SET_STEERING (jerk speed, angle from set_assist_steering)."""
+        binding.vec_set_full_assist_dynamics(self.c_envs, int(full_assist_dynamics))
+
+    def set_assist_steering(self, steering_rad):
+        """the angle FULL_ASSIST_DYNAMICS_SET_STEERING steers toward, sim sign; None steers by jerk until one arrives."""
+        valid = steering_rad is not None
+        binding.vec_set_assist_steering(self.c_envs, int(valid), float(steering_rad) if valid else 0.0)
+
     def get_assist_state(self):
         """The policy's reference steering/acceleration for the human car (sim sign: positive-left)."""
         return binding.vec_get_assist_state(self.c_envs)
@@ -939,6 +949,18 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_get_reward_coef_limits(self.c_envs, min_values, max_values)
         return min_values, max_values
 
+    def set_human_driving_style(self, min_values=None, max_values=None):
+        """under FULL your car drives with the centre of this coefficient window; no arguments clears it."""
+        active = min_values is not None
+        if not active:
+            min_values, max_values = self.get_reward_coef_limits()
+        binding.vec_set_human_driving_style(
+            self.c_envs,
+            int(active),
+            np.ascontiguousarray(min_values, dtype=np.float32),
+            np.ascontiguousarray(max_values, dtype=np.float32),
+        )
+
     def resample_reward_coefs(self):
         """redraw every policy car's coefficients from the current bounds; returns how many."""
         return binding.vec_resample_reward_coefs(self.c_envs)
@@ -954,6 +976,18 @@ class Drive(pufferlib.PufferEnv):
     def get_render_poses(self, elapsed_seconds, x, y, heading):
         """poses for drawing, dead-reckoned for partners under SUBSTEP_MODE_HUMAN_ONLY."""
         binding.vec_get_render_poses(self.c_envs, float(elapsed_seconds), x, y, heading)
+
+    def begin_preview(self):
+        """start imagining the human car forward; returns its action slot, or -1 when there is none to imagine."""
+        return binding.vec_begin_preview(self.c_envs)
+
+    def preview_step(self, steering_out):
+        """one imagined policy step on actions[slot], in len(steering_out) pieces; writes each piece's steering."""
+        binding.vec_preview_step(self.c_envs, steering_out)
+
+    def end_preview(self):
+        """put the real human car, its observation and the RNG back."""
+        binding.vec_end_preview(self.c_envs)
 
     def set_human_pedals(self, steering_norm, throttle_norm, brake_norm, clutch_norm, shift_request=0):
         """engage the powertrain: pedals in [0, 1], shift_request -1/0/+1 (one paddle pull)."""

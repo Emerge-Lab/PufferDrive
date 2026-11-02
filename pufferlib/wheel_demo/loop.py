@@ -6,6 +6,7 @@ behind, frames are dropped -- the physics step never stretches.
 """
 
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -18,14 +19,35 @@ from pufferlib.ocean.drive import binding
 
 GRIP_MODE_KINEMATIC = binding.GRIP_MODE_KINEMATIC
 GRIP_MODE_REALISTIC = binding.GRIP_MODE_REALISTIC
+GRIP_MODE_SKID = binding.GRIP_MODE_SKID
 GEARBOX_MODE_MANUAL = binding.GEARBOX_MODE_MANUAL
 GEARBOX_MODE_AUTOMATIC = binding.GEARBOX_MODE_AUTOMATIC
+GEARBOX_MODE_NONE = binding.GEARBOX_MODE_NONE
 SUBSTEP_MODE_ALL = binding.SUBSTEP_MODE_ALL
 SUBSTEP_MODE_HUMAN_ONLY = binding.SUBSTEP_MODE_HUMAN_ONLY
 
 # 60 Hz physics inside a 3.33 Hz policy step: matched to the display, and above the rate at
 # which anything the driver can feel changes.
 DEFAULT_SUBSTEPS_PER_POLICY_STEP = 18
+# Steering a stopped car moves nothing, so the policy's angle there is noise; the wheel holds its last target.
+ASSIST_WHEEL_HOLD_SPEED_MPS = 1.0
+# Soft deadband on the policy's angle: a change this size moves the wheel at half speed, smaller ones barely at all.
+ASSIST_WHEEL_DEADBAND_RAD = 8.0 / 450.0 * binding.HUMAN_STEERING_LIMIT_RAD
+ASSIST_WHEEL_SMOOTHING_SECONDS = 0.15
+# Look-ahead: the policy drives an imagined copy of your car forward, decisions at its own 0.3 s rate and physics
+# at 100 Hz, and the mean angle over a window ahead of now (or centred on now) becomes the wheel's target, or under
+# FULL_ASSIST_DYNAMICS_SET_STEERING the car's own steering.
+WHEEL_TARGETS = ("lookahead", "filtered", "car")
+LOOKAHEAD_PHYSICS_HZ = 100
+LOOKAHEAD_WINDOW_SECONDS = 0.6
+FULL_ASSIST_DYNAMICS_SET_STEERING = binding.FULL_ASSIST_DYNAMICS_SET_STEERING
+# FULL steering, both with speed from the jerk model: the car steers itself with the 0.6 s look-ahead mean and the
+# wheel shows it, or the wheel steers the car toward a 0.9 s look-ahead target. Picked from the all-towns ablation.
+FULL_STEERING_PRESETS = {
+    "car": (binding.FULL_ASSIST_DYNAMICS_SET_STEERING, 0.6),
+    "wheel": (binding.FULL_ASSIST_DYNAMICS_JERK_SPEED, 0.9),
+}
+DEFAULT_FULL_STEERING = "car"
 
 
 @dataclass
@@ -41,6 +63,12 @@ class DemoConfig:
     substep_mode: int = SUBSTEP_MODE_ALL
     substeps_per_policy_step: int = DEFAULT_SUBSTEPS_PER_POLICY_STEP
     device: str = "cpu"
+    action_selection: str = "mode"
+    wheel_target: str = "lookahead"
+    full_assist_dynamics: int = FULL_STEERING_PRESETS[DEFAULT_FULL_STEERING][0]
+    lookahead_window_seconds: float = FULL_STEERING_PRESETS[DEFAULT_FULL_STEERING][1]
+    # half the window from the car's own recent steering, half imagined ahead, so the mean does not lead
+    lookahead_centred: bool = False
     seed: int = 0
     env_overrides: dict = field(default_factory=dict)
 
@@ -84,7 +112,9 @@ class WheelDemoLoop:
         self.env = build_demo_env(checkpoint_config, config.map_file(), config.num_agents, config.env_overrides)
         self.dt = float(self.env.dt)
         self.observations, _ = self.env.reset(seed=config.seed)
-        self.traffic = FrozenTraffic(config.checkpoint_path, self.env, checkpoint_config, config.device)
+        self.traffic = FrozenTraffic(
+            config.checkpoint_path, self.env, checkpoint_config, config.device, config.action_selection
+        )
 
         self.env.set_substepping(config.substep_mode, config.substeps_per_policy_step)
         self.substeps_per_policy_step = config.substeps_per_policy_step
@@ -92,16 +122,52 @@ class WheelDemoLoop:
         self.env.set_human_grip_mode(config.grip_mode)
         self.env.set_human_gearbox_mode(config.gearbox_mode)
         self.env.set_human_gear(config.start_gear)
+        self.lookahead_dt = 1.0 / LOOKAHEAD_PHYSICS_HZ
+        self.set_full_steering(config.full_assist_dynamics, config.lookahead_window_seconds)
         self.select_human_agent(config.human_agent_idx)
         self._last_shift_up = 0
         self._last_shift_down = 0
         self._pending_shifts = 0
         self._last_steering_angle_rad = 0.0
         self._last_feel_time_s = time.perf_counter()
+        self._assist_wheel_target_rad = None
+        # (target, sim-time rate, when) published together, read by the force-feedback thread
+        self._assist_wheel_target_motion = (None, 0.0, time.perf_counter())
+        # sim seconds per wall second over the last policy step: 1 in real time, below it when recording lockstep
+        self._sim_speed_ratio = 1.0
+        self._last_step_start_s = None
+        self._previous_lookahead_rad = None
+
+    def set_full_steering(self, full_assist_dynamics, lookahead_window_seconds):
+        """What steers your car under FULL and how far the look-ahead averages; safe between policy steps."""
+        self.config.full_assist_dynamics = full_assist_dynamics
+        self.config.lookahead_window_seconds = lookahead_window_seconds
+        self.env.set_full_assist_dynamics(full_assist_dynamics)
+        self.lookahead_steers_car = full_assist_dynamics == FULL_ASSIST_DYNAMICS_SET_STEERING
+        centred = self.config.lookahead_centred
+        ahead_seconds = lookahead_window_seconds * (0.5 if centred else 1.0)
+        self.lookahead_window_count = round(ahead_seconds / self.lookahead_dt)
+        # the previous drive, one step older, must still cover the window at this step's last sub-step
+        self.lookahead_policy_steps = int(np.ceil((2.0 * self.dt + ahead_seconds) / self.dt - 1e-9))
+        past_count = round(0.5 * lookahead_window_seconds / self.substep_dt) if centred else 0
+        self._recent_car_steering_rad = deque(maxlen=max(past_count, 1))
+        # drives imagined for the old window are the wrong length for the new one
+        self._lookahead_rad = None
+        self._previous_lookahead_rad = None
+
+    @property
+    def full_steering(self):
+        """The FULL_STEERING_PRESETS name in use, or "custom" when set by hand."""
+        current = (self.config.full_assist_dynamics, self.config.lookahead_window_seconds)
+        return next((name for name, preset in FULL_STEERING_PRESETS.items() if preset == current), "custom")
 
     def select_human_agent(self, agent_idx):
         self.env.select_human_agent(agent_idx)
         self.human_agent_idx = agent_idx
+        self._assist_wheel_target_rad = None
+        self._lookahead_rad = None
+        self._recent_car_steering_rad.clear()
+        self._assist_wheel_target_motion = (None, 0.0, time.perf_counter())
 
     def human_state(self):
         return self.env.get_human_state()
@@ -125,7 +191,12 @@ class WheelDemoLoop:
         """One policy decision, then `substeps_per_policy_step` physics sub-steps that each re-read
         the wheel. `on_substep(substep_idx, wheel_state)` is where the renderer draws a frame."""
         policy_start = time.perf_counter()
+        if self._last_step_start_s is not None:
+            self._sim_speed_ratio = min(1.0, self.dt / max(policy_start - self._last_step_start_s, 1e-6))
+        self._last_step_start_s = policy_start
         actions = self.traffic.act(self.observations)
+        if self.config.wheel_target == "lookahead" or self.lookahead_steers_car:
+            self._look_ahead(actions)
         self.env.actions[:] = actions  # the sub-steps integrate this; step() only scores it
         env_start = time.perf_counter()
 
@@ -140,7 +211,25 @@ class WheelDemoLoop:
                 wheel_state.clutch_norm,
                 self.consume_shift_requests(wheel_state),
             )
+            if self.lookahead_steers_car:
+                lookahead_rad = self._lookahead_mean_rad(substep_idx)
+                self.env.set_assist_steering(None if lookahead_rad is None else -lookahead_rad)
             self.env.substep()
+            self._recent_car_steering_rad.append(-self.env.get_human_state()["steering_angle_rad"])
+            previous_target_rad = self._assist_wheel_target_rad
+            car_steers_itself = (
+                self.lookahead_steers_car and self.env.get_assist_state()["mode"] == binding.ASSIST_MODE_FULL
+            )
+            if car_steers_itself:
+                # only under FULL does the car steer itself; under NUDGE the car is the wheel, so it would pull nowhere
+                self._update_car_wheel_target()
+            elif self.config.wheel_target == "lookahead":
+                self._update_lookahead_wheel_target(substep_idx)
+            elif self.config.wheel_target == "car":
+                self._update_car_wheel_target()
+            else:
+                self._update_assist_wheel_target()
+            self._publish_wheel_target_motion(previous_target_rad)
             if on_substep is not None:
                 callback_start = time.perf_counter()
                 on_substep(substep_idx, wheel_state)
@@ -156,6 +245,12 @@ class WheelDemoLoop:
         )
         return wheel_state, info
 
+    def _publish_wheel_target_motion(self, previous_target_rad):
+        target_rad = self._assist_wheel_target_rad
+        moving = target_rad is not None and previous_target_rad is not None
+        rate_rad_s = (target_rad - previous_target_rad) / self.substep_dt if moving else 0.0
+        self._assist_wheel_target_motion = (target_rad, rate_rad_s, time.perf_counter())
+
     def car_feel(self):
         """Car state in DRIVER-facing signs for the force model: positive means RIGHT.
 
@@ -166,13 +261,19 @@ class WheelDemoLoop:
         human = self.env.get_human_state()
         if human is None:
             return None
-        assist = self.env.get_assist_state()
         now_s = time.perf_counter()
-        steering_angle_rad = -human["steering_angle_rad"]
+        # the wheel itself, not the sim's copy: a frame of lag is enough to make the assist servo overshoot
+        steering_angle_rad = self.wheel.latest().steering_norm * binding.HUMAN_STEERING_LIMIT_RAD
         interval_s = max(now_s - self._last_feel_time_s, 1e-4)
         steering_rate_rad_s = (steering_angle_rad - self._last_steering_angle_rad) / interval_s
         self._last_steering_angle_rad = steering_angle_rad
         self._last_feel_time_s = now_s
+        target_rad, target_sim_rate_rad_s, published_s = self._assist_wheel_target_motion
+        # the wheel moves in wall time, so the target's rate is too; at most one sub-step of motion is carried on
+        target_rate_rad_s = target_sim_rate_rad_s * self._sim_speed_ratio
+        if target_rad is not None:
+            # carry the target on through the policy's pause at each step start, so the wheel is not left behind
+            target_rad += target_sim_rate_rad_s * min((now_s - published_s) * self._sim_speed_ratio, self.substep_dt)
         return CarFeel(
             steering_angle_rad=steering_angle_rad,
             steering_rate_rad_s=steering_rate_rad_s,
@@ -181,17 +282,100 @@ class WheelDemoLoop:
             tire_grip_mps2=binding.HUMAN_TIRE_GRIP_MPS2,
             collision=human["collision"] > 0.0,
             offroad=human["offroad"] > 0.0,
-            assist_target_steering_rad=self._assist_wheel_target(assist),
-            assist_full=assist["mode"] == binding.ASSIST_MODE_FULL,
+            assist_target_steering_rad=target_rad,
+            assist_full=self.env.get_assist_state()["mode"] == binding.ASSIST_MODE_FULL,
+            assist_target_rate_rad_s=target_rate_rad_s,
         )
 
-    @staticmethod
-    def _assist_wheel_target(assist):
-        """The policy's angle in driver terms when the assist acts through the wheel (NUDGE, FULL)."""
+    def _update_assist_wheel_target(self):
+        """The policy's angle in driver terms for the wheel to follow (NUDGE, FULL), held while nearly stopped.
+        Low-passed with a soft deadband: small back-and-forth changes are mostly ignored, steady or large
+        ones are followed, and the weight between the two is smooth rather than a threshold."""
+        assist = self.env.get_assist_state()
         steers_the_wheel = assist["mode"] in (binding.ASSIST_MODE_NUDGE, binding.ASSIST_MODE_FULL)
         if not steers_the_wheel or not assist["reference_valid"]:
+            self._assist_wheel_target_rad = None
+            return
+        policy_rad = -assist["reference_steering_rad"]
+        if self._assist_wheel_target_rad is None:
+            self._assist_wheel_target_rad = policy_rad
+        if abs(self.env.get_human_state()["speed_mps"]) < ASSIST_WHEEL_HOLD_SPEED_MPS:
+            return
+        gap_rad = policy_rad - self._assist_wheel_target_rad
+        deadband_weight = (
+            gap_rad * gap_rad / (gap_rad * gap_rad + ASSIST_WHEEL_DEADBAND_RAD * ASSIST_WHEEL_DEADBAND_RAD)
+        )
+        smoothing = 1.0 - np.exp(-self.substep_dt / ASSIST_WHEEL_SMOOTHING_SECONDS)
+        self._assist_wheel_target_rad += deadband_weight * smoothing * gap_rad
+
+    def _update_car_wheel_target(self):
+        """The angle your car is actually steering at (NUDGE, FULL); under FULL on the jerk model that is the policy's."""
+        assist = self.env.get_assist_state()
+        steers_the_wheel = assist["mode"] in (binding.ASSIST_MODE_NUDGE, binding.ASSIST_MODE_FULL)
+        if not steers_the_wheel or not assist["reference_valid"]:
+            self._assist_wheel_target_rad = None
+            return
+        self._assist_wheel_target_rad = -self.env.get_human_state()["steering_angle_rad"]
+
+    def _look_ahead(self, actions):
+        """The policy's own drive of your car from where it is now, imagined at LOOKAHEAD_PHYSICS_HZ with
+        every other car holding still. Steering only, in driver sign; the env is left exactly as it was."""
+        pieces_per_step = round(self.dt / self.lookahead_dt)
+        self._previous_lookahead_rad = None if self._lookahead_rad is None else self._lookahead_rad[pieces_per_step:]
+        self._lookahead_rad = None
+        slot = self.env.begin_preview()
+        if slot < 0:
+            return
+        steering_rad = np.zeros((self.lookahead_policy_steps, pieces_per_step), dtype=np.float32)
+        try:
+            self.env.actions[slot] = actions[slot]
+            for step_idx in range(self.lookahead_policy_steps):
+                if step_idx > 0:
+                    self.env.actions[slot] = self.traffic.act(self.env.observations[slot : slot + 1])[0]
+                self.env.preview_step(steering_rad[step_idx])
+        finally:
+            self.env.end_preview()
+        self._lookahead_rad = -steering_rad.reshape(-1)
+
+    def _lookahead_mean_rad(self, substep_idx):
+        """Mean imagined angle (driver sign) over the window ahead of this sub-step's end, crossfaded across the
+        policy step from the previous drive to this one so a new plan never jumps; centred, it is averaged equally
+        with the car's own steering over the half-window behind. None when there is no drive to average."""
+        if self._lookahead_rad is None:
             return None
-        return -assist["reference_steering_rad"]
+        start_s = (substep_idx + 1) * self.substep_dt
+        ahead_rad = self._window_mean_rad(self._lookahead_rad, start_s)
+        if self._previous_lookahead_rad is not None:
+            new_plan_weight = (substep_idx + 1) / self.substeps_per_policy_step
+            previous_rad = self._window_mean_rad(self._previous_lookahead_rad, start_s)
+            ahead_rad = new_plan_weight * ahead_rad + (1.0 - new_plan_weight) * previous_rad
+        if not self.config.lookahead_centred or not self._recent_car_steering_rad:
+            return ahead_rad
+        return 0.5 * ahead_rad + 0.5 * float(np.mean(self._recent_car_steering_rad))
+
+    def _window_mean_rad(self, samples_rad, start_s):
+        """Mean of a drive sampled every lookahead_dt (sample k at (k + 1) * lookahead_dt) over the window from start_s.
+        Taken from the running integral at exact times, so the window slides smoothly even though 60 Hz sub-steps
+        do not land on 100 Hz samples; rounding to whole samples steps it by 2, 2, 1 and ripples the angle."""
+        sample_times_s = (np.arange(len(samples_rad)) + 1) * self.lookahead_dt
+        integral_rad_s = np.concatenate(([0.0], np.cumsum(samples_rad) * self.lookahead_dt))
+        integral_times_s = np.concatenate(([0.0], sample_times_s))
+        window_s = self.lookahead_window_count * self.lookahead_dt
+        end_s = start_s + window_s
+        assert end_s <= integral_times_s[-1] + 1e-9, "look-ahead drive is shorter than the window"
+        return float(
+            (np.interp(end_s, integral_times_s, integral_rad_s) - np.interp(start_s, integral_times_s, integral_rad_s))
+            / window_s
+        )
+
+    def _update_lookahead_wheel_target(self, substep_idx):
+        """The look-ahead mean as the wheel's target (NUDGE, FULL)."""
+        assist = self.env.get_assist_state()
+        steers_the_wheel = assist["mode"] in (binding.ASSIST_MODE_NUDGE, binding.ASSIST_MODE_FULL)
+        if not steers_the_wheel or not assist["reference_valid"]:
+            self._assist_wheel_target_rad = None
+            return
+        self._assist_wheel_target_rad = self._lookahead_mean_rad(substep_idx)
 
     def render_poses(self, substep_idx):
         """World poses for drawing. Under SUBSTEP_MODE_ALL these are the real poses; under

@@ -26,7 +26,9 @@ UNIT_SRCS := \
 	test_drive_steering_convention.c \
 	test_drive_reward_tuning.c \
 	test_drive_wheel_exports.c \
-	test_drive_steering_assist.c
+	test_drive_steering_assist.c \
+	test_drive_full_assist.c \
+	test_drive_skid.c
 SMOKE_SRCS := test_drive_env_smoke.c
 PERF_SRCS := test_perf.c
 

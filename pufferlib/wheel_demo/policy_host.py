@@ -78,6 +78,9 @@ def build_demo_env(config, map_file, num_agents, overrides=None):
     return Drive(**demo_env_kwargs(config, map_file, num_agents, overrides))
 
 
+ACTION_SELECTIONS = ("mode", "sample", "mean")
+
+
 class FrozenTraffic:
     """Runs the checkpoint's policy over every active agent once per policy step.
 
@@ -86,7 +89,7 @@ class FrozenTraffic:
     sitting, which is the reference signal the steering assist needs (M9).
     """
 
-    def __init__(self, checkpoint_path, env, config, device="cpu"):
+    def __init__(self, checkpoint_path, env, config, device="cpu", action_selection=None):
         import torch
 
         import pufferlib.pytorch
@@ -110,11 +113,9 @@ class FrozenTraffic:
         self.policy.eval()
 
         self.env_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
-        self.action_selection = (
-            pufferlib.pytorch.ACTION_SELECT_MEAN
-            if self.env_continuous and not self.policy.is_continuous
-            else pufferlib.pytorch.ACTION_SELECT_MODE
-        )
+        self.action_selection = action_selection or pufferlib.pytorch.ACTION_SELECT_MODE
+        if self.action_selection not in ACTION_SELECTIONS:
+            raise ValueError(f"action_selection must be one of {ACTION_SELECTIONS}, got {self.action_selection!r}")
 
     @staticmethod
     def _assert_layout_matches(state_dict, env):

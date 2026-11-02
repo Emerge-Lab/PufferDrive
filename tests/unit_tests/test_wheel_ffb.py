@@ -17,6 +17,7 @@ import math
 import os
 import threading
 import time
+import types
 from dataclasses import replace
 
 import pytest
@@ -54,6 +55,7 @@ from pufferlib.wheel_demo.ffb import (
     saturated_grip_factor,
     self_aligning_torque,
 )
+from pufferlib.wheel_demo.input.base import WheelState
 from pufferlib.wheel_demo.loop import WheelDemoLoop
 
 STEERING_LIMIT_RAD = binding.HUMAN_STEERING_LIMIT_RAD
@@ -222,16 +224,47 @@ def sim_human_state(
     }
 
 
+# Matched to loop.py: 18 sub-steps inside a 0.3 s policy step.
+FEEL_SUBSTEP_SECONDS = 1.0 / 60.0
+
+
+class MirrorWheel:
+    """The physical wheel held where the sim says the car is steering: steering_norm = -angle / limit."""
+
+    def __init__(self, env):
+        self.env = env
+
+    def latest(self):
+        human = self.env.get_human_state()
+        steering_rad = 0.0 if human is None else human["steering_angle_rad"]
+        return WheelState(steering_norm=-steering_rad / STEERING_LIMIT_RAD)
+
+
+def feel_loop(env, now_s=None):
+    """A WheelDemoLoop with only what car_feel reads, over a fake env and a wheel mirroring the sim."""
+    now_s = time.perf_counter() if now_s is None else now_s
+    loop = WheelDemoLoop.__new__(WheelDemoLoop)
+    loop.env = env
+    loop.wheel = MirrorWheel(env)
+    loop.substep_dt = FEEL_SUBSTEP_SECONDS
+    loop._sim_speed_ratio = 1.0
+    loop._assist_wheel_target_rad = None
+    loop._assist_wheel_target_motion = (None, 0.0, now_s)
+    loop._last_steering_angle_rad = 0.0
+    loop._last_feel_time_s = now_s
+    return loop
+
+
 def feel_from_sim_state(human_state, assist_state=None):
     """Run the real WheelDemoLoop.car_feel over a fake env, with the steering rate settled to zero.
 
-    car_feel is called twice so the second call differences the same angle against itself: the rate
-    term then cannot mask the steering and lateral-acceleration signs this suite is pinning.
+    The assist target goes through the loop's own filtered-target update and publish, as one sub-step
+    would. car_feel is called twice so the second call differences the same angle against itself.
     """
-    loop = WheelDemoLoop.__new__(WheelDemoLoop)
-    loop.env = FakeHumanEnv(human_state, assist_state)
-    loop._last_steering_angle_rad = 0.0
-    loop._last_feel_time_s = time.perf_counter()
+    loop = feel_loop(FakeHumanEnv(human_state, assist_state))
+    if human_state is not None:
+        loop._update_assist_wheel_target()
+        loop._publish_wheel_target_motion(None)
     loop.car_feel()
     return loop.car_feel()
 
@@ -547,8 +580,10 @@ def test_the_overspeed_haptic_is_gone():
         "offroad",
         "assist_target_steering_rad",
         "assist_full",
+        "assist_target_rate_rad_s",
     }
     assert CarFeel().assist_full is False
+    assert CarFeel().assist_target_rate_rad_s == 0.0
 
 
 def test_speeding_no_longer_moves_the_wheel():
@@ -1102,12 +1137,7 @@ def test_g920_construction_opens_no_device():
 
 
 def test_car_feel_returns_none_when_nobody_is_driving():
-    loop = WheelDemoLoop.__new__(WheelDemoLoop)
-    loop.env = FakeHumanEnv(None)
-    loop._last_steering_angle_rad = 0.0
-    loop._last_feel_time_s = time.perf_counter()
-
-    assert loop.car_feel() is None
+    assert feel_loop(FakeHumanEnv(None)).car_feel() is None
 
 
 def test_car_feel_passes_speed_and_grip_through_unchanged():
@@ -1124,10 +1154,7 @@ def test_car_feel_reports_collision():
 
 def test_car_feel_steering_rate_follows_the_steering_angle():
     """A wheel turned one way between two samples must report a rate pointing the same way."""
-    loop = WheelDemoLoop.__new__(WheelDemoLoop)
-    loop.env = FakeHumanEnv(sim_human_state(0.0, 0.0, 5.0))
-    loop._last_steering_angle_rad = 0.0
-    loop._last_feel_time_s = time.perf_counter()
+    loop = feel_loop(FakeHumanEnv(sim_human_state(0.0, 0.0, 5.0)))
     loop.car_feel()
     loop.env.human_state = sim_human_state(SIM_RIGHT * HELD_STEERING_RAD, 0.0, 5.0)
     turning_right = loop.car_feel()
@@ -1422,17 +1449,14 @@ def test_a_real_car_driven_off_the_road_rumbles_the_wheel():
         env.set_human_gearbox_mode(binding.GEARBOX_MODE_AUTOMATIC)
         assert env.get_human_state()["offroad"] == 0.0
 
-        feel_loop = WheelDemoLoop.__new__(WheelDemoLoop)
-        feel_loop.env = env
-        feel_loop._last_steering_angle_rad = 0.0
-        feel_loop._last_feel_time_s = time.perf_counter()
+        real_feel_loop = feel_loop(env)
 
         env.set_human_pedals(FULL_LOCK_STEERING_NORM, FULL_THROTTLE, 0.0, 0.0)
         no_action = env.action_space.sample() * 0
         off_road = None
         for _ in range(OFFROAD_MAX_STEPS):
             env.step(no_action)
-            feel = feel_loop.car_feel()
+            feel = real_feel_loop.car_feel()
             if feel.offroad:
                 off_road = feel
                 break
@@ -1537,13 +1561,10 @@ def steering_rate_over_one_interval(monkeypatch, interval_s):
 
     clock = FakeWallClock()
     monkeypatch.setattr(loop_module, "time", clock)
-    feel_loop = WheelDemoLoop.__new__(WheelDemoLoop)
-    feel_loop.env = FakeHumanEnv(sim_human_state(0.0, 0.0, 5.0))
-    feel_loop._last_steering_angle_rad = 0.0
-    feel_loop._last_feel_time_s = 0.0
+    polled_loop = feel_loop(FakeHumanEnv(sim_human_state(0.0, 0.0, 5.0)), now_s=0.0)
     clock.now_s += interval_s
-    feel_loop.env.human_state = sim_human_state(SIM_RIGHT * HELD_STEERING_RAD, 0.0, 5.0)
-    return feel_loop.car_feel().steering_rate_rad_s
+    polled_loop.env.human_state = sim_human_state(SIM_RIGHT * HELD_STEERING_RAD, 0.0, 5.0)
+    return polled_loop.car_feel().steering_rate_rad_s
 
 
 def test_car_feel_steering_rate_follows_the_polling_interval_not_the_sim(monkeypatch):
@@ -1561,16 +1582,104 @@ def test_car_feel_reports_no_steering_rate_when_the_sim_has_not_moved(monkeypatc
 
     clock = FakeWallClock()
     monkeypatch.setattr(loop_module, "time", clock)
-    feel_loop = WheelDemoLoop.__new__(WheelDemoLoop)
-    feel_loop.env = FakeHumanEnv(sim_human_state(SIM_RIGHT * HELD_STEERING_RAD, 0.0, 5.0))
-    feel_loop._last_steering_angle_rad = 0.0
-    feel_loop._last_feel_time_s = 0.0
+    polled_loop = feel_loop(FakeHumanEnv(sim_human_state(SIM_RIGHT * HELD_STEERING_RAD, 0.0, 5.0)), now_s=0.0)
     clock.now_s += SIM_SUBSTEP_SECONDS
-    feel_loop.car_feel()
+    polled_loop.car_feel()
 
     repolled = []
     for _ in range(FFB_POLLS_PER_SIM_SUBSTEP):
         clock.now_s += SIM_SUBSTEP_SECONDS / FFB_POLLS_PER_SIM_SUBSTEP
-        repolled.append(feel_loop.car_feel().steering_rate_rad_s)
+        repolled.append(polled_loop.car_feel().steering_rate_rad_s)
 
     assert repolled == [0.0] * FFB_POLLS_PER_SIM_SUBSTEP
+
+
+# ---------------------------------------------------------------------------------------------
+# 13. The assist target's motion: under FULL damping resists only the wheel's motion relative to
+# the target, and car_feel carries the published target on in wall time.
+# ---------------------------------------------------------------------------------------------
+
+TARGET_RATES_RAD_S = (-2.0, -0.4, 0.7, 3.0)
+FULL_OFFSETS_RAD = (-0.1, 0.0, 0.05)
+
+
+@pytest.mark.parametrize("target_rate_rad_s", TARGET_RATES_RAD_S)
+@pytest.mark.parametrize("offset_rad", FULL_OFFSETS_RAD)
+def test_full_damps_only_the_motion_relative_to_the_target(target_rate_rad_s, offset_rad):
+    target_rad = 0.12
+    moving_with_target = replace(full_feel(target_rad, target_rad + offset_rad), steering_rate_rad_s=target_rate_rad_s,
+                                 assist_target_rate_rad_s=target_rate_rad_s)
+    still = replace(moving_with_target, steering_rate_rad_s=0.0, assist_target_rate_rad_s=0.0)
+    assert compute_force(moving_with_target, STEERING_LIMIT_RAD) == pytest.approx(compute_force(still, STEERING_LIMIT_RAD))
+    lagging = replace(still, assist_target_rate_rad_s=target_rate_rad_s)
+    expected = replace(still, steering_rate_rad_s=-target_rate_rad_s)
+    assert compute_force(lagging, STEERING_LIMIT_RAD) == pytest.approx(compute_force(expected, STEERING_LIMIT_RAD))
+
+
+@pytest.mark.parametrize("target_rate_rad_s", TARGET_RATES_RAD_S)
+def test_full_tracking_a_moving_target_needs_no_force(target_rate_rad_s):
+    """No feed-forward: the wheel exactly on a moving target is pushed by nothing."""
+    on_target = replace(full_feel(0.2, 0.2), steering_rate_rad_s=target_rate_rad_s,
+                        assist_target_rate_rad_s=target_rate_rad_s)
+    assert compute_force(on_target, STEERING_LIMIT_RAD) == 0.0
+
+
+@pytest.mark.parametrize("target_rate_rad_s", TARGET_RATES_RAD_S)
+def test_target_rate_is_ignored_outside_full(target_rate_rad_s):
+    nudging = CarFeel(steering_angle_rad=0.1, steering_rate_rad_s=0.5, speed_mps=NUDGE_SPEED_MPS,
+                      assist_target_steering_rad=0.2)
+    full_without_target = CarFeel(steering_angle_rad=0.1, steering_rate_rad_s=0.5, speed_mps=NUDGE_SPEED_MPS,
+                                  assist_full=True)
+    for feel in (nudging, full_without_target):
+        moving = replace(feel, assist_target_rate_rad_s=target_rate_rad_s)
+        assert compute_force(moving, STEERING_LIMIT_RAD) == compute_force(feel, STEERING_LIMIT_RAD)
+
+
+def test_no_feed_forward_term_exists():
+    assert not [name for name in dir(ffb_module) if "FEED_FORWARD" in name.upper() or "FEEDFORWARD" in name.upper()]
+
+
+def test_car_feel_reads_the_wheel_not_the_sim():
+    loop = feel_loop(FakeHumanEnv(sim_human_state(SIM_LEFT * HELD_STEERING_RAD, 0.0, 5.0)))
+    wheel_norm = 0.25
+    loop.wheel = types.SimpleNamespace(latest=lambda: WheelState(steering_norm=wheel_norm))
+    assert loop.car_feel().steering_angle_rad == wheel_norm * STEERING_LIMIT_RAD
+
+
+SIM_RATE_RAD_S = 1.2
+PUBLISHED_TARGET_RAD = 0.1
+
+
+def published_feel(monkeypatch, elapsed_s, sim_speed_ratio, target_rad=PUBLISHED_TARGET_RAD):
+    from pufferlib.wheel_demo import loop as loop_module
+
+    clock = FakeWallClock()
+    monkeypatch.setattr(loop_module, "time", clock)
+    full_assist = sim_assist_state(mode=binding.ASSIST_MODE_FULL, reference_valid=1)
+    loop = feel_loop(FakeHumanEnv(sim_human_state(0.0, 0.0, 5.0), full_assist), now_s=0.0)
+    loop._sim_speed_ratio = sim_speed_ratio
+    loop._assist_wheel_target_motion = (target_rad, SIM_RATE_RAD_S, 0.0)
+    clock.now_s = elapsed_s
+    return loop.car_feel()
+
+
+@pytest.mark.parametrize("sim_speed_ratio", [1.0, 0.5, 0.1])
+@pytest.mark.parametrize("elapsed_substeps", [0.0, 0.3, 0.9])
+def test_car_feel_carries_the_target_on_at_its_rate_in_wall_time(monkeypatch, sim_speed_ratio, elapsed_substeps):
+    elapsed_s = elapsed_substeps * FEEL_SUBSTEP_SECONDS
+    feel = published_feel(monkeypatch, elapsed_s, sim_speed_ratio)
+    carried_s = min(elapsed_s * sim_speed_ratio, FEEL_SUBSTEP_SECONDS)
+    assert feel.assist_target_steering_rad == pytest.approx(PUBLISHED_TARGET_RAD + SIM_RATE_RAD_S * carried_s)
+    assert feel.assist_target_rate_rad_s == pytest.approx(SIM_RATE_RAD_S * sim_speed_ratio)
+    assert feel.assist_full is True
+
+
+@pytest.mark.parametrize("sim_speed_ratio", [1.0, 0.5])
+def test_car_feel_carries_the_target_on_at_most_one_substep(monkeypatch, sim_speed_ratio):
+    feel = published_feel(monkeypatch, 50.0 * FEEL_SUBSTEP_SECONDS, sim_speed_ratio)
+    assert feel.assist_target_steering_rad == pytest.approx(PUBLISHED_TARGET_RAD + SIM_RATE_RAD_S * FEEL_SUBSTEP_SECONDS)
+
+
+def test_car_feel_without_a_published_target_has_none(monkeypatch):
+    feel = published_feel(monkeypatch, FEEL_SUBSTEP_SECONDS, 1.0, target_rad=None)
+    assert feel.assist_target_steering_rad is None

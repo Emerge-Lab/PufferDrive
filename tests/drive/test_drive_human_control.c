@@ -48,6 +48,7 @@ static void human_bench_init(HumanBench *bench, float heading_rad, float speed_m
     bench->env.grid_map = &bench->offgrid_map;
     bench->env.dt = HUMAN_TEST_DT_SECONDS;
     bench->env.base_max_speed_mps = HUMAN_TEST_MAX_SPEED_MPS;
+    bench->env.human_max_speed_mps = HUMAN_TEST_MAX_SPEED_MPS;
     bench->env.human_grip_mode = GRIP_MODE_KINEMATIC;
 }
 
@@ -144,7 +145,7 @@ static int test_human_steering_is_exact_position_command(void) {
         HumanBench bench;
         human_bench_init(&bench, 0.0f, 5.0f);
         EXPECT_EQ_INT(c_set_human_input(&bench.env, steering_norms[i], 0.0f), 0);
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_NEAR(bench.agent.steering_angle, expected_angles_rad[i], EXACT_TOLERANCE);
     }
     EXPECT_NEAR(HUMAN_STEERING_LIMIT_RAD, JERK_PATH_STEERING_POSITION_LIMIT_RAD, EXACT_TOLERANCE);
@@ -170,7 +171,7 @@ static int test_wheel_right_steers_the_car_right(void) {
 
                 for (int step = 0; step < TURN_DIRECTION_STEP_COUNT; step++) {
                     float heading_before_rad = bench.agent.sim_heading;
-                    move_human(&bench.env, 0);
+                    move_human(&bench.env, 0, 0);
                     float heading_change_rad = normalize_heading(bench.agent.sim_heading - heading_before_rad);
                     if (steering_norm > 0.0f) {
                         EXPECT_TRUE(heading_change_rad < 0.0f);
@@ -200,7 +201,7 @@ static int test_centred_wheel_drives_straight(void) {
         bench.env.human_grip_mode = grip_mode;
         EXPECT_EQ_INT(c_set_human_input(&bench.env, 0.0f, 0.0f), 0);
         for (int step = 0; step < TURN_DIRECTION_STEP_COUNT; step++) {
-            move_human(&bench.env, 0);
+            move_human(&bench.env, 0, 0);
             EXPECT_NEAR(bench.agent.sim_heading, 0.0f, EXACT_TOLERANCE);
             EXPECT_NEAR(bench.agent.sim_y, 0.0f, EXACT_TOLERANCE);
             EXPECT_NEAR(bench.agent.yaw_rate, 0.0f, EXACT_TOLERANCE);
@@ -234,7 +235,7 @@ static int test_positive_curvature_turns_left(void) {
 
     // Full chain for a right-lock command: command > 0, angle < 0, curvature < 0, heading falls.
     EXPECT_EQ_INT(c_set_human_input(&bench.env, 1.0f, 0.0f), 0);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_TRUE(bench.agent.steering_angle < 0.0f);
     EXPECT_TRUE(tanf(bench.agent.steering_angle) / bench.agent.wheelbase < 0.0f);
     EXPECT_TRUE(bench.agent.yaw_rate < 0.0f);
@@ -252,8 +253,8 @@ static int test_human_steering_is_symmetric_and_monotone(void) {
         human_bench_init(&left_bench, 0.0f, 5.0f);
         c_set_human_input(&right_bench.env, steering_norm, 0.0f);
         c_set_human_input(&left_bench.env, -steering_norm, 0.0f);
-        move_human(&right_bench.env, 0);
-        move_human(&left_bench.env, 0);
+        move_human(&right_bench.env, 0, 0);
+        move_human(&left_bench.env, 0, 0);
         EXPECT_NEAR(right_bench.agent.steering_angle, -left_bench.agent.steering_angle, EXACT_TOLERANCE);
         EXPECT_TRUE(right_bench.agent.steering_angle < previous_angle_rad);
         previous_angle_rad = right_bench.agent.steering_angle;
@@ -266,7 +267,7 @@ static int test_human_steering_has_no_rate_limit(void) {
     human_bench_init(&bench, 0.0f, 5.0f);
     bench.agent.steering_angle = HUMAN_STEERING_LIMIT_RAD;
     c_set_human_input(&bench.env, 1.0f, 0.0f);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_NEAR(bench.agent.steering_angle, -HUMAN_STEERING_LIMIT_RAD, EXACT_TOLERANCE);
     float steering_rate_rps = 2.0f * HUMAN_STEERING_LIMIT_RAD / HUMAN_TEST_DT_SECONDS;
     EXPECT_TRUE(steering_rate_rps > JERK_PATH_STEERING_RATE_LIMIT_RPS);
@@ -286,19 +287,19 @@ static int test_human_accel_is_commanded_not_integrated(void) {
     human_bench_init(&bench, 0.0f, 5.0f);
 
     c_set_human_input(&bench.env, 0.0f, 1.7f);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_NEAR(bench.agent.accel_long, 1.7f, EXACT_TOLERANCE);
 
     c_set_human_input(&bench.env, 0.0f, -3.0f);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_NEAR(bench.agent.accel_long, -3.0f, EXACT_TOLERANCE);
 
     c_set_human_input(&bench.env, 0.0f, 100.0f);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_NEAR(bench.agent.accel_long, HUMAN_ACCEL_LIMIT_MPS2[1], EXACT_TOLERANCE);
 
     c_set_human_input(&bench.env, 0.0f, -100.0f);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_NEAR(bench.agent.accel_long, HUMAN_ACCEL_LIMIT_MPS2[0], EXACT_TOLERANCE);
     return 0;
 }
@@ -310,11 +311,11 @@ static int test_human_accel_envelope_is_independent_of_the_policy(void) {
     bench.agent.reward_coefs[REWARD_COEF_ACC] = 2.0f;
 
     c_set_human_input(&bench.env, 0.0f, 100.0f);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_NEAR(bench.agent.accel_long, HUMAN_ACCEL_LIMIT_MPS2[1], EXACT_TOLERANCE);
 
     c_set_human_input(&bench.env, 0.0f, -100.0f);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_NEAR(bench.agent.accel_long, HUMAN_ACCEL_LIMIT_MPS2[0], EXACT_TOLERANCE);
 
     EXPECT_TRUE(HUMAN_ACCEL_LIMIT_MPS2[1] > ACCEL_LONG_LIMIT[1]);
@@ -331,8 +332,8 @@ static int test_human_jerk_recorded_but_never_consumed(void) {
 
     c_set_human_input(&clean_bench.env, 0.4f, 1.25f);
     c_set_human_input(&dirty_bench.env, 0.4f, 1.25f);
-    move_human(&clean_bench.env, 0);
-    move_human(&dirty_bench.env, 0);
+    move_human(&clean_bench.env, 0, 0);
+    move_human(&dirty_bench.env, 0, 0);
 
     EXPECT_NEAR(dirty_bench.agent.sim_x, clean_bench.agent.sim_x, EXACT_TOLERANCE);
     EXPECT_NEAR(dirty_bench.agent.sim_y, clean_bench.agent.sim_y, EXACT_TOLERANCE);
@@ -354,11 +355,11 @@ static int test_human_speed_uses_trapezoidal_integration(void) {
     human_bench_init(&bench, 0.0f, 0.0f);
     c_set_human_input(&bench.env, 0.0f, 2.0f);
 
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_NEAR(bench.agent.sim_speed_signed, 0.1f, SPEED_TOLERANCE_MPS);
     EXPECT_NEAR(bench.agent.sim_x, 0.005f, ARC_TOLERANCE_M);
 
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_NEAR(bench.agent.sim_speed_signed, 0.3f, SPEED_TOLERANCE_MPS);
     EXPECT_NEAR(bench.agent.sim_x, 0.005f + 0.02f, ARC_TOLERANCE_M);
     return 0;
@@ -370,7 +371,7 @@ static int test_human_speed_clamped_to_conditioned_band(void) {
         human_bench_init(&bench, 0.0f, HUMAN_TEST_MAX_SPEED_MPS - 0.1f);
         c_set_human_input(&bench.env, 0.0f, ACCEL_LONG_LIMIT[1]);
         for (int step = 0; step < 10; step++) {
-            move_human(&bench.env, 0);
+            move_human(&bench.env, 0, 0);
             EXPECT_TRUE(bench.agent.sim_speed_signed <= HUMAN_TEST_MAX_SPEED_MPS);
         }
         EXPECT_NEAR(bench.agent.sim_speed_signed, HUMAN_TEST_MAX_SPEED_MPS, SPEED_TOLERANCE_MPS);
@@ -378,19 +379,30 @@ static int test_human_speed_clamped_to_conditioned_band(void) {
     {
         HumanBench bench;
         human_bench_init(&bench, 0.0f, 5.0f);
-        bench.agent.reward_coefs[REWARD_COEF_SPEED] = 0.5f;
+        bench.env.human_max_speed_mps = 0.5f * HUMAN_TEST_MAX_SPEED_MPS;
         c_set_human_input(&bench.env, 0.0f, ACCEL_LONG_LIMIT[1]);
         for (int step = 0; step < 40; step++) {
-            move_human(&bench.env, 0);
+            move_human(&bench.env, 0, 0);
         }
         EXPECT_NEAR(bench.agent.sim_speed_signed, 0.5f * HUMAN_TEST_MAX_SPEED_MPS, SPEED_TOLERANCE_MPS);
+    }
+    {
+        // a style's speed coefficient must not cap your car: only human_max_speed_mps does
+        HumanBench bench;
+        human_bench_init(&bench, 0.0f, 5.0f);
+        bench.agent.reward_coefs[REWARD_COEF_SPEED] = 0.5f;
+        c_set_human_input(&bench.env, 0.0f, ACCEL_LONG_LIMIT[1]);
+        for (int step = 0; step < 200; step++) {
+            move_human(&bench.env, 0, 0);
+        }
+        EXPECT_NEAR(bench.agent.sim_speed_signed, HUMAN_TEST_MAX_SPEED_MPS, SPEED_TOLERANCE_MPS);
     }
     {
         HumanBench bench;
         human_bench_init(&bench, 0.0f, MAX_BACKWARD_SPEED + 0.1f);
         c_set_human_input(&bench.env, 0.0f, ACCEL_LONG_LIMIT[0]);
         for (int step = 0; step < 10; step++) {
-            move_human(&bench.env, 0);
+            move_human(&bench.env, 0, 0);
             EXPECT_TRUE(bench.agent.sim_speed_signed >= MAX_BACKWARD_SPEED);
         }
         EXPECT_NEAR(bench.agent.sim_speed_signed, MAX_BACKWARD_SPEED, SPEED_TOLERANCE_MPS);
@@ -405,7 +417,7 @@ static int test_human_braking_to_stop_snaps_to_zero(void) {
         human_bench_init(&bench, 0.0f, 0.1f);
         bench.env.reset_accel_on_stop = reset_accel_on_stop;
         c_set_human_input(&bench.env, 0.0f, ACCEL_LONG_LIMIT[0]);
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_NEAR(bench.agent.sim_speed_signed, 0.0f, EXACT_TOLERANCE);
         EXPECT_NEAR(bench.agent.sim_speed, 0.0f, EXACT_TOLERANCE);
         EXPECT_NEAR(bench.agent.accel_long, 0.0f, EXACT_TOLERANCE);
@@ -426,17 +438,17 @@ static int test_direct_command_overrides_the_powertrain(void) {
 
     EXPECT_EQ_INT(c_set_human_pedals(&bench.env, 0.0f, 1.0f, 0.0f, 0.0f, 0), 0);
     EXPECT_EQ_INT(bench.env.human_longitudinal_mode, HUMAN_LONGITUDINAL_POWERTRAIN);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_TRUE(bench.agent.accel_long > 0.0f);
 
     EXPECT_EQ_INT(c_set_human_input(&bench.env, 0.0f, -3.0f), 0);
     EXPECT_EQ_INT(bench.env.human_longitudinal_mode, HUMAN_LONGITUDINAL_DIRECT);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_NEAR(bench.agent.accel_long, -3.0f, EXACT_TOLERANCE);
 
     EXPECT_EQ_INT(c_set_human_pedals(&bench.env, 0.0f, 1.0f, 0.0f, 0.0f, 0), 0);
     EXPECT_EQ_INT(bench.env.human_longitudinal_mode, HUMAN_LONGITUDINAL_POWERTRAIN);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_TRUE(bench.agent.accel_long > 0.0f);
     return 0;
 }
@@ -449,7 +461,7 @@ static int test_human_stop_reset_preserves_driver_jerk(void) {
         bench.env.reset_accel_on_stop = 1;
         bench.agent.accel_long = ACCEL_LONG_LIMIT[0];
         c_set_human_input(&bench.env, 0.0f, ACCEL_LONG_LIMIT[0]);
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_NEAR(bench.agent.sim_speed_signed, 0.0f, EXACT_TOLERANCE);
         EXPECT_NEAR(bench.agent.accel_long, 0.0f, EXACT_TOLERANCE);
         EXPECT_NEAR(bench.agent.jerk_long, 0.0f, EXACT_TOLERANCE);
@@ -460,7 +472,7 @@ static int test_human_stop_reset_preserves_driver_jerk(void) {
         human_bench_init(&bench, 0.0f, 0.1f);
         bench.env.reset_accel_on_stop = 1;
         c_set_human_input(&bench.env, 0.0f, ACCEL_LONG_LIMIT[0]);
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_NEAR(bench.agent.sim_speed_signed, 0.0f, EXACT_TOLERANCE);
         EXPECT_NEAR(bench.agent.accel_long, 0.0f, EXACT_TOLERANCE);
         EXPECT_NEAR(bench.agent.jerk_long, ACCEL_LONG_LIMIT[0] / HUMAN_TEST_DT_SECONDS, 1e-3f);
@@ -474,16 +486,16 @@ static int test_human_reverses_from_standstill(void) {
     bench.env.reset_accel_on_stop = 1;
     c_set_human_input(&bench.env, 0.0f, -2.0f);
 
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_NEAR(bench.agent.sim_speed_signed, -0.1f, SPEED_TOLERANCE_MPS);
     EXPECT_NEAR(bench.agent.sim_x, -0.005f, ARC_TOLERANCE_M);
     EXPECT_NEAR(bench.agent.accel_long, -2.0f, EXACT_TOLERANCE);
 
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_NEAR(bench.agent.sim_speed_signed, -0.3f, SPEED_TOLERANCE_MPS);
 
     for (int step = 0; step < 40; step++) {
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_TRUE(bench.agent.sim_speed_signed >= MAX_BACKWARD_SPEED);
     }
     EXPECT_NEAR(bench.agent.sim_speed_signed, MAX_BACKWARD_SPEED, SPEED_TOLERANCE_MPS);
@@ -501,7 +513,7 @@ static int test_human_grip_kinematic_follows_front_wheels(void) {
             HumanBench bench;
             human_bench_init(&bench, 0.7f, speeds_mps[s]);
             c_set_human_input(&bench.env, steering_norms[w], 0.0f);
-            move_human(&bench.env, 0);
+            move_human(&bench.env, 0, 0);
             float expected_curvature = commanded_curvature_per_m(&bench.agent, steering_norms[w]);
             EXPECT_NEAR(achieved_curvature_per_m(&bench.agent), expected_curvature, CURVATURE_TOLERANCE_PER_M);
             float speed = bench.agent.sim_speed_signed;
@@ -522,8 +534,8 @@ static int test_human_grip_modes_agree_below_tire_limit(void) {
             realistic_bench.env.human_grip_mode = GRIP_MODE_REALISTIC;
             c_set_human_input(&kinematic_bench.env, steering_norms[w], 0.0f);
             c_set_human_input(&realistic_bench.env, steering_norms[w], 0.0f);
-            move_human(&kinematic_bench.env, 0);
-            move_human(&realistic_bench.env, 0);
+            move_human(&kinematic_bench.env, 0, 0);
+            move_human(&realistic_bench.env, 0, 0);
             float demand_mps2
                 = speed_mps * speed_mps * commanded_curvature_per_m(&kinematic_bench.agent, steering_norms[w]);
             if (fabsf(demand_mps2) > HUMAN_TIRE_GRIP_MPS2) {
@@ -550,8 +562,8 @@ static int test_human_grip_realistic_understeers_above_tire_limit(void) {
             realistic_bench.env.human_grip_mode = GRIP_MODE_REALISTIC;
             c_set_human_input(&kinematic_bench.env, steering_norms[w], 0.0f);
             c_set_human_input(&realistic_bench.env, steering_norms[w], 0.0f);
-            move_human(&kinematic_bench.env, 0);
-            move_human(&realistic_bench.env, 0);
+            move_human(&kinematic_bench.env, 0, 0);
+            move_human(&realistic_bench.env, 0, 0);
 
             float commanded_curvature = commanded_curvature_per_m(&kinematic_bench.agent, steering_norms[w]);
             float realistic_curvature = achieved_curvature_per_m(&realistic_bench.agent);
@@ -576,7 +588,7 @@ static int test_human_grip_realistic_safe_at_standstill(void) {
     human_bench_init(&bench, 0.0f, 0.0f);
     bench.env.human_grip_mode = GRIP_MODE_REALISTIC;
     c_set_human_input(&bench.env, 1.0f, 0.0f);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_FINITE(bench.agent.sim_x);
     EXPECT_FINITE(bench.agent.sim_heading);
     EXPECT_NEAR(bench.agent.accel_lat, 0.0f, EXACT_TOLERANCE);
@@ -592,7 +604,7 @@ static int test_human_stopped_and_removed_agents(void) {
         bench.agent.stopped = 1;
         bench.agent.steering_angle = 0.3f;
         c_set_human_input(&bench.env, 1.0f, ACCEL_LONG_LIMIT[1]);
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_NEAR(bench.agent.sim_speed, 0.0f, EXACT_TOLERANCE);
         EXPECT_NEAR(bench.agent.steering_angle, 0.0f, EXACT_TOLERANCE);
         EXPECT_NEAR(bench.agent.sim_x, 0.0f, EXACT_TOLERANCE);
@@ -603,7 +615,7 @@ static int test_human_stopped_and_removed_agents(void) {
         human_bench_init(&bench, 0.4f, 9.0f);
         bench.agent.removed = 1;
         c_set_human_input(&bench.env, 1.0f, ACCEL_LONG_LIMIT[1]);
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_EQ_INT(bench.agent.sim_valid, 0);
         EXPECT_NEAR(bench.agent.sim_x, INVALID_POSITION, 1e-3f);
     }
@@ -867,7 +879,7 @@ static int test_human_grip_mode_rejects_unknown(void) {
     EXPECT_EQ_INT(c_set_human_grip_mode(&env, GRIP_MODE_REALISTIC), 0);
     EXPECT_EQ_INT(env.human_grip_mode, GRIP_MODE_REALISTIC);
     EXPECT_EQ_INT(c_set_human_grip_mode(&env, -1), -1);
-    EXPECT_EQ_INT(c_set_human_grip_mode(&env, 2), -1);
+    EXPECT_EQ_INT(c_set_human_grip_mode(&env, GRIP_MODE_SKID + 1), -1);
     EXPECT_EQ_INT(c_set_human_grip_mode(&env, 9999), -1);
     EXPECT_EQ_INT(env.human_grip_mode, GRIP_MODE_REALISTIC);
     EXPECT_EQ_INT(c_set_human_grip_mode(&env, GRIP_MODE_KINEMATIC), 0);
@@ -1007,7 +1019,7 @@ static int test_human_max_speed_drives_the_speed_cap(void) {
 
     c_set_human_input(&env, 0.0f, ACCEL_LONG_LIMIT[1]);
     for (int step = 0; step < 200; step++) {
-        move_human(&env, human_agent_idx);
+        move_human(&env, 0, human_agent_idx);
         EXPECT_TRUE(human->sim_speed_signed <= capped_speed_mps + SPEED_TOLERANCE_MPS);
     }
     EXPECT_NEAR(human->sim_speed_signed, capped_speed_mps, SPEED_TOLERANCE_MPS);
@@ -1015,7 +1027,7 @@ static int test_human_max_speed_drives_the_speed_cap(void) {
     EXPECT_EQ_INT(c_set_human_max_speed(&env, env.base_max_speed_mps), 0);
     EXPECT_NEAR(human->reward_coefs[REWARD_COEF_SPEED], 1.0f, EXACT_TOLERANCE);
     for (int step = 0; step < 200; step++) {
-        move_human(&env, human_agent_idx);
+        move_human(&env, 0, human_agent_idx);
     }
     EXPECT_NEAR(human->sim_speed_signed, env.base_max_speed_mps, SPEED_TOLERANCE_MPS);
     free_allocated(&env);

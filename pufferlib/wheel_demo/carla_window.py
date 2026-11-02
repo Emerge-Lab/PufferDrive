@@ -5,6 +5,9 @@ ships wheels for Python 3.10-3.12 only.
 """
 
 import os
+import queue
+import subprocess
+import threading
 import time
 
 from pufferlib.ocean.cosim import carla_bridge
@@ -23,9 +26,13 @@ MIRROR_CROPS = {"left": (0.0, 0.2, 0.22, 1.0), "rear": (0.33, 0.3, 0.67, 0.75), 
 MIRROR_DISPLAY_SIZES_PX = {"left": (300, 190), "rear": (640, 150), "right": (300, 190)}
 # Behind real time by more than this many frames, a frame is skipped rather than slowing the sim.
 MAX_FRAMES_BEHIND = 2
+RECORD_CRF = 26
+RECORD_PRESET = "veryfast"
+RECORD_QUEUE_FRAMES = 30
 # The wheel's own buttons drive the demo; the keyboard (1 2 3 N L M TAB R Esc) still works too.
 HELP_TEXT = (
     "A camera   B night   X traffic   Y next car   VIEW restart engine   MENU assist   "
+    "D-pad left full steering   D-pad right style   "
     "D-pad up/down force   stopped: L paddle reverse, R paddle drive"
 )
 
@@ -43,6 +50,7 @@ class CarlaDemoWindow:
         port=2000,
         size_px=DEFAULT_WINDOW_SIZE_PX,
         fullscreen=False,
+        record_path=None,
     ):
         import carla
         import pygame
@@ -72,6 +80,14 @@ class CarlaDemoWindow:
         self._next_frame_s = None
         self.frames_drawn = 0
         self.frames_skipped = 0
+        self._frames_since_update = 1
+        # a recording renders every frame, slowing the sim if it must, so the video never judders
+        self.lockstep = record_path is not None
+        self._recorder = None
+        self._record_queue = queue.Queue(maxsize=RECORD_QUEUE_FRAMES)
+        self._record_thread = None
+        if record_path is not None:
+            self._start_recorder(record_path)
 
     def set_camera_mode(self, camera_mode):
         self.scene.set_camera_mode(int(camera_mode))
@@ -124,30 +140,55 @@ class CarlaDemoWindow:
             ),
         ]
 
-    def draw(self, human, wheel_state, elapsed_seconds, assist=None, level_name="normal", ffb_gain=None):
+    def draw(
+        self,
+        human,
+        wheel_state,
+        elapsed_seconds,
+        assist=None,
+        level_name="normal",
+        ffb_gain=None,
+        driving_style="off",
+        full_steering="car",
+    ):
         """One real-time frame. Returns False when the frame was skipped to catch up."""
         now_s = time.perf_counter()
         if self._next_frame_s is None:
             self._next_frame_s = now_s
         self._next_frame_s += self.substep_dt_s
-        if now_s - self._next_frame_s > MAX_FRAMES_BEHIND * self.substep_dt_s:
+        behind = now_s - self._next_frame_s > MAX_FRAMES_BEHIND * self.substep_dt_s
+        if behind and self.lockstep:
+            self._next_frame_s = now_s
+        elif behind:
             self.frames_skipped += 1
+            self._frames_since_update += 1
             self._pump_events()
             return False
-        images = self.scene.update(human, wheel_state, self.substep_dt_s)
+        images = self.scene.update(human, wheel_state, self._frames_since_update * self.substep_dt_s)
+        self._frames_since_update = 1
         self.screen.blit(self._surface(images["main"]), (0, 0))
         goal_marker = self.scene.goal_marker(human, images["main"])
+        skid_marks = self.scene.skid_marks(images["main"], images.get("depth"))
         self.hud.draw(
             self.screen,
             human,
             wheel_state,
-            HudInfo(camera_mode=self.camera_mode, level_name=level_name, ffb_gain=ffb_gain, help_text=HELP_TEXT),
+            HudInfo(
+                camera_mode=self.camera_mode,
+                level_name=level_name,
+                ffb_gain=ffb_gain,
+                help_text=HELP_TEXT,
+                driving_style=driving_style,
+                full_steering=full_steering,
+            ),
             elapsed_seconds,
             mirrors=self._mirror_layout(images),
             assist=assist,
             goal_marker=goal_marker,
+            skid_marks=skid_marks,
         )
         self.pygame.display.flip()
+        self._record_frame()
         self.frames_drawn += 1
         self._pump_events()
         remaining_s = self._next_frame_s - time.perf_counter()
@@ -166,6 +207,8 @@ class CarlaDemoWindow:
             pygame.K_TAB: "next_agent",
             pygame.K_r: "restart_engine",
             pygame.K_m: "cycle_assist",
+            pygame.K_s: "cycle_style",
+            pygame.K_f: "cycle_full_steering",
         }
         for event in pygame.event.get():
             if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
@@ -186,7 +229,58 @@ class CarlaDemoWindow:
             os.makedirs(directory, exist_ok=True)
         self.pygame.image.save(self.screen, path)
 
+    def _start_recorder(self, record_path):
+        directory = os.path.dirname(record_path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        width, height = self.size_px
+        command = [
+            "ffmpeg",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            f"{width}x{height}",
+            "-r",
+            f"{1.0 / self.substep_dt_s:g}",
+            "-i",
+            "-",
+            "-c:v",
+            "libx264",
+            "-preset",
+            RECORD_PRESET,
+            "-crf",
+            str(RECORD_CRF),
+            "-pix_fmt",
+            "yuv420p",
+            record_path,
+        ]
+        self._recorder = subprocess.Popen(command, stdin=subprocess.PIPE)
+        self._record_thread = threading.Thread(target=self._write_recording, daemon=True)
+        self._record_thread.start()
+
+    def _write_recording(self):
+        while True:
+            frame = self._record_queue.get()
+            if frame is None:
+                return
+            self._recorder.stdin.write(frame)
+
+    def _record_frame(self):
+        if self._recorder is not None:
+            self._record_queue.put(self.pygame.image.tobytes(self.screen, "RGB"))
+
     def close(self):
+        if self._recorder is not None:
+            self._record_queue.put(None)
+            self._record_thread.join()
+            self._recorder.stdin.close()
+            if self._recorder.wait() != 0:
+                raise RuntimeError(f"ffmpeg exited with {self._recorder.returncode} while writing the recording")
         self.scene.close()
         self.pygame.quit()
 

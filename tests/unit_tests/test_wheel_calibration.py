@@ -10,6 +10,7 @@ import os
 
 import pytest
 
+from pufferlib.wheel_demo import calibrate
 from pufferlib.wheel_demo.calibrate import (
     CAPTURE_SECONDS,
     MAX_STEERING_CENTER_OFFSET_COUNTS,
@@ -24,8 +25,8 @@ from pufferlib.wheel_demo.calibrate import (
     collect,
     validate_calibration,
 )
-from pufferlib.wheel_demo.input.base import WheelCalibration
-from pufferlib.wheel_demo.input.g920 import G920_REPORT_ID, G920_REPORT_LENGTH
+from pufferlib.wheel_demo.input.base import HAT_NEUTRAL, WheelCalibration
+from pufferlib.wheel_demo.input.g920 import DPAD_DIRECTION_NAMES, G920_REPORT_ID, G920_REPORT_LENGTH, ButtonMap
 from pufferlib.wheel_demo.maps import CARLA_TOWNS
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -376,3 +377,137 @@ def test_repeated_invalid_input_keeps_reprompting(run_demo, answers):
 
     assert run_demo.choose_town("ask") == CARLA_TOWNS[-1]
     assert len(answers) == 1
+
+
+# ---------------------------------------------------------------------------------------------
+# Prompts and the shared button capture (used by probe_g920 and the launcher's wizard).
+# ---------------------------------------------------------------------------------------------
+
+
+CONTRACT_BUTTON_FIELDS = (
+    "shift_up_bit", "shift_down_bit", "a_bit", "b_bit", "x_bit", "y_bit", "view_bit", "menu_bit", "lsb_bit", "rsb_bit",
+)
+
+
+def test_terminal_prompt_asks_for_enter_after_the_instruction(monkeypatch):
+    asked = []
+    monkeypatch.setattr("builtins.input", lambda message="": asked.append(message) or "")
+    calibrate.terminal_prompt("Do the thing")
+    assert asked == ["\n>>> Do the thing\n    Press Enter to start ..."]
+
+
+def test_terminal_prompt_is_the_default_prompt():
+    import inspect
+
+    for function in (calibrate.capture_calibration, calibrate.calibrate_interactively):
+        assert inspect.signature(function).parameters["prompt"].default is calibrate.terminal_prompt
+
+
+def test_capture_calibration_prompts_are_instructions_with_their_recording_length(fake_clock):
+    sweep = [wheel_report(1_000, 255, 255, 255), wheel_report(64_000, 255, 255, 255)]
+    pedal = [wheel_report(32_500, 40, 60, 10), wheel_report(32_500, 255, 255, 255)]
+    device = FakeWheelDevice([sweep, pedal, pedal, pedal])
+    capture_calibration(device, prompt=device.advance, log=lambda _: None)
+    assert len(device.prompts) == 1 + len(PEDAL_BYTE_IDX)
+    assert device.prompts[0].endswith(f"(records for {2 * CAPTURE_SECONDS:.0f} s)")
+    assert all(p.endswith(f"(records for {CAPTURE_SECONDS:.0f} s)") for p in device.prompts[1:])
+    assert all("Press Enter" not in p and ">>>" not in p for p in device.prompts)
+
+
+def test_button_controls_are_paddles_then_face_buttons():
+    assert tuple(field for field, _ in calibrate.BUTTON_CONTROLS) == CONTRACT_BUTTON_FIELDS
+    assert [name for name, _ in calibrate.BUTTON_FACE_LABELS] == [f[: -len("_bit")] for f in CONTRACT_BUTTON_FIELDS[2:]]
+
+
+@pytest.mark.parametrize("values,expected", [([3], 3), ([1, 2, 2, 3], 2), (["a", "b", "b", "a", "b"], "b")])
+def test_most_common_picks_the_mode(values, expected):
+    assert calibrate.most_common(values) == expected
+
+
+def button_report(buttons=0, hat=HAT_NEUTRAL):
+    report = bytearray(G920_REPORT_LENGTH)
+    report[0] = G920_REPORT_ID
+    report[1] = ((buttons & 0xF) << 4) | hat
+    report[2] = (buttons >> 4) & 0xFF
+    report[3] = (buttons >> 12) & 0xFF
+    return bytes(report)
+
+
+BASELINE_BUTTONS = 1 << 19
+WIRED_BITS = {field: bit for bit, field in enumerate(CONTRACT_BUTTON_FIELDS)}
+WIRED_HATS = {"up": 0, "right": 2, "down": 4, "left": 6}
+
+
+class ScriptedButtons:
+    """Each prompt names a control; the next capture holds it on top of the baseline, with a stray noisy report."""
+
+    def __init__(self, wiring=None, hats=None, baseline_reports=None):
+        self.wiring = WIRED_BITS if wiring is None else wiring
+        self.hats = WIRED_HATS if hats is None else hats
+        self.baseline_reports = baseline_reports
+        self.prompts = []
+        self.next_reports = []
+
+    def prompt(self, instruction):
+        self.prompts.append(instruction)
+        baseline = button_report(BASELINE_BUTTONS)
+        self.next_reports = [baseline, baseline] if self.baseline_reports is None else self.baseline_reports
+        for field, control in calibrate.BUTTON_CONTROLS:
+            if instruction == f"Hold the {control}" and field in self.wiring:
+                self.next_reports = [baseline, button_report(BASELINE_BUTTONS | (1 << self.wiring[field]))]
+        for direction in DPAD_DIRECTION_NAMES:
+            if instruction == f"Hold the D-pad {direction.upper()}" and direction in self.hats:
+                held = button_report(BASELINE_BUTTONS, self.hats[direction])
+                self.next_reports = [baseline, held, held]
+
+    def capture(self, device):
+        return list(self.next_reports)
+
+
+def test_capture_button_map_assigns_every_wired_control():
+    operator = ScriptedButtons()
+    logs = []
+    button_map = calibrate.capture_button_map(object(), operator.prompt, operator.capture, logs.append)
+    expected = dict(WIRED_BITS)
+    expected.update({f"dpad_{direction}_hat": hat for direction, hat in WIRED_HATS.items()})
+    assert button_map == ButtonMap(**expected)
+    assert operator.prompts[0].startswith("Rock the wheel")
+    assert operator.prompts[1:] == [f"Hold the {control}" for _, control in calibrate.BUTTON_CONTROLS] + [
+        f"Hold the D-pad {direction.upper()}" for direction in DPAD_DIRECTION_NAMES
+    ]
+
+
+def test_a_control_that_changes_no_bit_or_two_is_not_guessed():
+    wiring = dict(WIRED_BITS)
+    del wiring["x_bit"]
+    operator = ScriptedButtons(wiring=wiring, hats={"up": 0})
+    original_prompt = operator.prompt
+
+    def prompt(instruction):
+        original_prompt(instruction)
+        if instruction == f"Hold the {dict(calibrate.BUTTON_CONTROLS)['y_bit']}":
+            operator.next_reports = [button_report(BASELINE_BUTTONS | 0b11 << 3)]
+
+    logs = []
+    button_map = calibrate.capture_button_map(object(), prompt, operator.capture, logs.append)
+    assert button_map.x_bit is None
+    assert button_map.y_bit is None
+    assert button_map.dpad_up_hat == 0
+    assert button_map.dpad_right_hat is None
+    assert sum("not assigning" in line for line in logs) == 2 + (len(DPAD_DIRECTION_NAMES) - 1)
+
+
+def test_only_recaptures_the_named_fields_and_keeps_the_existing_rest():
+    existing = ButtonMap(shift_up_bit=12, shift_down_bit=13, a_bit=14)
+    operator = ScriptedButtons(wiring={"a_bit": 7}, hats={"down": 4})
+    button_map = calibrate.capture_button_map(object(), operator.prompt, operator.capture, lambda _: None,
+                                              only={"a_bit", "x_bit", "dpad_down_hat"}, existing=existing)
+    assert button_map == ButtonMap(shift_up_bit=12, shift_down_bit=13, a_bit=7, dpad_down_hat=4)
+    assert len(operator.prompts) == 1 + 3
+
+
+def test_an_empty_baseline_raises_the_no_reports_message():
+    operator = ScriptedButtons(baseline_reports=[])
+    with pytest.raises(RuntimeError) as error:
+        calibrate.capture_button_map(object(), operator.prompt, operator.capture, lambda _: None)
+    assert str(error.value) == calibrate.NO_BUTTON_REPORTS_MESSAGE

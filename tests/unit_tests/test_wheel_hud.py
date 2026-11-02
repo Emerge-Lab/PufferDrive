@@ -92,8 +92,10 @@ def test_bearing_sign_follows_the_cross_product_and_stays_wrapped(x, y, heading,
 # ---------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("gearbox_mode", [binding.GEARBOX_MODE_AUTOMATIC, binding.GEARBOX_MODE_MANUAL])
-def test_reverse_and_neutral_read_the_same_in_both_gearboxes(gearbox_mode):
+@pytest.mark.parametrize(
+    "gearbox_mode", [binding.GEARBOX_MODE_AUTOMATIC, binding.GEARBOX_MODE_MANUAL, binding.GEARBOX_MODE_NONE]
+)
+def test_reverse_and_neutral_read_the_same_in_every_gearbox(gearbox_mode):
     assert gear_label(binding.GEAR_REVERSE, gearbox_mode) == "R"
     assert gear_label(binding.GEAR_NEUTRAL, gearbox_mode) == "N"
 
@@ -102,6 +104,11 @@ def test_reverse_and_neutral_read_the_same_in_both_gearboxes(gearbox_mode):
 def test_forward_gears_read_drive_n_in_automatic_and_n_in_manual(gear):
     assert gear_label(gear, binding.GEARBOX_MODE_AUTOMATIC) == f"D{gear}"
     assert gear_label(gear, binding.GEARBOX_MODE_MANUAL) == str(gear)
+    assert gear_label(gear, binding.GEARBOX_MODE_NONE) == "D"
+
+
+def test_hud_gearless_mode_matches_the_sim():
+    assert hud.GEARBOX_MODE_NONE == binding.GEARBOX_MODE_NONE
 
 
 # ---------------------------------------------------------------------------------------------
@@ -753,11 +760,12 @@ def test_policy_drives_speed_only_under_full_with_both_feet_off(assist, throttle
     assert bool(drives) == expected
 
 
+# the policy reverses under FULL, so R is a driving gear; only neutral hands the speed back
 @pytest.mark.parametrize(
     "gear,expected",
-    [(binding.GEAR_REVERSE, False), (binding.GEAR_NEUTRAL, False), (1, True), (binding.GEARBOX_FORWARD_GEAR_COUNT, True)],
+    [(binding.GEAR_REVERSE, True), (binding.GEAR_NEUTRAL, False), (1, True), (binding.GEARBOX_FORWARD_GEAR_COUNT, True)],
 )
-def test_policy_drives_speed_only_in_a_forward_gear(gear, expected):
+def test_policy_drives_speed_in_any_driving_gear(gear, expected):
     drives = hud.policy_drives_speed(hud_assist(binding.ASSIST_MODE_FULL), WheelStateStub(0.0, 0.0), gear,
                                      binding.ASSIST_MODE_FULL, binding.ASSIST_PEDAL_RELEASED_FRACTION)
     assert bool(drives) == expected
@@ -895,10 +903,11 @@ def test_policy_speed_flag_is_shown_exactly_when_the_policy_drives_the_speed(
 
 @pytest.mark.parametrize(
     "gear,gearbox_mode,expected",
-    [(binding.GEAR_REVERSE, binding.GEARBOX_MODE_AUTOMATIC, False), (binding.GEAR_NEUTRAL, binding.GEARBOX_MODE_MANUAL, False),
-     (1, binding.GEARBOX_MODE_MANUAL, True), (3, binding.GEARBOX_MODE_AUTOMATIC, True)],
+    [(binding.GEAR_REVERSE, binding.GEARBOX_MODE_AUTOMATIC, True), (binding.GEAR_NEUTRAL, binding.GEARBOX_MODE_MANUAL, False),
+     (1, binding.GEARBOX_MODE_MANUAL, True), (3, binding.GEARBOX_MODE_AUTOMATIC, True),
+     (1, binding.GEARBOX_MODE_NONE, True), (binding.GEAR_REVERSE, binding.GEARBOX_MODE_NONE, True)],
 )
-def test_no_policy_speed_flag_in_reverse_or_neutral(pygame_headless, town_hud, panel_texts, gear, gearbox_mode, expected):
+def test_policy_speed_flag_in_any_driving_gear_but_not_neutral(pygame_headless, town_hud, panel_texts, gear, gearbox_mode, expected):
     surface = pygame_headless.Surface(SCREEN_SIZE_PX)
     human = hud_human(accel_long_mps2=0.0, steering_angle_rad=0.0, gear=gear, gearbox_mode=gearbox_mode)
     town_hud.draw(surface, human, WheelStateStub(0.0, 0.0), HudInfo(), 0.0, assist=hud_assist(binding.ASSIST_MODE_FULL))
@@ -912,3 +921,121 @@ def test_policy_speed_flag_joins_the_other_warnings(pygame_headless, town_hud, p
     flag_lines = [message for message in panel_texts if POLICY_SPEED_FLAG in message]
     assert len(flag_lines) == 1
     assert "COLLISION" in flag_lines[0]
+
+
+@pytest.fixture
+def panel_colored_texts(pygame_headless, town_hud, monkeypatch):
+    texts = []
+    real_text = town_hud._text
+
+    def text(surface, font, message, position, color=hud.COLOR_TEXT, anchor="topleft"):
+        texts.append((message, color, position))
+        return real_text(surface, font, message, position, color, anchor)
+
+    monkeypatch.setattr(town_hud, "_text", text)
+    return texts
+
+
+def draw_info(pygame_headless, town_hud, info, assist):
+    surface = pygame_headless.Surface(SCREEN_SIZE_PX)
+    town_hud.draw(surface, hud_human(accel_long_mps2=0.0, steering_angle_rad=0.0), WheelStateStub(0.0, 0.0), info, 0.0,
+                  assist=assist)
+
+
+def lines_starting(texts, prefix):
+    return [(message, color, position) for message, color, position in texts if message.startswith(prefix)]
+
+
+def test_hud_info_defaults_to_no_style_and_the_car_preset():
+    assert HudInfo().driving_style == "off"
+    assert HudInfo().full_steering == "car"
+    assert hud.FULL_STEERING_LABELS == {"car": "CAR STEERS, WHEEL SHOWS", "wheel": "WHEEL STEERS"}
+
+
+@pytest.mark.parametrize("style", ["calm", "normal", "aggressive"])
+def test_your_style_is_drawn_under_full_in_its_level_colour(pygame_headless, town_hud, panel_colored_texts, style):
+    draw_info(pygame_headless, town_hud, HudInfo(driving_style=style), hud_assist(binding.ASSIST_MODE_FULL))
+    style_lines = lines_starting(panel_colored_texts, "Your style:")
+    assert [(message, color) for message, color, _ in style_lines] == [(f"Your style: {style.upper()}", hud.COLOR_LEVEL[style])]
+    steering_lines = lines_starting(panel_colored_texts, "Steering:")
+    assert len(steering_lines) == 1
+    assert style_lines[0][2][1] > steering_lines[0][2][1]
+
+
+def test_your_style_off_is_not_drawn_but_steering_is(pygame_headless, town_hud, panel_colored_texts):
+    draw_info(pygame_headless, town_hud, HudInfo(driving_style="off"), hud_assist(binding.ASSIST_MODE_FULL))
+    assert lines_starting(panel_colored_texts, "Your style:") == []
+    assert [message for message, _, _ in lines_starting(panel_colored_texts, "Steering:")] == [
+        "Steering: CAR STEERS, WHEEL SHOWS"
+    ]
+
+
+@pytest.mark.parametrize(
+    "full_steering,expected",
+    [("car", "CAR STEERS, WHEEL SHOWS"), ("wheel", "WHEEL STEERS"), ("custom", "CUSTOM")],
+)
+def test_full_steering_line_names_the_preset(pygame_headless, town_hud, panel_colored_texts, full_steering, expected):
+    draw_info(pygame_headless, town_hud, HudInfo(full_steering=full_steering), hud_assist(binding.ASSIST_MODE_FULL))
+    assert [message for message, _, _ in lines_starting(panel_colored_texts, "Steering:")] == [f"Steering: {expected}"]
+
+
+@pytest.mark.parametrize(
+    "assist",
+    [None, hud_assist(binding.ASSIST_MODE_OFF), hud_assist(binding.ASSIST_MODE_DISPLAY),
+     hud_assist(binding.ASSIST_MODE_BLEND), hud_assist(binding.ASSIST_MODE_NUDGE)],
+)
+def test_nothing_extra_is_drawn_outside_full(pygame_headless, town_hud, panel_colored_texts, assist):
+    draw_info(pygame_headless, town_hud, HudInfo(driving_style="aggressive", full_steering="wheel"), assist)
+    assert lines_starting(panel_colored_texts, "Your style:") == []
+    assert lines_starting(panel_colored_texts, "Steering:") == []
+
+
+
+def test_skid_mark_colour_and_alpha_are_the_contract():
+    assert hud.COLOR_SKID_MARK == (18, 18, 18)
+    assert 0 < hud.SKID_MARK_MAX_ALPHA <= 255
+
+
+def drawn_pixels(pygame_headless, town_hud, skid_marks, background=(200, 200, 200)):
+    surface = pygame_headless.Surface(SCREEN_SIZE_PX)
+    surface.fill(background)
+    town_hud.draw(surface, hud_human(accel_long_mps2=0.0, steering_angle_rad=0.0), WheelStateStub(0.0, 0.0), HudInfo(),
+                  0.0, skid_marks=skid_marks)
+    return pygame_headless.surfarray.array3d(surface)
+
+
+SKID_MARK_ROW_PX = 300
+SKID_MARK_START_PX = (500.0, SKID_MARK_ROW_PX)
+SKID_MARK_END_PX = (700.0, SKID_MARK_ROW_PX)
+SKID_MARK_PROBE_PX = (600, SKID_MARK_ROW_PX)
+BACKGROUND_GREY = 200
+
+
+def expected_blend(age_fraction):
+    alpha = round(hud.SKID_MARK_MAX_ALPHA * (1.0 - age_fraction))
+    return round((hud.COLOR_SKID_MARK[0] * alpha + BACKGROUND_GREY * (255 - alpha)) / 255)
+
+
+@pytest.mark.parametrize("age_fraction", [0.0, 0.5, 0.9])
+def test_skid_marks_darken_the_road_by_their_age(pygame_headless, town_hud, age_fraction):
+    pixels = drawn_pixels(pygame_headless, town_hud, [(SKID_MARK_START_PX, SKID_MARK_END_PX, 4, age_fraction)],
+                          background=(BACKGROUND_GREY,) * 3)
+    grey = int(pixels[SKID_MARK_PROBE_PX][0])
+    assert abs(grey - expected_blend(age_fraction)) <= 2
+
+
+def test_a_fully_aged_mark_or_none_draws_nothing(pygame_headless, town_hud):
+    without = drawn_pixels(pygame_headless, town_hud, ())
+    faded = drawn_pixels(pygame_headless, town_hud, [(SKID_MARK_START_PX, SKID_MARK_END_PX, 4, 1.0)])
+    np.testing.assert_array_equal(without, faded)
+
+
+def test_skid_marks_are_drawn_under_the_hud(pygame_headless, town_hud, monkeypatch):
+    order = []
+    real_skid_marks = town_hud._draw_skid_marks
+    monkeypatch.setattr(town_hud, "_draw_skid_marks", lambda *args: order.append("skid") or real_skid_marks(*args))
+    real_text = town_hud._text
+    monkeypatch.setattr(town_hud, "_text", lambda *args, **kwargs: order.append("text") or real_text(*args, **kwargs))
+    drawn_pixels(pygame_headless, town_hud, [(SKID_MARK_START_PX, SKID_MARK_END_PX, 4, 0.0)])
+    assert order[0] == "skid"
+    assert "text" in order

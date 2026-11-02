@@ -10,7 +10,12 @@ import time
 
 from pufferlib.wheel_demo.input.base import WheelCalibration
 from pufferlib.wheel_demo.input.g920 import (
+    BUTTON_MASK_BIT_COUNT,
+    DPAD_DIRECTION_NAMES,
     G920_REPORT_LENGTH,
+    HAT_MASK,
+    ButtonMap,
+    decode_button_mask,
     find_g920_interfaces,
     hid_module,
     set_darwin_non_exclusive,
@@ -31,6 +36,25 @@ MAX_STEERING_CENTER_OFFSET_COUNTS = int(0.06 * STEERING_FULL_SCALE)
 MIN_PEDAL_TRAVEL_COUNTS = 60
 # The brake is progressive and always shorter than the others, but not by this much.
 MIN_BRAKE_TRAVEL_FRACTION = 0.45
+
+BUTTON_FACE_LABELS = (
+    ("a", "A button (green)"),
+    ("b", "B button (red)"),
+    ("x", "X button (blue)"),
+    ("y", "Y button (yellow)"),
+    ("view", "VIEW button (two overlapping squares, left of centre)"),
+    ("menu", "MENU button (three lines, right of centre)"),
+    ("lsb", "LSB button (round, lower left)"),
+    ("rsb", "RSB button (round, lower right)"),
+)
+BUTTON_CONTROLS = (("shift_up_bit", "RIGHT paddle (upshift)"), ("shift_down_bit", "LEFT paddle (downshift)")) + tuple(
+    (f"{name}_bit", label) for name, label in BUTTON_FACE_LABELS
+)
+NO_BUTTON_REPORTS_MESSAGE = (
+    "No reports received during that step. Keep the wheel moving while it records.\n"
+    "If it never records anything, check the wheel is connected and readable (Linux: the udev rule; "
+    "macOS: Input Monitoring for this program)."
+)
 
 
 def collect(device, seconds):
@@ -60,7 +84,11 @@ def open_wheel():
     return device
 
 
-def capture_calibration(device, prompt=input, log=print):
+def terminal_prompt(instruction):
+    input(f"\n>>> {instruction}\n    Press Enter to start ...")
+
+
+def capture_calibration(device, prompt=terminal_prompt, log=print):
     """Walk the operator through the phases and build a WheelCalibration.
 
     Pedal rest comes from the maximum across EVERY phase, not from each pedal's own press window:
@@ -68,8 +96,8 @@ def capture_calibration(device, prompt=input, log=print):
     observed without ever asking anyone to hold still (which would yield no reports at all).
     """
     prompt(
-        "\n>>> Turn the wheel FULL LEFT, FULL RIGHT, then centre it. Keep BOTH FEET OFF the pedals."
-        "\n    Press Enter to start a 8s capture ..."
+        "Turn the wheel FULL LEFT, FULL RIGHT, then centre it. Keep BOTH FEET OFF the pedals. "
+        f"(records for {2 * CAPTURE_SECONDS:.0f} s)"
     )
     time.sleep(SETTLE_SECONDS)
     sweep = collect(device, CAPTURE_SECONDS * 2)
@@ -80,10 +108,7 @@ def capture_calibration(device, prompt=input, log=print):
 
     pedal_floor = {}
     for pedal, label in (("throttle", "THROTTLE"), ("brake", "BRAKE, as hard as you can"), ("clutch", "CLUTCH")):
-        prompt(
-            f"\n>>> Press the {label} to the floor, hold, then RELEASE."
-            f"\n    Press Enter to start a {CAPTURE_SECONDS:.0f}s capture ..."
-        )
+        prompt(f"Press the {label} to the floor, hold, then RELEASE. (records for {CAPTURE_SECONDS:.0f} s)")
         time.sleep(SETTLE_SECONDS)
         window = collect(device, CAPTURE_SECONDS)
         if not window:
@@ -150,7 +175,59 @@ def validate_calibration(calibration):
     return problems
 
 
-def calibrate_interactively(output_path, prompt=input, log=print):
+def most_common(values):
+    counts = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return max(counts, key=counts.get)
+
+
+def capture_button_map(device, prompt, capture, log=print, only=None, existing=None):
+    """Ask for each control in turn and assign the one bit (or hat value) that changed while it was held.
+
+    `prompt(instruction)` returns when the operator is ready; `capture(device)` returns that phase's reports.
+    `only` names the fields to re-capture, keeping the rest of `existing`; a control that changes no bit, or
+    more than one, is left as it was rather than guessed.
+    """
+    prompt("Rock the wheel gently left and right, touching NO buttons or paddles")
+    baseline_reports = capture(device)
+    if not baseline_reports:
+        raise RuntimeError(NO_BUTTON_REPORTS_MESSAGE)
+    baseline = most_common(decode_button_mask(r) for r in baseline_reports)
+    log(f"    baseline button mask = 0x{baseline:05x}")
+
+    assigned = {}
+    if existing is not None:
+        assigned = {name: value for name, value in existing.__dict__.items() if value is not None}
+    for field_name, control in BUTTON_CONTROLS:
+        if only and field_name not in only:
+            continue
+        prompt(f"Hold the {control}")
+        changed = 0
+        for mask in (decode_button_mask(r) for r in capture(device)):
+            changed |= mask ^ baseline
+        bits = [b for b in range(BUTTON_MASK_BIT_COUNT) if changed & (1 << b)]
+        log(f"    bits that changed: {bits if bits else 'NONE'}")
+        if len(bits) != 1:
+            log(f"    !! expected exactly one bit for {control}, got {len(bits)} -- not assigning")
+            continue
+        assigned[field_name] = bits[0]
+
+    baseline_hat = most_common(r[1] & HAT_MASK for r in baseline_reports)
+    for direction in DPAD_DIRECTION_NAMES:
+        if only and f"dpad_{direction}_hat" not in only:
+            continue
+        prompt(f"Hold the D-pad {direction.upper()}")
+        held = [r[1] & HAT_MASK for r in capture(device) if r[1] & HAT_MASK != baseline_hat]
+        if not held:
+            log(f"    !! the hat never left neutral for D-pad {direction} -- not assigning")
+            continue
+        assigned[f"dpad_{direction}_hat"] = most_common(held)
+        log(f"    hat value = {assigned[f'dpad_{direction}_hat']}")
+    return ButtonMap(**assigned)
+
+
+def calibrate_interactively(output_path, prompt=terminal_prompt, log=print):
     device = open_wheel()
     try:
         calibration = capture_calibration(device, prompt=prompt, log=log)

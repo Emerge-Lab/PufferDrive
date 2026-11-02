@@ -27,7 +27,9 @@ from pufferlib.wheel_demo.ffb import (
     find_g920_event_device,
     platform_force_output,
 )
+from pufferlib.ocean.drive import binding
 from pufferlib.wheel_demo.input import g920
+from pufferlib.wheel_demo.input.base import WheelState
 from pufferlib.wheel_demo.loop import WheelDemoLoop
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -64,6 +66,7 @@ SIM_RIGHT = -1
 HELD_STEERING_RAD = 0.3
 PARKING_SPEED_MPS = 1.0
 STEERING_LIMIT_RAD = 0.55
+SIM_SUBSTEP_SECONDS = 1.0 / 60.0
 
 FAKE_FD = 4242
 FAKE_EFFECT_ID = 3
@@ -590,6 +593,13 @@ def sim_feel(sim_steering_angle_rad):
             "offroad": 0.0,
         }
     )
+    # the wheel held where the sim steers: steering_norm = -angle / limit
+    loop.wheel = types.SimpleNamespace(
+        latest=lambda: WheelState(steering_norm=-sim_steering_angle_rad / binding.HUMAN_STEERING_LIMIT_RAD)
+    )
+    loop.substep_dt = SIM_SUBSTEP_SECONDS
+    loop._sim_speed_ratio = 1.0
+    loop._assist_wheel_target_motion = (None, 0.0, time.perf_counter())
     loop._last_steering_angle_rad = 0.0
     loop._last_feel_time_s = time.perf_counter()
     loop.car_feel()

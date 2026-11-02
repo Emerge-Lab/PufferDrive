@@ -29,15 +29,21 @@ from pufferlib.wheel_demo.input.trace import SyntheticWheelInput
 from pufferlib.wheel_demo.loop import (
     GEARBOX_MODE_AUTOMATIC,
     GEARBOX_MODE_MANUAL,
+    GEARBOX_MODE_NONE,
     GRIP_MODE_KINEMATIC,
     GRIP_MODE_REALISTIC,
+    GRIP_MODE_SKID,
+    DEFAULT_FULL_STEERING,
+    FULL_STEERING_PRESETS,
+    WHEEL_TARGETS,
     DemoConfig,
     WheelDemoLoop,
 )
 from pufferlib.wheel_demo.calibrate import calibrate_interactively, validate_calibration
 from pufferlib.wheel_demo.ffb import DEFAULT_FORCE_GAIN, ForceFeedbackLoop, platform_force_output
-from pufferlib.wheel_demo.levels import LEVELS, LEVEL_NAMES, apply_level, level_by_name
+from pufferlib.wheel_demo.levels import LEVELS, LEVEL_NAMES, apply_driving_style, apply_level, level_by_name
 from pufferlib.wheel_demo.maps import CARLA_TOWNS
+from pufferlib.wheel_demo.policy_host import ACTION_SELECTIONS
 from pufferlib.wheel_demo.carla_window import CAMERA_MODE_NAMES, CarlaDemoWindow
 from pufferlib.wheel_demo.hud import MPS_TO_KMH, gear_label
 
@@ -67,7 +73,15 @@ WHEEL_BUTTON_COMMANDS = {
     "menu": "cycle_assist",
     "dpad_up": "ffb_gain_up",
     "dpad_down": "ffb_gain_down",
+    "dpad_right": "cycle_style",
+    "dpad_left": "cycle_full_steering",
 }
+# How the policy drives YOUR car under FULL; "off" keeps your car's own coefficients.
+DRIVING_STYLES = ("off",) + LEVEL_NAMES
+# "none": no gears, the pedals drive the policy's own jerk model; D/R by paddle at rest as in automatic
+# "skid": tyres that saturate and slide, so the car can understeer, oversteer and spin (no ABS or stability control)
+GRIP_MODES_BY_NAME = {"realistic": GRIP_MODE_REALISTIC, "kinematic": GRIP_MODE_KINEMATIC, "skid": GRIP_MODE_SKID}
+GEARBOX_MODES_BY_NAME = {"automatic": GEARBOX_MODE_AUTOMATIC, "manual": GEARBOX_MODE_MANUAL, "none": GEARBOX_MODE_NONE}
 SYNTHETIC_STEER_PERIOD_STEPS = 40.0
 
 
@@ -132,6 +146,29 @@ def cycle_level(loop, current_index):
     return next_index
 
 
+def cycle_driving_style(loop, style_state):
+    """Next driving style for your car. Only under FULL: elsewhere the policy is not driving, so it is refused."""
+    if loop.env.get_assist_state()["mode"] != binding.ASSIST_MODE_FULL:
+        print("  driving style only applies under FULL assist")
+        return
+    style_state["index"] = (style_state["index"] + 1) % len(DRIVING_STYLES)
+    name = DRIVING_STYLES[style_state["index"]]
+    apply_driving_style(loop.env, None if name == "off" else level_by_name(name))
+    print(f"  your driving style -> {name}")
+
+
+def cycle_full_steering(loop):
+    """Switch FULL between the car steering itself (wheel shows it) and the wheel steering the car. FULL only."""
+    if loop.env.get_assist_state()["mode"] != binding.ASSIST_MODE_FULL:
+        print("  full steering only applies under FULL assist")
+        return
+    names = tuple(FULL_STEERING_PRESETS)
+    current = loop.full_steering
+    name = names[(names.index(current) + 1) % len(names)] if current in names else DEFAULT_FULL_STEERING
+    loop.set_full_steering(*FULL_STEERING_PRESETS[name])
+    print(f"  full steering -> {name}")
+
+
 def cycle_assist(loop, blend_target):
     current = loop.env.get_assist_state()["mode"]
     next_mode = ASSIST_MODE_CYCLE[(ASSIST_MODE_CYCLE.index(current) + 1) % len(ASSIST_MODE_CYCLE)]
@@ -160,10 +197,15 @@ def adjust_ffb_gain(force_loop, step):
     print(f"  force feedback gain -> {output.force_gain:.2f}")
 
 
-def apply_window_keys(window, loop, level_index=0, wheel_commands=None, force_loop=None, assist_blend=0.5):
-    """Window keys and wheel buttons drive the demo: cameras, night, level, assist, car takeover, engine restart."""
+def apply_window_keys(window, loop, level_index=0, wheel_commands=None, force_loop=None, assist_blend=0.5,
+                      style_state=None):
+    """Window keys and wheel buttons drive the demo: cameras, night, level, assist, style, car takeover, engine restart."""
     keys = window.poll()
     keys.update(wheel_commands or {})
+    if keys.get("cycle_style") and style_state is not None:
+        cycle_driving_style(loop, style_state)
+    if keys.get("cycle_full_steering"):
+        cycle_full_steering(loop)
     if keys.get("cycle_assist"):
         cycle_assist(loop, assist_blend)
     if keys.get("cycle_camera"):
@@ -188,6 +230,14 @@ def apply_window_keys(window, loop, level_index=0, wheel_commands=None, force_lo
     return level_index
 
 
+FULL_ASSIST_DYNAMICS_BY_NAME = {
+    "jerk-speed": binding.FULL_ASSIST_DYNAMICS_JERK_SPEED,
+    "bicycle": binding.FULL_ASSIST_DYNAMICS_HUMAN,
+    "jerk": binding.FULL_ASSIST_DYNAMICS_JERK,
+    "lookahead": binding.FULL_ASSIST_DYNAMICS_SET_STEERING,
+}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -197,8 +247,10 @@ def main():
     parser.add_argument("--town", default="ask", choices=("ask",) + tuple(CARLA_TOWNS))
     parser.add_argument("--agents", type=int, default=64)
     parser.add_argument("--human-agent", type=int, default=0)
-    parser.add_argument("--grip", default="realistic", choices=("realistic", "kinematic"))
-    parser.add_argument("--gearbox", default="automatic", choices=("automatic", "manual"))
+    parser.add_argument("--grip", default="realistic", choices=tuple(GRIP_MODES_BY_NAME),
+                        help="skid: the tyres can slide, so the car can spin (no ABS or stability control)")
+    parser.add_argument("--gearbox", default="automatic", choices=tuple(GEARBOX_MODES_BY_NAME),
+                        help="none: no gears, the pedals drive the policy's own jerk model (left paddle at rest for R)")
     parser.add_argument("--input", default="wheel", choices=("wheel", "synthetic"))
     parser.add_argument("--calibration", default="wheel_calibration.json")
     parser.add_argument("--buttons", default="wheel_buttons.json")
@@ -212,12 +264,28 @@ def main():
     parser.add_argument("--camera", default="chase", choices=CAMERA_MODE_NAMES)
     parser.add_argument("--night", action="store_true")
     parser.add_argument("--fullscreen", action="store_true", help="fill the screen (Esc quits)")
+    parser.add_argument("--record", metavar="PATH", help="write everything the window shows to an MP4")
     parser.add_argument("--ffb", action="store_true", help="force feedback (needs the wheel connected)")
     parser.add_argument("--ffb-gain", type=float, default=DEFAULT_FORCE_GAIN, help="overall force strength, 0-1")
     parser.add_argument("--calibrate", action="store_true", help="calibrate the wheel before driving")
     parser.add_argument("--level", default="normal", choices=LEVEL_NAMES, help="how the surrounding traffic behaves")
     parser.add_argument("--assist", default="off", choices=tuple(ASSIST_MODES_BY_NAME), help="steering assist mode")
     parser.add_argument("--assist-blend", type=float, default=0.5, help="blend mode: share of steering the policy gets")
+    parser.add_argument("--action-selection", default="mode", choices=ACTION_SELECTIONS,
+                        help="how the policy picks its action: argmax class (mode), a draw (sample) or the mean")
+    parser.add_argument("--full-steering", default=DEFAULT_FULL_STEERING, choices=tuple(FULL_STEERING_PRESETS),
+                        help="FULL assist: the car steers itself and the wheel shows it (car), or the wheel steers it (wheel)")
+    parser.add_argument("--full-assist-dynamics", default=None, choices=tuple(FULL_ASSIST_DYNAMICS_BY_NAME),
+                        help="under FULL with the pedals released: jerk speed + wheel steers, your powertrain + wheel steers, all jerk, "
+                             "or jerk speed + the look-ahead mean steers (the wheel follows the car in the last two)")
+    parser.add_argument("--driving-style", default="off", choices=DRIVING_STYLES,
+                        help="how the policy drives YOUR car under FULL assist: calm, normal or aggressive, like the traffic levels")
+    parser.add_argument("--lookahead-window", type=float, default=None,
+                        help="seconds the look-ahead averages over (default: from --full-steering)")
+    parser.add_argument("--lookahead-centred", action="store_true",
+                        help="centre the look-ahead window on now: half the car's recent steering, half imagined")
+    parser.add_argument("--wheel-target", default="lookahead", choices=WHEEL_TARGETS,
+                        help="assist wheel: mean of the policy's imagined drive ahead, the filtered policy angle, or the car's own angle")
     args = parser.parse_args()
 
     if args.calibrate:
@@ -237,9 +305,16 @@ def main():
         town=choose_town(args.town),
         num_agents=args.agents,
         human_agent_idx=args.human_agent,
-        grip_mode=GRIP_MODE_REALISTIC if args.grip == "realistic" else GRIP_MODE_KINEMATIC,
-        gearbox_mode=GEARBOX_MODE_AUTOMATIC if args.gearbox == "automatic" else GEARBOX_MODE_MANUAL,
+        grip_mode=GRIP_MODES_BY_NAME[args.grip],
+        gearbox_mode=GEARBOX_MODES_BY_NAME[args.gearbox],
         device=args.device,
+        action_selection=args.action_selection,
+        wheel_target=args.wheel_target,
+        full_assist_dynamics=(FULL_STEERING_PRESETS[args.full_steering][0] if args.full_assist_dynamics is None
+                              else FULL_ASSIST_DYNAMICS_BY_NAME[args.full_assist_dynamics]),
+        lookahead_window_seconds=(FULL_STEERING_PRESETS[args.full_steering][1] if args.lookahead_window is None
+                                  else args.lookahead_window),
+        lookahead_centred=args.lookahead_centred,
         seed=args.seed,
     )
 
@@ -257,6 +332,7 @@ def main():
             host=args.carla_host,
             port=args.carla_port,
             fullscreen=args.fullscreen,
+            record_path=args.record,
         )
     force_loop = None
     if args.ffb:
@@ -276,6 +352,11 @@ def main():
     state = {"level_index": LEVELS.index(starting_level)}
     changed = apply_level(loop.env, starting_level)
     print(f"level: {starting_level.name} - {starting_level.description} ({changed} cars)")
+    style_state = {"index": DRIVING_STYLES.index(args.driving_style)}
+    if args.driving_style != "off":
+        apply_driving_style(loop.env, level_by_name(args.driving_style))
+        loop.env.recompute_observations()  # the first decision already reads your car's new personality
+        print(f"your driving style under FULL: {args.driving_style}")
 
     def on_substep(substep_idx, wheel_state):
         if window is None:
@@ -286,11 +367,13 @@ def main():
             substep_idx * loop.substep_dt,
             assist=loop.env.get_assist_state(),
             level_name=LEVELS[state["level_index"]].name,
+            driving_style=DRIVING_STYLES[style_state["index"]],
+            full_steering=loop.full_steering,
             ffb_gain=force_loop.output.force_gain if force_loop is not None else None,
         )
         wheel_commands = wheel_buttons.poll(wheel_state) if wheel_buttons is not None else None
         state["level_index"] = apply_window_keys(
-            window, loop, state["level_index"], wheel_commands, force_loop, args.assist_blend
+            window, loop, state["level_index"], wheel_commands, force_loop, args.assist_blend, style_state
         )
 
     try:

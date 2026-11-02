@@ -346,3 +346,49 @@ def test_coef_bindings_reject_unsafe_arrays(env, make_bad_array):
         binding.vec_get_reward_coef_limits(env.c_envs, make_bad_array(trained_min), trained_max.copy())
     with pytest.raises(ValueError):
         binding.vec_get_reward_coef_limits(env.c_envs, trained_min.copy(), make_bad_array(trained_max))
+
+
+def human_coefs(env):
+    coefs, _slot, _speeds = agent_frame(env)
+    return coefs[HUMAN_AGENT_IDX].copy()
+
+
+@requires_checkpoint
+@pytest.mark.parametrize("level", levels.LEVELS, ids=levels.LEVEL_NAMES)
+def test_driving_style_sets_your_car_inside_the_level_window_only_under_full(env, level):
+    env.select_human_agent(HUMAN_AGENT_IDX)
+    own_coefs = human_coefs(env)
+    levels.apply_driving_style(env, level)
+    np.testing.assert_array_equal(human_coefs(env), own_coefs)
+
+    env.set_assist_mode(binding.ASSIST_MODE_FULL, 1.0)
+    styled = human_coefs(env)
+    low, high = levels.level_bounds(env, level)
+    for coef_idx in level.windows:
+        assert low[coef_idx] - 1e-6 <= styled[coef_idx] <= high[coef_idx] + 1e-6
+    windows_move_a_coef = any(own_coefs[coef_idx] < low[coef_idx] or own_coefs[coef_idx] > high[coef_idx]
+                              for coef_idx in level.windows)
+    assert not windows_move_a_coef or not np.array_equal(styled, own_coefs)
+
+    env.set_assist_mode(binding.ASSIST_MODE_OFF, 0.0)
+    np.testing.assert_array_equal(human_coefs(env), own_coefs)
+    env.set_assist_mode(binding.ASSIST_MODE_FULL, 1.0)
+    levels.apply_driving_style(env, None)
+    np.testing.assert_array_equal(human_coefs(env), own_coefs)
+
+
+@requires_checkpoint
+def test_driving_style_leaves_the_traffic_alone(env):
+    env.select_human_agent(HUMAN_AGENT_IDX)
+    env.set_assist_mode(binding.ASSIST_MODE_FULL, 1.0)
+    traffic_before = policy_car_coefs(env, HUMAN_AGENT_IDX)
+    levels.apply_driving_style(env, levels.AGGRESSIVE)
+    np.testing.assert_array_equal(policy_car_coefs(env, HUMAN_AGENT_IDX), traffic_before)
+
+
+@requires_checkpoint
+def test_driving_style_outside_the_trained_window_raises(env):
+    low, high = env.get_reward_coef_limits()
+    high[levels.COEF_COLLISION] += 1.0
+    with pytest.raises(ValueError):
+        env.set_human_driving_style(low, high)

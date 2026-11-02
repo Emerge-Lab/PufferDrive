@@ -34,6 +34,7 @@ static void powertrain_bench_init(PowertrainBench *bench, float speed_mps, int g
     bench->env.grid_map = &bench->offgrid_map;
     bench->env.dt = POWERTRAIN_TEST_DT_SECONDS;
     bench->env.base_max_speed_mps = POWERTRAIN_TEST_BASE_SPEED_MPS;
+    bench->env.human_max_speed_mps = POWERTRAIN_TEST_BASE_SPEED_MPS * POWERTRAIN_TEST_SPEED_SCALE;
     bench->env.conditioning_speed_scale = POWERTRAIN_TEST_SPEED_SCALE;
     bench->env.reset_accel_on_stop = 1;
     bench->env.human_grip_mode = GRIP_MODE_KINEMATIC;
@@ -225,21 +226,21 @@ static int test_manual_shift_requires_the_clutch(void) {
         PowertrainBench bench;
         powertrain_bench_init(&bench, 10.0f, GEARBOX_MODE_MANUAL, 3);
         EXPECT_EQ_INT(c_set_human_pedals(&bench.env, 0.0f, 0.0f, 0.0f, CLUTCH_ENGAGE_FRACTION - 0.01f, 1), 0);
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_EQ_INT(bench.env.human_gear, 3);
     }
     {
         PowertrainBench bench;
         powertrain_bench_init(&bench, 10.0f, GEARBOX_MODE_MANUAL, 3);
         EXPECT_EQ_INT(c_set_human_pedals(&bench.env, 0.0f, 0.0f, 0.0f, CLUTCH_ENGAGE_FRACTION, 1), 0);
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_EQ_INT(bench.env.human_gear, 4);
     }
     {
         PowertrainBench bench;
         powertrain_bench_init(&bench, 10.0f, GEARBOX_MODE_MANUAL, 3);
         c_set_human_pedals(&bench.env, 0.0f, 0.0f, 0.0f, 1.0f, -1);
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_EQ_INT(bench.env.human_gear, 2);
     }
     return 0;
@@ -250,11 +251,11 @@ static int test_manual_shift_is_consumed_by_one_step(void) {
     powertrain_bench_init(&bench, 10.0f, GEARBOX_MODE_MANUAL, 2);
     c_set_human_pedals(&bench.env, 0.0f, 0.0f, 0.0f, 1.0f, 1);
     EXPECT_EQ_INT(bench.env.human_shift_request, 1);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_EQ_INT(bench.env.human_gear, 3);
     EXPECT_EQ_INT(bench.env.human_shift_request, 0);
     for (int step = 0; step < 5; step++) {
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_EQ_INT(bench.env.human_gear, 3);
     }
     return 0;
@@ -265,14 +266,14 @@ static int test_manual_shift_does_not_wrap(void) {
         PowertrainBench bench;
         powertrain_bench_init(&bench, 15.0f, GEARBOX_MODE_MANUAL, GEARBOX_FORWARD_GEAR_COUNT);
         c_set_human_pedals(&bench.env, 0.0f, 0.0f, 0.0f, 1.0f, 1);
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_EQ_INT(bench.env.human_gear, GEARBOX_FORWARD_GEAR_COUNT);
     }
     {
         PowertrainBench bench;
         powertrain_bench_init(&bench, 0.0f, GEARBOX_MODE_MANUAL, GEAR_REVERSE);
         c_set_human_pedals(&bench.env, 0.0f, 0.0f, 0.0f, 1.0f, -1);
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_EQ_INT(bench.env.human_gear, GEAR_REVERSE);
     }
     return 0;
@@ -334,7 +335,7 @@ static int test_automatic_stays_in_reverse(void) {
         powertrain_bench_init(&bench, -1.5f, GEARBOX_MODE_AUTOMATIC, GEAR_REVERSE);
         c_set_human_pedals(&bench.env, 0.0f, 1.0f, 0.0f, 0.0f, 0);
         for (int step = 0; step < 100; step++) {
-            move_human(&bench.env, 0);
+            move_human(&bench.env, 0, 0);
             EXPECT_EQ_INT(bench.env.human_gear, GEAR_REVERSE);
         }
     }
@@ -360,7 +361,7 @@ static int test_brake_holds_against_idle_creep(void) {
     EXPECT_NEAR(standstill_accel_mps2, 0.0f, ACCEL_TOLERANCE_MPS2);
 
     for (int step = 0; step < HOLD_STEP_COUNT; step++) {
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_NEAR(bench.agent.sim_speed_signed, 0.0f, EXACT_TOLERANCE);
     }
     EXPECT_NEAR(bench.agent.sim_x, 0.0f, EXACT_TOLERANCE);
@@ -377,7 +378,7 @@ static int test_brake_stops_the_car_exactly_under_both_flag_settings(void) {
             c_set_human_pedals(&bench.env, 0.0f, 0.0f, 1.0f, 0.0f, 0);
             float previous_x_m = bench.agent.sim_x;
             for (int step = 0; step < SETTLE_STEP_COUNT; step++) {
-                move_human(&bench.env, 0);
+                move_human(&bench.env, 0, 0);
                 EXPECT_TRUE(bench.agent.sim_speed_signed >= 0.0f);
                 EXPECT_TRUE(bench.agent.sim_x >= previous_x_m);
                 previous_x_m = bench.agent.sim_x;
@@ -386,7 +387,7 @@ static int test_brake_stops_the_car_exactly_under_both_flag_settings(void) {
             EXPECT_NEAR(bench.agent.accel_long, 0.0f, EXACT_TOLERANCE);
             float settled_x_m = bench.agent.sim_x;
             for (int step = 0; step < HOLD_STEP_COUNT; step++) {
-                move_human(&bench.env, 0);
+                move_human(&bench.env, 0, 0);
                 EXPECT_NEAR(bench.agent.sim_speed_signed, 0.0f, EXACT_TOLERANCE);
                 EXPECT_NEAR(bench.agent.sim_x, settled_x_m, EXACT_TOLERANCE);
             }
@@ -399,7 +400,7 @@ static int test_engine_restart_recovers_a_stalled_car(void) {
     PowertrainBench bench;
     powertrain_bench_init(&bench, 0.0f, GEARBOX_MODE_MANUAL, 1);
     c_set_human_pedals(&bench.env, 0.0f, 1.0f, 0.0f, 0.0f, 0);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_EQ_INT(bench.env.human_engine_stalled, 1);
     EXPECT_NEAR(bench.env.human_engine_rpm, 0.0f, EXACT_TOLERANCE);
     EXPECT_NEAR(bench.agent.sim_speed_signed, 0.0f, EXACT_TOLERANCE);
@@ -410,7 +411,7 @@ static int test_engine_restart_recovers_a_stalled_car(void) {
 
     c_set_human_pedals(&bench.env, 0.0f, 0.8f, 0.0f, 0.3f, 0);
     for (int step = 0; step < 100; step++) {
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
     }
     EXPECT_EQ_INT(bench.env.human_engine_stalled, 0);
     EXPECT_TRUE(bench.agent.sim_speed_signed > 0.0f);
@@ -465,7 +466,7 @@ static int test_idle_creep_in_automatic(void) {
     powertrain_bench_init(&bench, 0.0f, GEARBOX_MODE_AUTOMATIC, GEAR_NEUTRAL);
     c_set_human_pedals(&bench.env, 0.0f, 0.0f, 0.0f, 0.0f, 0);
     for (int step = 0; step < 40; step++) {
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
     }
     EXPECT_TRUE(bench.env.human_gear >= 1);
     EXPECT_TRUE(bench.agent.sim_speed_signed > 0.0f);
@@ -473,12 +474,12 @@ static int test_idle_creep_in_automatic(void) {
 
     c_set_human_pedals(&bench.env, 0.0f, 0.0f, 1.0f, 0.0f, 0);
     for (int step = 0; step < HOLD_STEP_COUNT; step++) {
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
     }
     EXPECT_NEAR(bench.agent.sim_speed_signed, 0.0f, EXACT_TOLERANCE);
     float stopped_x_m = bench.agent.sim_x;
     for (int step = 0; step < HOLD_STEP_COUNT; step++) {
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_NEAR(bench.agent.sim_x, stopped_x_m, EXACT_TOLERANCE);
     }
     return 0;
@@ -490,7 +491,7 @@ static int test_reverse_accelerates_backwards_to_the_floor(void) {
         powertrain_bench_init(&bench, 0.0f, GEARBOX_MODE_AUTOMATIC, GEAR_REVERSE);
         c_set_human_pedals(&bench.env, 0.0f, 0.6f, 0.0f, 0.0f, 0);
         for (int step = 0; step < SETTLE_STEP_COUNT; step++) {
-            move_human(&bench.env, 0);
+            move_human(&bench.env, 0, 0);
             EXPECT_TRUE(bench.agent.sim_speed_signed >= MAX_BACKWARD_SPEED);
         }
         EXPECT_NEAR(bench.agent.sim_speed_signed, MAX_BACKWARD_SPEED, SPEED_TOLERANCE_MPS);
@@ -501,7 +502,7 @@ static int test_reverse_accelerates_backwards_to_the_floor(void) {
         powertrain_bench_init(&bench, 0.0f, GEARBOX_MODE_MANUAL, GEAR_REVERSE);
         c_set_human_pedals(&bench.env, 0.0f, 0.6f, 0.0f, 0.3f, 0);
         for (int step = 0; step < SETTLE_STEP_COUNT; step++) {
-            move_human(&bench.env, 0);
+            move_human(&bench.env, 0, 0);
             EXPECT_TRUE(bench.agent.sim_speed_signed >= MAX_BACKWARD_SPEED);
         }
         EXPECT_EQ_INT(bench.env.human_engine_stalled, 0);
@@ -556,11 +557,11 @@ static int test_accel_tapers_with_gear(void) {
 static int test_speed_settles_exactly_on_the_cap(void) {
     PowertrainBench bench;
     powertrain_bench_init(&bench, 0.0f, GEARBOX_MODE_AUTOMATIC, GEAR_NEUTRAL);
-    bench.agent.reward_coefs[REWARD_COEF_SPEED] = 1.0f;
-    float cap_mps = bench.env.base_max_speed_mps * bench.agent.reward_coefs[REWARD_COEF_SPEED];
+    bench.env.human_max_speed_mps = bench.env.base_max_speed_mps;
+    float cap_mps = bench.env.human_max_speed_mps;
     c_set_human_pedals(&bench.env, 0.0f, 1.0f, 0.0f, 0.0f, 0);
     for (int step = 0; step < SETTLE_STEP_COUNT; step++) {
-        move_human(&bench.env, 0);
+        move_human(&bench.env, 0, 0);
         EXPECT_TRUE(bench.agent.sim_speed_signed <= cap_mps);
     }
     EXPECT_NEAR(bench.agent.sim_speed_signed, cap_mps, SPEED_TOLERANCE_MPS);
@@ -580,7 +581,7 @@ static int test_powertrain_setters_validate(void) {
     EXPECT_EQ_INT(c_set_human_gearbox_mode(&bench.env, GEARBOX_MODE_MANUAL), 0);
     EXPECT_EQ_INT(c_set_human_gearbox_mode(&bench.env, GEARBOX_MODE_AUTOMATIC), 0);
     EXPECT_EQ_INT(c_set_human_gearbox_mode(&bench.env, -1), -1);
-    EXPECT_EQ_INT(c_set_human_gearbox_mode(&bench.env, 2), -1);
+    EXPECT_EQ_INT(c_set_human_gearbox_mode(&bench.env, GEARBOX_MODE_NONE + 1), -1);
     EXPECT_EQ_INT(bench.env.human_gearbox_mode, GEARBOX_MODE_AUTOMATIC);
 
     EXPECT_EQ_INT(c_set_human_pedals(&bench.env, 0.0f, 0.5f, 0.25f, 0.75f, 1), 0);
@@ -622,7 +623,7 @@ static int test_direct_mode_ignores_the_powertrain(void) {
     bench.env.human_longitudinal_mode = HUMAN_LONGITUDINAL_DIRECT;
     bench.env.human_throttle_norm = 1.0f;
     c_set_human_input(&bench.env, 0.0f, -2.0f);
-    move_human(&bench.env, 0);
+    move_human(&bench.env, 0, 0);
     EXPECT_NEAR(bench.agent.accel_long, -2.0f, EXACT_TOLERANCE);
     EXPECT_NEAR(bench.env.human_engine_rpm, ENGINE_IDLE_RPM, EXACT_TOLERANCE);
     EXPECT_EQ_INT(bench.env.human_gear, 2);

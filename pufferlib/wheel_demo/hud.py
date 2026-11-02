@@ -16,6 +16,7 @@ MPS_TO_KMH = 3.6
 GEAR_REVERSE = -1
 GEAR_NEUTRAL = 0
 GEARBOX_MODE_AUTOMATIC = 1
+GEARBOX_MODE_NONE = 2
 
 # Lane polylines in the bin are road types 0..9; edges and markings are drawn separately.
 BIN_LANE_TYPE_MAX = 9
@@ -91,6 +92,9 @@ COLOR_GOAL_BEACON = (255, 200, 60)
 PEDAL_MARKER_OVERHANG_PX = 4
 PEDAL_MARKER_THICKNESS_PX = 3
 COLOR_LEVEL = {"calm": (110, 210, 120), "normal": (240, 242, 245), "aggressive": (255, 90, 70)}
+COLOR_SKID_MARK = (18, 18, 18)
+SKID_MARK_MAX_ALPHA = 170
+FULL_STEERING_LABELS = {"car": "CAR STEERS, WHEEL SHOWS", "wheel": "WHEEL STEERS"}
 
 
 def speed_excess_mps(speed_mps, speed_limit_mps, overspeed_tolerance_mps):
@@ -115,6 +119,8 @@ def gear_label(gear, gearbox_mode):
         return "R"
     if gear == GEAR_NEUTRAL:
         return "N"
+    if gearbox_mode == GEARBOX_MODE_NONE:
+        return "D"  # no gears, only a direction
     return f"D{gear}" if gearbox_mode == GEARBOX_MODE_AUTOMATIC else str(gear)
 
 
@@ -181,9 +187,9 @@ def policy_pedal_targets(reference_accel_mps2, accel_min_mps2, accel_max_mps2):
 
 
 def policy_drives_speed(assist, wheel_state, gear, full_mode, pedal_released_fraction):
-    """FULL, a forward gear and both feet off the pedals: the policy is driving the car's speed. Compared
+    """FULL, a driving gear and both feet off the pedals: the policy is driving the car's speed. Compared
     in float32, as the sim compares them, so the HUD and the car agree at the threshold."""
-    if assist is None or assist["mode"] != full_mode or not assist["reference_valid"] or gear < 1:
+    if assist is None or assist["mode"] != full_mode or not assist["reference_valid"] or gear == 0:
         return False
     threshold = np.float32(pedal_released_fraction)
     return np.float32(wheel_state.throttle_norm) < threshold and np.float32(wheel_state.brake_norm) < threshold
@@ -197,6 +203,10 @@ class HudInfo:
     level_name: str = "normal"
     ffb_gain: float = None
     help_text: str = ""
+    # how the policy drives your car under FULL; "off" means your car's own coefficients
+    driving_style: str = "off"
+    # under FULL: "car" steers itself and the wheel shows it, "wheel" steers the car, "custom" set by hand
+    full_steering: str = "car"
 
 
 def pedal_fraction(value):
@@ -264,8 +274,12 @@ class Hud:
         surface.blit(rendered, rect)
         return rect
 
-    def draw(self, surface, human, wheel_state, info, elapsed_s, mirrors=(), assist=None, goal_marker=None):
+    def draw(
+        self, surface, human, wheel_state, info, elapsed_s, mirrors=(), assist=None, goal_marker=None, skid_marks=()
+    ):
         width, height = surface.get_size()
+        if skid_marks:
+            self._draw_skid_marks(surface, skid_marks)
         if goal_marker is not None:
             self._draw_goal_beacon(surface, human, goal_marker)
         for image, rect in mirrors:
@@ -289,6 +303,25 @@ class Hud:
         if assist is not None:
             self._text(surface, self.font_label, f"Assist: {ASSIST_MODE_NAMES[assist['mode']]}",
                        (PANEL_MARGIN_PX, INFO_TOP_PX + 2 * INFO_LINE_PX))
+        from pufferlib.ocean.drive import binding
+
+        if assist is None or assist["mode"] != binding.ASSIST_MODE_FULL:
+            return
+        steering_label = FULL_STEERING_LABELS.get(info.full_steering, info.full_steering.upper())
+        self._text(surface, self.font_label, f"Steering: {steering_label}", (PANEL_MARGIN_PX, INFO_TOP_PX + 3 * INFO_LINE_PX))
+        if info.driving_style != "off":
+            self._text(surface, self.font_label, f"Your style: {info.driving_style.upper()}",
+                       (PANEL_MARGIN_PX, INFO_TOP_PX + 4 * INFO_LINE_PX),
+                       color=COLOR_LEVEL.get(info.driving_style, COLOR_TEXT))
+
+    def _draw_skid_marks(self, surface, skid_marks):
+        """Rubber on the road: dark, translucent, fading out with age (age_fraction 0 new, 1 gone)."""
+        pygame = self.pygame
+        overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        for start_px, end_px, width_px, age_fraction in skid_marks:
+            alpha = round(SKID_MARK_MAX_ALPHA * (1.0 - age_fraction))
+            pygame.draw.line(overlay, (*COLOR_SKID_MARK, alpha), start_px, end_px, width_px)
+        surface.blit(overlay, (0, 0))
 
     def _draw_goal_beacon(self, surface, human, goal_marker):
         pygame = self.pygame

@@ -105,6 +105,15 @@ def level_bounds(env, level):
     return low, high
 
 
+def apply_driving_style(env, level):
+    """Your car's own personality under FULL: one fixed driver at the centre of this level's window. None clears it,
+    and outside FULL your car keeps its own coefficients either way."""
+    if level is None:
+        env.set_human_driving_style()
+        return
+    env.set_human_driving_style(*level_bounds(env, level))
+
+
 def apply_level(env, level):
     """Set the window and redraw every policy car from it. Returns how many cars changed.
 

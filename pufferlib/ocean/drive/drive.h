@@ -263,12 +263,23 @@ struct Drive {
     float human_steering_cmd_norm;
     float human_accel_long_cmd_mps2;
     int assist_mode;
+    int full_assist_dynamics;
+    // Driving style: under FULL the policy drives your car with this personality instead of its own
+    int human_style_active;
+    float human_style_coefs[NUM_REWARD_COEFS];
+    float human_own_coefs[NUM_REWARD_COEFS]; // your car's coefficients as selected, put back whenever no style applies
+    int assist_set_steering_valid;           // until the first angle arrives, SET_STEERING steers by jerk
+    float assist_set_steering_rad;           // sim sign: positive-left
     float assist_blend_target;
     float assist_blend_weight; // eases toward assist_blend_target, never jumps
     int assist_reference_valid;
     float assist_reference_steering_rad; // sim sign: positive-left
     float assist_reference_accel_mps2;
     float assist_reference_speed_mps; // where the policy's own step ends; 0 means it chose to stop
+    int preview_slot;                 // -1 = no look-ahead running; otherwise the human car's active slot
+    Agent preview_saved_agent;        // the human car as it really is, while a look-ahead imagines it forward
+    Rng preview_saved_rng;            // observation writers draw from rng_state; an imagined step must not
+    float *preview_saved_obs;         // the human car's real observation row, allocated on first look-ahead
     int reset_accel_on_stop;
     int init_mode;
     int control_mode;
@@ -3690,6 +3701,7 @@ void init(Drive *env) {
         &env->reward_coef_min[REWARD_COEF_SPEED],
         &env->reward_coef_max[REWARD_COEF_SPEED]);
     env->human_agent_idx = -1;
+    env->preview_slot = -1;
     env->human_prev_controller = CONTROLLER_POLICY;
     env->human_grip_mode = GRIP_MODE_KINEMATIC;
     env->human_steering_cmd_norm = 0.0f;
@@ -3831,6 +3843,8 @@ void c_close(Drive *env) {
     free(env->speed_zone_offset_mps);
     free(env->lane_limit_resolved);
     free(env->obs_neighbor_scratch);
+    free(env->preview_saved_obs);
+    env->preview_saved_obs = NULL;
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
     free_loaded_map_data(env);
@@ -5364,37 +5378,44 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
     return obs_idx + (env->obs_slots_traffic_controls_n - controls_written) * TRAFFIC_CONTROL_FEATURES;
 }
 
-static void compute_observations(Drive *env) {
-    int obs_per_agent = compute_observation_size(env);
-    memset(env->observations, 0, obs_per_agent * env->active_agent_count * sizeof(float));
-    float (*obs_matrix)[obs_per_agent] = (float (*)[obs_per_agent]) env->observations;
-    PartnerScanEntry partner_scan[env->num_agents];
+static void fill_partner_scan(Drive *env, PartnerScanEntry *partner_scan) {
     for (int j = 0; j < env->num_agents; j++) {
         int index = (j < env->active_agent_count) ? env->active_agent_indices[j]
                                                   : env->static_agent_indices[j - env->active_agent_count];
         Agent *agent = &env->agents[index];
         partner_scan[j] = (PartnerScanEntry) {agent->sim_x, agent->sim_y, agent->sim_z, index};
     }
-    for (int i = 0; i < env->active_agent_count; i++) {
-        float *obs = &obs_matrix[i][0];
-        int agent_idx = env->active_agent_indices[i];
-        Agent *ego = &env->agents[agent_idx];
-        int partner_count = 0;
-        int lane_count = 0;
-        int boundary_count = 0;
-        int traffic_control_count = 0;
-        int obs_idx = 0;
+}
 
-        obs_idx = write_ego_obs(env, ego, obs, obs_idx);
-        obs_idx = write_reward_target_obs(env, ego, obs, obs_idx);
-        obs_idx = write_partner_obs(env, ego, agent_idx, partner_scan, obs, obs_idx, &partner_count);
-        obs_idx = write_road_obs(env, ego, obs, obs_idx, &lane_count, &boundary_count);
-        obs_idx = write_traffic_control_obs(env, ego, obs, obs_idx, &traffic_control_count);
-        obs[obs_idx++] = (float) lane_count;
-        obs[obs_idx++] = (float) boundary_count;
-        obs[obs_idx++] = (float) partner_count;
-        obs[obs_idx++] = (float) traffic_control_count;
-        assert(obs_idx == obs_per_agent);
+static void write_agent_observation(Drive *env, int active_slot, const PartnerScanEntry *partner_scan) {
+    int obs_per_agent = compute_observation_size(env);
+    float *obs = &env->observations[active_slot * obs_per_agent];
+    memset(obs, 0, obs_per_agent * sizeof(float));
+    int agent_idx = env->active_agent_indices[active_slot];
+    Agent *ego = &env->agents[agent_idx];
+    int partner_count = 0;
+    int lane_count = 0;
+    int boundary_count = 0;
+    int traffic_control_count = 0;
+    int obs_idx = 0;
+
+    obs_idx = write_ego_obs(env, ego, obs, obs_idx);
+    obs_idx = write_reward_target_obs(env, ego, obs, obs_idx);
+    obs_idx = write_partner_obs(env, ego, agent_idx, partner_scan, obs, obs_idx, &partner_count);
+    obs_idx = write_road_obs(env, ego, obs, obs_idx, &lane_count, &boundary_count);
+    obs_idx = write_traffic_control_obs(env, ego, obs, obs_idx, &traffic_control_count);
+    obs[obs_idx++] = (float) lane_count;
+    obs[obs_idx++] = (float) boundary_count;
+    obs[obs_idx++] = (float) partner_count;
+    obs[obs_idx++] = (float) traffic_control_count;
+    assert(obs_idx == obs_per_agent);
+}
+
+static void compute_observations(Drive *env) {
+    PartnerScanEntry partner_scan[env->num_agents];
+    fill_partner_scan(env, partner_scan);
+    for (int i = 0; i < env->active_agent_count; i++) {
+        write_agent_observation(env, i, partner_scan);
     }
 }
 
@@ -5539,6 +5560,16 @@ static JerkStep integrate_jerk(
     return step;
 }
 
+static void apply_jerk_step(Drive *env, Agent *agent, float j_long, float j_lat, float dt, int phantom_braking) {
+    JerkStep step = integrate_jerk(env, agent, j_long, j_lat, dt, phantom_braking);
+    integrate_bicycle_arc(agent, step.signed_curvature, step.speed_mps, step.speed_before_mps, dt);
+    agent->jerk_long = step.jerk_long;
+    agent->jerk_lat = (step.accel_lat - agent->accel_lat) / dt;
+    agent->accel_long = step.accel_long;
+    agent->accel_lat = step.accel_lat;
+    agent->steering_angle = step.steering_angle;
+}
+
 static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     copy_pose_to_prev(agent);
@@ -5658,13 +5689,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             }
         }
 
-        JerkStep step = integrate_jerk(env, agent, j_long, j_lat, env->dt, agent->phantom_braking_counter > 0);
-        integrate_bicycle_arc(agent, step.signed_curvature, step.speed_mps, step.speed_before_mps, env->dt);
-        agent->jerk_long = step.jerk_long;
-        agent->jerk_lat = (step.accel_lat - agent->accel_lat) / env->dt;
-        agent->accel_long = step.accel_long;
-        agent->accel_lat = step.accel_lat;
-        agent->steering_angle = step.steering_angle;
+        apply_jerk_step(env, agent, j_long, j_lat, env->dt, agent->phantom_braking_counter > 0);
     }
 
     update_agent_z(env, agent);
@@ -5845,10 +5870,13 @@ int c_restart_human_engine(Drive *env) {
 }
 
 int c_set_human_gearbox_mode(Drive *env, int gearbox_mode) {
-    if (gearbox_mode != GEARBOX_MODE_MANUAL && gearbox_mode != GEARBOX_MODE_AUTOMATIC) {
+    if (gearbox_mode < GEARBOX_MODE_MANUAL || gearbox_mode > GEARBOX_MODE_NONE) {
         return -1;
     }
     env->human_gearbox_mode = gearbox_mode;
+    if (gearbox_mode == GEARBOX_MODE_NONE && env->human_gear != GEAR_REVERSE) {
+        env->human_gear = 1; // forward gears collapse to drive
+    }
     return 0;
 }
 
@@ -5876,22 +5904,65 @@ static float assisted_steering_angle(const Drive *env, float human_steering_rad)
 
 // BLEND shares the longitudinal command like the steering; FULL hands it to the policy while both pedals
 // are released and the car is in a forward gear.
+static int full_assist_drives_speed(const Drive *env) {
+    return env->assist_mode == ASSIST_MODE_FULL && env->assist_reference_valid
+        && env->human_throttle_norm < ASSIST_PEDAL_RELEASED_FRACTION
+        && env->human_brake_norm < ASSIST_PEDAL_RELEASED_FRACTION;
+}
+
+// Which parts of your car the policy's jerk model drives under FULL with the pedals released; a pedal takes them back.
+static int full_assist_jerk_drives_speed(const Drive *env) {
+    int jerk_speed
+        = env->full_assist_dynamics != FULL_ASSIST_DYNAMICS_HUMAN || env->human_gearbox_mode == GEARBOX_MODE_NONE;
+    // in neutral the car is yours, as on the powertrain path; the gear is selected before this is asked
+    int in_gear = env->human_gear != GEAR_NEUTRAL;
+    return full_assist_drives_speed(env) && jerk_speed && in_gear && env->dynamics_model == DYNAMICS_MODEL_JERK;
+}
+
+static int full_assist_set_steering_drives(const Drive *env) {
+    return full_assist_jerk_drives_speed(env) && env->full_assist_dynamics == FULL_ASSIST_DYNAMICS_SET_STEERING
+        && env->assist_set_steering_valid;
+}
+
+static int full_assist_jerk_drives_steering(const Drive *env) {
+    int set_steering_pending
+        = env->full_assist_dynamics == FULL_ASSIST_DYNAMICS_SET_STEERING && !env->assist_set_steering_valid;
+    return full_assist_jerk_drives_speed(env)
+        && (env->full_assist_dynamics == FULL_ASSIST_DYNAMICS_JERK || set_steering_pending);
+}
+
+// The policy reverses by braking from rest, so under FULL the selector follows its step's direction (at rest only)
+static int assist_shift_request(const Drive *env) {
+    int has_selector
+        = env->human_gearbox_mode == GEARBOX_MODE_AUTOMATIC || env->human_gearbox_mode == GEARBOX_MODE_NONE;
+    if (!full_assist_drives_speed(env) || !has_selector) {
+        return 0;
+    }
+    if (env->assist_reference_speed_mps < 0.0f && env->human_gear != GEAR_REVERSE) {
+        return -1;
+    }
+    if (env->assist_reference_speed_mps > 0.0f && env->human_gear == GEAR_REVERSE) {
+        return 1;
+    }
+    return 0;
+}
+
 static float assisted_accel(const Drive *env, float human_accel_mps2, float speed_mps) {
     if (!env->assist_reference_valid) {
         return human_accel_mps2;
     }
+    // +1 forward, -1 in reverse: the rules below are written for the direction the selected gear drives
+    float gear_direction = (env->human_gear == GEAR_REVERSE) ? -1.0f : 1.0f;
     float reference = clip(env->assist_reference_accel_mps2, HUMAN_ACCEL_LIMIT_MPS2[0], HUMAN_ACCEL_LIMIT_MPS2[1]);
-    if (env->assist_reference_speed_mps == 0.0f && speed_mps > 0.0f) {
-        reference = fminf(reference, -ASSIST_STOP_DECEL_MPS2);
+    if (env->assist_reference_speed_mps == 0.0f && gear_direction * speed_mps > 0.0f) {
+        reference = gear_direction * fminf(gear_direction * reference, -ASSIST_STOP_DECEL_MPS2);
     }
     // braking holds a car at rest; the zero-crossing check below cannot catch a start from exactly zero
-    if (speed_mps <= 0.0f) {
-        reference = fmaxf(reference, 0.0f);
+    if (gear_direction * speed_mps <= 0.0f) {
+        reference = gear_direction * fmaxf(gear_direction * reference, 0.0f);
     }
     if (env->assist_mode == ASSIST_MODE_FULL) {
-        int feet_off = env->human_throttle_norm < ASSIST_PEDAL_RELEASED_FRACTION
-            && env->human_brake_norm < ASSIST_PEDAL_RELEASED_FRACTION;
-        return (feet_off && env->human_gear >= 1) ? reference : human_accel_mps2;
+        return (full_assist_drives_speed(env) && env->human_gear != GEAR_NEUTRAL) ? reference : human_accel_mps2;
     }
     if (env->assist_blend_weight == 0.0f) {
         return human_accel_mps2;
@@ -5931,109 +6002,21 @@ static void advance_assist(Drive *env, int action_idx, const Agent *agent, float
     env->assist_blend_weight += clip(target_weight - env->assist_blend_weight, -max_change, max_change);
 }
 
-int c_set_assist_mode(Drive *env, int assist_mode, float blend_target) {
-    if (assist_mode < ASSIST_MODE_OFF || assist_mode > ASSIST_MODE_FULL) {
+int c_set_full_assist_dynamics(Drive *env, int full_assist_dynamics) {
+    if (full_assist_dynamics < FULL_ASSIST_DYNAMICS_JERK_SPEED
+        || full_assist_dynamics > FULL_ASSIST_DYNAMICS_SET_STEERING) {
         return -1;
     }
-    if (!isfinite(blend_target) || blend_target < 0.0f || blend_target > 1.0f) {
-        return -1;
-    }
-    env->assist_mode = assist_mode;
-    env->assist_blend_target = blend_target;
+    env->full_assist_dynamics = full_assist_dynamics;
     return 0;
 }
 
-// The human car runs no jerk integrator on either axis: the wheel sets the road-wheel angle and
-// the pedals set longitudinal acceleration. Only the arc integrator is shared with the jerk path.
-static void move_human(Drive *env, int agent_idx) {
-    Agent *agent = &env->agents[agent_idx];
-    copy_pose_to_prev(agent);
-
-    if (agent->removed) {
-        invalidate_agent(agent);
-        return;
-    }
-    if (agent->stopped) {
-        clear_agent_motion(agent);
-        agent->steering_angle = 0.0f;
-        return;
-    }
-
-    // steering_norm is +1 at the wheel's RIGHT lock, but positive curvature turns the car LEFT
-    // (constants.h: lane_curvature positive = left turn), so the command is negated here.
-    float steering_angle = assisted_steering_angle(env, human_steering_angle(env));
-    float accel_long = (env->human_longitudinal_mode == HUMAN_LONGITUDINAL_POWERTRAIN)
-        ? human_powertrain_accel_mps2(env, agent, env->human_shift_request)
-        : clip(env->human_accel_long_cmd_mps2, HUMAN_ACCEL_LIMIT_MPS2[0], HUMAN_ACCEL_LIMIT_MPS2[1]);
-    env->human_shift_request = 0; // a paddle pull is consumed by exactly one step
-    accel_long = assisted_accel(env, accel_long, agent->sim_speed_signed);
-
-    float speed_old = agent->sim_speed_signed;
-    float speed_new = speed_old + 0.5f * (accel_long + agent->accel_long) * env->dt;
-    // Comfort scores the driver's jerk, so take it before the stop reset rewrites accel_long
-    float jerk_long_before_stop_reset = (accel_long - agent->accel_long) / env->dt;
-    if (speed_old * speed_new < 0.0f) {
-        speed_new = 0.0f;
-        accel_long = 0.0f;
-    } else {
-        speed_new
-            = clip(speed_new, MAX_BACKWARD_SPEED, env->base_max_speed_mps * agent->reward_coefs[REWARD_COEF_SPEED]);
-    }
-
-    float signed_curvature = tanf(steering_angle) / agent->wheelbase;
-    if (env->human_grip_mode == GRIP_MODE_REALISTIC) {
-        float accel_lat_demand = speed_new * speed_new * signed_curvature;
-        if (fabsf(accel_lat_demand) > HUMAN_TIRE_GRIP_MPS2) {
-            // Front tyres saturate: the car understeers onto a wider arc than the wheel asks for
-            signed_curvature = copysignf(HUMAN_TIRE_GRIP_MPS2 / (speed_new * speed_new), signed_curvature);
-        }
-    }
-
-    integrate_bicycle_arc(agent, signed_curvature, speed_new, speed_old, env->dt);
-
-    float accel_lat_new = speed_new * speed_new * signed_curvature;
-    agent->jerk_long = jerk_long_before_stop_reset;
-    agent->jerk_lat = (accel_lat_new - agent->accel_lat) / env->dt;
-    agent->accel_long = accel_long;
-    agent->accel_lat = accel_lat_new;
-    agent->steering_angle = steering_angle;
-
-    update_agent_z(env, agent);
-}
-
-int c_select_human_agent(Drive *env, int agent_idx) {
-    if (agent_idx < -1 || agent_idx >= env->num_total_agents) {
+int c_set_assist_steering(Drive *env, int valid, float steering_rad) {
+    if (valid && !isfinite(steering_rad)) {
         return -1;
     }
-    if (agent_idx >= 0 && !env->agents[agent_idx].active_agent) {
-        return -1; // c_step only moves active agents; a static one would never respond to the wheel
-    }
-    if (env->human_agent_idx >= 0 && env->human_agent_idx < env->num_total_agents) {
-        Agent *previous = &env->agents[env->human_agent_idx];
-        previous->controller = env->human_prev_controller;
-        previous->ignores_infraction_behavior = 0;
-    }
-    env->human_agent_idx = agent_idx;
-    env->human_steering_cmd_norm = 0.0f;
-    env->human_accel_long_cmd_mps2 = 0.0f;
-    env->assist_reference_valid = 0; // the reference belonged to the previous car
-    if (agent_idx < 0) {
-        return 0;
-    }
-    Agent *agent = &env->agents[agent_idx];
-    env->human_prev_controller = agent->controller;
-    agent->controller = CONTROLLER_HUMAN;
-    agent->ignores_infraction_behavior = 1;
-    agent->steering_angle = 0.0f;
-    agent->accel_long = 0.0f;
-    agent->accel_lat = 0.0f;
-    agent->jerk_long = 0.0f;
-    agent->jerk_lat = 0.0f;
-    // Your car's capability must not come from the per-agent conditioning lottery
-    agent->reward_coefs[REWARD_COEF_SPEED] = env->human_max_speed_mps / env->base_max_speed_mps;
-    agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
-    agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
-    agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
+    env->assist_set_steering_valid = valid;
+    env->assist_set_steering_rad = steering_rad;
     return 0;
 }
 
@@ -6052,6 +6035,335 @@ static int reward_coef_reads_bounds(const Drive *env, int coef_idx) {
     default:
         return 1;
     }
+}
+
+// The only writer of your car's coefficients after selection; capability (throttle, steer, acc) is never styled
+static void apply_human_reward_coefs(Drive *env) {
+    if (env->human_agent_idx < 0) {
+        return;
+    }
+    Agent *agent = &env->agents[env->human_agent_idx];
+    int styled = env->human_style_active && env->assist_mode == ASSIST_MODE_FULL;
+    for (int c = 0; c < NUM_REWARD_COEFS; c++) {
+        int use_style = styled && reward_coef_reads_bounds(env, c);
+        agent->reward_coefs[c] = use_style ? env->human_style_coefs[c] : env->human_own_coefs[c];
+    }
+}
+
+// A style is one fixed driver: each window's centre (geometric where sampling is log-scale), not a fresh draw
+int c_set_human_driving_style(Drive *env, int active, const float *min_values, const float *max_values) {
+    if (!active) {
+        env->human_style_active = 0;
+        apply_human_reward_coefs(env);
+        return 0;
+    }
+    const RewardBound *bounds = env->reward_log_sampling ? REWARD_BOUNDS_LOG : REWARD_BOUNDS;
+    float centres[NUM_REWARD_COEFS];
+    for (int c = 0; c < NUM_REWARD_COEFS; c++) {
+        float limit_min, limit_max;
+        reward_coef_limits(env, c, &limit_min, &limit_max);
+        if (!isfinite(min_values[c]) || !isfinite(max_values[c]) || min_values[c] > max_values[c]) {
+            return -1;
+        }
+        // outside the trained window the conditioning saturates and the style would silently do nothing
+        if (min_values[c] < limit_min || max_values[c] > limit_max) {
+            return -1;
+        }
+        int log_centre = bounds[c].log_scale && min_values[c] > 0.0f;
+        centres[c] = log_centre ? sqrtf(min_values[c] * max_values[c]) : 0.5f * (min_values[c] + max_values[c]);
+    }
+    memcpy(env->human_style_coefs, centres, sizeof(env->human_style_coefs));
+    env->human_style_active = 1;
+    apply_human_reward_coefs(env);
+    return 0;
+}
+
+int c_set_assist_mode(Drive *env, int assist_mode, float blend_target) {
+    if (assist_mode < ASSIST_MODE_OFF || assist_mode > ASSIST_MODE_FULL) {
+        return -1;
+    }
+    if (!isfinite(blend_target) || blend_target < 0.0f || blend_target > 1.0f) {
+        return -1;
+    }
+    env->assist_mode = assist_mode;
+    env->assist_blend_target = blend_target;
+    apply_human_reward_coefs(env);
+    return 0;
+}
+
+// The human car runs no jerk integrator on either axis: the wheel sets the road-wheel angle and
+// the pedals set longitudinal acceleration. Only the arc integrator is shared with the jerk path.
+// Simplified Pacejka: slope cornering_stiffness at zero slip, peak_force_n at the peak, sliding a little lower beyond.
+static float tire_side_force_n(float slip_angle_rad, float cornering_stiffness_n_per_rad, float peak_force_n) {
+    if (peak_force_n <= 0.0f) {
+        return 0.0f;
+    }
+    float stiffness_factor = cornering_stiffness_n_per_rad / (HUMAN_TIRE_SHAPE_FACTOR * peak_force_n);
+    return peak_force_n * sinf(HUMAN_TIRE_SHAPE_FACTOR * atanf(stiffness_factor * slip_angle_rad));
+}
+
+// Body-frame side speed and yaw rate from tyre forces; returns body lateral accel (sim sign: positive-left)
+static float integrate_skid_bicycle(
+    Drive *env,
+    Agent *agent,
+    float steering_angle,
+    float forward_speed_old,
+    float forward_speed_new,
+    float accel_long_mps2) {
+    float wheelbase_m = agent->wheelbase;
+    float front_arm_m = HUMAN_CG_TO_FRONT_AXLE_FRACTION * wheelbase_m;
+    float rear_arm_m = wheelbase_m - front_arm_m;
+    float drive_force_n = VEHICLE_MASS_KG * accel_long_mps2;
+    float front_force_x_n = (accel_long_mps2 < 0.0f) ? HUMAN_BRAKE_FRONT_SHARE * drive_force_n : 0.0f;
+    float rear_force_x_n = drive_force_n - front_force_x_n;
+    float grip_coefficient = HUMAN_TIRE_GRIP_MPS2 / GRAVITY_MPS2;
+    float load_transfer_n = drive_force_n * HUMAN_CG_HEIGHT_PER_WHEELBASE;
+    float yaw_inertia_kg_m2 = VEHICLE_MASS_KG * front_arm_m * rear_arm_m;
+    float front_load_n = fmaxf(VEHICLE_MASS_KG * GRAVITY_MPS2 * rear_arm_m / wheelbase_m - load_transfer_n, 0.0f);
+    float rear_load_n = fmaxf(VEHICLE_MASS_KG * GRAVITY_MPS2 * front_arm_m / wheelbase_m + load_transfer_n, 0.0f);
+    float front_peak_n = grip_coefficient * front_load_n;
+    float rear_peak_n = grip_coefficient * rear_load_n;
+    // friction circle: what the axle spends pushing along the road it cannot spend holding the car sideways
+    front_peak_n = sqrtf(fmaxf(front_peak_n * front_peak_n - front_force_x_n * front_force_x_n, 0.0f));
+    rear_peak_n = sqrtf(fmaxf(rear_peak_n * rear_peak_n - rear_force_x_n * rear_force_x_n, 0.0f));
+
+    float side_speed_mps = -agent->sim_vx * agent->sin_heading + agent->sim_vy * agent->cos_heading;
+    float side_speed_start_mps = side_speed_mps;
+    float yaw_rate = agent->yaw_rate;
+    float heading = agent->sim_heading;
+    float forward_speed_mps = forward_speed_old;
+    float longitudinal_accel_mps2 = (forward_speed_new - forward_speed_old) / env->dt;
+    float step_dt = env->dt / (float) SKID_INTEGRATION_STEPS;
+    for (int step_idx = 0; step_idx < SKID_INTEGRATION_STEPS; step_idx++) {
+        // body-frame forward acceleration: the longitudinal model's, plus yaw rate * side speed as a slide rotates
+        forward_speed_mps += (longitudinal_accel_mps2 + yaw_rate * side_speed_mps) * step_dt;
+        float total_speed_mps = sqrtf(forward_speed_mps * forward_speed_mps + side_speed_mps * side_speed_mps);
+        float blend
+            = clip((total_speed_mps - SKID_BLEND_LOW_MPS) / (SKID_BLEND_HIGH_MPS - SKID_BLEND_LOW_MPS), 0.0f, 1.0f);
+        float kinematic_yaw_rate = forward_speed_mps * tanf(steering_angle) / wheelbase_m;
+        // friction circle: the slide may only use the grip the longitudinal acceleration leaves
+        float sideways_grip_mps2 = sqrtf(fmaxf(
+            HUMAN_TIRE_GRIP_MPS2 * HUMAN_TIRE_GRIP_MPS2 - longitudinal_accel_mps2 * longitudinal_accel_mps2,
+            0.0f));
+        float sliding_decel_mps2 = fminf(fabsf(side_speed_mps) / step_dt, sideways_grip_mps2);
+        float side_accel_mps2 = -copysignf(sliding_decel_mps2, side_speed_mps) * (1.0f - blend);
+        float yaw_accel = (kinematic_yaw_rate - yaw_rate) / SKID_LOW_SPEED_YAW_SETTLE_SECONDS * (1.0f - blend);
+        if (blend > 0.0f) {
+            // slip in each tyre's own frame, so its force opposes sliding across it whichever way it rolls
+            float front_side_speed_mps = side_speed_mps + front_arm_m * yaw_rate;
+            float front_rolling_mps
+                = forward_speed_mps * cosf(steering_angle) + front_side_speed_mps * sinf(steering_angle);
+            float front_across_mps
+                = -forward_speed_mps * sinf(steering_angle) + front_side_speed_mps * cosf(steering_angle);
+            float front_slip_rad
+                = -atanf(front_across_mps / fmaxf(fabsf(front_rolling_mps), SKID_SLIP_SPEED_FLOOR_MPS));
+            float rear_across_mps = side_speed_mps - rear_arm_m * yaw_rate;
+            float rear_slip_rad = -atanf(rear_across_mps / fmaxf(fabsf(forward_speed_mps), SKID_SLIP_SPEED_FLOOR_MPS));
+            float front_side_n
+                = tire_side_force_n(front_slip_rad, HUMAN_FRONT_CORNERING_STIFFNESS_N_PER_RAD, front_peak_n)
+                * cosf(steering_angle);
+            float rear_side_n = tire_side_force_n(rear_slip_rad, HUMAN_REAR_CORNERING_STIFFNESS_N_PER_RAD, rear_peak_n);
+            side_accel_mps2 += blend * ((front_side_n + rear_side_n) / VEHICLE_MASS_KG - yaw_rate * forward_speed_mps);
+            yaw_accel += blend * (front_arm_m * front_side_n - rear_arm_m * rear_side_n) / yaw_inertia_kg_m2;
+        }
+        side_speed_mps += side_accel_mps2 * step_dt;
+        yaw_rate += yaw_accel * step_dt;
+        if (blend == 0.0f && side_speed_mps == 0.0f) {
+            yaw_rate = kinematic_yaw_rate; // no slide left near standstill: exactly the kinematic arc
+        }
+        heading = normalize_heading(heading + yaw_rate * step_dt);
+        float cos_heading = cosf(heading);
+        float sin_heading = sinf(heading);
+        agent->sim_x += (forward_speed_mps * cos_heading - side_speed_mps * sin_heading) * step_dt;
+        agent->sim_y += (forward_speed_mps * sin_heading + side_speed_mps * cos_heading) * step_dt;
+    }
+    agent->sim_heading = heading;
+    agent->cos_heading = cosf(heading);
+    agent->sin_heading = sinf(heading);
+    agent->sim_vx = forward_speed_mps * agent->cos_heading - side_speed_mps * agent->sin_heading;
+    agent->sim_vy = forward_speed_mps * agent->sin_heading + side_speed_mps * agent->cos_heading;
+    agent->yaw_rate = yaw_rate;
+    update_agent_speed(agent);
+    return yaw_rate * forward_speed_mps + (side_speed_mps - side_speed_start_mps) / env->dt;
+}
+
+// Gearless D/R: the automatic's paddle rule at rest, no ratios, and an engine that only idles.
+static void select_gearless_direction(Drive *env, int shift_request, float speed_mps) {
+    apply_automatic_selector_request(env, shift_request, speed_mps);
+    if (env->human_gear != GEAR_REVERSE) {
+        env->human_gear = 1;
+    }
+    env->human_engine_rpm = ENGINE_IDLE_RPM;
+    env->human_engine_stalled = 0;
+}
+
+// Pedals as a target acceleration reached at the policy's jerk limits; at rest the brake only cancels throttle
+static float gearless_pedal_jerk(const Drive *env, const Agent *agent) {
+    float direction = (env->human_gear == GEAR_REVERSE) ? -1.0f : 1.0f;
+    float speed_mps = agent->sim_speed_signed;
+    float drive_mps2 = env->human_throttle_norm * ACCEL_LONG_LIMIT[1];
+    float brake_mps2 = -env->human_brake_norm * ACCEL_LONG_LIMIT[0];
+    float target_mps2;
+    if (speed_mps == 0.0f) {
+        target_mps2 = direction * fmaxf(drive_mps2 - brake_mps2, 0.0f);
+    } else {
+        target_mps2 = direction * drive_mps2 - copysignf(brake_mps2, speed_mps);
+    }
+    target_mps2 = clip(target_mps2, ACCEL_LONG_LIMIT[0], ACCEL_LONG_LIMIT[1]);
+    return clip((target_mps2 - agent->accel_long) / env->dt, JERK_LONG[0], JERK_LONG[NUM_JERK_LONG_ACTIONS - 1]);
+}
+
+static void move_human(Drive *env, int action_idx, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    copy_pose_to_prev(agent);
+
+    if (agent->removed) {
+        invalidate_agent(agent);
+        return;
+    }
+    if (agent->stopped) {
+        clear_agent_motion(agent);
+        agent->steering_angle = 0.0f;
+        return;
+    }
+
+    // steering_norm is +1 at the wheel's RIGHT lock, but positive curvature turns the car LEFT
+    // (constants.h: lane_curvature positive = left turn), so the command is negated here.
+    float steering_angle = assisted_steering_angle(env, human_steering_angle(env));
+    if (full_assist_set_steering_drives(env)) {
+        // the set angle is reached at the jerk model's own steering rate, so a new one never snaps the wheels
+        float max_change = JERK_STEERING_RATE_LIMIT_RAD_PER_S * env->dt;
+        float change = clip(env->assist_set_steering_rad - agent->steering_angle, -max_change, max_change);
+        steering_angle = clip(agent->steering_angle + change, -JERK_STEERING_LIMIT_RAD, JERK_STEERING_LIMIT_RAD);
+    }
+    int shift_request = (env->human_shift_request != 0) ? env->human_shift_request : assist_shift_request(env);
+    int gearless
+        = env->human_longitudinal_mode == HUMAN_LONGITUDINAL_POWERTRAIN && env->human_gearbox_mode == GEARBOX_MODE_NONE;
+    float accel_long = 0.0f;
+    if (gearless) {
+        select_gearless_direction(env, shift_request, agent->sim_speed_signed);
+    } else if (env->human_longitudinal_mode == HUMAN_LONGITUDINAL_POWERTRAIN) {
+        accel_long = human_powertrain_accel_mps2(env, agent, shift_request);
+    } else {
+        accel_long = clip(env->human_accel_long_cmd_mps2, HUMAN_ACCEL_LIMIT_MPS2[0], HUMAN_ACCEL_LIMIT_MPS2[1]);
+    }
+    env->human_shift_request = 0; // a paddle pull is consumed by exactly one step
+    if (full_assist_jerk_drives_steering(env)) {
+        float j_long, j_lat;
+        decode_jerk_action(env, action_idx, &j_long, &j_lat);
+        apply_jerk_step(env, agent, j_long, j_lat, env->dt, 0);
+        update_agent_z(env, agent);
+        return;
+    }
+    float speed_old = agent->sim_speed_signed;
+    float speed_new;
+    float jerk_long_before_stop_reset;
+    if (full_assist_jerk_drives_speed(env)) {
+        // the powertrain above still ran, so gear and rpm match the car when a pedal takes it back
+        float j_long, j_lat;
+        decode_jerk_action(env, action_idx, &j_long, &j_lat);
+        JerkStep step = integrate_jerk(env, agent, j_long, j_lat, env->dt, 0);
+        speed_new = step.speed_mps;
+        accel_long = step.accel_long;
+        jerk_long_before_stop_reset = step.jerk_long;
+    } else if (gearless) {
+        JerkStep step = integrate_jerk(env, agent, gearless_pedal_jerk(env, agent), 0.0f, env->dt, 0);
+        speed_new = step.speed_mps;
+        accel_long = step.accel_long;
+        jerk_long_before_stop_reset = step.jerk_long;
+        float direction = (env->human_gear == GEAR_REVERSE) ? -1.0f : 1.0f;
+        if (direction * speed_new < 0.0f) {
+            // the brake holds a car at rest: for you only the paddle selects reverse
+            speed_new = 0.0f;
+            accel_long = 0.0f;
+        }
+    } else {
+        accel_long = assisted_accel(env, accel_long, speed_old);
+        speed_new = speed_old + 0.5f * (accel_long + agent->accel_long) * env->dt;
+        // Comfort scores the driver's jerk, so take it before the stop reset rewrites accel_long
+        jerk_long_before_stop_reset = (accel_long - agent->accel_long) / env->dt;
+    }
+    if (speed_old * speed_new < 0.0f) {
+        speed_new = 0.0f;
+        accel_long = 0.0f;
+    } else {
+        speed_new = clip(speed_new, MAX_BACKWARD_SPEED, env->human_max_speed_mps); // yours, never a style's
+    }
+
+    float accel_lat_new;
+    if (env->human_grip_mode == GRIP_MODE_SKID) {
+        // the longitudinal models above work on the speed magnitude; in a slide only its change drives the car forward
+        float forward_speed_old = agent->sim_vx * agent->cos_heading + agent->sim_vy * agent->sin_heading;
+        float gear_direction = (env->human_gear == GEAR_REVERSE) ? -1.0f : 1.0f;
+        float forward_speed_new = forward_speed_old + (speed_new - speed_old);
+        if (gear_direction * forward_speed_old < 0.0f) {
+            // spun round and sliding against the selected direction: brakes and drive both push against the slide
+            forward_speed_new = forward_speed_old + gear_direction * fabsf(accel_long) * env->dt;
+        }
+        if (forward_speed_old * forward_speed_new < 0.0f) {
+            forward_speed_new = 0.0f;
+        }
+        accel_lat_new
+            = integrate_skid_bicycle(env, agent, steering_angle, forward_speed_old, forward_speed_new, accel_long);
+    } else {
+        float signed_curvature = tanf(steering_angle) / agent->wheelbase;
+        if (env->human_grip_mode == GRIP_MODE_REALISTIC) {
+            float accel_lat_demand = speed_new * speed_new * signed_curvature;
+            if (fabsf(accel_lat_demand) > HUMAN_TIRE_GRIP_MPS2) {
+                // Front tyres saturate: the car understeers onto a wider arc than the wheel asks for
+                signed_curvature = copysignf(HUMAN_TIRE_GRIP_MPS2 / (speed_new * speed_new), signed_curvature);
+            }
+        }
+        integrate_bicycle_arc(agent, signed_curvature, speed_new, speed_old, env->dt);
+        accel_lat_new = speed_new * speed_new * signed_curvature;
+    }
+    agent->jerk_long = jerk_long_before_stop_reset;
+    agent->jerk_lat = (accel_lat_new - agent->accel_lat) / env->dt;
+    agent->accel_long = accel_long;
+    agent->accel_lat = accel_lat_new;
+    agent->steering_angle = steering_angle;
+
+    update_agent_z(env, agent);
+}
+
+int c_select_human_agent(Drive *env, int agent_idx) {
+    if (agent_idx < -1 || agent_idx >= env->num_total_agents) {
+        return -1;
+    }
+    if (agent_idx >= 0 && !env->agents[agent_idx].active_agent) {
+        return -1; // c_step only moves active agents; a static one would never respond to the wheel
+    }
+    if (env->human_agent_idx >= 0 && env->human_agent_idx < env->num_total_agents) {
+        Agent *previous = &env->agents[env->human_agent_idx];
+        memcpy(previous->reward_coefs, env->human_own_coefs, sizeof(env->human_own_coefs)); // drop any style
+        previous->controller = env->human_prev_controller;
+        previous->ignores_infraction_behavior = 0;
+    }
+    env->human_agent_idx = agent_idx;
+    env->human_steering_cmd_norm = 0.0f;
+    env->human_accel_long_cmd_mps2 = 0.0f;
+    env->assist_reference_valid = 0; // the reference belonged to the previous car
+    env->assist_set_steering_valid = 0;
+    if (agent_idx < 0) {
+        return 0;
+    }
+    Agent *agent = &env->agents[agent_idx];
+    env->human_prev_controller = agent->controller;
+    agent->controller = CONTROLLER_HUMAN;
+    agent->ignores_infraction_behavior = 1;
+    agent->steering_angle = 0.0f;
+    agent->accel_long = 0.0f;
+    agent->accel_lat = 0.0f;
+    agent->jerk_long = 0.0f;
+    agent->jerk_lat = 0.0f;
+    // Your car's capability must not come from the per-agent conditioning lottery
+    agent->reward_coefs[REWARD_COEF_SPEED] = env->human_max_speed_mps / env->base_max_speed_mps;
+    agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
+    agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
+    agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
+    memcpy(env->human_own_coefs, agent->reward_coefs, sizeof(env->human_own_coefs));
+    apply_human_reward_coefs(env);
+    return 0;
 }
 
 int c_set_reward_coef_bounds(Drive *env, const float *min_values, const float *max_values) {
@@ -6111,9 +6423,8 @@ int c_set_human_max_speed(Drive *env, float max_speed_mps) {
         return -1;
     }
     env->human_max_speed_mps = max_speed_mps;
-    if (env->human_agent_idx >= 0) {
-        env->agents[env->human_agent_idx].reward_coefs[REWARD_COEF_SPEED] = max_speed_mps / env->base_max_speed_mps;
-    }
+    env->human_own_coefs[REWARD_COEF_SPEED] = max_speed_mps / env->base_max_speed_mps;
+    apply_human_reward_coefs(env);
     return 0;
 }
 
@@ -6128,7 +6439,7 @@ int c_set_human_input(Drive *env, float steering_norm, float accel_long_mps2) {
 }
 
 int c_set_human_grip_mode(Drive *env, int grip_mode) {
-    if (grip_mode != GRIP_MODE_KINEMATIC && grip_mode != GRIP_MODE_REALISTIC) {
+    if (grip_mode < GRIP_MODE_KINEMATIC || grip_mode > GRIP_MODE_SKID) {
         return -1;
     }
     env->human_grip_mode = grip_mode;
@@ -6174,6 +6485,7 @@ static void update_rollout_masks(Drive *env) {
 void c_reset(Drive *env) {
     env->substeps_taken = 0;
     env->assist_reference_valid = 0; // a reference belongs to the episode it was computed in
+    env->assist_set_steering_valid = 0;
     env->assist_blend_weight = 0.0f;
     env->autoreset_pending = 0;
     env->episode_end_timestep = env->scenario_length;
@@ -6336,7 +6648,7 @@ static void move_agent_for_substep(Drive *env, int action_idx, int agent_idx, in
     float prev_sin_heading = agent->prev_sin_heading;
 
     if (agent->controller == CONTROLLER_HUMAN) {
-        move_human(env, agent_idx);
+        move_human(env, action_idx, agent_idx);
     } else if (agent->controller == CONTROLLER_POLICY) {
         move_dynamics(env, action_idx, agent_idx);
     } else if (agent->controller == CONTROLLER_IDM) {
@@ -6435,6 +6747,68 @@ void c_get_render_poses(Drive *env, float elapsed_seconds, float *x_out, float *
     }
 }
 
+// Look-ahead: other cars hold still; c_end_preview restores the human car, its observation row and the RNG exactly
+int c_begin_preview(Drive *env) {
+    if (env->preview_slot >= 0 || env->human_agent_idx < 0 || env->dynamics_model != DYNAMICS_MODEL_JERK) {
+        return -1;
+    }
+    Agent *agent = &env->agents[env->human_agent_idx];
+    if (agent->removed || agent->stopped) {
+        return -1;
+    }
+    int obs_per_agent = compute_observation_size(env);
+    if (env->preview_saved_obs == NULL) {
+        env->preview_saved_obs = (float *) malloc(obs_per_agent * sizeof(float));
+        if (env->preview_saved_obs == NULL) {
+            return -1;
+        }
+    }
+    for (int i = 0; i < env->active_agent_count; i++) {
+        if (env->active_agent_indices[i] != env->human_agent_idx) {
+            continue;
+        }
+        env->preview_slot = i;
+        env->preview_saved_agent = *agent;
+        env->preview_saved_rng = env->rng_state;
+        memcpy(env->preview_saved_obs, &env->observations[i * obs_per_agent], obs_per_agent * sizeof(float));
+        return i;
+    }
+    return -1;
+}
+
+// steering_out gets the angle after each of substep_count pieces (sim sign); the human's obs row is rebuilt
+int c_preview_step(Drive *env, int substep_count, float *steering_out) {
+    if (env->preview_slot < 0 || substep_count < 1) {
+        return -1;
+    }
+    Agent *agent = &env->agents[env->human_agent_idx];
+    float substep_dt = env->dt / (float) substep_count;
+    float j_long, j_lat;
+    decode_jerk_action(env, env->preview_slot, &j_long, &j_lat);
+    for (int s = 0; s < substep_count; s++) {
+        apply_jerk_step(env, agent, j_long, j_lat, substep_dt, 0);
+        steering_out[s] = agent->steering_angle;
+    }
+    PartnerScanEntry partner_scan[env->num_agents];
+    fill_partner_scan(env, partner_scan);
+    write_agent_observation(env, env->preview_slot, partner_scan);
+    return 0;
+}
+
+void c_end_preview(Drive *env) {
+    if (env->preview_slot < 0) {
+        return;
+    }
+    int obs_per_agent = compute_observation_size(env);
+    env->agents[env->human_agent_idx] = env->preview_saved_agent;
+    memcpy(
+        &env->observations[env->preview_slot * obs_per_agent],
+        env->preview_saved_obs,
+        obs_per_agent * sizeof(float));
+    env->rng_state = env->preview_saved_rng;
+    env->preview_slot = -1;
+}
+
 int c_set_substepping(Drive *env, int substep_mode, int substeps_per_policy_step) {
     if (substep_mode != SUBSTEP_MODE_ALL && substep_mode != SUBSTEP_MODE_HUMAN_ONLY) {
         return -1;
@@ -6502,7 +6876,7 @@ void c_step(Drive *env) {
             }
         } else if (agent->controller == CONTROLLER_HUMAN) {
             advance_assist(env, i, agent, env->dt, env->dt, 1);
-            move_human(env, agent_idx);
+            move_human(env, i, agent_idx);
         } else if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, agent_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {

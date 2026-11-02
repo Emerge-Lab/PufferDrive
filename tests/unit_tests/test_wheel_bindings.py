@@ -94,6 +94,8 @@ def test_controller_and_mode_constants_are_exported():
     assert binding.GRIP_MODE_REALISTIC == 1
     assert binding.GEARBOX_MODE_MANUAL == 0
     assert binding.GEARBOX_MODE_AUTOMATIC == 1
+    assert binding.GEARBOX_MODE_NONE == 2
+    assert binding.GRIP_MODE_SKID == 2
     assert binding.GEAR_REVERSE == -1
     assert binding.GEAR_NEUTRAL == 0
     assert binding.GEARBOX_FORWARD_GEAR_COUNT == 6
@@ -141,6 +143,15 @@ def test_gear_and_gearbox_setters_round_trip(env):
         assert env.get_human_state()["gearbox_mode"] == mode
 
 
+@pytest.mark.parametrize("gear,expected", [(binding.GEAR_NEUTRAL, 1), (4, 1), (binding.GEAR_REVERSE, binding.GEAR_REVERSE)])
+def test_gearless_mode_collapses_forward_gears_to_drive(env, gear, expected):
+    env.select_human_agent(0)
+    env.set_human_gear(gear)
+    env.set_human_gearbox_mode(binding.GEARBOX_MODE_NONE)
+    state = env.get_human_state()
+    assert (state["gearbox_mode"], state["gear"]) == (binding.GEARBOX_MODE_NONE, expected)
+
+
 @pytest.mark.parametrize("gear", [-2, 7, 100])
 def test_out_of_range_gear_raises(env, gear):
     env.select_human_agent(0)
@@ -149,14 +160,21 @@ def test_out_of_range_gear_raises(env, gear):
     assert env.get_human_state()["gear"] == binding.GEAR_NEUTRAL
 
 
-@pytest.mark.parametrize("mode", [-1, 2, 99])
+@pytest.mark.parametrize("mode", [-1, binding.GEARBOX_MODE_NONE + 1, 99])
 def test_unknown_gearbox_mode_raises(env, mode):
     env.select_human_agent(0)
     with pytest.raises(ValueError):
         env.set_human_gearbox_mode(mode)
 
 
-@pytest.mark.parametrize("mode", [-1, 2, 99])
+@pytest.mark.parametrize("mode", [binding.GRIP_MODE_KINEMATIC, binding.GRIP_MODE_REALISTIC, binding.GRIP_MODE_SKID])
+def test_every_grip_mode_round_trips(env, mode):
+    env.select_human_agent(0)
+    env.set_human_grip_mode(mode)
+    assert env.get_human_state()["grip_mode"] == mode
+
+
+@pytest.mark.parametrize("mode", [-1, binding.GRIP_MODE_SKID + 1, 99])
 def test_unknown_grip_mode_raises(env, mode):
     with pytest.raises(ValueError):
         env.set_human_grip_mode(mode)
