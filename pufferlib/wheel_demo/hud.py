@@ -93,6 +93,13 @@ PEDAL_MARKER_OVERHANG_PX = 4
 PEDAL_MARKER_THICKNESS_PX = 3
 COLOR_LEVEL = {"calm": (110, 210, 120), "normal": (240, 242, 245), "aggressive": (255, 90, 70)}
 COLOR_SKID_MARK = (18, 18, 18)
+COLOR_BELIEF_ON_TRIAL = (90, 200, 255)
+BELIEF_ROW_PX = 22
+BELIEF_LABEL_WIDTH_PX = 46
+BELIEF_BAR_WIDTH_PX = 120
+BELIEF_BAR_HEIGHT_PX = 12
+BELIEF_BAR_INSET_PX = 5
+BELIEF_VALUE_GAP_PX = 8
 SKID_MARK_MAX_ALPHA = 170
 FULL_STEERING_LABELS = {"car": "CAR STEERS, WHEEL SHOWS", "wheel": "WHEEL STEERS"}
 
@@ -207,6 +214,10 @@ class HudInfo:
     driving_style: str = "off"
     # under FULL: "car" steers itself and the wheel shows it, "wheel" steers the car, "custom" set by hand
     full_steering: str = "car"
+    # co-adapt's live share and trial while it runs (the sim then reports plain Blend); empty otherwise
+    coadapt_line: str = ""
+    # co-adapt's belief about the best share: (label, probability, on trial now) per share
+    coadapt_belief: tuple = ()
 
 
 def pedal_fraction(value):
@@ -301,8 +312,12 @@ class Hud:
         ffb = "off" if info.ffb_gain is None else f"{round(100 * info.ffb_gain)}%"
         self._text(surface, self.font_label, f"Force feedback: {ffb}", (PANEL_MARGIN_PX, INFO_TOP_PX + INFO_LINE_PX))
         if assist is not None:
-            self._text(surface, self.font_label, f"Assist: {ASSIST_MODE_NAMES[assist['mode']]}",
-                       (PANEL_MARGIN_PX, INFO_TOP_PX + 2 * INFO_LINE_PX))
+            assist_name = "co-adapt" if info.coadapt_line else ASSIST_MODE_NAMES[assist["mode"]]
+            self._text(surface, self.font_label, f"Assist: {assist_name}", (PANEL_MARGIN_PX, INFO_TOP_PX + 2 * INFO_LINE_PX))
+        if info.coadapt_line:
+            self._text(surface, self.font_label, f"Co-adapt: {info.coadapt_line}", (PANEL_MARGIN_PX, INFO_TOP_PX + 3 * INFO_LINE_PX))
+        if info.coadapt_belief:
+            self._draw_coadapt_belief(surface, info.coadapt_belief, INFO_TOP_PX + 4 * INFO_LINE_PX)
         from pufferlib.ocean.drive import binding
 
         if assist is None or assist["mode"] != binding.ASSIST_MODE_FULL:
@@ -313,6 +328,21 @@ class Hud:
             self._text(surface, self.font_label, f"Your style: {info.driving_style.upper()}",
                        (PANEL_MARGIN_PX, INFO_TOP_PX + 4 * INFO_LINE_PX),
                        color=COLOR_LEVEL.get(info.driving_style, COLOR_TEXT))
+
+    def _draw_coadapt_belief(self, surface, belief, top_px):
+        """One bar per share: its probability of being the best (Gibbs belief), the share on trial now highlighted."""
+        pygame = self.pygame
+        self._text(surface, self.font_label, "Best share (belief):", (PANEL_MARGIN_PX, top_px))
+        for row, (label, probability, on_trial) in enumerate(belief):
+            y = top_px + (row + 1) * BELIEF_ROW_PX
+            color = COLOR_BELIEF_ON_TRIAL if on_trial else COLOR_TEXT
+            self._text(surface, self.font_label, label, (PANEL_MARGIN_PX, y), color=color)
+            bar_x = PANEL_MARGIN_PX + BELIEF_LABEL_WIDTH_PX
+            pygame.draw.rect(surface, COLOR_BAR_TRACK, (bar_x, y + BELIEF_BAR_INSET_PX, BELIEF_BAR_WIDTH_PX, BELIEF_BAR_HEIGHT_PX))
+            fill_px = round(probability * BELIEF_BAR_WIDTH_PX)
+            pygame.draw.rect(surface, color, (bar_x, y + BELIEF_BAR_INSET_PX, fill_px, BELIEF_BAR_HEIGHT_PX))
+            self._text(surface, self.font_label, f"{round(100 * probability)}%",
+                       (bar_x + BELIEF_BAR_WIDTH_PX + BELIEF_VALUE_GAP_PX, y), color=color)
 
     def _draw_skid_marks(self, surface, skid_marks):
         """Rubber on the road: dark, translucent, fading out with age (age_fraction 0 new, 1 gone)."""

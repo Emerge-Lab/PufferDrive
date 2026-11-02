@@ -443,7 +443,7 @@ def test_ffb_gain_defaults_to_the_force_models_default(demo_parser):
 
 def test_assist_flag_offers_the_five_modes_and_starts_off(demo_parser, run_demo):
     action = next(a for a in demo_parser._actions if a.dest == "assist")
-    assert set(action.choices) == {"off", "display", "blend", "nudge", "full"}
+    assert set(action.choices) == {"off", "display", "blend", "nudge", "full", "co-adapt"}
     assert action.default == "off"
     assert demo_parser.parse_args(["--assist", "full"]).assist == "full"
     assert run_demo.ASSIST_MODES_BY_NAME == {
@@ -582,6 +582,7 @@ class FakeDemoLoop:
         self.env = AssistEnv()
         self.human_agent_idx = 0
         self.substep_dt = 0.05
+        self.dt = 0.3
 
 
 @pytest.mark.parametrize("extra_args,expected", [(["--fullscreen"], True), ([], False)])
@@ -1076,3 +1077,20 @@ def test_cli_help_names_full_self_driving(demo_parser):
     assert actions["assist_blend"].help.endswith("share of steering and acceleration the policy gets")
     assert demo_parser.get_default("assist_blend") == 0.5
     assert demo_parser.parse_args(["--assist", "full"]).assist == "full"
+
+
+def test_draw_passes_the_co_adapt_line_to_the_hud(drawing_window):
+    window, _clock, drawn = drawing_window
+    window.draw({}, WheelState(), 0.0, coadapt_line="40% policy, trial 2, 9 s left")
+    assert drawn["infos"][-1].coadapt_line == "40% policy, trial 2, 9 s left"
+    window.draw({}, WheelState(), 0.0)
+    assert drawn["infos"][-1].coadapt_line == ""
+
+
+def test_draw_passes_the_co_adapt_belief_to_the_hud(drawing_window):
+    window, _clock, drawn = drawing_window
+    belief = (("20%", 0.7, True), ("40%", 0.3, False))
+    window.draw({}, WheelState(), 0.0, coadapt_belief=belief)
+    assert drawn["infos"][-1].coadapt_belief == belief
+    window.draw({}, WheelState(), 0.0)
+    assert drawn["infos"][-1].coadapt_belief == ()

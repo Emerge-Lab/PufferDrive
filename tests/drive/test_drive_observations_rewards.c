@@ -229,6 +229,62 @@ static int test_reward_goal_speed_gating(void) {
     return 0;
 }
 
+#define STALE_GOAL_REWARD -7.0f
+
+static int test_human_step_goal_reward_is_the_goal_term_of_this_step_only(void) {
+    Drive env;
+    Agent agent;
+    Log log;
+    int active[1];
+    float reward[1] = {0};
+
+    init_reward_env(&env, &agent, &log, active, reward);
+    env.human_agent_idx = 0;
+    env.human_step_goal_reward = STALE_GOAL_REWARD;
+    agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
+    agent.metrics_array[COLLISION_IDX] = 1.0f;
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(env.human_step_goal_reward, env.reward_goal, 0.0f);
+    EXPECT_NEAR(env.human_step_goal_reward, log.reward_goal, 0.0f);
+
+    init_reward_env(&env, &agent, &log, active, reward);
+    env.human_agent_idx = 0;
+    env.human_step_goal_reward = STALE_GOAL_REWARD;
+    agent.metrics_array[COLLISION_IDX] = 1.0f;
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(env.human_step_goal_reward, 0.0f, 0.0f);
+    EXPECT_TRUE(env.rewards[0] != 0.0f);
+
+    // a gated final waypoint pays nothing, and that is what is reported
+    init_reward_env(&env, &agent, &log, active, reward);
+    env.human_agent_idx = 0;
+    env.human_step_goal_reward = STALE_GOAL_REWARD;
+    agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
+    agent.current_goal_idx = agent.goal_count;
+    agent.reward_coefs[REWARD_COEF_GOAL_SPEED] = 3.0f;
+    agent.sim_speed = 10.0f;
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(env.human_step_goal_reward, 0.0f, 0.0f);
+    return 0;
+}
+
+static int test_another_cars_goal_never_touches_the_human_goal_reward(void) {
+    Drive env;
+    Agent agent;
+    Log log;
+    int active[1];
+    float reward[1] = {0};
+
+    init_reward_env(&env, &agent, &log, active, reward);
+    env.human_agent_idx = -1;
+    env.human_step_goal_reward = STALE_GOAL_REWARD;
+    agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(env.human_step_goal_reward, STALE_GOAL_REWARD, 0.0f);
+    EXPECT_NEAR(env.rewards[0], env.reward_goal, 1e-5f);
+    return 0;
+}
+
 static int test_reward_coef_goal_speed_pinned(void) {
     Drive env = {0};
     Agent agent = {0};
@@ -602,6 +658,8 @@ int main(void) {
     RUN_TEST(test_observation_zero_fill_and_valid_counts);
     RUN_TEST(test_reward_terminal_components);
     RUN_TEST(test_reward_goal_speed_gating);
+    RUN_TEST(test_human_step_goal_reward_is_the_goal_term_of_this_step_only);
+    RUN_TEST(test_another_cars_goal_never_touches_the_human_goal_reward);
     RUN_TEST(test_reward_coef_goal_speed_pinned);
     RUN_TEST(test_partner_obs_relative_velocity);
     RUN_TEST(test_partner_obs_split_long_partner);

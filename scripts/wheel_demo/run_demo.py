@@ -40,6 +40,7 @@ from pufferlib.wheel_demo.loop import (
     WheelDemoLoop,
 )
 from pufferlib.wheel_demo.calibrate import calibrate_interactively, validate_calibration
+from pufferlib.wheel_demo.coadapt import CoAdapt
 from pufferlib.wheel_demo.ffb import DEFAULT_FORCE_GAIN, ForceFeedbackLoop, platform_force_output
 from pufferlib.wheel_demo.levels import LEVELS, LEVEL_NAMES, apply_driving_style, apply_level, level_by_name
 from pufferlib.wheel_demo.maps import CARLA_TOWNS
@@ -63,6 +64,9 @@ ASSIST_MODES_BY_NAME = {
     "full": binding.ASSIST_MODE_FULL,
 }
 ASSIST_MODE_CYCLE = tuple(ASSIST_MODES_BY_NAME.values())
+# Co-adapt is Blend with the share learned by a bandit, so it is a demo-side mode, not one of the sim's
+COADAPT = "co-adapt"
+ASSIST_CHOICES = tuple(ASSIST_MODES_BY_NAME) + (COADAPT,)
 # Wheel button -> demo command. The keyboard keys keep working alongside these.
 WHEEL_BUTTON_COMMANDS = {
     "a": "cycle_camera",
@@ -171,11 +175,45 @@ def cycle_full_steering(loop):
     print(f"  self-driving steering -> {name}")
 
 
-def cycle_assist(loop, blend_target):
-    current = loop.env.get_assist_state()["mode"]
-    next_mode = ASSIST_MODE_CYCLE[(ASSIST_MODE_CYCLE.index(current) + 1) % len(ASSIST_MODE_CYCLE)]
+def cycle_assist(loop, blend_target, coadapt=None):
+    """Next assist mode; with a co-adapt controller the cycle ends on co-adapt before returning to off."""
+    if coadapt is not None and coadapt.active:
+        coadapt.stop()
+        next_mode = ASSIST_MODE_CYCLE[0]
+    else:
+        current = loop.env.get_assist_state()["mode"]
+        position = ASSIST_MODE_CYCLE.index(current) + 1
+        if coadapt is not None and position == len(ASSIST_MODE_CYCLE):
+            coadapt.start(loop.env)
+            print(f"  assist -> {COADAPT} (Blend share {round(100 * coadapt.share)}%)")
+            return
+        next_mode = ASSIST_MODE_CYCLE[position % len(ASSIST_MODE_CYCLE)]
     loop.env.set_assist_mode(next_mode, blend_target)
     print(f"  assist -> {ASSIST_MODE_NAMES[next_mode]}")
+
+
+def coadapt_hud_line(coadapt):
+    if not coadapt.active:
+        return ""
+    return f"{round(100 * coadapt.share)}% policy, trial {coadapt.trial_count + 1}, {coadapt.seconds_left:.0f} s left"
+
+
+def coadapt_hud_belief(coadapt):
+    """(share label, P(best), on trial now) per share for the HUD's belief bars, or () when co-adapt is off."""
+    if not coadapt.active:
+        return ()
+    belief = coadapt.bandit.best_arm_belief()
+    return tuple((f"{round(100 * share)}%", belief[arm], arm == coadapt.arm) for arm, share in enumerate(coadapt.shares))
+
+
+def report_coadapt_trial(coadapt, finished):
+    if finished is None:
+        return
+    arm, score = finished
+    print(
+        f"  co-adapt trial {coadapt.trial_count}: {round(100 * coadapt.shares[arm])}% scored {score:+.3f} | "
+        f"{coadapt.summary()} | next {round(100 * coadapt.share)}%"
+    )
 
 
 class WheelButtonCommands:
@@ -204,7 +242,7 @@ def adjust_ffb_gain(force_loop, step):
 
 
 def apply_window_keys(window, loop, level_index=0, wheel_commands=None, force_loop=None, assist_blend=0.5,
-                      style_state=None):
+                      style_state=None, coadapt=None):
     """Window keys and wheel buttons drive the demo: cameras, night, level, assist, style, car takeover, engine restart."""
     keys = window.poll()
     keys.update(wheel_commands or {})
@@ -215,9 +253,11 @@ def apply_window_keys(window, loop, level_index=0, wheel_commands=None, force_lo
     if keys.get("restart"):
         loop.restart()
         window.restart()
+        if coadapt is not None:
+            coadapt.restart(loop.env)
         print("  restarted: every car and your goals are back at the start")
     if keys.get("cycle_assist"):
-        cycle_assist(loop, assist_blend)
+        cycle_assist(loop, assist_blend, coadapt)
     if keys.get("cycle_camera"):
         window.set_camera_mode((window.camera_mode + 1) % CAMERA_MODE_COUNT)
     if keys.get("ffb_gain_up"):
@@ -279,8 +319,9 @@ def main():
     parser.add_argument("--ffb-gain", type=float, default=DEFAULT_FORCE_GAIN, help="overall force strength, 0-1")
     parser.add_argument("--calibrate", action="store_true", help="calibrate the wheel before driving")
     parser.add_argument("--level", default="normal", choices=LEVEL_NAMES, help="how the surrounding traffic behaves")
-    parser.add_argument("--assist", default="off", choices=tuple(ASSIST_MODES_BY_NAME),
-                        help="steering assist mode; full = Full Self Driving")
+    parser.add_argument("--assist", default="off", choices=ASSIST_CHOICES,
+                        help="steering assist mode; full = Full Self Driving; co-adapt = Blend whose share "
+                             "(20/40/60/80%%) a bandit learns from your return, one 20 s trial at a time")
     parser.add_argument("--assist-blend", type=float, default=0.5, help="blend mode: share of steering and acceleration the policy gets")
     parser.add_argument("--action-selection", default="mode", choices=ACTION_SELECTIONS,
                         help="how the policy picks its action: argmax class (mode), a draw (sample) or the mean")
@@ -330,7 +371,11 @@ def main():
     )
 
     loop = WheelDemoLoop(config, wheel)
-    loop.env.set_assist_mode(ASSIST_MODES_BY_NAME[args.assist], args.assist_blend)
+    coadapt = CoAdapt(loop.dt)
+    if args.assist == COADAPT:
+        coadapt.start(loop.env)
+    else:
+        loop.env.set_assist_mode(ASSIST_MODES_BY_NAME[args.assist], args.assist_blend)
     window = None
     if args.render:
         window = CarlaDemoWindow(
@@ -381,10 +426,12 @@ def main():
             driving_style=DRIVING_STYLES[style_state["index"]],
             full_steering=loop.full_steering,
             ffb_gain=force_loop.output.force_gain if force_loop is not None else None,
+            coadapt_line=coadapt_hud_line(coadapt),
+            coadapt_belief=coadapt_hud_belief(coadapt),
         )
         wheel_commands = wheel_buttons.poll(wheel_state) if wheel_buttons is not None else None
         state["level_index"] = apply_window_keys(
-            window, loop, state["level_index"], wheel_commands, force_loop, args.assist_blend, style_state
+            window, loop, state["level_index"], wheel_commands, force_loop, args.assist_blend, style_state, coadapt
         )
 
     try:
@@ -393,6 +440,7 @@ def main():
                 drive_synthetic(wheel, step_idx)
             started = time.perf_counter()
             wheel_state, _info = loop.step_once(on_substep=on_substep)
+            report_coadapt_trial(coadapt, coadapt.after_step(loop))
             if step_idx % HUD_EVERY_STEPS == 0 and window is None:
                 print_hud(step_idx, wheel_state, loop.human_state(), loop.dt)
             if window is not None and window.should_close():

@@ -254,6 +254,7 @@ struct Drive {
     int human_gearbox_mode;
     int human_gear;
     int human_reverse_chosen_by_assist; // FULL put the selector in R; it goes back to D once you have the car at rest
+    float human_step_goal_reward; // the goal part of the human car's reward on the latest step (co-adapt leaves it out)
     int human_engine_stalled;
     float human_engine_rpm;
     float human_throttle_norm;
@@ -4749,6 +4750,10 @@ static void compute_rewards(Drive *env, int i) {
     int agent_idx = env->active_agent_indices[i];
     Agent *agent = &env->agents[agent_idx];
     Log *agent_log = &env->logs[i];
+    int is_human = agent_idx == env->human_agent_idx;
+    if (is_human) {
+        env->human_step_goal_reward = 0.0f;
+    }
 
     // Collision reward
     if (agent->metrics_array[COLLISION_IDX] > 0.0f) {
@@ -4791,6 +4796,9 @@ static void compute_rewards(Drive *env, int i) {
         float reward_goal = (final_waypoint && speeding) ? 0.0f : env->reward_goal;
         env->rewards[i] += reward_goal;
         agent_log->reward_goal += reward_goal;
+        if (is_human) {
+            env->human_step_goal_reward = reward_goal;
+        }
     }
 
     // Get lane angle metric: cos(θ_f) where θ_f = heading diff from lane

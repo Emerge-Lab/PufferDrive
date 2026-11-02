@@ -113,6 +113,7 @@ class WheelDemoLoop:
         self.env = build_demo_env(checkpoint_config, config.map_file(), config.num_agents, config.env_overrides)
         self.dt = float(self.env.dt)
         self.observations, _ = self.env.reset(seed=config.seed)
+        self.last_rewards = None
         self.traffic = FrozenTraffic(
             config.checkpoint_path, self.env, checkpoint_config, config.device, config.action_selection
         )
@@ -249,6 +250,7 @@ class WheelDemoLoop:
                 self.telemetry.substep_callback_seconds += time.perf_counter() - callback_start
 
         self.observations, rewards, terminals, truncations, info = self.env.step(actions)
+        self.last_rewards = rewards  # every car's reward for this policy step (co-adapt scores yours)
         done = time.perf_counter()
 
         self.telemetry.policy_steps += 1

@@ -47,6 +47,7 @@ HUMAN_STATE_KEYS = {
     "goal_y",
     "goal_idx",
     "wheelbase_m",
+    "step_goal_reward",
 }
 
 
@@ -129,6 +130,7 @@ def test_selecting_a_human_reports_the_full_powertrain_state(env):
     assert state["engine_rpm"] == pytest.approx(binding.ENGINE_IDLE_RPM)
     assert state["engine_stalled"] == 0
     assert state["max_speed_mps"] > 0.0
+    assert state["step_goal_reward"] == 0.0
 
     env.select_human_agent(-1)
     assert env.get_human_state() is None

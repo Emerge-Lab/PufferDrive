@@ -175,7 +175,7 @@ def every_launcher_choice():
         ("chase", "driver", "agent"),
         ("day", "night"),
         ("calm", "normal", "aggressive"),
-        ("off", "display", "blend", "nudge", "full"),
+        ("off", "display", "blend", "nudge", "full", "co-adapt"),
         (True, False),
         ("wheel", "synthetic"),
         CONTRACT_GEARBOXES,
@@ -208,7 +208,7 @@ def test_run_demo_accepts_every_command_the_launcher_can_build(launcher, demo_pa
         if args.ffb:
             assert args.ffb_gain == pytest.approx(0.45)
         checked += 1
-    assert checked == 3 * 2 * 3 * 5 * 2 * 2 * len(CONTRACT_GEARBOXES) * len(CONTRACT_GRIPS) * 2
+    assert checked == 3 * 2 * 3 * 6 * 2 * 2 * len(CONTRACT_GEARBOXES) * len(CONTRACT_GRIPS) * 2
 
 
 @pytest.mark.parametrize("window,expected", [("fullscreen", True), ("windowed", False)])
@@ -376,7 +376,7 @@ def test_grip_is_always_passed(launcher, grip):
     assert flag_value(launcher.demo_command(settings_with(grip=grip)), "--grip") == grip
 
 
-@pytest.mark.parametrize("assist", ["off", "display", "blend", "nudge", "full"])
+@pytest.mark.parametrize("assist", ["off", "display", "blend", "nudge", "full", "co-adapt"])
 def test_full_steering_and_style_rows_are_enabled_only_under_full(built_launcher, launcher, assist):
     built_launcher.vars["assist"] = FakeVar(assist)
     launcher.Launcher._on_change(built_launcher)
@@ -609,5 +609,6 @@ def test_the_default_town_is_town10hd(launcher):
 
 def test_the_assist_choice_names_full_self_driving(built_launcher):
     assert ("full", "Full Self Driving") in segment_options("assist", built_launcher)
+    assert ("co-adapt", "Co-adapt") in segment_options("assist", built_launcher)
     assert "Self-driving steering" in built_launcher.widgets
     assert "Full steering" not in built_launcher.widgets

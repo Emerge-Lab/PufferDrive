@@ -153,6 +153,8 @@ class CarlaDemoWindow:
         ffb_gain=None,
         driving_style="off",
         full_steering="car",
+        coadapt_line="",
+        coadapt_belief=(),
     ):
         """One real-time frame. Returns False when the frame was skipped to catch up."""
         now_s = time.perf_counter()
@@ -183,6 +185,8 @@ class CarlaDemoWindow:
                 help_text=HELP_TEXT,
                 driving_style=driving_style,
                 full_steering=full_steering,
+                coadapt_line=coadapt_line,
+                coadapt_belief=coadapt_belief,
             ),
             elapsed_seconds,
             mirrors=self._mirror_layout(images),
