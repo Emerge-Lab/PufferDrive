@@ -1774,9 +1774,74 @@ static bool check_corner_boxes_overlap(float corners_a[4][2], float corners_b[4]
     return true;
 }
 
+static bool check_front_bumper_crossing(Agent *agent, TrafficControlElement *tc) {
+    float line_dx = tc->stop_line[3] - tc->stop_line[0];
+    float line_dy = tc->stop_line[4] - tc->stop_line[1];
+    float line_len = sqrtf(line_dx * line_dx + line_dy * line_dy);
+    if (line_len <= 0.0f) {
+        return false;
+    }
+    float mid_x = (tc->stop_line[0] + tc->stop_line[3]) * 0.5f;
+    float mid_y = (tc->stop_line[1] + tc->stop_line[4]) * 0.5f;
+    float line_ux = line_dx / line_len, line_uy = line_dy / line_len;
+    // Normal oriented along travel direction, so s < 0 is before the line.
+    float normal_x = -line_uy, normal_y = line_ux;
+    if (normal_x * cosf(tc->heading) + normal_y * sinf(tc->heading) < 0.0f) {
+        normal_x = -normal_x;
+        normal_y = -normal_y;
+    }
+
+    // Use physical dimensions, not the observation-only perceived size margin.
+    float prev_corners[4][2], cur_corners[4][2];
+    compute_bounding_box_corners(
+        agent->prev_x,
+        agent->prev_y,
+        agent->prev_cos_heading,
+        agent->prev_sin_heading,
+        agent->sim_length / 2.0f,
+        agent->sim_width / 2.0f,
+        prev_corners);
+    compute_bounding_box_corners(
+        agent->sim_x,
+        agent->sim_y,
+        agent->cos_heading,
+        agent->sin_heading,
+        agent->sim_length / 2.0f,
+        agent->sim_width / 2.0f,
+        cur_corners);
+
+    // Corners 0 and 1 form the front bumper. Both must start before the line:
+    // the trailing corner, center, and rear must not report the same entry again.
+    float s_prev[2], s_cur[2];
+    for (int corner_idx = 0; corner_idx < 2; corner_idx++) {
+        s_prev[corner_idx]
+            = (prev_corners[corner_idx][0] - mid_x) * normal_x + (prev_corners[corner_idx][1] - mid_y) * normal_y;
+        s_cur[corner_idx]
+            = (cur_corners[corner_idx][0] - mid_x) * normal_x + (cur_corners[corner_idx][1] - mid_y) * normal_y;
+    }
+    if (fmaxf(s_prev[0], s_prev[1]) >= 0.0f) {
+        return false;
+    }
+    for (int corner_idx = 0; corner_idx < 2; corner_idx++) {
+        if (s_cur[corner_idx] < 0.0f) {
+            continue;
+        }
+        float crossing_frac = s_prev[corner_idx] / (s_prev[corner_idx] - s_cur[corner_idx]);
+        float cross_x
+            = prev_corners[corner_idx][0] + crossing_frac * (cur_corners[corner_idx][0] - prev_corners[corner_idx][0]);
+        float cross_y
+            = prev_corners[corner_idx][1] + crossing_frac * (cur_corners[corner_idx][1] - prev_corners[corner_idx][1]);
+        float lateral = (cross_x - mid_x) * line_ux + (cross_y - mid_y) * line_uy;
+        if (fabsf(lateral) <= 0.5f * line_len + RED_LIGHT_LATERAL_EXTENSION_M) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool check_red_light_violation(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
-    // Vehicle center crosses on red; the laterally extended line cannot be driven
+    // Front bumper crosses on red; the laterally extended line cannot be driven
     // around, and the heading gate exempts exiting/opposing traffic.
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
@@ -1804,29 +1869,7 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
             continue;
         }
 
-        float line_dx = tc->stop_line[3] - tc->stop_line[0];
-        float line_dy = tc->stop_line[4] - tc->stop_line[1];
-        float line_len = sqrtf(line_dx * line_dx + line_dy * line_dy);
-        if (line_len <= 0.0f) {
-            continue;
-        }
-        float line_ux = line_dx / line_len, line_uy = line_dy / line_len;
-        // normal oriented along travel direction, so s < 0 is before the line
-        float normal_x = -line_uy, normal_y = line_ux;
-        if (normal_x * cosf(tc->heading) + normal_y * sinf(tc->heading) < 0.0f) {
-            normal_x = -normal_x;
-            normal_y = -normal_y;
-        }
-        float s_prev = (agent->prev_x - mid_x) * normal_x + (agent->prev_y - mid_y) * normal_y;
-        float s_cur = (agent->sim_x - mid_x) * normal_x + (agent->sim_y - mid_y) * normal_y;
-        if (!(s_prev < 0.0f && s_cur >= 0.0f)) {
-            continue;
-        }
-        float crossing_frac = s_prev / (s_prev - s_cur);
-        float cross_x = agent->prev_x + crossing_frac * (agent->sim_x - agent->prev_x);
-        float cross_y = agent->prev_y + crossing_frac * (agent->sim_y - agent->prev_y);
-        float lateral = (cross_x - mid_x) * line_ux + (cross_y - mid_y) * line_uy;
-        if (fabsf(lateral) <= 0.5f * line_len + RED_LIGHT_LATERAL_EXTENSION_M) {
+        if (check_front_bumper_crossing(agent, tc)) {
             return true;
         }
     }

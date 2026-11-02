@@ -34,7 +34,7 @@ static Drive drive_test_light_env(TrafficControlElement *tc) {
     return env;
 }
 
-// Violation = vehicle center crossing the line; stationary/backward motion never flags.
+// Agent length 4: the front bumper is 2 m ahead of the center.
 static Agent drive_test_driving_agent(float prev_x, float cur_x, float y) {
     Agent agent = drive_test_agent(prev_x, y, 0.0f);
     agent.sim_x = cur_x;
@@ -47,20 +47,20 @@ static int test_red_crossing_flags(void) {
     TrafficControlElement tc = drive_test_light();
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
-    Agent agent = drive_test_driving_agent(-0.5f, 0.5f, 0.0f);
+    Agent agent = drive_test_driving_agent(-2.5f, -1.5f, 0.0f);
     env.agents = &agent;
     EXPECT_TRUE(check_red_light_violation(&env, 0));
     return 0;
 }
 
-static int test_straddle_then_proceed_on_red_flags(void) {
+static int test_front_already_across_no_flag(void) {
     TrafficControlElement tc = drive_test_light();
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
-    // nose already over the line when the light turned red; proceeding completes entry
+    // The entry event has already happened; crossing with the center must not fire again.
     Agent agent = drive_test_driving_agent(-1.5f, 0.5f, 0.0f);
     env.agents = &agent;
-    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    EXPECT_TRUE(!check_red_light_violation(&env, 0));
     return 0;
 }
 
@@ -68,12 +68,12 @@ static int test_green_crossing_then_red_inside_no_flag(void) {
     TrafficControlElement tc = drive_test_light();
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_GREEN);
-    Agent agent = drive_test_driving_agent(1.5f, 2.5f, 0.0f);
+    Agent agent = drive_test_driving_agent(-2.5f, -1.5f, 0.0f);
     env.agents = &agent;
     EXPECT_TRUE(!check_red_light_violation(&env, 0));
-    // light turns red once the agent is fully inside the junction
+    // The front entered on green; red must not penalize the later center crossing.
     set_light(TRAFFIC_CONTROL_STATE_RED);
-    agent = drive_test_driving_agent(4.0f, 5.0f, 0.0f);
+    agent = drive_test_driving_agent(-1.5f, 0.5f, 0.0f);
     EXPECT_TRUE(!check_red_light_violation(&env, 0));
     return 0;
 }
@@ -94,8 +94,12 @@ static int test_crossing_fires_once(void) {
     TrafficControlElement tc = drive_test_light();
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
-    Agent agent = drive_test_driving_agent(2.5f, 3.5f, 0.0f);
+    Agent agent = drive_test_driving_agent(-2.5f, -1.5f, 0.0f);
     env.agents = &agent;
+    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    agent = drive_test_driving_agent(-1.5f, 0.5f, 0.0f);
+    EXPECT_TRUE(!check_red_light_violation(&env, 0));
+    agent = drive_test_driving_agent(0.5f, 2.5f, 0.0f);
     EXPECT_TRUE(!check_red_light_violation(&env, 0));
     return 0;
 }
@@ -105,7 +109,7 @@ static int test_opposing_lane_bypass_flags(void) {
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
     // crossing 5 m beside the painted line (opposing lane) is still a violation
-    Agent agent = drive_test_driving_agent(-0.5f, 0.5f, 5.0f);
+    Agent agent = drive_test_driving_agent(-2.5f, -1.5f, 5.0f);
     env.agents = &agent;
     EXPECT_TRUE(check_red_light_violation(&env, 0));
     return 0;
@@ -115,7 +119,7 @@ static int test_crossing_beyond_virtual_extension_no_flag(void) {
     TrafficControlElement tc = drive_test_light();
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
-    Agent agent = drive_test_driving_agent(-0.5f, 0.5f, 18.0f);
+    Agent agent = drive_test_driving_agent(-2.5f, -1.5f, 18.1f);
     env.agents = &agent;
     EXPECT_TRUE(!check_red_light_violation(&env, 0));
     return 0;
@@ -138,8 +142,9 @@ static int test_diagonal_entry_flags(void) {
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
     // 1.2 rad off the light heading is still entering (< pi/2 gate)
-    Agent agent = drive_test_agent(-0.5f, 0.0f, 1.2f);
-    agent.sim_x = 0.5f;
+    // Only the leading corner crosses: even the bumper midpoint stays before x = 0.
+    Agent agent = drive_test_agent(-2.0f, 0.0f, 1.2f);
+    agent.sim_x = -1.5f;
     env.agents = &agent;
     EXPECT_TRUE(check_red_light_violation(&env, 0));
     return 0;
@@ -161,7 +166,7 @@ static int test_different_z_level_no_flag(void) {
     TrafficControlElement tc = drive_test_light();
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
-    Agent agent = drive_test_driving_agent(-0.5f, 0.5f, 0.0f);
+    Agent agent = drive_test_driving_agent(-2.5f, -1.5f, 0.0f);
     agent.sim_z = 6.0f;
     env.agents = &agent;
     EXPECT_TRUE(!check_red_light_violation(&env, 0));
@@ -172,7 +177,7 @@ static int test_no_lane_assignment_still_flags(void) {
     TrafficControlElement tc = drive_test_light();
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
-    Agent agent = drive_test_driving_agent(-0.5f, 0.5f, 0.0f);
+    Agent agent = drive_test_driving_agent(-2.5f, -1.5f, 0.0f);
     agent.current_lane_idx = -1;
     agent.previous_lane_idx = -1;
     env.agents = &agent;
@@ -180,10 +185,126 @@ static int test_no_lane_assignment_still_flags(void) {
     return 0;
 }
 
+static int test_approach_and_reverse_no_flag(void) {
+    TrafficControlElement tc = drive_test_light();
+    Drive env = drive_test_light_env(&tc);
+    set_light(TRAFFIC_CONTROL_STATE_RED);
+    Agent agent = drive_test_driving_agent(-3.0f, -2.1f, 0.0f);
+    env.agents = &agent;
+    EXPECT_TRUE(!check_red_light_violation(&env, 0));
+    agent = drive_test_driving_agent(-2.1f, -2.1f, 0.0f);
+    EXPECT_TRUE(!check_red_light_violation(&env, 0));
+    agent = drive_test_driving_agent(-1.5f, -2.5f, 0.0f);
+    EXPECT_TRUE(!check_red_light_violation(&env, 0));
+    return 0;
+}
+
+static int test_front_touch_and_large_step_flag(void) {
+    TrafficControlElement tc = drive_test_light();
+    Drive env = drive_test_light_env(&tc);
+    set_light(TRAFFIC_CONTROL_STATE_RED);
+    Agent agent = drive_test_driving_agent(-2.5f, -2.0f, 0.0f);
+    env.agents = &agent;
+    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    agent = drive_test_driving_agent(-10.0f, 10.0f, 0.0f);
+    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    return 0;
+}
+
+static int test_heading_change_uses_previous_pose(void) {
+    TrafficControlElement tc = drive_test_light();
+    Drive env = drive_test_light_env(&tc);
+    set_light(TRAFFIC_CONTROL_STATE_RED);
+    Agent agent = drive_test_agent(-1.8f, 0.0f, 1.2f);
+    agent.sim_heading = 0.4f;
+    agent.cos_heading = cosf(agent.sim_heading);
+    agent.sin_heading = sinf(agent.sim_heading);
+    env.agents = &agent;
+    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    return 0;
+}
+
+static int test_trailing_front_corner_does_not_retrigger(void) {
+    TrafficControlElement tc = drive_test_light();
+    Drive env = drive_test_light_env(&tc);
+    set_light(TRAFFIC_CONTROL_STATE_RED);
+    Agent agent = drive_test_agent(-2.0f, 0.0f, 1.2f);
+    agent.sim_x = -1.5f;
+    env.agents = &agent;
+    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    copy_pose_to_prev(&agent);
+    agent.sim_x = 1.0f;
+    EXPECT_TRUE(!check_red_light_violation(&env, 0));
+    return 0;
+}
+
+static int test_front_edge_overlaps_lateral_limit(void) {
+    TrafficControlElement tc = drive_test_light();
+    Drive env = drive_test_light_env(&tc);
+    set_light(TRAFFIC_CONTROL_STATE_RED);
+    // Center is outside the 17 m half-span, but the right front corner is inside.
+    Agent agent = drive_test_driving_agent(-2.5f, -1.5f, 17.5f);
+    env.agents = &agent;
+    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    return 0;
+}
+
+static int test_translated_rotated_line_and_reversed_endpoints(void) {
+    TrafficControlElement tc = drive_test_light();
+    tc.stop_line[0] = 8.0f;
+    tc.stop_line[1] = 20.0f;
+    tc.stop_line[3] = 12.0f;
+    tc.stop_line[4] = 20.0f;
+    tc.heading = (float) M_PI / 2.0f;
+    Drive env = drive_test_light_env(&tc);
+    set_light(TRAFFIC_CONTROL_STATE_RED);
+    Agent agent = drive_test_agent(10.0f, 17.5f, tc.heading);
+    agent.sim_y = 18.5f;
+    env.agents = &agent;
+    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    tc.stop_line[0] = 12.0f;
+    tc.stop_line[3] = 8.0f;
+    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    return 0;
+}
+
+static int test_physical_length_and_perceived_margin(void) {
+    TrafficControlElement tc = drive_test_light();
+    Drive env = drive_test_light_env(&tc);
+    set_light(TRAFFIC_CONTROL_STATE_RED);
+    Agent agent = drive_test_driving_agent(-3.5f, -2.5f, 0.0f);
+    env.agents = &agent;
+    EXPECT_TRUE(!check_red_light_violation(&env, 0));
+    env.eval_mode = 1;
+    env.control_mode = CONTROL_MODE_SDC_ONLY;
+    env.eval_perceived_size_margin_m = 2.0f;
+    EXPECT_TRUE(!check_red_light_violation(&env, 0));
+    agent.sim_length = 6.0f;
+    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    env.eval_perceived_size_margin_m = 0.0f;
+    EXPECT_TRUE(check_red_light_violation(&env, 0));
+    return 0;
+}
+
+static int test_non_red_or_missing_state_no_flag(void) {
+    TrafficControlElement tc = drive_test_light();
+    Drive env = drive_test_light_env(&tc);
+    Agent agent = drive_test_driving_agent(-2.5f, -1.5f, 0.0f);
+    env.agents = &agent;
+    set_light(TRAFFIC_CONTROL_STATE_GREEN);
+    EXPECT_TRUE(!check_red_light_violation(&env, 0));
+    set_light(TRAFFIC_CONTROL_STATE_YELLOW);
+    EXPECT_TRUE(!check_red_light_violation(&env, 0));
+    set_light(TRAFFIC_CONTROL_STATE_RED);
+    env.timestep = tc.state_size;
+    EXPECT_TRUE(!check_red_light_violation(&env, 0));
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_red_crossing_flags);
-    RUN_TEST(test_straddle_then_proceed_on_red_flags);
+    RUN_TEST(test_front_already_across_no_flag);
     RUN_TEST(test_green_crossing_then_red_inside_no_flag);
     RUN_TEST(test_stationary_straddle_no_flag);
     RUN_TEST(test_crossing_fires_once);
@@ -194,5 +315,13 @@ int main(void) {
     RUN_TEST(test_perpendicular_crossing_no_flag);
     RUN_TEST(test_different_z_level_no_flag);
     RUN_TEST(test_no_lane_assignment_still_flags);
+    RUN_TEST(test_approach_and_reverse_no_flag);
+    RUN_TEST(test_front_touch_and_large_step_flag);
+    RUN_TEST(test_heading_change_uses_previous_pose);
+    RUN_TEST(test_trailing_front_corner_does_not_retrigger);
+    RUN_TEST(test_front_edge_overlaps_lateral_limit);
+    RUN_TEST(test_translated_rotated_line_and_reversed_endpoints);
+    RUN_TEST(test_physical_length_and_perceived_margin);
+    RUN_TEST(test_non_red_or_missing_state_no_flag);
     return test_summary(failures);
 }
