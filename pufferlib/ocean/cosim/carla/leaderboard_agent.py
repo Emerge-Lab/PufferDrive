@@ -237,6 +237,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             "ego": actor_state_row(self.vehicle),
             "partners": [partner_row(a) for a in self._nearby_actors()],
             "light_states": [[lt.id, lt.get_state().name] for lt in self.lights],
+            "light_timers": [[lt.id, lt.get_elapsed_time(), lt.get_yellow_time()] for lt in self.lights],
             "ego_light_id": -1 if ego_light is None else ego_light.id,
         }
 

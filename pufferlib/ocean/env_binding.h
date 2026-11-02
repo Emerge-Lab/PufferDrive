@@ -1121,8 +1121,11 @@ static PyObject *vec_recompute_observations(PyObject *self, PyObject *args) {
 }
 
 static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 2) {
-        PyErr_SetString(PyExc_TypeError, "vec_set_traffic_light_states requires 2 arguments");
+    Py_ssize_t arg_count = PyTuple_Size(args);
+    if (arg_count != 2 && arg_count != 3) {
+        PyErr_SetString(
+            PyExc_TypeError,
+            "vec_set_traffic_light_states requires 2 or 3 arguments (vec_env, states[, yellow_remaining_s])");
         return NULL;
     }
     VecEnv *vec = unpack_vecenv(args);
@@ -1144,10 +1147,25 @@ static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {
             (int) PyArray_SIZE((PyArrayObject *) states_arr));
         return NULL;
     }
-    if (c_set_traffic_light_states(drive, states) != 0) {
+    float *yellow_remaining_s = NULL;
+    if (arg_count == 3 && PyTuple_GetItem(args, 2) != Py_None) {
+        PyObject *remaining_arr = PyTuple_GetItem(args, 2);
+        if (!PyArray_Check(remaining_arr) || PyArray_TYPE((PyArrayObject *) remaining_arr) != NPY_FLOAT32
+            || (int) PyArray_SIZE((PyArrayObject *) remaining_arr) != drive->num_traffic_elements) {
+            PyErr_Format(
+                PyExc_ValueError,
+                "vec_set_traffic_light_states: yellow_remaining_s must be a float32 NumPy array of %d entries",
+                drive->num_traffic_elements);
+            return NULL;
+        }
+        yellow_remaining_s = (float *) PyArray_DATA((PyArrayObject *) remaining_arr);
+    }
+    if (c_set_traffic_light_states(drive, states, yellow_remaining_s) != 0) {
         PyErr_SetString(
             PyExc_ValueError,
-            "vec_set_traffic_light_states: timestep outside the light state buffer or invalid state");
+            "vec_set_traffic_light_states: timestep outside the light state buffer, invalid state, or "
+            "yellow_remaining_s missing (obs_traffic_light_yellow_remaining needs it) or outside "
+            "[0, traffic_light_yellow_max_s]");
         return NULL;
     }
     Py_RETURN_NONE;
@@ -1629,6 +1647,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);
     PyModule_AddIntConstant(m, "PARTNER_RELATIVE_VELOCITY_FEATURES", PARTNER_RELATIVE_VELOCITY_FEATURES);
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_FEATURES", TRAFFIC_CONTROL_FEATURES);
+    PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES", TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES);
     PyModule_AddIntConstant(m, "OBS_VALID_COUNT_FEATURES", OBS_VALID_COUNT_FEATURES);
     PyModule_AddIntConstant(m, "NUM_TRAFFIC_CONTROL_TYPES", NUM_TRAFFIC_CONTROL_TYPES);
     PyModule_AddIntConstant(m, "NUM_TRAFFIC_CONTROL_STATES", NUM_TRAFFIC_CONTROL_STATES);

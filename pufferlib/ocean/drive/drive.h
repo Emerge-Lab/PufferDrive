@@ -299,6 +299,7 @@ struct Drive {
     int obs_lane_heading_signed;
     int obs_lane_speed_limit;
     int obs_slots_traffic_controls_n;
+    int obs_traffic_light_yellow_remaining; // row gains remaining yellow / traffic_light_yellow_max_s, clipped at 1
     int traffic_lights_enabled;
     int stop_signs_enabled;
     int yield_signs_enabled;
@@ -3798,10 +3799,15 @@ static inline int lane_feature_count(const Drive *env) {
     return LANE_FEATURES + (env->obs_lane_speed_limit ? LANE_SPEED_LIMIT_FEATURES : 0);
 }
 
+static inline int traffic_control_feature_count(const Drive *env) {
+    return TRAFFIC_CONTROL_FEATURES
+        + (env->obs_traffic_light_yellow_remaining ? TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES : 0);
+}
+
 static int compute_observation_size(Drive *env) {
     return EGO_FEATURES + partner_feature_count(env) * env->obs_slots_partners_n
         + lane_feature_count(env) * env->obs_slots_lane_kept + BOUNDARY_FEATURES * env->obs_slots_boundary_kept
-        + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
+        + traffic_control_feature_count(env) * env->obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
         + env->reward_conditioning * NUM_REWARD_COEFS + env->num_goals * GOAL_FEATURES;
 }
 
@@ -4240,8 +4246,13 @@ int c_set_agent_sizes(Drive *env, int count, const int *idx, const float *length
     return 0;
 }
 
-int c_set_traffic_light_states(Drive *env, const int *states) {
+// yellow_remaining_s (optional, seconds per element) keeps a yellow schedule yellow through ts + ceil(s / dt) - 1, then
+// red
+int c_set_traffic_light_states(Drive *env, const int *states, const float *yellow_remaining_s) {
     int ts = env->timestep;
+    if (env->obs_traffic_light_yellow_remaining && yellow_remaining_s == NULL) {
+        return -1;
+    }
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *traffic = &env->traffic_elements[i];
         if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
@@ -4256,10 +4267,29 @@ int c_set_traffic_light_states(Drive *env, const int *states) {
         if (states[i] < TRAFFIC_CONTROL_STATE_UNKNOWN || states[i] > TRAFFIC_CONTROL_STATE_OFF) {
             return -1;
         }
+        if (yellow_remaining_s != NULL
+            && (!isfinite(yellow_remaining_s[i]) || yellow_remaining_s[i] < 0.0f
+                || yellow_remaining_s[i] > env->traffic_light_yellow_max_s)) {
+            return -1;
+        }
         traffic->states[ts] = states[i];
         // holds until the next sync: c_step's metrics and obs read timestep + 1 before that sync arrives
         if (ts + 1 < traffic->state_size) {
             traffic->states[ts + 1] = states[i];
+        }
+        if (yellow_remaining_s == NULL || states[i] != TRAFFIC_CONTROL_STATE_YELLOW) {
+            continue;
+        }
+        int yellow_steps = (int) ceilf(yellow_remaining_s[i] / env->dt);
+        if (yellow_steps < 2) {
+            yellow_steps = 2; // the held step stays yellow
+        }
+        int yellow_end = ts + yellow_steps < traffic->state_size ? ts + yellow_steps : traffic->state_size;
+        for (int t = ts + 2; t < yellow_end; t++) {
+            traffic->states[t] = TRAFFIC_CONTROL_STATE_YELLOW;
+        }
+        if (ts + yellow_steps < traffic->state_size) {
+            traffic->states[ts + yellow_steps] = TRAFFIC_CONTROL_STATE_RED;
         }
     }
     return 0;
@@ -5223,6 +5253,19 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     return obs_idx;
 }
 
+// Consecutive yellow steps from timestep on, at most max_steps (the schedule's end truncates)
+static int yellow_remaining_steps(const TrafficControlElement *tc, int timestep, int max_steps) {
+    int scan_end = timestep + max_steps < tc->state_size ? timestep + max_steps : tc->state_size;
+    int remaining_steps = 0;
+    for (int t = timestep; t < scan_end; t++) {
+        if (tc->states[t] != TRAFFIC_CONTROL_STATE_YELLOW) {
+            break;
+        }
+        remaining_steps++;
+    }
+    return remaining_steps;
+}
+
 static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *traffic_control_count) {
     typedef struct {
         int idx;
@@ -5272,6 +5315,7 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
         }
     }
 
+    int yellow_scan_steps = (int) ceilf(env->traffic_light_yellow_max_s / env->dt);
     int controls_written = 0;
     for (int j = 0; j < controls_to_observe && controls_written < env->obs_slots_traffic_controls_n; j++) {
         TrafficControlElement *tc = &env->traffic_elements[visible_controls[j].idx];
@@ -5294,13 +5338,20 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
         obs[obs_idx++] = rel_x2 / env->obs_norm_xy_offset_m;
         obs[obs_idx++] = rel_y2 / env->obs_norm_xy_offset_m;
         obs[obs_idx++] = rel_z / env->obs_norm_z_m;
+        if (env->obs_traffic_light_yellow_remaining) {
+            float yellow_remaining_s = light_state == TRAFFIC_CONTROL_STATE_YELLOW
+                ? yellow_remaining_steps(tc, env->timestep, yellow_scan_steps) * env->dt
+                : 0.0f;
+            obs[obs_idx++]
+                = fminf(yellow_remaining_s, env->traffic_light_yellow_max_s) / env->traffic_light_yellow_max_s;
+        }
         obs[obs_idx++] = tc->type;
         obs[obs_idx++] = light_state;
         controls_written++;
     }
 
     *traffic_control_count = controls_written;
-    return obs_idx + (env->obs_slots_traffic_controls_n - controls_written) * TRAFFIC_CONTROL_FEATURES;
+    return obs_idx + (env->obs_slots_traffic_controls_n - controls_written) * traffic_control_feature_count(env);
 }
 
 static void compute_observations(Drive *env) {

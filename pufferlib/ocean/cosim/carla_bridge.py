@@ -262,8 +262,18 @@ class CarlaTransform:
 
 # CARLA traffic-light state name -> PufferDrive enum (datatypes.h:61-67)
 #   UNKNOWN=0 RED=1 YELLOW=2 GREEN=3 OFF=4
+TRAFFIC_LIGHT_STATE_YELLOW = 2
 TRAFFIC_LIGHT_STATE_OFF = 4
-LIGHT_STATE_BY_NAME = {"Red": 1, "Yellow": 2, "Green": 3, "Off": 4, "Unknown": 0}
+LIGHT_STATE_BY_NAME = {
+    "Red": 1,
+    "Yellow": TRAFFIC_LIGHT_STATE_YELLOW,
+    "Green": 3,
+    "Off": TRAFFIC_LIGHT_STATE_OFF,
+    "Unknown": 0,
+}
+# scenario_runner's TrafficLightManipulator (Leaderboard 1 scenarios 7-9) sets a light's phase times to 1e9 s while it
+# drives the states itself; the light's own timer then says nothing about the remaining yellow
+CARLA_LIGHT_TIMER_FROZEN_S = 1.0e6
 
 
 def light_state_from_name(state_name) -> int:
@@ -273,6 +283,14 @@ def light_state_from_name(state_name) -> int:
 
 def carla_light_to_puffer(state) -> int:
     return light_state_from_name(state.name)
+
+
+def carla_yellow_remaining_s(elapsed_s, yellow_time_s):
+    """Seconds a CARLA light stays yellow by its own phase timer (get_yellow_time - get_elapsed_time), or None
+    when a scenario froze that timer."""
+    if float(yellow_time_s) >= CARLA_LIGHT_TIMER_FROZEN_S:
+        return None
+    return max(float(yellow_time_s) - float(elapsed_s), 0.0)
 
 
 LIGHT_PROBE_STEPS_M = (0.0, 3.0, 6.0, 10.0, 15.0)  # walk-back (all) / forward (all but 0) probes of map_lights_to_bin

@@ -2072,6 +2072,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_lane_heading_signed = (int) unpack(kwargs, "obs_lane_heading_signed");
     env->obs_lane_speed_limit = (int) unpack(kwargs, "obs_lane_speed_limit");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
+    env->obs_traffic_light_yellow_remaining = (int) unpack(kwargs, "obs_traffic_light_yellow_remaining");
     env->traffic_lights_enabled = (bool) unpack(kwargs, "traffic_lights_enabled");
     env->stop_signs_enabled = (bool) unpack(kwargs, "stop_signs_enabled");
     env->yield_signs_enabled = (bool) unpack(kwargs, "yield_signs_enabled");

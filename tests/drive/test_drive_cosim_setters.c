@@ -81,7 +81,7 @@ static int test_set_traffic_light_states_writes_current_and_next_timestep_for_li
     env.timestep = 2;
 
     int new_states[2] = {3, 7}; // one entry per traffic element, indexed like env->traffic_elements
-    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states), 0);
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states, NULL), 0);
 
     EXPECT_EQ_INT(light_states[2], 3); // written at the current timestep
     EXPECT_EQ_INT(light_states[3], 3); // and at the one c_step reads next
@@ -108,23 +108,106 @@ static int test_set_traffic_light_states_rejects_out_of_range_timestep_and_state
 
     int new_states[2] = {1, 1};
     env.timestep = 10; // out of range for state_size=3
-    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states), -1);
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states, NULL), -1);
     EXPECT_EQ_INT(light_states[0], 99);
     EXPECT_EQ_INT(light_states[1], 99);
     EXPECT_EQ_INT(light_states[2], 99);
 
     env.timestep = 1;
     int bad_states[2] = {1, TRAFFIC_CONTROL_STATE_OFF + 1};
-    EXPECT_EQ_INT(c_set_traffic_light_states(&env, bad_states), -1);
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, bad_states, NULL), -1);
     EXPECT_EQ_INT(light_states[1], 99);
-    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states), 0);
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states, NULL), 0);
     EXPECT_EQ_INT(light_states[1], 1);
     EXPECT_EQ_INT(light_states[2], 1);
 
     env.timestep = 2; // last slot of the schedule: no next timestep to fill, still a success
     int last_states[2] = {3, 3};
-    EXPECT_EQ_INT(c_set_traffic_light_states(&env, last_states), 0);
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, last_states, NULL), 0);
     EXPECT_EQ_INT(light_states[2], 3);
+    return 0;
+}
+
+#define TIMING_STATE_COUNT 12
+
+static Drive make_timing_env(TrafficControlElement *elements, int element_count, int (*storage)[TIMING_STATE_COUNT]) {
+    for (int i = 0; i < element_count; i++) {
+        for (int t = 0; t < TIMING_STATE_COUNT; t++) {
+            storage[i][t] = 99;
+        }
+        int type = i == element_count - 1 ? TRAFFIC_CONTROL_TYPE_STOP_SIGN : TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT;
+        elements[i] = make_traffic_element(type, TIMING_STATE_COUNT, storage[i]);
+    }
+    Drive env = {0};
+    env.traffic_elements = elements;
+    env.num_traffic_elements = element_count;
+    env.dt = 0.1f;
+    env.traffic_light_yellow_max_s = 3.0f;
+    return env;
+}
+
+static int test_set_traffic_light_states_yellow_timing_patches_schedule(void) {
+    // A yellow light with r seconds left stays yellow through ts + ceil(r / dt) - 1 and turns red right after;
+    // the held step ts + 1 is always yellow, and non-yellow lights or non-light elements get no patch.
+    int storage[3][TIMING_STATE_COUNT];
+    TrafficControlElement elements[3];
+    Drive env = make_timing_env(elements, 3, storage);
+    int *yellow_light = storage[0], *green_light = storage[1], *stop_sign = storage[2];
+
+    env.timestep = 2;
+    int new_states[3] = {TRAFFIC_CONTROL_STATE_YELLOW, TRAFFIC_CONTROL_STATE_GREEN, 7};
+    float remaining_s[3] = {0.5f, 0.0f, 0.0f}; // 5 steps: yellow at 2..6, red at 7
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states, remaining_s), 0);
+    EXPECT_EQ_INT(yellow_light[1], 99);
+    for (int t = 2; t <= 6; t++) {
+        EXPECT_EQ_INT(yellow_light[t], TRAFFIC_CONTROL_STATE_YELLOW);
+    }
+    EXPECT_EQ_INT(yellow_light[7], TRAFFIC_CONTROL_STATE_RED);
+    EXPECT_EQ_INT(yellow_light[8], 99);
+    EXPECT_EQ_INT(green_light[2], TRAFFIC_CONTROL_STATE_GREEN);
+    EXPECT_EQ_INT(green_light[3], TRAFFIC_CONTROL_STATE_GREEN);
+    EXPECT_EQ_INT(green_light[4], 99);
+    for (int t = 0; t < TIMING_STATE_COUNT; t++) {
+        EXPECT_EQ_INT(stop_sign[t], 99);
+    }
+
+    env.timestep = 0; // under one step left: the held step still counts, red right after it
+    float short_remaining_s[3] = {0.05f, 0.0f, 0.0f};
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states, short_remaining_s), 0);
+    EXPECT_EQ_INT(yellow_light[0], TRAFFIC_CONTROL_STATE_YELLOW);
+    EXPECT_EQ_INT(yellow_light[1], TRAFFIC_CONTROL_STATE_YELLOW);
+    EXPECT_EQ_INT(yellow_light[2], TRAFFIC_CONTROL_STATE_RED);
+
+    env.timestep = 9; // the schedule end truncates the patch
+    float long_remaining_s[3] = {3.0f, 0.0f, 0.0f};
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states, long_remaining_s), 0);
+    for (int t = 9; t < TIMING_STATE_COUNT; t++) {
+        EXPECT_EQ_INT(yellow_light[t], TRAFFIC_CONTROL_STATE_YELLOW);
+    }
+    return 0;
+}
+
+static int test_set_traffic_light_states_yellow_timing_validation(void) {
+    // The obs flag makes the timing mandatory; NaN, negative or above-the-training-max seconds fail the call.
+    int storage[2][TIMING_STATE_COUNT];
+    TrafficControlElement elements[2];
+    Drive env = make_timing_env(elements, 2, storage);
+    env.timestep = 1;
+    int new_states[2] = {TRAFFIC_CONTROL_STATE_YELLOW, 7};
+
+    env.obs_traffic_light_yellow_remaining = 1;
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states, NULL), -1);
+    EXPECT_EQ_INT(storage[0][1], 99);
+    float at_max_s[2] = {3.0f, 0.0f};
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states, at_max_s), 0);
+    EXPECT_EQ_INT(storage[0][1], TRAFFIC_CONTROL_STATE_YELLOW);
+
+    float nan_s[2] = {NAN, 0.0f};
+    float negative_s[2] = {-0.1f, 0.0f};
+    float above_max_s[2] = {3.5f, 0.0f};
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states, nan_s), -1);
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states, negative_s), -1);
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states, above_max_s), -1);
     return 0;
 }
 
@@ -414,6 +497,8 @@ int main(void) {
     RUN_TEST(test_set_agent_sizes_rejects_out_of_range_index_and_bad_size);
     RUN_TEST(test_set_traffic_light_states_writes_current_and_next_timestep_for_lights_only);
     RUN_TEST(test_set_traffic_light_states_rejects_out_of_range_timestep_and_state);
+    RUN_TEST(test_set_traffic_light_states_yellow_timing_patches_schedule);
+    RUN_TEST(test_set_traffic_light_states_yellow_timing_validation);
     RUN_TEST(test_set_stop_signs_retires_map_signs_and_appends_external_ones);
     RUN_TEST(test_set_stop_signs_rejects_bad_input_untouched);
     RUN_TEST(test_set_traffic_light_lines_moves_lights_only_and_rejects_bad_input);

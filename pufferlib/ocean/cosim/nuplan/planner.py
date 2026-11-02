@@ -23,6 +23,7 @@ from carl_nuplan.planning.simulation.trajectory.action_trajectory import ActionT
 from pufferlib.ocean.cosim import nuplan_bridge as nb
 from pufferlib.ocean.cosim.arch import checkpoint_config_path
 from pufferlib.ocean.cosim.goals import RouteGoalWindow, route_goals_from_xy
+from pufferlib.ocean.cosim.light_timing import YellowCountdown
 from pufferlib.ocean.cosim.nuplan_bicycle import (
     DEVKIT_ACCEL_TIME_CONSTANT_S,
     DEVKIT_STEERING_TIME_CONSTANT_S,
@@ -303,6 +304,7 @@ class PufferDrivePlanner(AbstractPlanner):
         self._goal_window: Optional[RouteGoalWindow] = None
         self._last_integrated = None  # (bin_x, bin_y, heading) the shadow ego was left at by the last step
         self._last_light_states = None  # traffic-light state array from the most recent _sync
+        self._yellow_countdown = None  # YellowCountdown, built with the env
         self._static_on_lane: Dict[str, bool] = {}  # static object track_token -> its box overlaps a lane polygon
 
     # --- AbstractPlanner interface -------------------------------------------
@@ -508,6 +510,8 @@ class PufferDrivePlanner(AbstractPlanner):
         self._arch = self._resolve_arch(cfg, bin_path)
         self._env = Drive(**self._arch)
         self._env.reset()
+        # nuPlan reports light status only: a yellow counts down from the shortest trained yellow
+        self._yellow_countdown = YellowCountdown(self._env.traffic_light_yellow_min_s, self._env.dt)
         torch.set_num_threads(1)  # one scenario per worker process; BLAS threads only fight the other workers
         if max(self._startup_accel_jerk_cap_mps3, self._startup_brake_jerk_cap_mps3) > 0:
             import pufferlib.spaces
@@ -709,7 +713,14 @@ class PufferDrivePlanner(AbstractPlanner):
             self._last_light_states = nb.traffic_light_states(
                 traffic_light_data, self._connector_map, self._num_traffic, self._route_connector_ids
             )
-            env.set_traffic_light_states(self._last_light_states)
+            yellow_remaining_s = None
+            if env.obs_traffic_light_yellow_remaining:
+                yellow_elements = [int(j) for j in np.flatnonzero(self._last_light_states == nb.LIGHT_STATE_YELLOW)]
+                countdown_s = self._yellow_countdown.tick(yellow_elements, ego_state.time_point.time_s)
+                yellow_remaining_s = np.zeros(self._num_traffic, np.float32)
+                for j, remaining_s in countdown_s.items():
+                    yellow_remaining_s[j] = remaining_s
+            env.set_traffic_light_states(self._last_light_states, yellow_remaining_s)
 
         self._goal_window.sync(ex, ey, h)
 

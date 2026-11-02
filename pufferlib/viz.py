@@ -493,6 +493,7 @@ def unpack_obs(
     agent_idx: int = 0,
     obs_partner_relative_velocity: bool = False,
     obs_lane_speed_limit: bool = False,
+    obs_traffic_light_yellow_remaining: bool = False,
 ):
     """
     Unpack the flattened observation into ego, map, partner, and traffic-control views.
@@ -515,7 +516,9 @@ def unpack_obs(
     lane_feature_size = binding.LANE_FEATURES + (binding.LANE_SPEED_LIMIT_FEATURES if obs_lane_speed_limit else 0)
     boundary_feature_size = binding.BOUNDARY_FEATURES
     # Traffic control obs
-    traffic_control_feature_size = binding.TRAFFIC_CONTROL_FEATURES
+    traffic_control_feature_size = binding.TRAFFIC_CONTROL_FEATURES + (
+        binding.TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES if obs_traffic_light_yellow_remaining else 0
+    )
     lane_segment_count = compute_effective_road_obs_count(obs_slots_lane_n, obs_dropout_lane)
     boundary_segment_count = compute_effective_road_obs_count(obs_slots_boundary_n, obs_dropout_boundary)
 
@@ -597,6 +600,7 @@ def plot_observation(
     true_width_m=None,
     obs_partner_relative_velocity=False,
     obs_lane_speed_limit=False,
+    obs_traffic_light_yellow_remaining=False,
 ) -> np.ndarray:
     """Plot observation in ego-centric frame.
 
@@ -619,6 +623,7 @@ def plot_observation(
         agent_idx=agent_idx,
         obs_partner_relative_velocity=obs_partner_relative_velocity,
         obs_lane_speed_limit=obs_lane_speed_limit,
+        obs_traffic_light_yellow_remaining=obs_traffic_light_yellow_remaining,
     )
     scales = _obs_scales(
         obs_norm_goal_offset_m=obs_norm_goal_offset_m,
@@ -790,7 +795,8 @@ def plot_observation(
     for i in range(traffic_controls_obs.shape[0]):
         if np.all(traffic_controls_obs[i] == 0):
             continue
-        rel_x1, rel_y1, rel_x2, rel_y2, _, control_type, state = traffic_controls_obs[i]
+        rel_x1, rel_y1, rel_x2, rel_y2 = traffic_controls_obs[i][:4]
+        control_type, state = traffic_controls_obs[i][-2:]
         control_type = int(control_type)
         if control_type == binding.TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT:
             ax.plot(
@@ -1039,7 +1045,12 @@ def encode_interactive_replay(scenario, replay):
         + (int(binding.LANE_SPEED_LIMIT_FEATURES) if env_cfg.get("obs_lane_speed_limit") else 0),
         "lane_speed_limit_idx": int(binding.LANE_FEATURES) if env_cfg.get("obs_lane_speed_limit") else -1,
         "boundary_features": int(binding.BOUNDARY_FEATURES),
-        "traffic_features": int(binding.TRAFFIC_CONTROL_FEATURES),
+        "traffic_features": int(binding.TRAFFIC_CONTROL_FEATURES)
+        + (
+            int(binding.TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES)
+            if env_cfg.get("obs_traffic_light_yellow_remaining")
+            else 0
+        ),
         "lane_count": int(lane_count),
         "boundary_count": int(boundary_count),
         "traffic_obs_count": int(env_cfg["obs_slots_traffic_controls_n"]),
@@ -1657,7 +1668,7 @@ self.onmessage = async event => {
             const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(v(o),v(o+1)), cs=rot(v(o+4),v(o+5)); out.push([xy[0],xy[1],2*v(o+3)*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i),feat===LF?v(o+6)*(H.scales.road_width_to_position||0):0,feat===LF && limitIdx >= 0 ? v(o+limitIdx)*speedScale : null]); } return out; };
             const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(v(o),v(o+1)), h=Math.atan2(v(o+6),v(o+5)); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:v(o+3)*H.scales.veh_len_to_position,w:v(o+4)*H.scales.veh_width_to_position,h:h,pool:poolAt("pool_partner",frame,slot,i)}); }
             const gps = []; for(let i=0;i<H.num_goals;i++){ const o=targetStart+i*H.goal_features; if(zero(o,H.goal_features)) continue; let scale=H.scales.goal_to_position, xy=rot(v(o)*scale, v(o+1)*scale); gps.push(xy); }
-            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(v(o),v(o+1)), b=rot(v(o+2),v(o+3)); controls.push({type:Math.round(v(o+5)), state:Math.round(v(o+6)), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
+            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(v(o),v(o+1)), b=rot(v(o+2),v(o+3)); controls.push({type:Math.round(v(o+TF-2)), state:Math.round(v(o+TF-1)), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
             return {ego:{w:v(egoStart+1)*H.scales.veh_width_to_position,l:v(egoStart+2)*H.scales.veh_len_to_position,limit:speedScale ? v(egoStart+EGO_LANE_SPEED_LIMIT_FEATURE)*speedScale : null}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane",LF), bounds:roads(boundsStart,H.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
         }
         function drawObs(frame, trueSize) {

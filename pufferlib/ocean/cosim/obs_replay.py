@@ -139,6 +139,7 @@ class ObsReplayCapture:
             "obs_norm_speed_mps": float(env.obs_norm_speed_mps),
             "obs_partner_relative_velocity": bool(env.obs_partner_relative_velocity),
             "obs_lane_speed_limit": bool(env.obs_lane_speed_limit),
+            "obs_traffic_light_yellow_remaining": bool(env.obs_traffic_light_yellow_remaining),
             "obs_goal_lane_distance": bool(env.obs_goal_lane_distance),
             "ego_features": int(env.ego_features),
             "num_reward_coefs": int(env.num_reward_coefs),
@@ -158,7 +159,7 @@ class ObsReplayCapture:
             + env.obs_slots_partners_n * env.partner_features
             + env.obs_slots_lane_kept * env.lane_features
             + env.obs_slots_boundary_kept * env.boundary_features
-            + env.obs_slots_traffic_controls_n * binding.TRAFFIC_CONTROL_FEATURES
+            + env.obs_slots_traffic_controls_n * env.traffic_control_features
         )
         if obs_dim < viewer_dim or obs_dim - viewer_dim > OBS_TRAILING_COUNT_FEATURES:
             raise RuntimeError(

@@ -272,6 +272,7 @@ static const int ROAD_OFFSETS[25][2]
 #define PARTNER_FEATURES 9
 #define PARTNER_RELATIVE_VELOCITY_FEATURES 2 // appended per partner row when obs_partner_relative_velocity is set
 #define TRAFFIC_CONTROL_FEATURES 7
+#define TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES 1 // before type/state when obs_traffic_light_yellow_remaining is set
 #define GOAL_FEATURES 3
 #define OBS_VALID_COUNT_FEATURES 4
 // Heading deviation since last kept point that forces a keep when obs stride > 1 (~15 degrees).

@@ -337,6 +337,7 @@ class DriveEnvConfig:
     obs_lane_heading_signed: bool = MISSING
     obs_lane_speed_limit: bool = MISSING
     obs_slots_traffic_controls_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
+    obs_traffic_light_yellow_remaining: bool = MISSING
     obs_dropout_lane: float = _constrained_field(PROBABILITY_CONSTRAINT)
     obs_dropout_boundary: float = _constrained_field(PROBABILITY_CONSTRAINT)
     obs_lane_stride: int = _constrained_field(POSITIVE_INT_CONSTRAINT)

@@ -127,6 +127,7 @@ class Drive(pufferlib.PufferEnv):
         obs_lane_heading_signed=False,
         obs_lane_speed_limit=False,
         obs_slots_traffic_controls_n=4,
+        obs_traffic_light_yellow_remaining=False,
         traffic_lights_enabled=True,
         stop_signs_enabled=False,
         yield_signs_enabled=False,
@@ -336,6 +337,7 @@ class Drive(pufferlib.PufferEnv):
         self.stop_signs_enabled = stop_signs_enabled
         self.yield_signs_enabled = yield_signs_enabled
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
+        self.obs_traffic_light_yellow_remaining = int(bool(obs_traffic_light_yellow_remaining))
         self.obs_norm_speed_mps = float(obs_norm_speed_mps)
         if not np.isfinite(self.obs_norm_speed_mps) or self.obs_norm_speed_mps <= 0.0:
             raise ValueError(f"obs_norm_speed_mps must be finite and > 0. Got: {obs_norm_speed_mps}")
@@ -409,7 +411,9 @@ class Drive(pufferlib.PufferEnv):
             binding.LANE_SPEED_LIMIT_FEATURES if self.obs_lane_speed_limit else 0
         )
         self.boundary_features = binding.BOUNDARY_FEATURES
-        self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
+        self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES + (
+            binding.TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES if self.obs_traffic_light_yellow_remaining else 0
+        )
         self.obs_valid_count_features = binding.OBS_VALID_COUNT_FEATURES
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
 
@@ -636,6 +640,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_lane_heading_signed": self.obs_lane_heading_signed,
             "obs_lane_speed_limit": self.obs_lane_speed_limit,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
+            "obs_traffic_light_yellow_remaining": self.obs_traffic_light_yellow_remaining,
             "traffic_lights_enabled": self.traffic_lights_enabled,
             "stop_signs_enabled": self.stop_signs_enabled,
             "yield_signs_enabled": self.yield_signs_enabled,
@@ -946,10 +951,22 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_recompute_observations(self.c_envs)
         return self.observations
 
-    def set_traffic_light_states(self, states):
+    def set_traffic_light_states(self, states, yellow_remaining_s=None):
         """override each traffic-light element's state at the current
-        timestep (states length == num_traffic_elements)."""
-        binding.vec_set_traffic_light_states(self.c_envs, np.ascontiguousarray(states, dtype=np.int32))
+        timestep (states length == num_traffic_elements). yellow_remaining_s
+        (same length, seconds each light stays yellow from now, 0 unless
+        yellow) feeds the obs_traffic_light_yellow_remaining column and is
+        required when that flag is set; the co-sim's value is clipped to the
+        training max traffic_light_yellow_max_s."""
+        states = np.ascontiguousarray(states, dtype=np.int32)
+        if yellow_remaining_s is None:
+            binding.vec_set_traffic_light_states(self.c_envs, states)
+            return
+        remaining = np.asarray(yellow_remaining_s, dtype=np.float32).reshape(-1)
+        if not np.all(np.isfinite(remaining)) or np.any(remaining < 0.0):
+            raise ValueError(f"yellow_remaining_s must be finite and >= 0. Got: {yellow_remaining_s}")
+        remaining = np.minimum(remaining, np.float32(self.traffic_light_yellow_max_s))
+        binding.vec_set_traffic_light_states(self.c_envs, states, np.ascontiguousarray(remaining))
 
     def set_stop_signs(self, lines, headings):
         """replace every stop-sign element with the external sim's own (co-sim):

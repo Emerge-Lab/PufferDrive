@@ -214,6 +214,9 @@ env:
   # Append each lane segment's speed limit (/ obs_norm_speed_mps) to its lane row so limit changes ahead are visible
   obs_lane_speed_limit: true
   obs_slots_traffic_controls_n: 4
+  # Append to every traffic-control row the seconds the light stays yellow / traffic_light_yellow_max_s (clipped at 1,
+  # 0 unless yellow); co-sims feed the simulator's own timer, clipped to the same training max
+  obs_traffic_light_yellow_remaining: false
   # Fraction of segment observation slots to drop (reduces obs size)
   obs_dropout_lane: 0.5
   obs_dropout_boundary: 0.4

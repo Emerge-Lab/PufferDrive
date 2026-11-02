@@ -40,6 +40,7 @@ from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.cosim import carla_bridge as cb
 from pufferlib.ocean.cosim.arch import checkpoint_config_path, shadow_env_kwargs
 from pufferlib.ocean.cosim.goals import RouteGoalWindow
+from pufferlib.ocean.cosim.light_timing import YellowCountdown
 # carla_scenarios imports carla at module scope (it's pure CARLA-actor
 # manipulation, unlike this module's carla_bridge deps) and is only used
 # inside main() below, so it's imported there too.
@@ -421,6 +422,7 @@ def main():
     route_goals = build_route_goals(dense_route, transform, cmap)  # fixed 20-m lane-centered goal sequence
     goal_window = RouteGoalWindow(env, route_goals)
     light_map, num_traffic = cb.map_lights_to_bin(cb.light_geometry_from_carla(lights, cmap), transform, town_bin)
+    yellow_countdown = YellowCountdown(env.traffic_light_yellow_min_s, dt)
     print(
         f"[cosim] carla: ego + {len(bg)} background + {len(lights)} lights; "
         f"offset={transform.tx:.1f},{transform.ty:.1f} z={transform.tz:+.2f}"
@@ -510,12 +512,20 @@ def main():
             zz = np.zeros_like(zf)
             env.set_agent_states(sp, zf, zf, zf, zz, zz, zz, zz, zz)
         states = np.zeros(num_traffic, np.int32)
+        yellow_remaining_s = np.zeros(num_traffic, np.float32)
+        light_states = [cb.carla_light_to_puffer(lt.get_state()) for lt in lights]
+        yellow_lights = [li for li, state in enumerate(light_states) if state == cb.TRAFFIC_LIGHT_STATE_YELLOW]
+        countdown_s = yellow_countdown.tick(yellow_lights, step * dt)
         for li, lt in enumerate(lights):
-            state = cb.carla_light_to_puffer(lt.get_state())
+            remaining_s = 0.0
+            if li in countdown_s:
+                timed_s = cb.carla_yellow_remaining_s(lt.get_elapsed_time(), lt.get_yellow_time())
+                remaining_s = countdown_s[li] if timed_s is None else timed_s
             for j in light_map[li]:
                 if 0 <= j < num_traffic:
-                    states[j] = state
-        env.set_traffic_light_states(states)
+                    states[j] = light_states[li]
+                    yellow_remaining_s[j] = remaining_s
+        env.set_traffic_light_states(states, yellow_remaining_s if env.obs_traffic_light_yellow_remaining else None)
         ebx, eby = float(ego_bin["x"][0]), float(ego_bin["y"][0])
         goal_window.sync(ebx, eby, float(ego_bin["heading"][0]))
         gx, gy = goal_window.window[:, 0], goal_window.window[:, 1]

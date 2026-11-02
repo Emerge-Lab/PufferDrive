@@ -23,7 +23,9 @@ init_route(route) once the ego exists, route = {
   infraction_flags: bool, also compute the shadow env's own infraction flags when no telemetry is written }
 step(snapshot) every simulator tick, snapshot = {
   ego: ACTOR_STATE, partners: PARTNER_ROW list (nearest first, at most partner_slots, |dz| <= PARTNER_MAX_ABS_DZ_M),
-  light_states: [[light_id, carla.TrafficLightState name], ...], ego_light_id: id reported for the ego or -1 }
+  light_states: [[light_id, carla.TrafficLightState name], ...], ego_light_id: id reported for the ego or -1,
+  light_timers: [[light_id, get_elapsed_time(), get_yellow_time()], ...] (the light's own phase timer; required when
+  the checkpoint observes the remaining yellow, obs_traffic_light_yellow_remaining) }
 
 Environment variables:
   COSIM_DEVICE=cpu             torch device for the policy
@@ -71,6 +73,7 @@ from pufferlib.ocean.cosim import carla_bridge as cb
 from pufferlib.ocean.cosim.arch import checkpoint_config_path, shadow_env_kwargs
 from pufferlib.ocean.cosim.carla.controller import TrackingController, vehicle_geometry_from_wheels
 from pufferlib.ocean.cosim.goals import RouteGoalWindow, route_goals_from_target_points
+from pufferlib.ocean.cosim.light_timing import YellowCountdown
 from pufferlib.ocean.drive.drive import Drive
 
 
@@ -215,7 +218,7 @@ class ShadowEgo:
         self.obs_dump_dir = os.environ.get("COSIM_DUMP_OBS", None)
         self._obs_dump = []
         self.world_log_dir = os.environ.get("COSIM_WORLD_LOG", None)
-        self._world_log = {"ego": [], "partners": [], "lights": []}
+        self._world_log = {"ego": [], "partners": [], "lights": [], "light_yellow_s": []}
         self._last_partners = None
         self._partner_stopped_s = {}  # CARLA actor id -> seconds at standstill
         from pufferlib.ocean.drive import binding
@@ -395,6 +398,8 @@ class ShadowEgo:
         # ego-governance pass picked the wrong element ~5% of the time).
         self.light_bin_indices_by_id = {int(light["id"]): light_map[i] for i, light in enumerate(lights)}
         self.last_light_states = np.zeros(self.num_traffic, np.int32)
+        self.last_yellow_remaining_s = np.zeros(self.num_traffic, np.float32)
+        self._yellow_countdown = YellowCountdown(self.env.traffic_light_yellow_min_s, self.dt)
 
         wheelbase, max_steer = vehicle_geometry_from_wheels(ego["wheels"])
         self.controller = TrackingController(wheelbase_m=wheelbase, max_steer_rad=max_steer, horizon_s=self.dt)
@@ -479,25 +484,44 @@ class ShadowEgo:
             width.append(max(2.0 * row[PARTNER_EXTENT_Y], MIN_PARTNER_SIZE_M) + vru_pad_m)
         return (np.array(idx, np.int32), np.array(length, np.float32), np.array(width, np.float32))
 
-    def _read_light_states(self, light_states, ego_light_id):
-        """Ground truth for every mapped bin traffic element, via the
+    def _read_light_states(self, snapshot):
+        """Ground truth for every mapped bin traffic element (state, seconds it stays yellow), via the
         precomputed light_bin_indices_by_id table (see init_route)."""
         # unmapped light elements read OFF (a training state), never UNKNOWN
         states = np.full(self.num_traffic, cb.TRAFFIC_LIGHT_STATE_OFF, np.int32)
-        state_by_id = {}
-        for light_id, state_name in light_states:
-            state = cb.light_state_from_name(state_name)
-            state_by_id[int(light_id)] = state
-            for j in self.light_bin_indices_by_id[int(light_id)]:
-                if 0 <= j < self.num_traffic:
-                    states[j] = state
-        ego_light_id = int(ego_light_id)
+        yellow_remaining_s = np.zeros(self.num_traffic, np.float32)
+        state_by_id = {int(light_id): cb.light_state_from_name(name) for light_id, name in snapshot["light_states"]}
+        remaining_by_id = self._yellow_remaining_by_id(snapshot, state_by_id)
+        ego_light_id = int(snapshot["ego_light_id"])
+        # the ego's own light is written last so it wins over any other light mapped onto the same element
+        ordered_ids = [light_id for light_id in state_by_id if light_id != ego_light_id]
         if ego_light_id in self.light_bin_indices_by_id:
-            state = state_by_id[ego_light_id]
-            for j in self.light_bin_indices_by_id[ego_light_id]:
+            ordered_ids.append(ego_light_id)
+        for light_id in ordered_ids:
+            for j in self.light_bin_indices_by_id[light_id]:
                 if 0 <= j < self.num_traffic:
-                    states[j] = state
-        return states
+                    states[j] = state_by_id[light_id]
+                    yellow_remaining_s[j] = remaining_by_id.get(light_id, 0.0)
+        return states, yellow_remaining_s
+
+    def _yellow_remaining_by_id(self, snapshot, state_by_id):
+        """{light_id: seconds it stays yellow} for the yellow lights: CARLA's own phase timer, or the
+        shortest-trained-yellow countdown from the onset where a scenario froze that timer."""
+        timers = snapshot.get("light_timers")
+        if timers is None:
+            if self.env.obs_traffic_light_yellow_remaining:
+                raise KeyError("snapshot has no light_timers, which obs_traffic_light_yellow_remaining needs")
+            return {}
+        yellow_ids = {light_id for light_id, state in state_by_id.items() if state == cb.TRAFFIC_LIGHT_STATE_YELLOW}
+        countdown_s = self._yellow_countdown.tick(yellow_ids, self.step_count * self.tick_dt)
+        remaining_by_id = {}
+        for light_id, elapsed_s, yellow_time_s in timers:
+            light_id = int(light_id)
+            if light_id not in yellow_ids:
+                continue
+            timed_s = cb.carla_yellow_remaining_s(elapsed_s, yellow_time_s)
+            remaining_by_id[light_id] = countdown_s[light_id] if timed_s is None else timed_s
+        return remaining_by_id
 
     def _sync_ego(self, ego_state, zero_velocity=False):
         """Overwrite agent 0 (ego) from the simulator's ground-truth pose/size."""
@@ -552,8 +576,11 @@ class ShadowEgo:
             zz = np.zeros_like(zf)
             self.env.set_agent_states(sp, zf, zf, zf, zz, zz, zz, zz, zz)
 
-        self.last_light_states = self._read_light_states(snapshot["light_states"], snapshot["ego_light_id"])
-        self.env.set_traffic_light_states(self.last_light_states)
+        self.last_light_states, self.last_yellow_remaining_s = self._read_light_states(snapshot)
+        self.env.set_traffic_light_states(
+            self.last_light_states,
+            self.last_yellow_remaining_s if self.env.obs_traffic_light_yellow_remaining else None,
+        )
 
         self.goal_window.sync(ebx, eby, float(ego["heading"][0]))
         if self._goal_lane_debug_file is not None:
@@ -752,6 +779,7 @@ class ShadowEgo:
             rows = np.column_stack([np.full(len(x), step_idx, np.float32), x, y, h, length, width, speed, is_walker])
             self._world_log["partners"].append(rows.astype(np.float32))
         self._world_log["lights"].append(self.last_light_states.astype(np.int8))
+        self._world_log["light_yellow_s"].append(self.last_yellow_remaining_s.astype(np.float32))
 
     def _write_world_log(self):
         Path(self.world_log_dir).mkdir(parents=True, exist_ok=True)
@@ -762,6 +790,9 @@ class ShadowEgo:
             ego=np.array(self._world_log["ego"], np.float32),
             partners=np.concatenate(partners) if partners else np.zeros((0, 8), np.float32),
             lights=np.stack(self._world_log["lights"]) if self._world_log["lights"] else np.zeros((0, 0), np.int8),
+            light_yellow_s=np.stack(self._world_log["light_yellow_s"])
+            if self._world_log["light_yellow_s"]
+            else np.zeros((0, 0), np.float32),
             route_goals=self.route_goals,
             stop_signs=self._stop_sign_lines,
             dense_route=dense,
