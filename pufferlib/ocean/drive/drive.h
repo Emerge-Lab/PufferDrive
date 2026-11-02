@@ -253,6 +253,7 @@ struct Drive {
     int human_longitudinal_mode;
     int human_gearbox_mode;
     int human_gear;
+    int human_reverse_chosen_by_assist; // FULL put the selector in R; it goes back to D once you have the car at rest
     int human_engine_stalled;
     float human_engine_rpm;
     float human_throttle_norm;
@@ -5785,7 +5786,9 @@ static float human_powertrain_accel_mps2(Drive *env, Agent *agent, int shift_req
         apply_manual_shift_request(env, shift_request);
     }
 
-    float engagement = clutch_engagement(env->human_clutch_norm);
+    // an automatic has no clutch: the pedal is only read by the manual box, so a resting left foot cannot cut the drive
+    float engagement
+        = (env->human_gearbox_mode == GEARBOX_MODE_MANUAL) ? clutch_engagement(env->human_clutch_norm) : 1.0f;
     float ratio = gear_ratio(env->human_gear);
     int driveline_connected = (engagement > 0.0f) && (ratio != 0.0f);
 
@@ -5885,6 +5888,7 @@ int c_set_human_gear(Drive *env, int gear) {
         return -1;
     }
     env->human_gear = gear;
+    env->human_reverse_chosen_by_assist = 0;
     env->human_engine_stalled = 0;
     return 0;
 }
@@ -6236,7 +6240,17 @@ static void move_human(Drive *env, int action_idx, int agent_idx) {
         float change = clip(env->assist_set_steering_rad - agent->steering_angle, -max_change, max_change);
         steering_angle = clip(agent->steering_angle + change, -JERK_STEERING_LIMIT_RAD, JERK_STEERING_LIMIT_RAD);
     }
-    int shift_request = (env->human_shift_request != 0) ? env->human_shift_request : assist_shift_request(env);
+    int has_selector
+        = env->human_gearbox_mode == GEARBOX_MODE_AUTOMATIC || env->human_gearbox_mode == GEARBOX_MODE_NONE;
+    int driver_shift = env->human_shift_request != 0;
+    int assist_reverse_left_behind = has_selector && env->human_reverse_chosen_by_assist
+        && env->human_gear == GEAR_REVERSE && !full_assist_drives_speed(env);
+    int shift_request = env->human_shift_request;
+    if (!driver_shift) {
+        // the selector only moves at rest, so a reverse the assist chose returns to D once you have stopped
+        shift_request = assist_reverse_left_behind ? 1 : assist_shift_request(env);
+    }
+    int gear_before = env->human_gear;
     int gearless
         = env->human_longitudinal_mode == HUMAN_LONGITUDINAL_POWERTRAIN && env->human_gearbox_mode == GEARBOX_MODE_NONE;
     float accel_long = 0.0f;
@@ -6248,6 +6262,9 @@ static void move_human(Drive *env, int action_idx, int agent_idx) {
         accel_long = clip(env->human_accel_long_cmd_mps2, HUMAN_ACCEL_LIMIT_MPS2[0], HUMAN_ACCEL_LIMIT_MPS2[1]);
     }
     env->human_shift_request = 0; // a paddle pull is consumed by exactly one step
+    if (env->human_gear != gear_before) {
+        env->human_reverse_chosen_by_assist = !driver_shift && env->human_gear == GEAR_REVERSE;
+    }
     if (full_assist_jerk_drives_steering(env)) {
         float j_long, j_lat;
         decode_jerk_action(env, action_idx, &j_long, &j_lat);

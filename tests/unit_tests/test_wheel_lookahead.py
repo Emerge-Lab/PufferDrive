@@ -495,3 +495,131 @@ def test_full_with_the_default_preset_shows_the_cars_own_angle():
         assert all(target_rad == car_rad for target_rad, _, car_rad in seen)
     finally:
         loop.close()
+
+
+HUMAN_ACTION_ROW_IDX = 0
+RESTART_DRIVE_STEP_COUNT = 8
+
+
+def start_snapshot(loop):
+    state = loop.env.get_global_agent_state()
+    human = loop.env.get_human_state()
+    poses = {name: state[name].copy() for name in ("x", "y", "z", "heading")}
+    return poses, (human["goal_x"], human["goal_y"], human["goal_idx"])
+
+
+def human_conditioning(loop):
+    start = loop.env.ego_features
+    return loop.observations[HUMAN_ACTION_ROW_IDX, start : start + loop.env.num_reward_coefs].copy()
+
+
+@requires_checkpoint
+def test_restart_puts_every_car_and_goal_back_and_keeps_the_settings():
+    from pufferlib.wheel_demo import levels
+
+    loop = real_loop()
+    try:
+        loop.env.set_assist_mode(binding.ASSIST_MODE_FULL, 1.0)
+        levels.apply_level(loop.env, levels.AGGRESSIVE)
+        levels.apply_driving_style(loop.env, levels.CALM)
+        loop.observations, _ = loop.env.reset(seed=loop.config.seed)
+        loop.select_human_agent(loop.human_agent_idx)
+        loop.env.set_human_gear(loop.config.start_gear)
+        poses_before, goal_before = start_snapshot(loop)
+        conditioning_before = human_conditioning(loop)
+        assert conditioning_before.size == binding.NUM_REWARD_COEFS
+        dynamics_before = loop.config.full_assist_dynamics
+
+        loop.wheel.set_controls(steering_norm=SYNTHETIC_STEERING_NORM, throttle_norm=0.5)
+        for _ in range(RESTART_DRIVE_STEP_COUNT):
+            loop.step_once()
+        assert loop.env.get_human_state()["speed_mps"] > 0.0
+        loop._pending_shifts = 2
+
+        loop.restart()
+        poses_after, goal_after = start_snapshot(loop)
+        for name in poses_before:
+            np.testing.assert_array_equal(poses_after[name], poses_before[name])
+        assert goal_after == goal_before
+        human = loop.env.get_human_state()
+        assert human["speed_mps"] == 0.0
+        assert human["gear"] == loop.config.start_gear
+        assert human["engine_stalled"] == 0
+        assert loop.env.get_assist_state()["mode"] == binding.ASSIST_MODE_FULL
+        assert loop.config.full_assist_dynamics == dynamics_before
+        np.testing.assert_array_equal(human_conditioning(loop), conditioning_before)
+        assert loop._pending_shifts == 0
+        assert loop._previous_lookahead_rad is None
+        assert loop._lookahead_rad is None
+        assert loop._last_step_start_s is None
+        assert loop._assist_wheel_target_rad is None
+        assert len(loop._recent_car_steering_rad) == 0
+
+        for _ in range(2):
+            loop.step_once()
+        assert loop.env.get_human_state()["speed_mps"] > 0.0
+    finally:
+        loop.close()
+
+
+COMMANDED_SIM_RAD = 0.07
+
+
+def test_blend_target_is_the_cars_commanded_angle_in_driver_sign():
+    loop = bare_loop()
+    loop.env.assist.update(mode=binding.ASSIST_MODE_BLEND, commanded_steering_rad=COMMANDED_SIM_RAD)
+    loop._update_blend_wheel_target()
+    assert loop._assist_wheel_target_rad == -COMMANDED_SIM_RAD
+
+
+def test_blend_target_is_none_without_a_reference():
+    loop = bare_loop()
+    loop._assist_wheel_target_rad = 0.1
+    loop.env.assist.update(mode=binding.ASSIST_MODE_BLEND, reference_valid=0, commanded_steering_rad=COMMANDED_SIM_RAD)
+    loop._update_blend_wheel_target()
+    assert loop._assist_wheel_target_rad is None
+
+
+BLEND_MIN_PULL_GAP_RAD = 0.01
+
+
+def blend_drive(blend_target, step_count=REAL_LOOP_STEP_COUNT):
+    """Per sub-step under BLEND with the wheel held straight: (target, commanded angle, wheel angle, force)."""
+    from pufferlib.wheel_demo.ffb import compute_force
+
+    loop = real_loop()
+    seen = []
+
+    def record(substep_idx, wheel_state):
+        assist = loop.env.get_assist_state()
+        feel = loop.car_feel()
+        seen.append((loop._assist_wheel_target_rad, -assist["commanded_steering_rad"], feel.steering_angle_rad,
+                     compute_force(feel, binding.HUMAN_STEERING_LIMIT_RAD), feel.assist_full))
+
+    try:
+        loop.env.set_assist_mode(binding.ASSIST_MODE_BLEND, blend_target)
+        loop.wheel.set_controls(steering_norm=0.0, throttle_norm=0.5)
+        for _ in range(step_count):
+            loop.step_once(on_substep=record)
+    finally:
+        loop.close()
+    return seen
+
+
+@requires_checkpoint
+def test_blend_at_zero_weight_has_no_gap_to_pull_across():
+    seen = blend_drive(0.0)
+    assert all(target_rad is not None for target_rad, *_ in seen)
+    assert all(target_rad == commanded_rad for target_rad, commanded_rad, *_ in seen)
+    assert all(abs(target_rad - wheel_rad) < 1e-6 for target_rad, _, wheel_rad, _, _ in seen)
+    assert not any(assist_full for *_, assist_full in seen)
+
+
+@requires_checkpoint
+def test_blend_pulls_the_wheel_toward_where_the_car_is_steered():
+    seen = blend_drive(1.0, step_count=2 * REAL_LOOP_STEP_COUNT)
+    assert all(target_rad == commanded_rad for target_rad, commanded_rad, *_ in seen)
+    pulling = [(target_rad - wheel_rad, force) for target_rad, _, wheel_rad, force, _ in seen
+               if abs(target_rad - wheel_rad) > BLEND_MIN_PULL_GAP_RAD]
+    assert pulling, "the policy never steered away from the straight wheel"
+    assert all(math.copysign(1.0, force) == math.copysign(1.0, gap_rad) for gap_rad, force in pulling)

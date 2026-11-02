@@ -709,6 +709,54 @@ static int test_human_powertrain_car_drives_through_c_step(void) {
     return 0;
 }
 
+#define AUTOMATIC_PULL_AWAY_THROTTLE 0.6f
+#define AUTOMATIC_PULL_AWAY_STEP_COUNT 30
+
+// An automatic has no clutch: the pedal must not cut the drive or free-rev the engine.
+static int test_automatic_ignores_the_clutch_pedal(void) {
+    float clutch_norms[] = {0.3f, CLUTCH_ENGAGE_FRACTION, 1.0f};
+    for (int c = 0; c < 3; c++) {
+        PowertrainBench clutch_up;
+        PowertrainBench clutch_down;
+        powertrain_bench_init(&clutch_up, 0.0f, GEARBOX_MODE_AUTOMATIC, 1);
+        powertrain_bench_init(&clutch_down, 0.0f, GEARBOX_MODE_AUTOMATIC, 1);
+        for (int step = 0; step < AUTOMATIC_PULL_AWAY_STEP_COUNT; step++) {
+            c_set_human_pedals(&clutch_up.env, 0.0f, AUTOMATIC_PULL_AWAY_THROTTLE, 0.0f, 0.0f, 0);
+            c_set_human_pedals(&clutch_down.env, 0.0f, AUTOMATIC_PULL_AWAY_THROTTLE, 0.0f, clutch_norms[c], 0);
+            float speed_before_mps = clutch_down.agent.sim_speed_signed;
+            move_human(&clutch_up.env, 0, 0);
+            move_human(&clutch_down.env, 0, 0);
+            EXPECT_TRUE(memcmp(&clutch_up.agent, &clutch_down.agent, sizeof(Agent)) == 0);
+            EXPECT_EQ_INT(clutch_down.env.human_gear, clutch_up.env.human_gear);
+            EXPECT_TRUE(clutch_down.env.human_engine_rpm == clutch_up.env.human_engine_rpm);
+            EXPECT_EQ_INT(clutch_down.env.human_engine_stalled, 0);
+            float driveline_rpm = engine_rpm_for_speed(speed_before_mps, clutch_down.env.human_gear);
+            EXPECT_NEAR(clutch_down.env.human_engine_rpm, fmaxf(driveline_rpm, ENGINE_IDLE_RPM), RPM_TOLERANCE);
+        }
+        float free_rev_rpm = ENGINE_IDLE_RPM + AUTOMATIC_PULL_AWAY_THROTTLE * ENGINE_FREE_REV_GAIN;
+        EXPECT_TRUE(fabsf(clutch_down.env.human_engine_rpm - free_rev_rpm) > RPM_TOLERANCE);
+        EXPECT_TRUE(clutch_down.agent.sim_speed_signed > 0.0f);
+    }
+    return 0;
+}
+
+// The manual box still reads the pedal: fully down disconnects the drive, fully up at rest stalls.
+static int test_manual_still_reads_the_clutch_pedal(void) {
+    PowertrainBench bench;
+    powertrain_bench_init(&bench, 0.0f, GEARBOX_MODE_MANUAL, 1);
+    c_set_human_pedals(&bench.env, 0.0f, AUTOMATIC_PULL_AWAY_THROTTLE, 0.0f, 1.0f, 0);
+    for (int step = 0; step < AUTOMATIC_PULL_AWAY_STEP_COUNT; step++) {
+        move_human(&bench.env, 0, 0);
+        EXPECT_TRUE(bench.agent.sim_speed_signed == 0.0f);
+    }
+    EXPECT_NEAR(bench.env.human_engine_rpm, ENGINE_IDLE_RPM + AUTOMATIC_PULL_AWAY_THROTTLE * ENGINE_FREE_REV_GAIN,
+                RPM_TOLERANCE);
+    c_set_human_pedals(&bench.env, 0.0f, 0.0f, 0.0f, 0.0f, 0);
+    move_human(&bench.env, 0, 0);
+    EXPECT_EQ_INT(bench.env.human_engine_stalled, 1);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_gear_ratios_are_ordered);
@@ -719,6 +767,8 @@ int main(void) {
     RUN_TEST(test_manual_stalls_in_gear_at_standstill);
     RUN_TEST(test_stall_requires_full_engagement);
     RUN_TEST(test_automatic_never_stalls);
+    RUN_TEST(test_automatic_ignores_the_clutch_pedal);
+    RUN_TEST(test_manual_still_reads_the_clutch_pedal);
     RUN_TEST(test_engine_restart_recovers_a_stalled_car);
     RUN_TEST(test_restart_is_the_only_way_out_of_a_stall);
     RUN_TEST(test_idle_governor_floors_reported_rpm);

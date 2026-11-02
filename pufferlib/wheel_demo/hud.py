@@ -57,7 +57,7 @@ COLOR_MINIMAP_GOAL = (255, 200, 60)
 COLOR_MIRROR_FRAME = (20, 20, 24)
 COLOR_ASSIST_YOU = (240, 242, 245)
 COLOR_ASSIST_POLICY = (90, 200, 255)
-ASSIST_MODE_NAMES = {0: "off", 1: "display", 2: "blend", 3: "nudge", 4: "full"}
+ASSIST_MODE_NAMES = {0: "off", 1: "display", 2: "blend", 3: "nudge", 4: "full self driving"}
 CAMERA_MODE_DRIVER = 1
 DRIVER_WHEEL_RADIUS_PX = 110
 # Left-hand drive: in the driver's view the wheel sits left of centre, in front of the driver.

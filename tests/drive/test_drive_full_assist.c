@@ -1109,6 +1109,152 @@ static int test_a_manual_gearbox_in_gear_is_driven_by_the_policy(void) {
     return 0;
 }
 
+#define TAKEOVER_STEP_COUNT 120
+#define BACKWARD_ROLL_MPS -1.5f
+
+static void press_pedals(FullBench *bench, float throttle, float brake, int shift_request) {
+    c_set_human_pedals(&bench->env, 0.0f, throttle, brake, 0.0f, shift_request);
+}
+
+// FULL picks R for a policy reversing from rest, so the selector is in an assist-chosen R.
+static void assist_chosen_reverse(FullBench *bench, int gearbox_mode) {
+    reverse_bench_init(bench, 0.0f, 1, -MOVING_REFERENCE_SPEED_MPS);
+    bench->env.human_gearbox_mode = gearbox_mode;
+    press_pedals(bench, 0.0f, 0.0f, 0);
+    move_human(&bench->env, 0, 0);
+}
+
+static int expect_stops_in_drive_then_throttle_goes_forward(FullBench *bench) {
+    for (int step = 0; step < TAKEOVER_STEP_COUNT; step++) {
+        float speed_before_mps = bench->agent.sim_speed_signed;
+        move_human(&bench->env, 0, 0);
+        if (bench->env.human_gear == GEAR_REVERSE) {
+            continue;
+        }
+        EXPECT_TRUE(fabsf(speed_before_mps) <= AUTO_SELECTOR_MAX_SPEED_MPS);
+    }
+    EXPECT_TRUE(bench->agent.sim_speed_signed == 0.0f);
+    EXPECT_EQ_INT(bench->env.human_gear, 1);
+    EXPECT_EQ_INT(bench->env.human_reverse_chosen_by_assist, 0);
+    press_pedals(bench, 1.0f, 0.0f, 0);
+    for (int step = 0; step < TAKEOVER_STEP_COUNT; step++) {
+        move_human(&bench->env, 0, 0);
+        EXPECT_TRUE(bench->agent.sim_speed_signed >= 0.0f);
+    }
+    EXPECT_TRUE(bench->agent.sim_speed_signed > 0.0f);
+    EXPECT_TRUE(bench->env.human_gear >= 1);
+    return 0;
+}
+
+static int test_full_marks_the_reverse_it_chose(void) {
+    int gearboxes[] = {GEARBOX_MODE_AUTOMATIC, GEARBOX_MODE_NONE};
+    for (int g = 0; g < 2; g++) {
+        FullBench bench;
+        assist_chosen_reverse(&bench, gearboxes[g]);
+        EXPECT_EQ_INT(bench.env.human_gear, GEAR_REVERSE);
+        EXPECT_EQ_INT(bench.env.human_reverse_chosen_by_assist, 1);
+        EXPECT_EQ_INT(c_set_human_gear(&bench.env, GEAR_REVERSE), 0);
+        EXPECT_EQ_INT(bench.env.human_reverse_chosen_by_assist, 0);
+    }
+    return 0;
+}
+
+static int test_switching_the_assist_off_in_its_reverse_returns_to_drive_at_rest(void) {
+    int gearboxes[] = {GEARBOX_MODE_AUTOMATIC, GEARBOX_MODE_NONE};
+    for (int g = 0; g < 2; g++) {
+        FullBench bench;
+        assist_chosen_reverse(&bench, gearboxes[g]);
+        bench.env.assist_mode = ASSIST_MODE_OFF;
+        press_pedals(&bench, 0.0f, 1.0f, 0);
+        EXPECT_FALSE(expect_stops_in_drive_then_throttle_goes_forward(&bench));
+    }
+    return 0;
+}
+
+static int test_a_brake_takeover_in_the_assists_reverse_returns_to_drive_at_rest(void) {
+    int gearboxes[] = {GEARBOX_MODE_AUTOMATIC, GEARBOX_MODE_NONE};
+    for (int g = 0; g < 2; g++) {
+        FullBench bench;
+        assist_chosen_reverse(&bench, gearboxes[g]);
+        press_pedals(&bench, 0.0f, 1.0f, 0);
+        EXPECT_FALSE(expect_stops_in_drive_then_throttle_goes_forward(&bench));
+    }
+    return 0;
+}
+
+static int test_a_reverse_the_driver_chose_stays_in_reverse(void) {
+    FullBench bench;
+    reverse_bench_init(&bench, 0.0f, 1, MOVING_REFERENCE_SPEED_MPS);
+    bench.env.assist_mode = ASSIST_MODE_OFF;
+    press_pedals(&bench, 0.0f, 1.0f, -1);
+    move_human(&bench.env, 0, 0);
+    EXPECT_EQ_INT(bench.env.human_gear, GEAR_REVERSE);
+    EXPECT_EQ_INT(bench.env.human_reverse_chosen_by_assist, 0);
+    press_pedals(&bench, 0.0f, 1.0f, 0);
+    for (int step = 0; step < TAKEOVER_STEP_COUNT; step++) {
+        move_human(&bench.env, 0, 0);
+        EXPECT_EQ_INT(bench.env.human_gear, GEAR_REVERSE);
+    }
+    press_pedals(&bench, 1.0f, 0.0f, 0);
+    for (int step = 0; step < TAKEOVER_STEP_COUNT; step++) {
+        move_human(&bench.env, 0, 0);
+        EXPECT_EQ_INT(bench.env.human_gear, GEAR_REVERSE);
+    }
+    EXPECT_NEAR(bench.agent.sim_speed_signed, MAX_BACKWARD_SPEED, SPEED_TOLERANCE_MPS);
+    return 0;
+}
+
+static int test_full_alone_keeps_its_reverse_while_the_policy_reverses(void) {
+    FullBench bench;
+    assist_chosen_reverse(&bench, GEARBOX_MODE_AUTOMATIC);
+    for (int step = 0; step < TAKEOVER_STEP_COUNT; step++) {
+        move_human(&bench.env, 0, 0);
+        EXPECT_EQ_INT(bench.env.human_gear, GEAR_REVERSE);
+        EXPECT_TRUE(bench.agent.sim_speed_signed <= 0.0f);
+    }
+    EXPECT_TRUE(bench.agent.sim_speed_signed < 0.0f);
+    EXPECT_EQ_INT(bench.env.human_reverse_chosen_by_assist, 1);
+    return 0;
+}
+
+static int test_a_car_still_rolling_back_at_takeover_keeps_reverse_until_it_stops(void) {
+    FullBench bench;
+    assist_chosen_reverse(&bench, GEARBOX_MODE_AUTOMATIC);
+    bench.agent.sim_vx = BACKWARD_ROLL_MPS * bench.agent.cos_heading;
+    bench.agent.sim_vy = BACKWARD_ROLL_MPS * bench.agent.sin_heading;
+    update_agent_speed(&bench.agent);
+    bench.agent.accel_long = 0.0f;
+    bench.env.assist_mode = ASSIST_MODE_OFF;
+    press_pedals(&bench, 0.0f, 0.3f, 0);
+    int saw_reverse_while_rolling = 0;
+    for (int step = 0; step < TAKEOVER_STEP_COUNT; step++) {
+        float speed_before_mps = bench.agent.sim_speed_signed;
+        move_human(&bench.env, 0, 0);
+        if (fabsf(speed_before_mps) > AUTO_SELECTOR_MAX_SPEED_MPS) {
+            EXPECT_EQ_INT(bench.env.human_gear, GEAR_REVERSE);
+            saw_reverse_while_rolling = 1;
+        }
+    }
+    EXPECT_TRUE(saw_reverse_while_rolling);
+    EXPECT_TRUE(bench.agent.sim_speed_signed == 0.0f);
+    EXPECT_EQ_INT(bench.env.human_gear, 1);
+    return 0;
+}
+
+static int test_a_manual_gearbox_is_never_shifted_out_of_reverse(void) {
+    FullBench bench;
+    reverse_bench_init(&bench, 0.0f, GEAR_REVERSE, -MOVING_REFERENCE_SPEED_MPS);
+    bench.env.human_gearbox_mode = GEARBOX_MODE_MANUAL;
+    bench.env.human_reverse_chosen_by_assist = 1;
+    bench.env.assist_mode = ASSIST_MODE_OFF;
+    press_pedals(&bench, 0.0f, 1.0f, 0);
+    for (int step = 0; step < TAKEOVER_STEP_COUNT; step++) {
+        move_human(&bench.env, 0, 0);
+        EXPECT_EQ_INT(bench.env.human_gear, GEAR_REVERSE);
+    }
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_begin_preview_refuses_when_there_is_nothing_to_imagine);
@@ -1135,6 +1281,13 @@ int main(void) {
     RUN_TEST(test_full_selects_reverse_when_the_policy_step_ends_moving_backward);
     RUN_TEST(test_full_reverse_selector_holds_while_rolling_or_without_the_policy);
     RUN_TEST(test_a_driver_paddle_wins_over_the_automatic_reverse_request);
+    RUN_TEST(test_full_marks_the_reverse_it_chose);
+    RUN_TEST(test_switching_the_assist_off_in_its_reverse_returns_to_drive_at_rest);
+    RUN_TEST(test_a_brake_takeover_in_the_assists_reverse_returns_to_drive_at_rest);
+    RUN_TEST(test_a_reverse_the_driver_chose_stays_in_reverse);
+    RUN_TEST(test_full_alone_keeps_its_reverse_while_the_policy_reverses);
+    RUN_TEST(test_a_car_still_rolling_back_at_takeover_keeps_reverse_until_it_stops);
+    RUN_TEST(test_a_manual_gearbox_is_never_shifted_out_of_reverse);
     RUN_TEST(test_style_setter_validates_the_window_and_keeps_state);
     RUN_TEST(test_style_is_the_window_centre_geometric_on_log_scale);
     RUN_TEST(test_style_applies_only_under_full_and_only_to_shaped_coefficients);

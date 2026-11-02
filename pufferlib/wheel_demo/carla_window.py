@@ -32,7 +32,7 @@ RECORD_QUEUE_FRAMES = 30
 # The wheel's own buttons drive the demo; the keyboard (1 2 3 N L M TAB R Esc) still works too.
 HELP_TEXT = (
     "A camera   B night   X traffic   Y next car   VIEW restart engine   MENU assist   "
-    "D-pad left full steering   D-pad right style   "
+    "D-pad left self-driving steering   D-pad right style   LSB+RSB restart   "
     "D-pad up/down force   stopped: L paddle reverse, R paddle drive"
 )
 
@@ -95,6 +95,9 @@ class CarlaDemoWindow:
 
     def set_human_agent(self, agent_idx):
         self.scene.set_human_agent(agent_idx)
+
+    def restart(self):
+        self.scene.restart()
 
     def toggle_night(self):
         self.night_mode = not self.night_mode

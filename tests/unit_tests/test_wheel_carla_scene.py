@@ -998,3 +998,20 @@ def test_the_depth_camera_is_the_main_view_without_exposure_settings(night):
     assert not any(key.startswith("exposure") for key in blueprint.attributes)
     assert "depth" in scene._frames
     assert scene._depth_camera is not None
+
+
+def test_restart_clears_marks_and_eased_poses():
+    scene = skid_scene()
+    scene._lay_skid_marks(FakeTransform(0.0, 0.0, 0.0, 0.0))
+    scene._lay_skid_marks(FakeTransform(0.3, 0.0, 0.0, 0.0))
+    scene._ground[3] = (0.0, 0.0, 1.0, 0.0)
+    scene._poses[3] = carla_scene.SmoothedPose(1.0, 2.0, 3.0)
+    assert scene._skid_marks and scene._skid_mark_points is not None
+    scene.restart()
+    assert len(scene._skid_marks) == 0
+    assert scene._skid_mark_points is None
+    assert scene._poses == {}
+    assert scene._ground == {}
+    first = carla_scene.smooth_pose(scene._poses.get(3), 50.0, 60.0, 90.0, SMOOTH_FRAME_DT_S,
+                                    carla_scene.POSE_SMOOTHING_SECONDS)
+    assert (first.x, first.y, first.yaw_deg) == (50.0, 60.0, 90.0)

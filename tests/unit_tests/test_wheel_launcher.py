@@ -18,7 +18,7 @@ from pufferlib.wheel_demo.maps import CARLA_TOWNS
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPTS_DIR = os.path.join(REPO_ROOT, "scripts", "wheel_demo")
 CONTRACT_DEFAULTS = {
-    "town": "Town03",
+    "town": "Town10HD",
     "camera": "chase",
     "night": "day",
     "level": "normal",
@@ -41,7 +41,7 @@ CONTRACT_FULL_STEERINGS = ("car", "wheel")
 CONTRACT_DRIVING_STYLES = ("off", "calm", "normal", "aggressive")
 CONTRACT_GEARBOXES = ("automatic", "manual", "none")
 CONTRACT_GRIPS = ("realistic", "kinematic", "skid")
-FULL_ONLY_ROWS = ("Full steering", "Your style")
+FULL_ONLY_ROWS = ("Self-driving steering", "Your style")
 
 
 def load_script(name):
@@ -112,7 +112,7 @@ def test_default_command_runs_run_demo_with_this_interpreter(launcher):
     assert os.path.realpath(command[1]) == os.path.realpath(os.path.join(SCRIPTS_DIR, "run_demo.py"))
     assert os.path.isfile(command[1])
     assert "--render" in command
-    assert flag_value(command, "--town") == "Town03"
+    assert flag_value(command, "--town") == "Town10HD"
     assert "--night" not in command
     assert command.count("--fullscreen") == 1
     assert flag_value(command, "--ffb-gain") == "0.70"
@@ -600,3 +600,14 @@ def test_launcher_reenables_and_reports_what_was_saved(built_launcher, launcher)
     assert built_launcher.calibrate_button.kwargs["state"] == "normal"
     assert CONTRACT_CALIBRATION_FILE in built_launcher.status.kwargs["text"]
     assert CONTRACT_BUTTON_MAP_FILE in built_launcher.status.kwargs["text"]
+
+
+def test_the_default_town_is_town10hd(launcher):
+    assert launcher.DEFAULTS["town"] == "Town10HD"
+    assert "Town10HD" in {town for town, _ in launcher.TOWNS}
+
+
+def test_the_assist_choice_names_full_self_driving(built_launcher):
+    assert ("full", "Full Self Driving") in segment_options("assist", built_launcher)
+    assert "Self-driving steering" in built_launcher.widgets
+    assert "Full steering" not in built_launcher.widgets

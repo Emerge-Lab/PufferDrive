@@ -48,7 +48,7 @@ TOWNS = (
     ("Town10HD", "Dense city centre, high detail."),
 )
 DEFAULTS = {
-    "town": "Town03",
+    "town": "Town10HD",
     "camera": "chase",
     "night": "day",
     "level": "normal",
@@ -218,10 +218,10 @@ class Launcher:
                                                                        ("aggressive", "Aggressive")), r, 1)),
             ("Steering assist", lambda r: self._segmented(settings, "assist", (("off", "Off"), ("display", "Display"),
                                                                                ("blend", "Blend"), ("nudge", "Nudge"),
-                                                                               ("full", "Full")),
+                                                                               ("full", "Full Self Driving")),
                                                           r, 1)),
             ("Blend share", lambda r: self._slider(settings, "assist_blend", 0, 100, "%", r, 1)),
-            ("Full steering", lambda r: self._segmented(settings, "full_steering", (("car", "Car steers, wheel shows"),
+            ("Self-driving steering", lambda r: self._segmented(settings, "full_steering", (("car", "Car steers, wheel shows"),
                                                                                      ("wheel", "Wheel steers")), r, 1)),
             ("Your style", lambda r: self._segmented(settings, "driving_style", (("off", "Off"), ("calm", "Calm"),
                                                                                   ("normal", "Normal"),
@@ -300,7 +300,7 @@ class Launcher:
         if hasattr(self, "widgets"):
             self.widgets["Blend share"].configure(state="normal" if self.vars["assist"].get() == "blend" else "disabled")
             full_state = "normal" if self.vars["assist"].get() == "full" else "disabled"
-            for name in ("Full steering", "Your style"):
+            for name in ("Self-driving steering", "Your style"):
                 for button in self.widgets[name].winfo_children():
                     button.configure(state=full_state)
             wheel = self.vars["input"].get() == "wheel"

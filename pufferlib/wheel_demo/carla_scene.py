@@ -354,6 +354,13 @@ class CarlaScene:
         self._poses.pop(("ego",), None)
         self._skid_mark_points = None
 
+    def restart(self):
+        """A new drive: no skid marks, and every car snaps to its start pose instead of easing there."""
+        self._skid_marks.clear()
+        self._skid_mark_points = None
+        self._poses.clear()
+        self._ground.clear()
+
     def set_camera_mode(self, camera_mode):
         if camera_mode == self._camera_mode:
             return

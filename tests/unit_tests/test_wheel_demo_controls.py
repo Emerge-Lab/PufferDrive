@@ -227,7 +227,9 @@ def test_dpad_sweeping_up_to_down_fires_each_direction(run_demo):
 
 def test_unbound_buttons_and_paddles_emit_nothing(run_demo):
     commands = run_demo.WheelButtonCommands(TEST_BUTTON_MAP)
-    assert commands.poll(wheel_with("lsb", "rsb")) == {}
+    assert commands.poll(wheel_with("lsb")) == {}
+    assert commands.poll(wheel_with()) == {}
+    assert commands.poll(wheel_with("rsb")) == {}
     paddles = (1 << TEST_BUTTON_MAP.shift_up_bit) | (1 << TEST_BUTTON_MAP.shift_down_bit)
     assert commands.poll(WheelState(buttons=paddles)) == {}
 
@@ -742,7 +744,7 @@ def test_driving_style_is_refused_outside_full(run_demo, mode, capsys):
     run_demo.cycle_driving_style(loop, style_state)
     assert style_state == {"index": 1}
     assert loop.env.style_calls == []
-    assert "FULL" in capsys.readouterr().out
+    assert capsys.readouterr().out == "  driving style only applies under Full Self Driving\n"
 
 
 def test_full_steering_presets_are_the_contract():
@@ -769,7 +771,7 @@ def test_full_steering_is_refused_outside_full(run_demo, mode, capsys):
     run_demo.cycle_full_steering(loop)
     assert loop.full_steering_calls == []
     assert loop.full_steering == "car"
-    assert "FULL" in capsys.readouterr().out
+    assert capsys.readouterr().out == "  self-driving steering only applies under Full Self Driving\n"
 
 
 def test_window_keys_route_style_and_full_steering(run_demo):
@@ -881,7 +883,7 @@ def test_window_binds_s_and_f_and_documents_the_dpad():
     assert "pygame.K_s: \"cycle_style\"" in source
     assert "pygame.K_f: \"cycle_full_steering\"" in source
     assert "D-pad right style" in carla_window.HELP_TEXT
-    assert "D-pad left full steering" in carla_window.HELP_TEXT
+    assert "D-pad left self-driving steering" in carla_window.HELP_TEXT
 
 
 class FakeFrameClock:
@@ -977,3 +979,100 @@ def test_draw_hands_the_scenes_skid_marks_for_the_main_and_depth_images_to_the_h
     images.pop("depth")
     window.draw({}, WheelState(), 0.0)
     assert drawn["skid_queries"][-1] == ("main image", None)
+
+
+CONTRACT_COMBOS = {frozenset({"lsb", "rsb"}): "restart"}
+RESTART_COMMAND = {"restart": True}
+
+
+def test_button_combo_table_is_the_contract(run_demo):
+    assert run_demo.WHEEL_BUTTON_COMBOS == CONTRACT_COMBOS
+    assert "lsb" not in run_demo.WHEEL_BUTTON_COMMANDS and "rsb" not in run_demo.WHEEL_BUTTON_COMMANDS
+
+
+@pytest.mark.parametrize("first,second", [("lsb", "rsb"), ("rsb", "lsb")])
+def test_the_restart_combo_fires_once_when_the_second_button_joins(run_demo, first, second):
+    commands = run_demo.WheelButtonCommands(TEST_BUTTON_MAP)
+    assert commands.poll(wheel_with(first)) == {}
+    assert commands.poll(wheel_with(first, second)) == RESTART_COMMAND
+    for _ in range(5):
+        assert commands.poll(wheel_with(first, second)) == {}
+    assert commands.poll(wheel_with(second)) == {}
+    assert commands.poll(wheel_with(first, second)) == RESTART_COMMAND
+    assert commands.poll(wheel_with()) == {}
+    assert commands.poll(wheel_with(first, second)) == RESTART_COMMAND
+
+
+def test_the_combo_fires_alongside_another_buttons_press(run_demo):
+    commands = run_demo.WheelButtonCommands(TEST_BUTTON_MAP)
+    assert commands.poll(wheel_with("lsb", "rsb", "a")) == {"restart": True, "cycle_camera": True}
+    assert commands.poll(wheel_with("lsb", "rsb", "a")) == {}
+
+
+class RestartLoop(FakeLoop):
+    def __init__(self):
+        super().__init__()
+        self.restarts = 0
+
+    def restart(self):
+        self.restarts += 1
+
+
+class RestartWindow(FakeWindow):
+    def __init__(self, keys=None):
+        super().__init__(keys)
+        self.restarts = 0
+
+    def restart(self):
+        self.restarts += 1
+
+
+def test_restart_command_restarts_the_loop_and_the_window(run_demo, capsys):
+    loop, window = RestartLoop(), RestartWindow()
+    run_demo.apply_window_keys(window, loop, 0, dict(RESTART_COMMAND), None, 0.5)
+    assert (loop.restarts, window.restarts) == (1, 1)
+    assert "restart" in capsys.readouterr().out
+    run_demo.apply_window_keys(window, loop, 0, None, None, 0.5)
+    assert (loop.restarts, window.restarts) == (1, 1)
+
+
+def test_restart_has_no_keyboard_key_but_is_documented():
+    from pufferlib.wheel_demo import carla_window
+
+    source = open(carla_window.__file__).read()
+    assert ': "restart"' not in source
+    assert "LSB+RSB restart" in carla_window.HELP_TEXT
+
+
+def test_window_restart_restarts_the_scene(headless_window_module):
+    carla_window, _pygame, _calls = headless_window_module
+    window = carla_window.CarlaDemoWindow(object(), "Town01", 0, WINDOW_SUBSTEP_SECONDS)
+    restarted = []
+    window.scene.restart = lambda: restarted.append(True)
+    window.restart()
+    assert restarted == [True]
+
+
+def test_cycling_the_assist_prints_the_hud_name(run_demo, capsys):
+    from pufferlib.wheel_demo.hud import ASSIST_MODE_NAMES
+
+    loop = FakeLoop()
+    loop.env.mode = binding.ASSIST_MODE_NUDGE
+    run_demo.cycle_assist(loop, 0.5)
+    assert capsys.readouterr().out == f"  assist -> {ASSIST_MODE_NAMES[binding.ASSIST_MODE_FULL]}\n"
+    assert ASSIST_MODE_NAMES[binding.ASSIST_MODE_FULL] == "full self driving"
+
+
+def test_cycling_self_driving_steering_prints_the_new_preset(run_demo, capsys):
+    run_demo.cycle_full_steering(StyleLoop(binding.ASSIST_MODE_FULL))
+    assert capsys.readouterr().out == "  self-driving steering -> wheel\n"
+
+
+def test_cli_help_names_full_self_driving(demo_parser):
+    actions = {a.dest: a for a in demo_parser._actions}
+    assert "full = Full Self Driving" in actions["assist"].help
+    for dest in ("full_steering", "full_assist_dynamics", "driving_style"):
+        assert "Full Self Driving" in actions[dest].help
+    assert actions["assist_blend"].help.endswith("share of steering and acceleration the policy gets")
+    assert demo_parser.get_default("assist_blend") == 0.5
+    assert demo_parser.parse_args(["--assist", "full"]).assist == "full"

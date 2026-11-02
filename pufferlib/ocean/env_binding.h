@@ -1645,7 +1645,7 @@ static PyObject *vec_get_human_state(PyObject *self, PyObject *args) {
     Agent *agent = &drive->agents[agent_idx];
     float lane_speed_limit_mps = lane_speed_limit_target(drive, agent);
     return Py_BuildValue(
-        "{s:i,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:i,s:i,s:i,s:i,s:i,s:i,s:f,s:f,s:f,s:f,s:i}",
+        "{s:i,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:i,s:i,s:i,s:i,s:i,s:i,s:f,s:f,s:f,s:f,s:i,s:f}",
         "agent_idx",
         agent_idx,
         "sim_x",
@@ -1693,7 +1693,9 @@ static PyObject *vec_get_human_state(PyObject *self, PyObject *args) {
         "goal_y",
         agent->current_goal_y + drive->world_mean_y,
         "goal_idx",
-        agent->current_goal_idx);
+        agent->current_goal_idx,
+        "wheelbase_m",
+        agent->wheelbase);
 }
 
 static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {

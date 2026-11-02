@@ -5,6 +5,7 @@ same seed and the same recorded input trace replay to the same trajectory. When 
 behind, frames are dropped -- the physics step never stretches.
 """
 
+import math
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -161,6 +162,17 @@ class WheelDemoLoop:
         current = (self.config.full_assist_dynamics, self.config.lookahead_window_seconds)
         return next((name for name, preset in FULL_STEERING_PRESETS.items() if preset == current), "custom")
 
+    def restart(self):
+        """Back to the start: the session's seed puts every car and goal where they began. Assist, steering preset,
+        driving style and traffic level live in the env and carry over."""
+        self.observations, _ = self.env.reset(seed=self.config.seed)
+        self.select_human_agent(self.human_agent_idx)
+        self.env.set_human_gear(self.config.start_gear)
+        self.env.restart_human_engine()
+        self._pending_shifts = 0
+        self._previous_lookahead_rad = None
+        self._last_step_start_s = None
+
     def select_human_agent(self, agent_idx):
         self.env.select_human_agent(agent_idx)
         self.human_agent_idx = agent_idx
@@ -217,10 +229,11 @@ class WheelDemoLoop:
             self.env.substep()
             self._recent_car_steering_rad.append(-self.env.get_human_state()["steering_angle_rad"])
             previous_target_rad = self._assist_wheel_target_rad
-            car_steers_itself = (
-                self.lookahead_steers_car and self.env.get_assist_state()["mode"] == binding.ASSIST_MODE_FULL
-            )
-            if car_steers_itself:
+            assist_mode = self.env.get_assist_state()["mode"]
+            car_steers_itself = self.lookahead_steers_car and assist_mode == binding.ASSIST_MODE_FULL
+            if assist_mode == binding.ASSIST_MODE_BLEND:
+                self._update_blend_wheel_target()
+            elif car_steers_itself:
                 # only under FULL does the car steer itself; under NUDGE the car is the wheel, so it would pull nowhere
                 self._update_car_wheel_target()
             elif self.config.wheel_target == "lookahead":
@@ -278,7 +291,7 @@ class WheelDemoLoop:
             steering_angle_rad=steering_angle_rad,
             steering_rate_rad_s=steering_rate_rad_s,
             speed_mps=human["speed_mps"],
-            accel_lat_mps2=-human["accel_lat_mps2"],
+            accel_lat_mps2=self._felt_lateral_accel_mps2(human, steering_angle_rad),
             tire_grip_mps2=binding.HUMAN_TIRE_GRIP_MPS2,
             collision=human["collision"] > 0.0,
             offroad=human["offroad"] > 0.0,
@@ -286,6 +299,16 @@ class WheelDemoLoop:
             assist_full=self.env.get_assist_state()["mode"] == binding.ASSIST_MODE_FULL,
             assist_target_rate_rad_s=target_rate_rad_s,
         )
+
+    def _felt_lateral_accel_mps2(self, human, steering_angle_rad):
+        """Cornering the wheel's aligning torque is built from, driver sign. Under BLEND the car's front wheels are
+        partly the policy's, not this wheel's, so the torque comes from the cornering this wheel's own angle asks for:
+        the car's would push the wheel against the policy's turn."""
+        if self.env.get_assist_state()["mode"] != binding.ASSIST_MODE_BLEND:
+            return -human["accel_lat_mps2"]
+        speed_mps = human["speed_mps"]
+        wheel_accel_mps2 = speed_mps * speed_mps * math.tan(steering_angle_rad) / human["wheelbase_m"]
+        return float(np.clip(wheel_accel_mps2, -binding.HUMAN_TIRE_GRIP_MPS2, binding.HUMAN_TIRE_GRIP_MPS2))
 
     def _update_assist_wheel_target(self):
         """The policy's angle in driver terms for the wheel to follow (NUDGE, FULL), held while nearly stopped.
@@ -307,6 +330,15 @@ class WheelDemoLoop:
         )
         smoothing = 1.0 - np.exp(-self.substep_dt / ASSIST_WHEEL_SMOOTHING_SECONDS)
         self._assist_wheel_target_rad += deadband_weight * smoothing * gap_rad
+
+    def _update_blend_wheel_target(self):
+        """Under BLEND the wheel is pulled toward the angle the car is actually steered at, so it lines up with where
+        the car goes. That gap is blend_weight * (policy - wheel): no pull at 0%, the policy's at 100%."""
+        assist = self.env.get_assist_state()
+        if not assist["reference_valid"]:
+            self._assist_wheel_target_rad = None
+            return
+        self._assist_wheel_target_rad = -assist["commanded_steering_rad"]
 
     def _update_car_wheel_target(self):
         """The angle your car is actually steering at (NUDGE, FULL); under FULL on the jerk model that is the policy's."""

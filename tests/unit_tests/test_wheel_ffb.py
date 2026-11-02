@@ -207,6 +207,9 @@ class FakeHumanEnv:
         return self.assist_state
 
 
+FAKE_WHEELBASE_M = 2.7
+
+
 def sim_human_state(
     steering_angle_rad,
     accel_lat_mps2,
@@ -221,6 +224,7 @@ def sim_human_state(
         "speed_mps": speed_mps,
         "collision": collision,
         "offroad": offroad,
+        "wheelbase_m": FAKE_WHEELBASE_M,
     }
 
 
@@ -1683,3 +1687,66 @@ def test_car_feel_carries_the_target_on_at_most_one_substep(monkeypatch, sim_spe
 def test_car_feel_without_a_published_target_has_none(monkeypatch):
     feel = published_feel(monkeypatch, FEEL_SUBSTEP_SECONDS, 1.0, target_rad=None)
     assert feel.assist_target_steering_rad is None
+
+
+
+# ---------------------------------------------------------------------------------------------
+# 14. Under BLEND the aligning torque comes from what THIS wheel's angle asks for, not the car's cornering.
+# ---------------------------------------------------------------------------------------------
+
+BLEND_SPEED_MPS = 12.0
+CAR_TURNING_ACCEL_LAT_MPS2 = 5.0
+NON_BLEND_MODES = (binding.ASSIST_MODE_OFF, binding.ASSIST_MODE_DISPLAY, binding.ASSIST_MODE_NUDGE,
+                   binding.ASSIST_MODE_FULL)
+
+
+def blend_feel(wheel_norm, speed_mps=BLEND_SPEED_MPS, car_accel_lat_mps2=SIM_LEFT * CAR_TURNING_ACCEL_LAT_MPS2,
+               mode=binding.ASSIST_MODE_BLEND):
+    """The car corners on the policy's share while the wheel is held at wheel_norm."""
+    human = sim_human_state(SIM_LEFT * 0.1, car_accel_lat_mps2, speed_mps)
+    loop = feel_loop(FakeHumanEnv(human, sim_assist_state(mode=mode, reference_valid=1)))
+    loop.wheel = types.SimpleNamespace(latest=lambda: WheelState(steering_norm=wheel_norm))
+    loop.car_feel()
+    return loop.car_feel()
+
+
+def expected_wheel_accel_mps2(wheel_norm, speed_mps):
+    demand = speed_mps**2 * math.tan(wheel_norm * STEERING_LIMIT_RAD) / FAKE_WHEELBASE_M
+    return max(-TIRE_GRIP_MPS2, min(TIRE_GRIP_MPS2, demand))
+
+
+def test_blend_with_a_straight_wheel_feels_no_cornering_and_no_push():
+    feel = blend_feel(0.0)
+    assert feel.accel_lat_mps2 == 0.0
+    assert compute_force(feel, STEERING_LIMIT_RAD) == 0.0
+
+
+@pytest.mark.parametrize("wheel_norm", [-0.2, -0.05, 0.03, 0.1])
+@pytest.mark.parametrize("speed_mps", [BLEND_SPEED_MPS, -BLEND_SPEED_MPS * 0.25, 2.0])
+def test_blend_feels_the_cornering_the_wheels_own_angle_asks_for(wheel_norm, speed_mps):
+    feel = blend_feel(wheel_norm, speed_mps)
+    assert feel.accel_lat_mps2 == pytest.approx(expected_wheel_accel_mps2(wheel_norm, speed_mps))
+    assert sign_of(feel.accel_lat_mps2) == sign_of(wheel_norm)
+
+
+def test_blend_feel_is_the_same_rolling_forward_or_back():
+    assert blend_feel(0.1, BLEND_SPEED_MPS).accel_lat_mps2 == blend_feel(0.1, -BLEND_SPEED_MPS).accel_lat_mps2
+
+
+@pytest.mark.parametrize("wheel_norm", [-1.0, -0.6, 0.6, 1.0])
+def test_blend_feel_is_clipped_at_the_tyre_grip(wheel_norm):
+    feel = blend_feel(wheel_norm)
+    assert feel.accel_lat_mps2 == sign_of(wheel_norm) * TIRE_GRIP_MPS2
+
+
+@pytest.mark.parametrize("wheel_norm", [-0.1, 0.1])
+def test_blend_pushes_a_turned_wheel_back_towards_centre(wheel_norm):
+    force = compute_force(blend_feel(wheel_norm), STEERING_LIMIT_RAD)
+    assert force != 0.0
+    assert sign_of(force) == -sign_of(wheel_norm)
+
+
+@pytest.mark.parametrize("mode", NON_BLEND_MODES)
+def test_every_other_mode_feels_the_cars_own_cornering(mode):
+    feel = blend_feel(0.0, mode=mode)
+    assert feel.accel_lat_mps2 == -SIM_LEFT * CAR_TURNING_ACCEL_LAT_MPS2

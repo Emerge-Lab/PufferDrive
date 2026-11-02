@@ -46,6 +46,7 @@ HUMAN_STATE_KEYS = {
     "goal_x",
     "goal_y",
     "goal_idx",
+    "wheelbase_m",
 }
 
 
@@ -428,3 +429,27 @@ def test_render_poses_are_finite_and_leave_state_alone(env):
         assert np.all(np.isfinite(heading))
     after = env.get_human_state()
     assert after == before
+
+
+
+KINEMATIC_TEST_SPEED_MPS = 6.0
+KINEMATIC_TEST_STEERING_NORM = 0.4
+KINEMATIC_SETTLE_STEP_COUNT = 30
+
+
+def test_wheelbase_is_the_one_the_kinematic_arc_turns_on(env):
+    env.select_human_agent(0)
+    env.set_human_grip_mode(binding.GRIP_MODE_KINEMATIC)
+    wheelbase_m = env.get_human_state()["wheelbase_m"]
+    assert math.isfinite(wheelbase_m) and wheelbase_m > 0.0
+    no_action = env.action_space.sample() * 0
+    env.set_human_input(KINEMATIC_TEST_STEERING_NORM, 2.0)
+    while env.get_human_state()["speed_mps"] < KINEMATIC_TEST_SPEED_MPS:
+        env.step(no_action)
+    env.set_human_input(KINEMATIC_TEST_STEERING_NORM, 0.0)
+    for _ in range(KINEMATIC_SETTLE_STEP_COUNT):
+        env.step(no_action)
+    human = env.get_human_state()
+    expected_yaw_rps = human["speed_mps"] * math.tan(human["steering_angle_rad"]) / wheelbase_m
+    assert human["yaw_rate_rps"] == pytest.approx(expected_yaw_rps, rel=1e-4)
+    assert human["wheelbase_m"] == wheelbase_m

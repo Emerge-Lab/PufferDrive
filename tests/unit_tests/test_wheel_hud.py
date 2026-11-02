@@ -475,7 +475,7 @@ def test_drawing_every_info_combination_does_not_raise(pygame_headless, town_hud
 
 
 def test_full_has_a_hud_name():
-    assert hud.ASSIST_MODE_NAMES == {0: "off", 1: "display", 2: "blend", 3: "nudge", 4: "full"}
+    assert hud.ASSIST_MODE_NAMES == {0: "off", 1: "display", 2: "blend", 3: "nudge", 4: "full self driving"}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -673,7 +673,7 @@ def test_full_mode_is_named_on_the_hud(pygame_headless, town_hud, wheel_spy):
     _, texts = wheel_spy
     draw_wheel_frame(pygame_headless, town_hud, hud_human(accel_long_mps2=0.0, steering_angle_rad=0.0),
                      CAMERA_MODE_CHASE, hud_assist(binding.ASSIST_MODE_FULL))
-    assert "Assist: full" in texts
+    assert "Assist: full self driving" in texts
 
 
 # ---------------------------------------------------------------------------------------------
