@@ -8,6 +8,7 @@
 #SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
 #SBATCH --output experiments/logs/carla_longest6_v1_%j.out
 #SBATCH --error experiments/logs/carla_longest6_v1_%j.err
+#SBATCH --open-mode=append               # a requeued job keeps the log of the instance it resumes
 #SBATCH --partition dev
 # CARLA longest6 v1 evaluation of a PufferDrive checkpoint through carla_garage's unmodified Leaderboard 1.0
 # (CARLA 0.9.10.1, pufferlib/ocean/cosim/carla/lb1/leaderboard_agent.py), the Leaderboard 1.0 counterpart of
@@ -53,7 +54,8 @@
 # COSIM_VRU_SIZE_PAD_M and COSIM_OBS_SLOTS_PARTNERS_N default to the run's own values from run_info.txt (a run from before the seeds layout has no
 # seeds line and is completed as it was driven: single default seed, route_<id> folders), CKPT must be the run's checkpoint. The replaced
 # route folders and worker logs move to $OUT/pre_completion_<stamp>/, timing.csv grows, run_info.txt gets a completion
-# line, and results.csv, the report and the gallery are rebuilt over all routes.
+# line, and results.csv, the report and the gallery are rebuilt over all routes (also when no route is left to rerun).
+# A requeued job (SLURM_RESTART_COUNT > 0 after a preemption or node failure) completes its own folder this way by itself.
 # scripts/kesai/17_carla_longest6_v1_complete_local.sh does this on a desktop for a run folder synced from the cluster.
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
@@ -68,6 +70,13 @@ export CKPT=${CKPT:-$RUN_DIR/final_model.pt}
 ROUTE_DIR=${ROUTE_DIR:-$GARAGE_WORK_DIR/leaderboard/data/longest6_split}
 ROUTES_XML=${ROUTES_XML:-$GARAGE_WORK_DIR/leaderboard/data/longest6.xml}
 COMPLETE_RUN=${COMPLETE_RUN:-}
+# a requeued job (preemption, node failure) resumes its own run folder instead of starting over
+if [ -z "$COMPLETE_RUN" ] && [ "${SLURM_RESTART_COUNT:-0}" -gt 0 ]; then
+    for candidate in "$RUN_DIR"/eval/carla_longest6_v1*_"${SLURM_JOB_ID:-none}"; do   # sorted by start time: the newest wins
+        [ -d "$candidate/routes" ] && [ -f "$candidate/run_info.txt" ] && COMPLETE_RUN=$candidate
+    done
+    [ -n "$COMPLETE_RUN" ] && echo "requeued job $SLURM_JOB_ID (restart $SLURM_RESTART_COUNT): resuming $COMPLETE_RUN"
+fi
 if [ -n "$COMPLETE_RUN" ]; then
     [ -d "$COMPLETE_RUN/routes" ] && [ -f "$COMPLETE_RUN/run_info.txt" ] || { echo "COMPLETE_RUN=$COMPLETE_RUN is not a run folder (needs routes/ and run_info.txt)"; exit 1; }
     run_info_value() { awk -v key="$1" '$1 == key {print $2; exit}' "$COMPLETE_RUN/run_info.txt"; }
@@ -237,20 +246,23 @@ if [ -n "$COMPLETE_RUN" ]; then
     for unit in "${UNITS[@]}"; do
         route_done "$OUT/routes/$(unit_dir "${unit%%:*}" "${unit##*:}")/result.json" || PENDING+=("$unit")
     done
-    [ "${#PENDING[@]}" -gt 0 ] || { echo "nothing to complete: every route run of $OUT has a valid record"; exit 0; }
-    echo "completing $OUT: ${#PENDING[@]} of $TOTAL_UNITS route runs without a valid record: ${PENDING[*]}"
-    UNITS=("${PENDING[@]}")
-    # what the completion replaces stays readable next to the live results
+    UNITS=(${PENDING[@]+"${PENDING[@]}"})
     COMPLETION_STAMP=$(date +%Y%m%d_%H%M%S)
-    PREVIOUS=$OUT/pre_completion_$COMPLETION_STAMP
-    mkdir -p "$PREVIOUS/routes"
-    for unit in "${UNITS[@]}"; do
-        route_name=$(unit_dir "${unit%%:*}" "${unit##*:}")
-        [ -d "$OUT/routes/$route_name" ] && mv "$OUT/routes/$route_name" "$PREVIOUS/routes/"
-        rm -f "$(unit_json "${unit%%:*}" "${unit##*:}")"
-    done
-    for f in "$OUT"/worker_w*.log; do [ -e "$f" ] && mv "$f" "$PREVIOUS/"; done
-    echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
+    if [ "${#UNITS[@]}" -eq 0 ]; then
+        echo "every route run of $OUT has a valid record: only results.csv, the report and the gallery are rebuilt"
+    else
+        echo "completing $OUT: ${#UNITS[@]} of $TOTAL_UNITS route runs without a valid record: ${UNITS[*]}"
+        # what the completion replaces stays readable next to the live results
+        PREVIOUS=$OUT/pre_completion_$COMPLETION_STAMP
+        mkdir -p "$PREVIOUS/routes"
+        for unit in "${UNITS[@]}"; do
+            route_name=$(unit_dir "${unit%%:*}" "${unit##*:}")
+            [ -d "$OUT/routes/$route_name" ] && mv "$OUT/routes/$route_name" "$PREVIOUS/routes/"
+            rm -f "$(unit_json "${unit%%:*}" "${unit##*:}")"
+        done
+        for f in "$OUT"/worker_w*.log; do [ -e "$f" ] && mv "$f" "$PREVIOUS/"; done
+    fi
+    echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]:-none}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
 fi
 [ "$WORKERS" -gt "${#UNITS[@]}" ] && WORKERS=${#UNITS[@]}
 # one shared queue, longest route first; length = the xml's waypoint polyline (an earlier run's duration would read a
@@ -371,14 +383,6 @@ run_worker() {  # $1 worker: pulls route runs from the queue until it is empty, 
     echo "[w$w] queue empty $(date +%H:%M:%S)"
 }
 
-# never attach to a server that is not ours (a peer's test server, a leftover of an earlier job)
-if command -v ss >/dev/null 2>&1; then
-    for ((w = 0; w < WORKERS; w++)); do
-        for port in $((PORT_BASE + w * 50)) $((PORT_BASE + w * 50 + 1)) $((PORT_BASE + 6000 + w * 50)); do
-            [ -z "$(ss -Hltn "sport = :$port")" ] || { echo "port $port is already in use (ss -ltn); pick another PORT_BASE"; exit 1; }
-        done
-    done
-fi
 # only the servers this job started (children first: the UE4 binary outlives its wrapper shell otherwise)
 trap 'for p in $(cat "$OUT/server_pids" 2>/dev/null); do pkill -9 -P "$p" 2>/dev/null; kill -9 "$p" 2>/dev/null; done' EXIT
 WORKER_PIDS=()
@@ -388,10 +392,10 @@ for ((w = 0; w < WORKERS; w++)); do
     run_worker "$w" > "$OUT/worker_w$w.log" 2>&1 &
     WORKER_PIDS+=($!)
 done
-wait "${WORKER_PIDS[@]}"
+wait ${WORKER_PIDS[@]+"${WORKER_PIDS[@]}"}
 ROUTES_WALL_S=$(( $(date +%s) - ROUTES_T0 ))
 rm -f "$QUEUE" "$QUEUE.lock"
-cat "$OUT"/worker_w*.log
+cat "$OUT"/worker_w*.log 2>/dev/null
 "$SERVER_PY" - "$OUT/timing.csv" "$ROUTES_WALL_S" "$WORKERS" "$NUM_GPUS" "${#UNITS[@]}" "$TIMING_ROWS_BEFORE" <<'EOF' | tee -a "$OUT/run_info.txt"
 import csv, sys
 rows = list(csv.DictReader(open(sys.argv[1]))); wall, workers, gpus, n_routes, rows_before = (int(x) for x in sys.argv[2:7])
