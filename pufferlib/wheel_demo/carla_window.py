@@ -51,6 +51,7 @@ class CarlaDemoWindow:
         size_px=DEFAULT_WINDOW_SIZE_PX,
         fullscreen=False,
         record_path=None,
+        frame_sink=None,
     ):
         import carla
         import pygame
@@ -86,6 +87,7 @@ class CarlaDemoWindow:
         self._recorder = None
         self._record_queue = queue.Queue(maxsize=RECORD_QUEUE_FRAMES)
         self._record_thread = None
+        self.frame_sink = frame_sink  # e.g. the remote input, which streams the window to a browser
         if record_path is not None:
             self._start_recorder(record_path)
 
@@ -155,6 +157,8 @@ class CarlaDemoWindow:
         full_steering="car",
         coadapt_line="",
         coadapt_belief=(),
+        dynamic_line="",
+        dynamic_share=0.0,
     ):
         """One real-time frame. Returns False when the frame was skipped to catch up."""
         now_s = time.perf_counter()
@@ -187,6 +191,8 @@ class CarlaDemoWindow:
                 full_steering=full_steering,
                 coadapt_line=coadapt_line,
                 coadapt_belief=coadapt_belief,
+                dynamic_line=dynamic_line,
+                dynamic_share=dynamic_share,
             ),
             elapsed_seconds,
             mirrors=self._mirror_layout(images),
@@ -196,6 +202,8 @@ class CarlaDemoWindow:
         )
         self.pygame.display.flip()
         self._record_frame()
+        if self.frame_sink is not None:
+            self.frame_sink.offer_frame(self.screen, self.pygame)
         self.frames_drawn += 1
         self._pump_events()
         remaining_s = self._next_frame_s - time.perf_counter()

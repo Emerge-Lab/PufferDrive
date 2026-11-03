@@ -25,6 +25,7 @@ sys.path.insert(0, REPO_ROOT)
 from pufferlib.ocean.drive import binding
 from pufferlib.wheel_demo.input.base import WheelCalibration
 from pufferlib.wheel_demo.input.g920 import ButtonMap
+from pufferlib.wheel_demo.input.remote import REMOTE_DEFAULT_PORT, RemoteWheelInput, load_or_create_key
 from pufferlib.wheel_demo.input.trace import SyntheticWheelInput
 from pufferlib.wheel_demo.loop import (
     GEARBOX_MODE_AUTOMATIC,
@@ -41,6 +42,7 @@ from pufferlib.wheel_demo.loop import (
 )
 from pufferlib.wheel_demo.calibrate import calibrate_interactively, validate_calibration
 from pufferlib.wheel_demo.coadapt import CoAdapt
+from pufferlib.wheel_demo.dynamic_blend import DynamicBlend
 from pufferlib.wheel_demo.ffb import DEFAULT_FORCE_GAIN, ForceFeedbackLoop, platform_force_output
 from pufferlib.wheel_demo.levels import LEVELS, LEVEL_NAMES, apply_driving_style, apply_level, level_by_name
 from pufferlib.wheel_demo.maps import CARLA_TOWNS
@@ -63,10 +65,14 @@ ASSIST_MODES_BY_NAME = {
     "nudge": binding.ASSIST_MODE_NUDGE,
     "full": binding.ASSIST_MODE_FULL,
 }
-ASSIST_MODE_CYCLE = tuple(ASSIST_MODES_BY_NAME.values())
+ASSIST_NAMES_BY_MODE = {mode: name for name, mode in ASSIST_MODES_BY_NAME.items()}
 # Co-adapt is Blend with the share learned by a bandit, so it is a demo-side mode, not one of the sim's
 COADAPT = "co-adapt"
-ASSIST_CHOICES = tuple(ASSIST_MODES_BY_NAME) + (COADAPT,)
+# Dynamic blend: Blend whose share follows how you have been driving (assist as needed); also demo-side
+DYNAMIC = "dynamic"
+ASSIST_CHOICES = tuple(ASSIST_MODES_BY_NAME) + (COADAPT, DYNAMIC)
+# The menu order. Co-adapt is hidden from it and from the launcher; --assist co-adapt still starts it.
+ASSIST_CYCLE = ("off", "display", "blend", "nudge", DYNAMIC, "full")
 # Wheel button -> demo command. The keyboard keys keep working alongside these.
 WHEEL_BUTTON_COMMANDS = {
     "a": "cycle_camera",
@@ -89,12 +95,18 @@ DRIVING_STYLES = ("off",) + LEVEL_NAMES
 GRIP_MODES_BY_NAME = {"realistic": GRIP_MODE_REALISTIC, "kinematic": GRIP_MODE_KINEMATIC, "skid": GRIP_MODE_SKID}
 GEARBOX_MODES_BY_NAME = {"automatic": GEARBOX_MODE_AUTOMATIC, "manual": GEARBOX_MODE_MANUAL, "none": GEARBOX_MODE_NONE}
 SYNTHETIC_STEER_PERIOD_STEPS = 40.0
+# Kept between runs, so the remote URL stays the same; delete the file to make a new key.
+REMOTE_KEY_PATH = os.path.expanduser("~/.cache/pufferdrive_wheel_demo/remote_key")
 
 
-def build_wheel_input(kind, calibration_path, button_map_path):
+def build_wheel_input(kind, calibration_path, button_map_path, remote_port=REMOTE_DEFAULT_PORT, remote_key=None):
     if kind == "synthetic":
         return SyntheticWheelInput(), None
     calibration = WheelCalibration.from_json(calibration_path) if calibration_path else WheelCalibration()
+    if kind == "remote":
+        commands = set(WHEEL_BUTTON_COMMANDS.values()) | set(WHEEL_BUTTON_COMBOS.values())
+        key = remote_key or load_or_create_key(REMOTE_KEY_PATH)
+        return RemoteWheelInput(key, commands, port=remote_port, calibration=calibration).start(), None
     button_map = ButtonMap.from_json(button_map_path) if button_map_path else ButtonMap()
     from pufferlib.wheel_demo.input.g920 import G920HidInput
 
@@ -175,19 +187,31 @@ def cycle_full_steering(loop):
     print(f"  self-driving steering -> {name}")
 
 
-def cycle_assist(loop, blend_target, coadapt=None):
-    """Next assist mode; with a co-adapt controller the cycle ends on co-adapt before returning to off."""
-    if coadapt is not None and coadapt.active:
-        coadapt.stop()
-        next_mode = ASSIST_MODE_CYCLE[0]
+def start_demo_mode(name, controller, env):
+    if name == COADAPT:
+        controller.start(env)
+        print(f"  assist -> {COADAPT} (Blend share {round(100 * controller.share)}%)")
     else:
-        current = loop.env.get_assist_state()["mode"]
-        position = ASSIST_MODE_CYCLE.index(current) + 1
-        if coadapt is not None and position == len(ASSIST_MODE_CYCLE):
-            coadapt.start(loop.env)
-            print(f"  assist -> {COADAPT} (Blend share {round(100 * coadapt.share)}%)")
-            return
-        next_mode = ASSIST_MODE_CYCLE[position % len(ASSIST_MODE_CYCLE)]
+        controller.start()
+        print(f"  assist -> dynamic blend ({controller.hud_line()})")
+
+
+def cycle_assist(loop, blend_target, coadapt=None, dynamic=None):
+    """Next assist mode in ASSIST_CYCLE; dynamic blend is skipped when no controller is given. A running co-adapt
+    stops and counts as Blend, the mode it runs on."""
+    if dynamic is not None and dynamic.active:
+        dynamic.stop()
+        current = DYNAMIC
+    else:
+        if coadapt is not None and coadapt.active:
+            coadapt.stop()
+        current = ASSIST_NAMES_BY_MODE[loop.env.get_assist_state()["mode"]]
+    cycle = ASSIST_CYCLE if dynamic is not None else tuple(name for name in ASSIST_CYCLE if name != DYNAMIC)
+    next_name = cycle[(cycle.index(current) + 1) % len(cycle)]
+    if next_name == DYNAMIC:
+        start_demo_mode(DYNAMIC, dynamic, loop.env)
+        return
+    next_mode = ASSIST_MODES_BY_NAME[next_name]
     loop.env.set_assist_mode(next_mode, blend_target)
     print(f"  assist -> {ASSIST_MODE_NAMES[next_mode]}")
 
@@ -206,6 +230,13 @@ def coadapt_hud_belief(coadapt):
     return tuple((f"{round(100 * share)}%", belief[arm], arm == coadapt.arm) for arm, share in enumerate(coadapt.shares))
 
 
+def report_dynamic_baseline(dynamic, was_measuring):
+    """One line on the step the warm-up ends and the reward gap joins the disagreement."""
+    if was_measuring and not dynamic.measuring_baseline and dynamic.active:
+        print(f"  dynamic blend: policy's look-ahead baseline {dynamic.baseline:+.4f} per step; target "
+              f"{dynamic.target:+.4f}; now at {round(100 * dynamic.share)}% policy")
+
+
 def report_coadapt_trial(coadapt, finished):
     if finished is None:
         return
@@ -214,6 +245,25 @@ def report_coadapt_trial(coadapt, finished):
         f"  co-adapt trial {coadapt.trial_count}: {round(100 * coadapt.shares[arm])}% scored {score:+.3f} | "
         f"{coadapt.summary()} | next {round(100 * coadapt.share)}%"
     )
+
+
+def remote_status(human, assist, coadapt, dynamic):
+    """The remote page's status line: speed, gear and the assist mode, as the HUD shows them."""
+    if dynamic.active:
+        assist_name = f"dynamic blend {round(100 * dynamic.share)}%"
+    elif coadapt.active:
+        assist_name = f"{COADAPT} {round(100 * coadapt.share)}%"
+    elif assist["mode"] == binding.ASSIST_MODE_BLEND:
+        assist_name = f"blend {round(100 * assist['blend_target'])}%"
+    else:
+        assist_name = ASSIST_MODE_NAMES[assist["mode"]]
+    if human is None:
+        return {"assist": assist_name}
+    return {
+        "speed_kmh": round(abs(human["speed_mps"]) * MPS_TO_KMH),
+        "gear": gear_label(human["gear"], human["gearbox_mode"]),
+        "assist": assist_name,
+    }
 
 
 class WheelButtonCommands:
@@ -242,7 +292,7 @@ def adjust_ffb_gain(force_loop, step):
 
 
 def apply_window_keys(window, loop, level_index=0, wheel_commands=None, force_loop=None, assist_blend=0.5,
-                      style_state=None, coadapt=None):
+                      style_state=None, coadapt=None, dynamic=None):
     """Window keys and wheel buttons drive the demo: cameras, night, level, assist, style, car takeover, engine restart."""
     keys = window.poll()
     keys.update(wheel_commands or {})
@@ -255,9 +305,11 @@ def apply_window_keys(window, loop, level_index=0, wheel_commands=None, force_lo
         window.restart()
         if coadapt is not None:
             coadapt.restart(loop.env)
+        if dynamic is not None:
+            dynamic.restart()
         print("  restarted: every car and your goals are back at the start")
     if keys.get("cycle_assist"):
-        cycle_assist(loop, assist_blend, coadapt)
+        cycle_assist(loop, assist_blend, coadapt, dynamic)
     if keys.get("cycle_camera"):
         window.set_camera_mode((window.camera_mode + 1) % CAMERA_MODE_COUNT)
     if keys.get("ffb_gain_up"):
@@ -297,11 +349,15 @@ def main():
     parser.add_argument("--town", default="ask", choices=("ask",) + tuple(CARLA_TOWNS))
     parser.add_argument("--agents", type=int, default=64)
     parser.add_argument("--human-agent", type=int, default=0)
-    parser.add_argument("--grip", default="realistic", choices=tuple(GRIP_MODES_BY_NAME),
+    parser.add_argument("--grip", default="skid", choices=tuple(GRIP_MODES_BY_NAME),
                         help="skid: the tyres can slide, so the car can spin (no ABS or stability control)")
     parser.add_argument("--gearbox", default="automatic", choices=tuple(GEARBOX_MODES_BY_NAME),
                         help="none: no gears, the pedals drive the policy's own jerk model (left paddle at rest for R)")
-    parser.add_argument("--input", default="wheel", choices=("wheel", "synthetic"))
+    parser.add_argument("--input", default="wheel", choices=("wheel", "synthetic", "remote"),
+                        help="remote: a touch wheel and pedals in a browser, which also shows the window")
+    parser.add_argument("--remote-port", type=int, default=REMOTE_DEFAULT_PORT)
+    parser.add_argument("--remote-key", default=None,
+                        help=f"key the remote URL must carry (default: the one kept in {REMOTE_KEY_PATH})")
     parser.add_argument("--calibration", default="wheel_calibration.json")
     parser.add_argument("--buttons", default="wheel_buttons.json")
     parser.add_argument("--steps", type=int, default=400)
@@ -320,8 +376,11 @@ def main():
     parser.add_argument("--calibrate", action="store_true", help="calibrate the wheel before driving")
     parser.add_argument("--level", default="normal", choices=LEVEL_NAMES, help="how the surrounding traffic behaves")
     parser.add_argument("--assist", default="off", choices=ASSIST_CHOICES,
-                        help="steering assist mode; full = Full Self Driving; co-adapt = Blend whose share "
-                             "(20/40/60/80%%) a bandit learns from your return, one 20 s trial at a time")
+                        help="steering assist mode; full = Full Self Driving; dynamic = Blend toward the policy's "
+                             "smoothed look-ahead, whose share follows how you have been driving (disagreement alone "
+                             "for the first 30 s, while the policy's look-ahead sets the target); co-adapt (hidden "
+                             "from the menu) = Blend whose share (20/40/60/80%%) a bandit learns, one 20 s trial at a "
+                             "time")
     parser.add_argument("--assist-blend", type=float, default=0.5, help="blend mode: share of steering and acceleration the policy gets")
     parser.add_argument("--action-selection", default="mode", choices=ACTION_SELECTIONS,
                         help="how the policy picks its action: argmax class (mode), a draw (sample) or the mean")
@@ -350,8 +409,12 @@ def main():
     if args.input == "wheel" and calibration_path is None:
         print(f"warning: {args.calibration} not found, using default calibration", file=sys.stderr)
 
-    wheel, button_map = build_wheel_input(args.input, calibration_path, button_map_path)
+    wheel, button_map = build_wheel_input(args.input, calibration_path, button_map_path, args.remote_port,
+                                          args.remote_key)
     wheel_buttons = WheelButtonCommands(button_map) if button_map is not None else None
+    if args.input == "remote":
+        wheel_buttons = wheel  # the page's buttons arrive as the same demo commands
+        print(f"remote controls: {wheel.url()}")
     config = DemoConfig(
         checkpoint_path=os.path.expanduser(args.checkpoint),
         town=choose_town(args.town),
@@ -372,8 +435,11 @@ def main():
 
     loop = WheelDemoLoop(config, wheel)
     coadapt = CoAdapt(loop.dt)
+    dynamic = DynamicBlend(loop)
     if args.assist == COADAPT:
         coadapt.start(loop.env)
+    elif args.assist == DYNAMIC:
+        dynamic.start()
     else:
         loop.env.set_assist_mode(ASSIST_MODES_BY_NAME[args.assist], args.assist_blend)
     window = None
@@ -389,9 +455,12 @@ def main():
             port=args.carla_port,
             fullscreen=args.fullscreen,
             record_path=args.record,
+            frame_sink=wheel if args.input == "remote" else None,
         )
     force_loop = None
-    if args.ffb:
+    if args.ffb and args.input == "remote":
+        print("force feedback is off: the remote input has no wheel to push", file=sys.stderr)
+    elif args.ffb:
         force_loop = ForceFeedbackLoop(
             platform_force_output(force_gain=args.ffb_gain),
             loop.car_feel,
@@ -415,6 +484,8 @@ def main():
         print(f"your driving style under Full Self Driving: {args.driving_style}")
 
     def on_substep(substep_idx, wheel_state):
+        if args.input == "remote":
+            wheel.publish_status(remote_status(loop.human_state(), loop.env.get_assist_state(), coadapt, dynamic))
         if window is None:
             return
         window.draw(
@@ -428,10 +499,13 @@ def main():
             ffb_gain=force_loop.output.force_gain if force_loop is not None else None,
             coadapt_line=coadapt_hud_line(coadapt),
             coadapt_belief=coadapt_hud_belief(coadapt),
+            dynamic_line=dynamic.hud_line(),
+            dynamic_share=dynamic.share,
         )
         wheel_commands = wheel_buttons.poll(wheel_state) if wheel_buttons is not None else None
         state["level_index"] = apply_window_keys(
-            window, loop, state["level_index"], wheel_commands, force_loop, args.assist_blend, style_state, coadapt
+            window, loop, state["level_index"], wheel_commands, force_loop, args.assist_blend, style_state, coadapt,
+            dynamic,
         )
 
     try:
@@ -441,11 +515,14 @@ def main():
             started = time.perf_counter()
             wheel_state, _info = loop.step_once(on_substep=on_substep)
             report_coadapt_trial(coadapt, coadapt.after_step(loop))
+            was_measuring_baseline = dynamic.measuring_baseline
+            dynamic.after_step()
+            report_dynamic_baseline(dynamic, was_measuring_baseline)
             if step_idx % HUD_EVERY_STEPS == 0 and window is None:
                 print_hud(step_idx, wheel_state, loop.human_state(), loop.dt)
             if window is not None and window.should_close():
                 break
-            if args.input == "wheel" and window is None:
+            if args.input in ("wheel", "remote") and window is None:
                 remaining = loop.dt - (time.perf_counter() - started)
                 if remaining > 0.0:
                     time.sleep(remaining)

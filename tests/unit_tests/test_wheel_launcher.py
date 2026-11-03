@@ -29,7 +29,7 @@ CONTRACT_DEFAULTS = {
     "ffb": True,
     "ffb_gain": 70,
     "gearbox": "automatic",
-    "grip": "realistic",
+    "grip": "skid",
     "input": "wheel",
     "minutes": 20,
     "window": "fullscreen",
@@ -138,12 +138,24 @@ def test_night_flag_only_for_night(launcher, night, expected):
 
 @pytest.mark.parametrize(
     "ffb,input_name,expected",
-    [(True, "wheel", True), (False, "wheel", False), (True, "synthetic", False), (False, "synthetic", False)],
+    [(True, "wheel", True), (False, "wheel", False), (True, "synthetic", False), (False, "synthetic", False),
+     (True, "remote", False), (False, "remote", False)],
 )
 def test_force_feedback_only_with_the_wheel_and_ffb_on(launcher, ffb, input_name, expected):
     command = launcher.demo_command(settings_with(ffb=ffb, input=input_name))
     assert ("--ffb" in command) == expected
     assert ("--ffb-gain" in command) == expected
+
+
+@pytest.mark.parametrize("input_name", ["wheel", "synthetic", "remote"])
+def test_input_is_passed_through(launcher, input_name):
+    assert flag_value(launcher.demo_command(settings_with(input=input_name)), "--input") == input_name
+
+
+def test_remote_command_is_the_wheel_command_without_force_feedback(launcher):
+    wheel_command = launcher.demo_command(settings_with(input="wheel", ffb=False))
+    remote_command = launcher.demo_command(settings_with(input="remote", ffb=True))
+    assert remote_command == [("remote" if part == "wheel" else part) for part in wheel_command]
 
 
 @pytest.mark.parametrize("gain_percent,expected", [(5, "0.05"), (33, "0.33"), (70, "0.70"), (100, "1.00")])
@@ -175,9 +187,9 @@ def every_launcher_choice():
         ("chase", "driver", "agent"),
         ("day", "night"),
         ("calm", "normal", "aggressive"),
-        ("off", "display", "blend", "nudge", "full", "co-adapt"),
+        ("off", "display", "blend", "nudge", "full", "co-adapt", "dynamic"),
         (True, False),
-        ("wheel", "synthetic"),
+        ("wheel", "synthetic", "remote"),
         CONTRACT_GEARBOXES,
         CONTRACT_GRIPS,
         ("fullscreen", "windowed"),
@@ -208,7 +220,7 @@ def test_run_demo_accepts_every_command_the_launcher_can_build(launcher, demo_pa
         if args.ffb:
             assert args.ffb_gain == pytest.approx(0.45)
         checked += 1
-    assert checked == 3 * 2 * 3 * 6 * 2 * 2 * len(CONTRACT_GEARBOXES) * len(CONTRACT_GRIPS) * 2
+    assert checked == 3 * 2 * 3 * 7 * 2 * 3 * len(CONTRACT_GEARBOXES) * len(CONTRACT_GRIPS) * 2
 
 
 @pytest.mark.parametrize("window,expected", [("fullscreen", True), ("windowed", False)])
@@ -376,7 +388,7 @@ def test_grip_is_always_passed(launcher, grip):
     assert flag_value(launcher.demo_command(settings_with(grip=grip)), "--grip") == grip
 
 
-@pytest.mark.parametrize("assist", ["off", "display", "blend", "nudge", "full", "co-adapt"])
+@pytest.mark.parametrize("assist", ["off", "display", "blend", "nudge", "full", "co-adapt", "dynamic"])
 def test_full_steering_and_style_rows_are_enabled_only_under_full(built_launcher, launcher, assist):
     built_launcher.vars["assist"] = FakeVar(assist)
     launcher.Launcher._on_change(built_launcher)
@@ -609,6 +621,8 @@ def test_the_default_town_is_town10hd(launcher):
 
 def test_the_assist_choice_names_full_self_driving(built_launcher):
     assert ("full", "Full Self Driving") in segment_options("assist", built_launcher)
-    assert ("co-adapt", "Co-adapt") in segment_options("assist", built_launcher)
+    assert segment_options("assist", built_launcher) == [
+        ("off", "Off"), ("display", "Display"), ("blend", "Blend"), ("nudge", "Nudge"), ("dynamic", "Dynamic blend"),
+        ("full", "Full Self Driving")]
     assert "Self-driving steering" in built_launcher.widgets
     assert "Full steering" not in built_launcher.widgets

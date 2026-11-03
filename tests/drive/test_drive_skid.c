@@ -28,7 +28,8 @@
 #define SPEED_RATE_TOLERANCE_MPS2 0.5f
 #define SPEED_RISE_TOLERANCE_MPS 1e-5f
 #define SLIDE_SPEED_FLOOR_MPS 0.1f
-#define SPIN_BRAKE_MPS2 -8.5f
+// a full brake pedal: BRAKE_MAX_FORCE_N on VEHICLE_MASS_KG
+#define SPIN_BRAKE_MPS2 (-BRAKE_MAX_FORCE_N / VEHICLE_MASS_KG)
 #define DEG_PER_RAD (180.0f / (float) M_PI)
 #define SLOPE_PROBE_SLIP_RAD 1e-5f
 #define LARGE_SLIP_RAD 1e3f
@@ -51,6 +52,7 @@ typedef struct {
     float max_abs_speed_rate_mps2;
     int speed_rose_while_braking;
     int all_finite;
+    int came_to_rest;
 } ManoeuvreStats;
 
 // The zeroed GridMap reports every query off-grid, which makes update_agent_z a no-op.
@@ -107,7 +109,7 @@ static int agent_is_finite(const Agent *agent) {
 
 // Braking stops at BRAKE_END_SPEED_MPS: direct input past rest would drive the car backward.
 static ManoeuvreStats manoeuvre(SkidBench *bench, float steering_norm, float accel_mps2, int step_count) {
-    ManoeuvreStats stats = {0.0f, 0.0f, 0.0f, 0, 1};
+    ManoeuvreStats stats = {0.0f, 0.0f, 0.0f, 0, 1, 0};
     for (int step = 0; step < step_count; step++) {
         if (accel_mps2 < 0.0f && bench->agent.sim_speed < BRAKE_END_SPEED_MPS) {
             break;
@@ -127,12 +129,38 @@ static ManoeuvreStats manoeuvre(SkidBench *bench, float steering_norm, float acc
     return stats;
 }
 
+// The brake pedal through the automatic powertrain, held to a standstill: a real stop, not a direct command.
+static ManoeuvreStats pedal_braking(SkidBench *bench, float steering_norm, float brake_mps2) {
+    bench->env.human_gearbox_mode = GEARBOX_MODE_AUTOMATIC;
+    bench->env.human_gear = 1;
+    bench->env.human_engine_rpm = ENGINE_IDLE_RPM;
+    float brake_norm = fminf(-brake_mps2 * VEHICLE_MASS_KG / BRAKE_MAX_FORCE_N, 1.0f);
+    ManoeuvreStats stats = {0.0f, 0.0f, 0.0f, 0, 1, 0};
+    for (int step = 0; step < BRAKE_MAX_STEP_COUNT; step++) {
+        float speed_before_mps = bench->agent.sim_speed;
+        c_set_human_pedals(&bench->env, steering_norm, 0.0f, brake_norm, 0.0f, 0);
+        move_human(&bench->env, 0, 0);
+        const Agent *agent = &bench->agent;
+        stats.all_finite &= agent_is_finite(agent);
+        stats.max_slide_deg = fmaxf(stats.max_slide_deg, slide_deg(agent));
+        stats.max_abs_accel_lat_mps2 = fmaxf(stats.max_abs_accel_lat_mps2, fabsf(agent->accel_lat));
+        float speed_rate_mps2 = fabsf(agent->sim_speed - speed_before_mps) / bench->env.dt;
+        stats.max_abs_speed_rate_mps2 = fmaxf(stats.max_abs_speed_rate_mps2, speed_rate_mps2);
+        if (agent->sim_speed > speed_before_mps + SPEED_RISE_TOLERANCE_MPS) {
+            printf("  braking step %d: total speed rose %g -> %g m/s\n", step, speed_before_mps, agent->sim_speed);
+            stats.speed_rose_while_braking = 1;
+        }
+    }
+    stats.came_to_rest = bench->agent.sim_speed == 0.0f;
+    return stats;
+}
+
 static ManoeuvreStats braking_in_a_corner(float steering_norm, float brake_mps2) {
     SkidBench bench;
     skid_bench_init(&bench, GRIP_MODE_SKID, 0.0f);
     run_up(&bench);
     drive_steps(&bench, steering_norm, 0.0f, SETTLE_STEP_COUNT);
-    return manoeuvre(&bench, steering_norm, brake_mps2, BRAKE_MAX_STEP_COUNT);
+    return pedal_braking(&bench, steering_norm, brake_mps2);
 }
 
 static int expect_stats_within_the_tyres(ManoeuvreStats stats) {
@@ -255,6 +283,7 @@ static int test_moderate_braking_in_a_corner_stays_stable(void) {
             EXPECT_FALSE(expect_stats_within_the_tyres(stats));
             EXPECT_TRUE(stats.max_slide_deg < STABLE_SLIDE_DEG);
             EXPECT_TRUE(stats.max_abs_speed_rate_mps2 <= -HUMAN_ACCEL_LIMIT_MPS2[0] + SPEED_RATE_TOLERANCE_MPS2);
+            EXPECT_TRUE(stats.came_to_rest);
         }
     }
     return 0;
@@ -265,6 +294,7 @@ static int test_emergency_braking_in_a_corner_spins_the_car(void) {
         ManoeuvreStats stats = braking_in_a_corner(MODERATE_CORNER_NORMS[c], SPIN_BRAKE_MPS2);
         EXPECT_FALSE(expect_stats_within_the_tyres(stats));
         EXPECT_TRUE(stats.max_slide_deg > SPIN_SLIDE_DEG);
+        EXPECT_TRUE(stats.came_to_rest);
     }
     return 0;
 }

@@ -235,27 +235,37 @@ def test_the_module_needs_no_wheel_or_carla():
 
 def test_assist_choices_add_co_adapt(run_demo):
     assert run_demo.COADAPT == "co-adapt"
-    assert run_demo.ASSIST_CHOICES == tuple(run_demo.ASSIST_MODES_BY_NAME) + ("co-adapt",)
+    assert run_demo.ASSIST_CHOICES[: len(run_demo.ASSIST_MODES_BY_NAME) + 1] == tuple(run_demo.ASSIST_MODES_BY_NAME) + (
+        "co-adapt",)
 
 
-def test_cycle_with_co_adapt_goes_full_then_co_adapt_then_off(run_demo, capsys):
+@pytest.mark.parametrize("mode", [binding.ASSIST_MODE_OFF, binding.ASSIST_MODE_NUDGE, binding.ASSIST_MODE_FULL])
+def test_the_cycle_never_starts_co_adapt(run_demo, mode):
     controller = CoAdapt(POLICY_DT_SECONDS)
-    loop = RewardLoop(mode=binding.ASSIST_MODE_FULL)
-    run_demo.cycle_assist(loop, 0.5, controller)
-    assert controller.active
-    assert loop.env.calls == [(binding.ASSIST_MODE_BLEND, COADAPT_SHARES[0])]
-    assert capsys.readouterr().out == "  assist -> co-adapt (Blend share 20%)\n"
+    loop = RewardLoop(mode=mode)
+    for _ in range(len(run_demo.ASSIST_CYCLE) + 1):
+        run_demo.cycle_assist(loop, 0.5, controller)
+        assert not controller.active
+
+
+def test_a_running_co_adapt_stops_and_counts_as_blend(run_demo, capsys):
+    controller = CoAdapt(POLICY_DT_SECONDS)
+    loop = RewardLoop()
+    controller.start(loop.env)
+    capsys.readouterr()
     run_demo.cycle_assist(loop, 0.5, controller)
     assert not controller.active
-    assert loop.env.calls[-1] == (binding.ASSIST_MODE_OFF, 0.5)
-    run_demo.cycle_assist(loop, 0.5, controller)
-    assert loop.env.calls[-1] == (binding.ASSIST_MODE_DISPLAY, 0.5)
+    assert loop.env.calls[-1] == (binding.ASSIST_MODE_NUDGE, 0.5)
+    from pufferlib.wheel_demo.hud import ASSIST_MODE_NAMES
+
+    assert capsys.readouterr().out == f"  assist -> {ASSIST_MODE_NAMES[binding.ASSIST_MODE_NUDGE]}\n"
 
 
-def test_cycle_without_a_controller_is_the_old_cycle(run_demo):
-    loop = RewardLoop(mode=binding.ASSIST_MODE_FULL)
+def test_cycle_without_controllers_skips_dynamic(run_demo):
+    loop = RewardLoop(mode=binding.ASSIST_MODE_NUDGE)
     run_demo.cycle_assist(loop, 0.5)
-    assert loop.env.calls == [(binding.ASSIST_MODE_OFF, 0.5)]
+    run_demo.cycle_assist(loop, 0.5)
+    assert loop.env.calls == [(binding.ASSIST_MODE_FULL, 0.5), (binding.ASSIST_MODE_OFF, 0.5)]
 
 
 def test_the_hud_line_is_empty_unless_co_adapt_runs(run_demo):
@@ -316,9 +326,11 @@ def test_restart_starts_a_fresh_co_adapt_trial(run_demo):
 
 def test_window_keys_pass_the_controller_to_the_assist_cycle(run_demo):
     controller = CoAdapt(POLICY_DT_SECONDS)
-    loop = RestartingLoop(mode=binding.ASSIST_MODE_FULL)
+    loop = RestartingLoop()
+    controller.start(loop.env)
     run_demo.apply_window_keys(FakeWindow({"cycle_assist": True}), loop, 0, None, None, 0.5, None, controller)
-    assert controller.active
+    assert not controller.active
+    assert loop.env.calls[-1] == (binding.ASSIST_MODE_NUDGE, 0.5)
 
 
 class MainBuilt(Exception):
@@ -398,7 +410,9 @@ def launcher():
     return load_script("launcher")
 
 
-def test_launcher_passes_co_adapt_through(launcher):
+def test_launcher_hides_co_adapt_but_still_passes_it_through(launcher):
+    source = open(os.path.join(REPO_ROOT, "scripts", "wheel_demo", "launcher.py")).read()
+    assert '("co-adapt", "Co-adapt")' not in source
     settings = dict(launcher.DEFAULTS, assist="co-adapt")
     command = launcher.demo_command(settings)
     assert command[command.index("--assist") + 1] == "co-adapt"

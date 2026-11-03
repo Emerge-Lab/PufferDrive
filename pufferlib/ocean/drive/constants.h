@@ -157,6 +157,12 @@
 // When the policy would come to rest within its step, the assist brakes at least this hard until it does;
 // the jerk chain zeroes the acceleration on a stop, which alone would leave a slow car creeping.
 #define ASSIST_STOP_DECEL_MPS2 3.0f
+// What c_preview_step scores for each imagined policy step, by index
+#define PREVIEW_SCORE_REWARD 0
+#define PREVIEW_SCORE_GOAL_REWARD 1
+#define PREVIEW_SCORE_OFFROAD 2
+#define PREVIEW_SCORE_COLLISION 3
+#define PREVIEW_SCORE_COUNT 4
 
 // =====================================================================================
 // 3. DYNAMICS
@@ -237,7 +243,7 @@ static const float HUMAN_ACCEL_LIMIT_MPS2[2] = {-9.0f, 4.0f};
 #define CLUTCH_ENGAGE_FRACTION 0.55f
 #define AUTO_UPSHIFT_RPM 2900.0f
 #define AUTO_DOWNSHIFT_RPM 1250.0f
-// The automatic's D/R selector (a paddle pull) only moves at a standstill, as a real shift lock does.
+// The automatic's selector only puts R in near a standstill, as a real shift lock does.
 #define AUTO_SELECTOR_MAX_SPEED_MPS 0.5f
 
 #define BRAKE_MAX_FORCE_N 12000.0f

@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>PufferDrive remote</title>
+<style>
+  :root {
+    --bg: #0d0f13;
+    --panel: rgba(20, 23, 29, 0.62);
+    --panel-solid: #1b1f27;
+    --border: rgba(255, 255, 255, 0.14);
+    --text: #eef0f3;
+    --muted: #8b919c;
+    --accent: #5ac8ff;
+    --gas: #3ccf7a;
+    --brake: #ff6a5a;
+    --clutch: #f0b54a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+    font: 14px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  }
+  #video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+  #novideo { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+  .bar {
+    position: fixed; top: max(8px, env(safe-area-inset-top)); left: max(8px, env(safe-area-inset-left));
+    right: max(8px, env(safe-area-inset-right)); display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  }
+  button {
+    font: inherit; font-size: 13px; color: var(--text); background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 7px 10px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    touch-action: none;
+  }
+  button:active, button.held { background: rgba(90, 200, 255, 0.35); border-color: var(--accent); }
+  #status { padding: 6px 10px; border-radius: 10px; background: var(--panel); font-size: 12px; }
+  #info {
+    margin-left: auto; padding: 6px 12px; border-radius: 10px; background: var(--panel-solid); font-weight: 700;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  #info .assist { color: var(--accent); }
+  #more { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; }
+  #more[hidden] { display: none; }
+  #status.ok { color: var(--gas); }
+  #status.bad { color: var(--brake); }
+  #wheel {
+    position: fixed; left: max(14px, env(safe-area-inset-left)); bottom: max(14px, env(safe-area-inset-bottom));
+    width: min(46vh, 40vw); height: min(46vh, 40vw); touch-action: none;
+  }
+  #wheel svg { width: 100%; height: 100%; display: block; }
+  #readout {
+    position: fixed; left: 50%; bottom: max(10px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+    padding: 6px 12px; border-radius: 10px; background: var(--panel); font-variant-numeric: tabular-nums;
+    font-size: 12px; white-space: nowrap;
+  }
+  .controls {
+    position: fixed; right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom));
+    display: flex; gap: 10px; align-items: flex-end;
+  }
+  .gears { display: flex; flex-direction: column; gap: 8px; }
+  .gears button { width: 58px; height: 52px; font-size: 18px; font-weight: 700; }
+  .pedal {
+    position: relative; width: min(15vh, 12vw); height: min(40vh, 34vw); border-radius: 14px; overflow: hidden;
+    background: var(--panel); border: 1px solid var(--border); touch-action: none;
+  }
+  .pedal.small { width: min(10vh, 8vw); height: min(28vh, 24vw); }
+  .pedal .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0%; opacity: 0.75; }
+  .pedal .label {
+    position: absolute; left: 0; right: 0; top: 8px; text-align: center; font-weight: 700; font-size: 13px;
+    text-shadow: 0 1px 2px #000;
+  }
+  #gas .fill { background: var(--gas); }
+  #brake .fill { background: var(--brake); }
+  #clutch .fill { background: var(--clutch); }
+  #clutch[hidden] { display: none; }
+</style>
+</head>
+<body>
+<div id="novideo">waiting for the demo window ...</div>
+<img id="video" alt="">
+
+<div class="bar">
+  <button data-command="cycle_assist">Assist ▸</button>
+  <button data-command="cycle_camera">Camera</button>
+  <button data-command="restart">Restart drive</button>
+  <button id="moreToggle">More</button>
+  <button id="fullscreen">Full screen</button>
+  <span id="info">- km/h  ·  -  ·  <span class="assist">-</span></span>
+  <span id="status" class="bad">connecting</span>
+  <div id="more" hidden>
+    <button data-command="restart_engine">Restart engine</button>
+    <button data-command="cycle_level">Traffic</button>
+    <button data-command="cycle_full_steering">FSD steering</button>
+    <button data-command="cycle_style">FSD style</button>
+    <button data-command="toggle_night">Night</button>
+    <button id="lock">Wheel 450°</button>
+    <button id="clutchToggle">Clutch pedal</button>
+  </div>
+</div>
+
+<div id="wheel">
+  <svg viewBox="-100 -100 200 200">
+    <g id="wheelRotor">
+      <circle r="88" fill="none" stroke="rgba(20,23,29,0.5)" stroke-width="22"/>
+      <circle r="88" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="2"/>
+      <circle r="24" fill="rgba(20,23,29,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="2"/>
+      <rect x="-80" y="-6" width="58" height="12" rx="5" fill="rgba(20,23,29,0.55)"/>
+      <rect x="22" y="-6" width="58" height="12" rx="5" fill="rgba(20,23,29,0.55)"/>
+      <rect x="-6" y="22" width="12" height="58" rx="5" fill="rgba(20,23,29,0.55)"/>
+      <rect x="-5" y="-99" width="10" height="22" rx="3" fill="#5ac8ff"/>
+    </g>
+  </svg>
+</div>
+
+<div id="readout">steer 0°  gas 0%  brake 0%</div>
+
+<div class="controls">
+  <div class="gears">
+    <button id="shiftUp" title="right paddle: D, or a gear up">D</button>
+    <button id="shiftDown" title="left paddle: R, or a gear down">R</button>
+  </div>
+  <div class="pedal small" id="clutch" hidden><div class="fill"></div><div class="label">CLUTCH</div></div>
+  <div class="pedal" id="brake"><div class="fill"></div><div class="label">BRAKE</div></div>
+  <div class="pedal" id="gas"><div class="fill"></div><div class="label">GAS</div></div>
+</div>
+
+<script>
+"use strict";
+const KEY = new URLSearchParams(location.search).get("key") || "";
+const query = "?key=" + encodeURIComponent(KEY);
+// the G920 turns 450 degrees each way; the short lock reaches full steering in less finger travel
+const WHEEL_LOCKS_DEG = [450, 180];
+const SELF_CENTRE_DEG_PER_S = 720;
+const KEY_STEER_DEG_PER_S = 270;
+const SEND_INTERVAL_MS = 33;
+// where a finger lands on a pedal sets its travel: the top edge is this much, the bottom edge full
+const PEDAL_TOP_TRAVEL = 0.3;
+
+const state = { wheelDeg: 0, lockIdx: 0, wheelHeld: false, gas: 0, brake: 0, clutch: 0, keys: new Set() };
+let inFlight = false;
+let lastOkMs = 0;
+
+const statusEl = document.getElementById("status");
+const video = document.getElementById("video");
+video.onload = () => { document.getElementById("novideo").hidden = true; };
+video.src = "/stream" + query;
+
+function setStatus(ok, text) {
+  statusEl.className = ok ? "ok" : "bad";
+  statusEl.textContent = text;
+}
+
+function post(path, body) {
+  return fetch(path + query, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), keepalive: true,
+  });
+}
+
+function lockDeg() { return WHEEL_LOCKS_DEG[state.lockIdx]; }
+
+function sendControl() {
+  if (inFlight) return;
+  inFlight = true;
+  const started = performance.now();
+  post("/control", {
+    steering: Math.max(-1, Math.min(1, state.wheelDeg / lockDeg())),
+    throttle: state.gas, brake: state.brake, clutch: state.clutch,
+  }).then((response) => {
+    lastOkMs = performance.now();
+    if (response.status === 403) setStatus(false, "wrong key");
+    else if (!response.ok) setStatus(false, "error " + response.status);
+    else {
+      setStatus(true, Math.round(lastOkMs - started) + " ms");
+      return response.json().then(showInfo);
+    }
+  }).catch(() => setStatus(false, "no connection")).finally(() => { inFlight = false; });
+}
+setInterval(sendControl, SEND_INTERVAL_MS);
+
+const infoEl = document.getElementById("info");
+function showInfo(status) {
+  const speed = status.speed_kmh === undefined ? "-" : status.speed_kmh;
+  infoEl.replaceChildren(speed + " km/h  ·  " + (status.gear || "-") + "  ·  ");
+  const assist = document.createElement("span");
+  assist.className = "assist";
+  assist.textContent = status.assist || "-";
+  infoEl.append(assist);
+}
+
+function sendCommand(name) {
+  post("/command", { name }).catch(() => setStatus(false, "no connection"));
+}
+
+document.querySelectorAll("[data-command]").forEach((button) => {
+  button.addEventListener("pointerdown", (event) => { event.preventDefault(); sendCommand(button.dataset.command); });
+});
+for (const [id, name] of [["shiftUp", "shift_up"], ["shiftDown", "shift_down"]]) {
+  document.getElementById(id).addEventListener("pointerdown", (event) => { event.preventDefault(); sendCommand(name); });
+}
+document.getElementById("lock").addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  state.lockIdx = (state.lockIdx + 1) % WHEEL_LOCKS_DEG.length;
+  state.wheelDeg = Math.max(-lockDeg(), Math.min(lockDeg(), state.wheelDeg));
+  event.currentTarget.textContent = "Wheel " + lockDeg() + "°";
+});
+document.getElementById("moreToggle").addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  const more = document.getElementById("more");
+  more.hidden = !more.hidden;
+  event.currentTarget.classList.toggle("held", !more.hidden);
+});
+document.getElementById("clutchToggle").addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  const clutch = document.getElementById("clutch");
+  clutch.hidden = !clutch.hidden;
+  event.currentTarget.classList.toggle("held", !clutch.hidden);
+});
+document.getElementById("fullscreen").addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  const root = document.documentElement;
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (root.requestFullscreen) root.requestFullscreen().then(() => screen.orientation?.lock?.("landscape")).catch(() => {});
+});
+
+// Wheel: the finger's angle around the centre turns it, unwrapped so it can go past half a turn.
+const wheelEl = document.getElementById("wheel");
+const rotor = document.getElementById("wheelRotor");
+let wheelPointer = null;
+let lastPointerDeg = 0;
+function pointerDeg(event) {
+  const rect = wheelEl.getBoundingClientRect();
+  const dx = event.clientX - (rect.left + rect.width / 2);
+  const dy = event.clientY - (rect.top + rect.height / 2);
+  return Math.atan2(dy, dx) * 180 / Math.PI;  // clockwise positive on screen, so clockwise steers right
+}
+wheelEl.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  wheelPointer = event.pointerId;
+  wheelEl.setPointerCapture(event.pointerId);
+  lastPointerDeg = pointerDeg(event);
+  state.wheelHeld = true;
+});
+wheelEl.addEventListener("pointermove", (event) => {
+  if (event.pointerId !== wheelPointer) return;
+  const now = pointerDeg(event);
+  let delta = now - lastPointerDeg;
+  if (delta > 180) delta -= 360;
+  if (delta < -180) delta += 360;
+  lastPointerDeg = now;
+  state.wheelDeg = Math.max(-lockDeg(), Math.min(lockDeg(), state.wheelDeg + delta));
+});
+function releaseWheel(event) {
+  if (event.pointerId !== wheelPointer) return;
+  wheelPointer = null;
+  state.wheelHeld = false;
+}
+wheelEl.addEventListener("pointerup", releaseWheel);
+wheelEl.addEventListener("pointercancel", releaseWheel);
+
+// Pedals: each follows its own finger, so gas and brake can be held while the other hand steers.
+function bindPedal(id, field) {
+  const pedal = document.getElementById(id);
+  let pointer = null;
+  const travel = (event) => {
+    const rect = pedal.getBoundingClientRect();
+    const depth = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+    return PEDAL_TOP_TRAVEL + (1 - PEDAL_TOP_TRAVEL) * depth;
+  };
+  pedal.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    pointer = event.pointerId;
+    pedal.setPointerCapture(event.pointerId);
+    state[field] = travel(event);
+    sendControl();
+  });
+  pedal.addEventListener("pointermove", (event) => { if (event.pointerId === pointer) state[field] = travel(event); });
+  const release = (event) => {
+    if (event.pointerId !== pointer) return;
+    pointer = null;
+    state[field] = 0;
+    sendControl();
+  };
+  pedal.addEventListener("pointerup", release);
+  pedal.addEventListener("pointercancel", release);
+}
+bindPedal("gas", "gas");
+bindPedal("brake", "brake");
+bindPedal("clutch", "clutch");
+
+// Keyboard: arrows or WASD steer and press the pedals, E and Q are the paddles, C the clutch.
+const PEDAL_KEYS = { ArrowUp: "gas", w: "gas", ArrowDown: "brake", s: "brake", c: "clutch" };
+window.addEventListener("keydown", (event) => {
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  if (event.repeat) { if (key in PEDAL_KEYS || key.startsWith("Arrow")) event.preventDefault(); return; }
+  if (key === "e") sendCommand("shift_up");
+  else if (key === "q") sendCommand("shift_down");
+  else if (key === "m") sendCommand("cycle_assist");
+  if (key in PEDAL_KEYS) state[PEDAL_KEYS[key]] = 1;
+  state.keys.add(key);
+  if (key.startsWith("Arrow")) event.preventDefault();
+});
+window.addEventListener("keyup", (event) => {
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  if (key in PEDAL_KEYS) state[PEDAL_KEYS[key]] = 0;
+  state.keys.delete(key);
+});
+function releaseEverything() {
+  state.gas = state.brake = state.clutch = 0;
+  state.keys.clear();
+  sendControl();
+}
+window.addEventListener("blur", releaseEverything);
+document.addEventListener("visibilitychange", () => { if (document.hidden) releaseEverything(); });
+
+let lastFrameMs = performance.now();
+function frame(nowMs) {
+  const dt = Math.min(0.1, (nowMs - lastFrameMs) / 1000);
+  lastFrameMs = nowMs;
+  const keyLeft = state.keys.has("ArrowLeft") || state.keys.has("a");
+  const keyRight = state.keys.has("ArrowRight") || state.keys.has("d");
+  if (keyLeft !== keyRight) {
+    state.wheelDeg += (keyRight ? 1 : -1) * KEY_STEER_DEG_PER_S * dt;
+  } else if (!state.wheelHeld) {
+    const step = SELF_CENTRE_DEG_PER_S * dt;
+    state.wheelDeg = Math.abs(state.wheelDeg) <= step ? 0 : state.wheelDeg - Math.sign(state.wheelDeg) * step;
+  }
+  state.wheelDeg = Math.max(-lockDeg(), Math.min(lockDeg(), state.wheelDeg));
+  rotor.setAttribute("transform", "rotate(" + state.wheelDeg.toFixed(1) + ")");
+  for (const field of ["gas", "brake", "clutch"]) {
+    document.querySelector("#" + field + " .fill").style.height = (100 * state[field]).toFixed(0) + "%";
+  }
+  const side = state.wheelDeg > 0.5 ? " R" : state.wheelDeg < -0.5 ? " L" : "";
+  document.getElementById("readout").textContent =
+    "steer " + Math.abs(state.wheelDeg).toFixed(0) + "°" + side + "   gas " + Math.round(100 * state.gas) +
+    "%   brake " + Math.round(100 * state.brake) + "%" + (state.clutch > 0 ? "   clutch " + Math.round(100 * state.clutch) + "%" : "");
+  if (performance.now() - lastOkMs > 1500 && lastOkMs > 0) setStatus(false, "no connection");
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

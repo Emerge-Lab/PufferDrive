@@ -175,14 +175,29 @@ static int test_begin_preview_refuses_when_there_is_nothing_to_imagine(void) {
 static int test_preview_step_refuses_without_a_preview_or_pieces(void) {
     Drive env = full_env(DYNAMICS_MODEL_JERK, FULL_TEST_SEED);
     float steering_rad[1] = {0.0f};
-    EXPECT_EQ_INT(c_preview_step(&env, 1, steering_rad), -1);
+    float preview_score[PREVIEW_SCORE_COUNT];
+    EXPECT_EQ_INT(c_preview_step(&env, 1, steering_rad, preview_score), -1);
     EXPECT_EQ_INT(c_begin_preview(&env), HUMAN_ACTIVE_IDX);
-    EXPECT_EQ_INT(c_preview_step(&env, 0, steering_rad), -1);
-    EXPECT_EQ_INT(c_preview_step(&env, -1, steering_rad), -1);
+    EXPECT_EQ_INT(c_preview_step(&env, 0, steering_rad, preview_score), -1);
+    EXPECT_EQ_INT(c_preview_step(&env, -1, steering_rad, preview_score), -1);
     c_end_preview(&env);
     c_end_preview(&env);
     EXPECT_EQ_INT(env.preview_slot, -1);
     free_allocated(&env);
+    return 0;
+}
+
+// The imagined step moves the car exactly as the jerk model would, from a prev pose taken at its start.
+static int expect_same_motion(const Agent *expected, const Agent *actual) {
+    float expected_fields[] = {expected->sim_x, expected->sim_y, expected->sim_heading, expected->sim_vx,
+                               expected->sim_vy, expected->yaw_rate, expected->accel_long, expected->accel_lat,
+                               expected->jerk_long, expected->jerk_lat, expected->steering_angle, expected->prev_x,
+                               expected->prev_y, expected->prev_cos_heading, expected->prev_sin_heading};
+    float actual_fields[] = {actual->sim_x, actual->sim_y, actual->sim_heading, actual->sim_vx, actual->sim_vy,
+                             actual->yaw_rate, actual->accel_long, actual->accel_lat, actual->jerk_long,
+                             actual->jerk_lat, actual->steering_angle, actual->prev_x, actual->prev_y,
+                             actual->prev_cos_heading, actual->prev_sin_heading};
+    EXPECT_TRUE(memcmp(expected_fields, actual_fields, sizeof(expected_fields)) == 0);
     return 0;
 }
 
@@ -199,18 +214,22 @@ static int test_preview_step_integrates_the_slot_action_in_pieces_with_the_jerk_
         Agent imagined = *human_agent(&env);
         float piece_dt = env.dt / (float) piece_count;
         float steering_rad[piece_count];
+        float preview_score[PREVIEW_SCORE_COUNT];
         for (int step = 0; step < PREVIEW_STEP_COUNT; step++) {
             float (*actions)[2] = (float (*)[2]) env.actions;
             actions[slot][0] = 0.4f * (float) (step + 1) - 0.9f;
             actions[slot][1] = 0.5f - 0.3f * (float) step;
             float j_long, j_lat;
             decode_jerk_action(&env, slot, &j_long, &j_lat);
-            EXPECT_EQ_INT(c_preview_step(&env, piece_count, steering_rad), 0);
+            EXPECT_EQ_INT(c_preview_step(&env, piece_count, steering_rad, preview_score), 0);
+            copy_pose_to_prev(&imagined);
             for (int s = 0; s < piece_count; s++) {
                 apply_jerk_step(&env, &imagined, j_long, j_lat, piece_dt, 0);
                 EXPECT_TRUE(same_bits(steering_rad[s], imagined.steering_angle));
             }
-            EXPECT_TRUE(memcmp(&imagined, human_agent(&env), sizeof(Agent)) == 0);
+            EXPECT_FALSE(expect_same_motion(&imagined, human_agent(&env)));
+            // the metrics the preview scored are the car's own after the step, so the next step starts from them
+            memcpy(imagined.metrics_array, human_agent(&env)->metrics_array, sizeof(imagined.metrics_array));
         }
         c_end_preview(&env);
         free_allocated(&env);
@@ -229,8 +248,9 @@ static int test_preview_step_rebuilds_only_the_human_observation_row(void) {
     memcpy(real_obs, env.observations, bytes);
     int slot = c_begin_preview(&env);
     float steering_rad[FULL_TEST_SUBSTEPS];
+    float preview_score[PREVIEW_SCORE_COUNT];
     Rng rng_before_step = env.rng_state;
-    EXPECT_EQ_INT(c_preview_step(&env, FULL_TEST_SUBSTEPS, steering_rad), 0);
+    EXPECT_EQ_INT(c_preview_step(&env, FULL_TEST_SUBSTEPS, steering_rad, preview_score), 0);
     memcpy(imagined_obs, env.observations, bytes);
     for (int i = 0; i < env.active_agent_count; i++) {
         int row_equal = memcmp(&imagined_obs[i * obs_per_agent], &real_obs[i * obs_per_agent],
@@ -258,10 +278,11 @@ static int run_preview(Drive *env) {
     }
     float saved_action[2] = {actions[slot][0], actions[slot][1]};
     float steering_rad[FULL_TEST_SUBSTEPS];
+    float preview_score[PREVIEW_SCORE_COUNT];
     for (int step = 0; step < PREVIEW_STEP_COUNT; step++) {
         actions[slot][0] = -1.0f + 0.7f * (float) step;
         actions[slot][1] = 1.0f - 0.9f * (float) step;
-        c_preview_step(env, FULL_TEST_SUBSTEPS, steering_rad);
+        c_preview_step(env, FULL_TEST_SUBSTEPS, steering_rad, preview_score);
     }
     c_end_preview(env);
     // the caller owns the action buffer, exactly as the demo loop rewrites it after a look-ahead
@@ -1061,9 +1082,10 @@ static int test_gearless_under_full_follows_the_policy_into_reverse_at_rest(void
     }
     EXPECT_TRUE(bench.agent.sim_speed_signed < 0.0f);
     EXPECT_EQ_INT(bench.env.human_gear, GEAR_REVERSE);
+    // D is taken from R at any speed, so the policy turning forward again shifts at once
     bench.env.assist_reference_speed_mps = MOVING_REFERENCE_SPEED_MPS;
     move_human(&bench.env, 0, 0);
-    EXPECT_EQ_INT(bench.env.human_gear, GEAR_REVERSE);
+    EXPECT_EQ_INT(bench.env.human_gear, 1);
     return 0;
 }
 
@@ -1217,27 +1239,29 @@ static int test_full_alone_keeps_its_reverse_while_the_policy_reverses(void) {
     return 0;
 }
 
-static int test_a_car_still_rolling_back_at_takeover_keeps_reverse_until_it_stops(void) {
-    FullBench bench;
-    assist_chosen_reverse(&bench, GEARBOX_MODE_AUTOMATIC);
-    bench.agent.sim_vx = BACKWARD_ROLL_MPS * bench.agent.cos_heading;
-    bench.agent.sim_vy = BACKWARD_ROLL_MPS * bench.agent.sin_heading;
-    update_agent_speed(&bench.agent);
-    bench.agent.accel_long = 0.0f;
-    bench.env.assist_mode = ASSIST_MODE_OFF;
-    press_pedals(&bench, 0.0f, 0.3f, 0);
-    int saw_reverse_while_rolling = 0;
-    for (int step = 0; step < TAKEOVER_STEP_COUNT; step++) {
-        float speed_before_mps = bench.agent.sim_speed_signed;
+static int test_a_car_still_rolling_back_at_takeover_returns_to_drive_at_once_and_throttle_goes_forward(void) {
+    int gearboxes[] = {GEARBOX_MODE_AUTOMATIC, GEARBOX_MODE_NONE};
+    for (int g = 0; g < 2; g++) {
+        FullBench bench;
+        assist_chosen_reverse(&bench, gearboxes[g]);
+        bench.agent.sim_vx = BACKWARD_ROLL_MPS * bench.agent.cos_heading;
+        bench.agent.sim_vy = BACKWARD_ROLL_MPS * bench.agent.sin_heading;
+        update_agent_speed(&bench.agent);
+        bench.agent.accel_long = 0.0f;
+        bench.env.assist_mode = ASSIST_MODE_OFF;
+        press_pedals(&bench, 1.0f, 0.0f, 0);
         move_human(&bench.env, 0, 0);
-        if (fabsf(speed_before_mps) > AUTO_SELECTOR_MAX_SPEED_MPS) {
-            EXPECT_EQ_INT(bench.env.human_gear, GEAR_REVERSE);
-            saw_reverse_while_rolling = 1;
+        EXPECT_EQ_INT(bench.env.human_gear, 1);
+        EXPECT_EQ_INT(bench.env.human_reverse_chosen_by_assist, 0);
+        float previous_speed_mps = bench.agent.sim_speed_signed;
+        for (int step = 0; step < TAKEOVER_STEP_COUNT; step++) {
+            move_human(&bench.env, 0, 0);
+            EXPECT_TRUE(bench.agent.sim_speed_signed >= previous_speed_mps);
+            previous_speed_mps = bench.agent.sim_speed_signed;
         }
+        EXPECT_TRUE(bench.agent.sim_speed_signed > 0.0f);
+        EXPECT_EQ_INT(bench.env.human_gear >= 1, 1);
     }
-    EXPECT_TRUE(saw_reverse_while_rolling);
-    EXPECT_TRUE(bench.agent.sim_speed_signed == 0.0f);
-    EXPECT_EQ_INT(bench.env.human_gear, 1);
     return 0;
 }
 
@@ -1255,6 +1279,119 @@ static int test_a_manual_gearbox_is_never_shifted_out_of_reverse(void) {
     return 0;
 }
 
+// The imagined step, scored by hand exactly as a real one is: the preview must give the same car and the same score.
+static int expect_preview_scores_like_a_real_step(Drive *env, int slot) {
+    Agent *agent = human_agent(env);
+    Agent before = *agent;
+    float steering_rad[FULL_TEST_SUBSTEPS];
+    float preview_score[PREVIEW_SCORE_COUNT];
+    EXPECT_EQ_INT(c_preview_step(env, FULL_TEST_SUBSTEPS, steering_rad, preview_score), 0);
+    Agent after = *agent;
+    Log log_after = env->logs[slot];
+    float reward_after = env->rewards[slot];
+    float goal_reward_after = env->human_step_goal_reward;
+
+    *agent = before;
+    copy_pose_to_prev(agent);
+    float j_long, j_lat;
+    decode_jerk_action(env, slot, &j_long, &j_lat);
+    for (int s = 0; s < FULL_TEST_SUBSTEPS; s++) {
+        apply_jerk_step(env, agent, j_long, j_lat, env->dt / (float) FULL_TEST_SUBSTEPS, 0);
+    }
+    env->rewards[slot] = 0.0f;
+    compute_metrics(env, env->human_agent_idx, slot);
+    compute_rewards(env, slot);
+    EXPECT_TRUE(memcmp(agent, &after, sizeof(Agent)) == 0);
+    EXPECT_TRUE(same_bits(preview_score[PREVIEW_SCORE_REWARD], env->rewards[slot]));
+    EXPECT_TRUE(same_bits(preview_score[PREVIEW_SCORE_GOAL_REWARD], env->human_step_goal_reward));
+    EXPECT_TRUE(same_bits(preview_score[PREVIEW_SCORE_OFFROAD], agent->metrics_array[OFFROAD_IDX]));
+    EXPECT_TRUE(same_bits(preview_score[PREVIEW_SCORE_COLLISION], agent->metrics_array[COLLISION_IDX]));
+    env->logs[slot] = log_after;
+    env->rewards[slot] = reward_after;
+    env->human_step_goal_reward = goal_reward_after;
+    return 0;
+}
+
+static int test_the_preview_score_is_the_imagined_steps_own_reward(void) {
+    Drive env = full_env(DYNAMICS_MODEL_JERK, FULL_TEST_SEED);
+    set_actions(&env, 0);
+    c_step(&env);
+    int slot = c_begin_preview(&env);
+    for (int step = 0; step < PREVIEW_STEP_COUNT; step++) {
+        float (*actions)[2] = (float (*)[2]) env.actions;
+        actions[slot][0] = 0.3f * (float) step - 0.5f;
+        actions[slot][1] = 0.4f - 0.2f * (float) step;
+        EXPECT_FALSE(expect_preview_scores_like_a_real_step(&env, slot));
+    }
+    c_end_preview(&env);
+    free_allocated(&env);
+    return 0;
+}
+
+static int test_a_preview_restores_logs_rewards_and_the_goal_reward_on_every_step(void) {
+    Drive env = full_env(DYNAMICS_MODEL_JERK, FULL_TEST_SEED);
+    set_actions(&env, 0);
+    c_step(&env);
+    size_t log_bytes = (size_t) env.active_agent_count * sizeof(Log);
+    size_t reward_bytes = (size_t) env.active_agent_count * sizeof(float);
+    Log *logs_before = (Log *) malloc(log_bytes);
+    float *rewards_before = (float *) malloc(reward_bytes);
+    memcpy(logs_before, env.logs, log_bytes);
+    memcpy(rewards_before, env.rewards, reward_bytes);
+    env.human_step_goal_reward = 0.375f;
+    int slot = c_begin_preview(&env);
+    float steering_rad[FULL_TEST_SUBSTEPS];
+    float preview_score[PREVIEW_SCORE_COUNT];
+    for (int step = 0; step < PREVIEW_STEP_COUNT; step++) {
+        EXPECT_EQ_INT(c_preview_step(&env, FULL_TEST_SUBSTEPS, steering_rad, preview_score), 0);
+        EXPECT_TRUE(memcmp(logs_before, env.logs, log_bytes) == 0);
+        EXPECT_TRUE(memcmp(rewards_before, env.rewards, reward_bytes) == 0);
+        EXPECT_TRUE(env.human_step_goal_reward == 0.375f);
+        for (int k = 0; k < PREVIEW_SCORE_COUNT; k++) {
+            EXPECT_FINITE(preview_score[k]);
+        }
+        EXPECT_TRUE(preview_score[PREVIEW_SCORE_OFFROAD] == 0.0f || preview_score[PREVIEW_SCORE_OFFROAD] == 1.0f);
+        EXPECT_TRUE(preview_score[PREVIEW_SCORE_COLLISION] == 0.0f || preview_score[PREVIEW_SCORE_COLLISION] == 1.0f);
+    }
+    c_end_preview(&env);
+    EXPECT_EQ_INT(slot, HUMAN_ACTIVE_IDX);
+    EXPECT_TRUE(memcmp(logs_before, env.logs, log_bytes) == 0);
+    free(logs_before);
+    free(rewards_before);
+    free_allocated(&env);
+    return 0;
+}
+
+static int test_an_imagined_crash_is_scored_and_leaves_the_other_car_alone(void) {
+    Drive env = full_env(DYNAMICS_MODEL_JERK, FULL_TEST_SEED);
+    set_actions(&env, 0);
+    c_step(&env);
+    Agent *partner = &env.agents[env.active_agent_indices[OTHER_ACTIVE_IDX]];
+    Agent *human = human_agent(&env);
+    partner->sim_x = human->sim_x;
+    partner->sim_y = human->sim_y;
+    partner->sim_z = human->sim_z;
+    partner->sim_heading = human->sim_heading;
+    partner->cos_heading = human->cos_heading;
+    partner->sin_heading = human->sin_heading;
+    Agent partner_before = *partner;
+    float (*actions)[2] = (float (*)[2]) env.actions;
+    int slot = c_begin_preview(&env);
+    actions[slot][0] = 0.0f;
+    actions[slot][1] = 0.0f;
+    float steering_rad[1];
+    float preview_score[PREVIEW_SCORE_COUNT];
+    EXPECT_EQ_INT(c_preview_step(&env, 1, steering_rad, preview_score), 0);
+    EXPECT_TRUE(preview_score[PREVIEW_SCORE_COLLISION] == 1.0f);
+    EXPECT_TRUE(preview_score[PREVIEW_SCORE_OFFROAD] == 0.0f);
+    EXPECT_TRUE(preview_score[PREVIEW_SCORE_REWARD] < 0.0f);
+    EXPECT_TRUE(memcmp(&partner_before, partner, sizeof(Agent)) == 0);
+    c_end_preview(&env);
+    EXPECT_TRUE(memcmp(&partner_before, partner, sizeof(Agent)) == 0);
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_begin_preview_refuses_when_there_is_nothing_to_imagine);
@@ -1263,6 +1400,9 @@ int main(void) {
     RUN_TEST(test_preview_step_rebuilds_only_the_human_observation_row);
     RUN_TEST(test_end_preview_restores_agents_observations_and_rng_exactly);
     RUN_TEST(test_previews_never_change_later_trajectories);
+    RUN_TEST(test_the_preview_score_is_the_imagined_steps_own_reward);
+    RUN_TEST(test_a_preview_restores_logs_rewards_and_the_goal_reward_on_every_step);
+    RUN_TEST(test_an_imagined_crash_is_scored_and_leaves_the_other_car_alone);
     RUN_TEST(test_split_observations_match_the_pre_split_loop_for_every_agent);
     RUN_TEST(test_apply_jerk_step_writes_exactly_the_integrated_step);
     RUN_TEST(test_full_assist_dynamics_setter_validates_and_keeps_state);
@@ -1286,7 +1426,7 @@ int main(void) {
     RUN_TEST(test_a_brake_takeover_in_the_assists_reverse_returns_to_drive_at_rest);
     RUN_TEST(test_a_reverse_the_driver_chose_stays_in_reverse);
     RUN_TEST(test_full_alone_keeps_its_reverse_while_the_policy_reverses);
-    RUN_TEST(test_a_car_still_rolling_back_at_takeover_keeps_reverse_until_it_stops);
+    RUN_TEST(test_a_car_still_rolling_back_at_takeover_returns_to_drive_at_once_and_throttle_goes_forward);
     RUN_TEST(test_a_manual_gearbox_is_never_shifted_out_of_reverse);
     RUN_TEST(test_style_setter_validates_the_window_and_keeps_state);
     RUN_TEST(test_style_is_the_window_centre_geometric_on_log_scale);

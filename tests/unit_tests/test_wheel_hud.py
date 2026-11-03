@@ -412,6 +412,7 @@ def hud_assist(mode, reference_valid=1, reference_sim_rad=0.0, human_sim_rad=0.0
         "blend_weight": 0.0,
         "reference_valid": reference_valid,
         "reference_steering_rad": reference_sim_rad,
+        "blend_reference_steering_rad": reference_sim_rad,
         "reference_accel_mps2": 0.4,
         "human_steering_rad": human_sim_rad,
         "commanded_steering_rad": human_sim_rad,
@@ -535,11 +536,15 @@ READOUT_PATTERN = re.compile(r"wheel\s+you ([+-]\d+) deg\s+policy ([+-]\d+) deg\
 
 @pytest.fixture
 def wheel_spy(pygame_headless, town_hud, monkeypatch):
-    """Records each rotozoom angle and draws the wheel as a solid marker, so its placement is measurable."""
+    """Records each wheel rotozoom angle and draws the wheel as a solid marker, so its placement is measurable.
+    The heading-up minimap's lane layer is rotated too; it passes through untouched."""
     calls = []
     texts = []
+    real_rotozoom = pygame_headless.transform.rotozoom
 
     def rotozoom(sprite, angle_deg, scale):
+        if sprite is town_hud.minimap_lanes:
+            return real_rotozoom(sprite, angle_deg, scale)
         calls.append((sprite, angle_deg, scale))
         marker = pygame_headless.Surface(sprite.get_size())
         marker.fill(WHEEL_MARKER_COLOR)
@@ -1039,3 +1044,254 @@ def test_skid_marks_are_drawn_under_the_hud(pygame_headless, town_hud, monkeypat
     drawn_pixels(pygame_headless, town_hud, [(SKID_MARK_START_PX, SKID_MARK_END_PX, 4, 0.0)])
     assert order[0] == "skid"
     assert "text" in order
+
+
+# ---------------------------------------------------------------------------------------------
+# Dynamic blend on the HUD.
+# ---------------------------------------------------------------------------------------------
+
+DYNAMIC_LINE = "50% policy (recent - vs target +0.010, gap 0%, disagree 0%)"
+
+
+@pytest.mark.parametrize("share,expected", [(0.0, "Assist: dynamic blend 0%"), (0.37, "Assist: dynamic blend 37%")])
+@pytest.mark.parametrize("mode", [binding.ASSIST_MODE_BLEND, binding.ASSIST_MODE_FULL])
+def test_dynamic_blend_names_itself_with_its_share(pygame_headless, town_hud, panel_colored_texts, share, expected, mode):
+    draw_info(pygame_headless, town_hud, HudInfo(dynamic_line=DYNAMIC_LINE, dynamic_share=share,
+                                                 driving_style="calm"), hud_assist(mode))
+    assert [message for message, _, _ in lines_starting(panel_colored_texts, "Assist:")] == [expected]
+    dynamic_lines = lines_starting(panel_colored_texts, "Dynamic:")
+    assert [message for message, _, _ in dynamic_lines] == [f"Dynamic: {DYNAMIC_LINE}"]
+    assert dynamic_lines[0][2] == (hud.PANEL_MARGIN_PX, hud.INFO_TOP_PX + 3 * hud.INFO_LINE_PX)
+    assert lines_starting(panel_colored_texts, "Steering:") == []
+    assert lines_starting(panel_colored_texts, "Your style:") == []
+
+
+def test_without_a_dynamic_line_the_assist_is_named_by_its_mode(pygame_headless, town_hud, panel_colored_texts):
+    draw_info(pygame_headless, town_hud, HudInfo(dynamic_share=0.4), hud_assist(binding.ASSIST_MODE_BLEND))
+    assert [message for message, _, _ in lines_starting(panel_colored_texts, "Assist:")] == [
+        f"Assist: {hud.ASSIST_MODE_NAMES[binding.ASSIST_MODE_BLEND]}"]
+    assert lines_starting(panel_colored_texts, "Dynamic:") == []
+    assert HudInfo().dynamic_line == "" and HudInfo().dynamic_share == 0.0
+
+
+def test_co_adapt_wins_the_assist_name(pygame_headless, town_hud, panel_colored_texts):
+    draw_info(pygame_headless, town_hud, HudInfo(coadapt_line="20% policy, trial 1, 20 s left"),
+              hud_assist(binding.ASSIST_MODE_BLEND))
+    assert [message for message, _, _ in lines_starting(panel_colored_texts, "Assist:")] == ["Assist: co-adapt"]
+
+
+# ---------------------------------------------------------------------------------------------
+# Heading-up minimap.
+# ---------------------------------------------------------------------------------------------
+
+HEADINGS_RAD = (0.0, 0.4, math.pi / 2.0, 2.0, math.pi, -1.1, -math.pi / 2.0)
+
+
+@pytest.mark.parametrize("heading_rad", HEADINGS_RAD)
+def test_heading_up_turns_the_cars_heading_straight_up(heading_rad):
+    up = hud.heading_up_offset_px((math.cos(heading_rad), -math.sin(heading_rad)), heading_rad)
+    assert up == pytest.approx((0.0, -1.0), abs=1e-12)
+
+
+@pytest.mark.parametrize("heading_rad", HEADINGS_RAD)
+@pytest.mark.parametrize("offset_px", [(3.0, -4.0), (-10.0, 0.5), (0.0, 7.0)])
+def test_heading_up_keeps_lengths(heading_rad, offset_px):
+    turned = hud.heading_up_offset_px(offset_px, heading_rad)
+    assert math.hypot(*turned) == pytest.approx(math.hypot(*offset_px))
+
+
+@pytest.mark.parametrize("offset_px", [(3.0, -4.0), (-10.0, 0.5)])
+def test_heading_north_is_north_up(offset_px):
+    assert hud.heading_up_offset_px(offset_px, math.pi / 2.0) == pytest.approx(offset_px, abs=1e-12)
+
+
+@pytest.mark.parametrize("heading_rad", HEADINGS_RAD)
+def test_the_left_of_the_car_is_left_on_the_panel(heading_rad):
+    left_screen = (-math.sin(heading_rad), -math.cos(heading_rad))
+    assert hud.heading_up_offset_px(left_screen, heading_rad) == pytest.approx((-1.0, 0.0), abs=1e-12)
+
+
+def test_pinned_inside_keeps_inner_points_and_pulls_outer_ones_in_along_their_direction():
+    half_px, inset_px = 125.0, 10.0
+    reach_px = half_px - inset_px
+    assert hud.pinned_inside((30.0, -100.0), half_px, inset_px) == (30.0, -100.0)
+    assert hud.pinned_inside((reach_px, -reach_px), half_px, inset_px) == (reach_px, -reach_px)
+    for offset in [(400.0, 100.0), (-50.0, -900.0), (300.0, -300.0)]:
+        pinned = hud.pinned_inside(offset, half_px, inset_px)
+        assert max(abs(pinned[0]), abs(pinned[1])) == pytest.approx(reach_px)
+        assert math.atan2(pinned[1], pinned[0]) == pytest.approx(math.atan2(offset[1], offset[0]))
+
+
+MARKER_COLOR = (255, 0, 255, 255)
+SENTINEL_COLOR = (1, 2, 3)
+MINIMAP_SCREEN_PX = (1280, 720)
+WORLD_PROBE_M = ((12.0, 0.0), (0.0, 15.0), (-8.0, -6.0), (20.0, 10.0))
+PLACEMENT_TOLERANCE_PX = 3.0
+
+
+def panel_origin_px():
+    width, height = MINIMAP_SCREEN_PX
+    return (width - hud.PANEL_MARGIN_PX - hud.MINIMAP_SIZE_PX, height - hud.PANEL_MARGIN_PX - hud.MINIMAP_SIZE_PX)
+
+
+def minimap_human(x_m, y_m, heading_rad, goal_xy=None):
+    goal_x, goal_y = goal_xy if goal_xy is not None else (x_m + 1e4, y_m)
+    return {"sim_x": x_m, "sim_y": y_m, "sim_heading": heading_rad, "goal_x": goal_x, "goal_y": goal_y}
+
+
+def draw_minimap_with_marker(pygame, town_hud, monkeypatch, human, marker_world_xy):
+    layer = pygame.Surface((hud.MINIMAP_SIZE_PX, hud.MINIMAP_SIZE_PX), pygame.SRCALPHA)
+    if marker_world_xy is not None:
+        pygame.draw.circle(layer, MARKER_COLOR, town_hud.minimap.to_px(*marker_world_xy), 3)
+    monkeypatch.setattr(town_hud, "minimap_lanes", layer)
+    surface = pygame.Surface(MINIMAP_SCREEN_PX)
+    surface.fill(SENTINEL_COLOR)
+    town_hud._draw_minimap(surface, human, *MINIMAP_SCREEN_PX)
+    return pygame.surfarray.array3d(surface).astype(np.int32)
+
+
+def marker_centroid_px(pixels):
+    magenta = np.minimum(pixels[:, :, 0], pixels[:, :, 2]) - pixels[:, :, 1]
+    weights = np.clip(magenta - 60, 0, None).astype(np.float64)
+    assert weights.sum() > 0.0, "marker not drawn"
+    xs, ys = np.meshgrid(np.arange(pixels.shape[0]), np.arange(pixels.shape[1]), indexing="ij")
+    return (weights * xs).sum() / weights.sum(), (weights * ys).sum() / weights.sum()
+
+
+def ego_world_xy(town_hud):
+    return tuple(town_hud.minimap.center)
+
+
+@pytest.mark.parametrize("heading_rad", (0.0, 0.7, math.pi / 2.0, math.pi, -2.3))
+@pytest.mark.parametrize("forward_m,left_m", WORLD_PROBE_M)
+def test_a_point_ahead_and_to_the_left_lands_ahead_and_to_the_left(pygame_headless, town_hud, monkeypatch, heading_rad,
+                                                                    forward_m, left_m):
+    ego_x, ego_y = ego_world_xy(town_hud)
+    world = (ego_x + forward_m * math.cos(heading_rad) - left_m * math.sin(heading_rad),
+             ego_y + forward_m * math.sin(heading_rad) + left_m * math.cos(heading_rad))
+    pixels = draw_minimap_with_marker(pygame_headless, town_hud, monkeypatch,
+                                      minimap_human(ego_x, ego_y, heading_rad), world)
+    origin = panel_origin_px()
+    half = hud.MINIMAP_SIZE_PX / 2.0
+    scale = town_hud.minimap.scale_px_per_m
+    expected = (origin[0] + half - scale * left_m, origin[1] + half - scale * forward_m)
+    centroid = marker_centroid_px(pixels)
+    assert math.dist(centroid, expected) <= PLACEMENT_TOLERANCE_PX
+
+
+@pytest.mark.parametrize("heading_rad", (0.0, math.pi / 2.0, math.pi, -1.0))
+def test_the_ego_sits_at_the_centre_pointing_up(pygame_headless, town_hud, monkeypatch, heading_rad):
+    pixels = draw_minimap_with_marker(pygame_headless, town_hud, monkeypatch,
+                                      minimap_human(*ego_world_xy(town_hud), heading_rad), None)
+    origin = panel_origin_px()
+    centre = (round(origin[0] + hud.MINIMAP_SIZE_PX / 2.0), round(origin[1] + hud.MINIMAP_SIZE_PX / 2.0))
+    ego = np.array(hud.COLOR_MINIMAP_EGO)
+    nose_px = round(hud.MINIMAP_NOSE_LENGTH_RADII * hud.MINIMAP_EGO_RADIUS_PX) - 1
+    tail_px = hud.MINIMAP_EGO_RADIUS_PX + 3
+    assert (pixels[centre] == ego).all()
+    assert (pixels[centre[0], centre[1] - nose_px] == ego).all()
+    assert not (pixels[centre[0], centre[1] + tail_px] == ego).all()
+    assert not (pixels[centre[0] + tail_px, centre[1]] == ego).all()
+
+
+def test_nothing_is_drawn_outside_the_panel(pygame_headless, town_hud, monkeypatch):
+    ego_x, ego_y = ego_world_xy(town_hud)
+    pixels = draw_minimap_with_marker(pygame_headless, town_hud, monkeypatch, minimap_human(ego_x, ego_y, 0.7),
+                                      (ego_x + 1e3, ego_y))
+    origin = panel_origin_px()
+    outside = np.ones(pixels.shape[:2], dtype=bool)
+    outside[origin[0] : origin[0] + hud.MINIMAP_SIZE_PX, origin[1] : origin[1] + hud.MINIMAP_SIZE_PX] = False
+    assert (pixels[outside] == np.array(SENTINEL_COLOR)).all()
+
+
+def test_the_panel_is_transparent_apart_from_what_it_draws(pygame_headless, town_hud, monkeypatch):
+    assert not hasattr(hud, "COLOR_MINIMAP_BG")
+    ego_x, ego_y = ego_world_xy(town_hud)
+    pixels = draw_minimap_with_marker(pygame_headless, town_hud, monkeypatch, minimap_human(ego_x, ego_y, 0.7), None)
+    origin = panel_origin_px()
+    panel = pixels[origin[0] : origin[0] + hud.MINIMAP_SIZE_PX, origin[1] : origin[1] + hud.MINIMAP_SIZE_PX]
+    untouched = (panel == np.array(SENTINEL_COLOR)).all(axis=-1)
+    assert untouched.mean() > 0.95
+    corner = hud.MINIMAP_EDGE_INSET_PX // 2
+    assert untouched[corner, corner] and untouched[-corner, -corner]
+
+
+@pytest.fixture
+def minimap_texts(town_hud, monkeypatch):
+    texts = []
+    real_text = town_hud._text
+
+    def text(surface, font, message, position, color=hud.COLOR_TEXT, anchor="topleft"):
+        texts.append((message, tuple(position), anchor))
+        return real_text(surface, font, message, position, color, anchor)
+
+    monkeypatch.setattr(town_hud, "_text", text)
+    return texts
+
+
+@pytest.mark.parametrize(
+    "heading_rad,expected_direction",
+    [(0.0, (-1.0, 0.0)), (math.pi, (1.0, 0.0)), (math.pi / 2.0, (0.0, -1.0)), (-math.pi / 2.0, (0.0, 1.0))],
+    ids=["east_puts_north_left", "west_puts_north_right", "north_on_top", "south_at_the_bottom"],
+)
+def test_the_north_marker_points_to_north(pygame_headless, town_hud, monkeypatch, minimap_texts, heading_rad,
+                                          expected_direction):
+    draw_minimap_with_marker(pygame_headless, town_hud, monkeypatch, minimap_human(*ego_world_xy(town_hud), heading_rad),
+                             None)
+    (message, position, anchor), = [entry for entry in minimap_texts if entry[0] == "N"]
+    half = hud.MINIMAP_SIZE_PX / 2.0
+    reach = half - hud.MINIMAP_EDGE_INSET_PX
+    assert anchor == "center"
+    assert position == pytest.approx((half + reach * expected_direction[0], half + reach * expected_direction[1]),
+                                     abs=1e-9)
+
+
+@pytest.mark.parametrize("heading_rad", (0.0, 1.0, math.pi))
+@pytest.mark.parametrize("goal_forward_m,goal_left_m", [(15.0, 5.0), (3000.0, -800.0)], ids=["near", "pinned"])
+def test_the_goal_dot_is_heading_up_and_pinned_inside(pygame_headless, town_hud, monkeypatch, heading_rad,
+                                                      goal_forward_m, goal_left_m):
+    ego_x, ego_y = ego_world_xy(town_hud)
+    goal = (ego_x + goal_forward_m * math.cos(heading_rad) - goal_left_m * math.sin(heading_rad),
+            ego_y + goal_forward_m * math.sin(heading_rad) + goal_left_m * math.cos(heading_rad))
+    pixels = draw_minimap_with_marker(pygame_headless, town_hud, monkeypatch,
+                                      minimap_human(ego_x, ego_y, heading_rad, goal), None)
+    half = hud.MINIMAP_SIZE_PX / 2.0
+    scale = town_hud.minimap.scale_px_per_m
+    expected_offset = hud.pinned_inside((-scale * goal_left_m, -scale * goal_forward_m), half, hud.MINIMAP_EDGE_INSET_PX)
+    origin = panel_origin_px()
+    dot = (round(origin[0] + half + expected_offset[0]), round(origin[1] + half + expected_offset[1]))
+    assert (pixels[dot] == np.array(hud.COLOR_MINIMAP_GOAL)).all()
+
+
+def test_the_minimap_projection_is_still_north_up_over_the_whole_town(town_hud):
+    projection = town_hud.minimap
+    x, y = projection.center
+    assert projection.to_px(x, y) == pytest.approx((projection.size_px / 2.0, projection.size_px / 2.0))
+    east = projection.to_px(x + 10.0, y)
+    north = projection.to_px(x, y + 10.0)
+    assert east[0] > projection.size_px / 2.0 and east[1] == pytest.approx(projection.size_px / 2.0)
+    assert north[1] < projection.size_px / 2.0 and north[0] == pytest.approx(projection.size_px / 2.0)
+
+
+def test_the_lanes_layer_is_transparent_where_there_are_no_lanes(town_hud):
+    layer = town_hud.minimap_lanes
+    assert layer.get_flags() & town_hud.pygame.SRCALPHA
+    assert layer.get_size() == (hud.MINIMAP_SIZE_PX, hud.MINIMAP_SIZE_PX)
+    alpha = town_hud.pygame.surfarray.array_alpha(layer)
+    assert (alpha == 0).any() and (alpha > 0).any()
+
+
+def test_the_policy_arrow_shows_the_blend_reference_not_the_raw_policy_step(pygame_headless, town_hud):
+    assist = hud_assist(binding.ASSIST_MODE_BLEND, reference_sim_rad=SMALL_ROAD_ANGLE_RAD)
+    assist["blend_reference_steering_rad"] = -SMALL_ROAD_ANGLE_RAD
+    columns, cx = dial_policy_columns(pygame_headless, town_hud, assist)
+    assert len(columns) > 0
+    assert columns.mean() > cx + 3
+
+
+def test_the_readout_compares_you_with_the_blend_reference():
+    assist = hud_assist(binding.ASSIST_MODE_BLEND, reference_sim_rad=0.3, human_sim_rad=0.1)
+    assist["blend_reference_steering_rad"] = -0.2
+    readout = hud.assist_readout(assist, 0.0, binding.HUMAN_STEERING_RATIO)
+    assert readout.policy_steering_rad == pytest.approx(0.2)
+    assert readout.steer_delta_wheel_deg == pytest.approx(math.degrees(0.2 - (-0.1)) * binding.HUMAN_STEERING_RATIO)

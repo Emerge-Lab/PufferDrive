@@ -443,7 +443,7 @@ def test_ffb_gain_defaults_to_the_force_models_default(demo_parser):
 
 def test_assist_flag_offers_the_five_modes_and_starts_off(demo_parser, run_demo):
     action = next(a for a in demo_parser._actions if a.dest == "assist")
-    assert set(action.choices) == {"off", "display", "blend", "nudge", "full", "co-adapt"}
+    assert set(action.choices) == {"off", "display", "blend", "nudge", "full", "co-adapt", "dynamic"}
     assert action.default == "off"
     assert demo_parser.parse_args(["--assist", "full"]).assist == "full"
     assert run_demo.ASSIST_MODES_BY_NAME == {
@@ -863,10 +863,13 @@ def test_grip_flag_reaches_the_config(run_demo, monkeypatch, tmp_path, name, gri
     assert config.grip_mode == grip_mode
 
 
-def test_grip_flag_offers_skid_and_defaults_to_realistic(demo_parser, run_demo):
+def test_grip_flag_offers_skid_and_defaults_to_it(demo_parser, run_demo):
+    from pufferlib.wheel_demo.loop import DemoConfig
+
     action = next(a for a in demo_parser._actions if a.dest == "grip")
     assert tuple(action.choices) == ("realistic", "kinematic", "skid")
-    assert action.default == "realistic"
+    assert action.default == "skid"
+    assert DemoConfig(checkpoint_path="unused").grip_mode == binding.GRIP_MODE_REALISTIC
     assert "spin" in action.help
     with pytest.raises(SystemExit):
         demo_parser.parse_args(["--grip", "drift"])
@@ -1094,3 +1097,13 @@ def test_draw_passes_the_co_adapt_belief_to_the_hud(drawing_window):
     assert drawn["infos"][-1].coadapt_belief == belief
     window.draw({}, WheelState(), 0.0)
     assert drawn["infos"][-1].coadapt_belief == ()
+
+
+def test_draw_passes_the_dynamic_line_and_share_to_the_hud(drawing_window):
+    window, _clock, drawn = drawing_window
+    window.draw({}, WheelState(), 0.0, dynamic_line="50% policy (disagree 0%; learning the target, 30 s left)",
+                dynamic_share=0.5)
+    assert (drawn["infos"][-1].dynamic_line, drawn["infos"][-1].dynamic_share) == (
+        "50% policy (disagree 0%; learning the target, 30 s left)", 0.5)
+    window.draw({}, WheelState(), 0.0)
+    assert (drawn["infos"][-1].dynamic_line, drawn["infos"][-1].dynamic_share) == ("", 0.0)

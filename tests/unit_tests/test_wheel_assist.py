@@ -27,6 +27,7 @@ ASSIST_STATE_KEYS = {
     "blend_weight",
     "reference_valid",
     "reference_steering_rad",
+    "blend_reference_steering_rad",
     "reference_accel_mps2",
     "reference_speed_mps",
     "human_steering_rad",
@@ -193,7 +194,8 @@ def test_readout_delta_is_policy_minus_driver_in_driver_terms(env):
     ids=["policy_right", "policy_left", "driver_further_right", "agree"],
 )
 def test_readout_sign_is_positive_when_the_policy_wants_further_right(reference_sim_rad, human_sim_rad, expected_sign):
-    assist = {"human_steering_rad": human_sim_rad, "reference_steering_rad": reference_sim_rad, "reference_accel_mps2": 1.5}
+    assist = {"human_steering_rad": human_sim_rad, "blend_reference_steering_rad": reference_sim_rad,
+              "reference_accel_mps2": 1.5}
     readout = assist_readout(assist, 0.5, binding.HUMAN_STEERING_RATIO)
     assert np.sign(readout.steer_delta_wheel_deg) == expected_sign
     assert readout.accel_delta_mps2 == pytest.approx(1.0)
@@ -201,7 +203,7 @@ def test_readout_sign_is_positive_when_the_policy_wants_further_right(reference_
 
 def test_readout_wheel_degrees_use_the_wheels_steering_ratio():
     road_delta_rad = math.radians(2.0)
-    assist = {"human_steering_rad": 0.0, "reference_steering_rad": -road_delta_rad, "reference_accel_mps2": 0.0}
+    assist = {"human_steering_rad": 0.0, "blend_reference_steering_rad": -road_delta_rad, "reference_accel_mps2": 0.0}
     readout = assist_readout(assist, 0.0, binding.HUMAN_STEERING_RATIO)
     full_lock_wheel_deg = binding.HUMAN_WHEEL_RANGE_DEG / 2.0
     assert readout.steer_delta_wheel_deg == pytest.approx(
@@ -396,9 +398,11 @@ def test_full_in_reverse_with_feet_off_follows_a_forward_policy_back_into_drive(
     full = human_trajectory(binding.ASSIST_MODE_FULL, 0.0, 0.0, reverse=True)
     off = human_trajectory(binding.ASSIST_MODE_OFF, 0.0, 0.0, reverse=True)
     assert {gear for *_, gear in off} == {binding.GEAR_REVERSE}
-    assert full[0][-1] >= 1
-    assert all(gear >= 1 for *_, gear in full)
-    assert all(speed_mps >= 0.0 for _, _, speed_mps, _, _ in full)
+    gears = [gear for *_, gear in full]
+    first_drive_idx = next(idx for idx, gear in enumerate(gears) if gear >= 1)
+    assert all(gear >= 1 for gear in gears[first_drive_idx:])
+    # still backing while the policy's own step ends backward; forward from the step it turns
+    assert all(speed_mps >= 0.0 for _, _, speed_mps, _, _ in full[first_drive_idx:])
     assert full[-1][2] > 0.0
 
 
@@ -572,6 +576,61 @@ def test_set_assist_steering_accepts_an_angle_or_none(env):
     env.set_assist_steering(None)
 
 
+def preview_score():
+    return np.zeros(binding.PREVIEW_SCORE_COUNT, dtype=np.float32)
+
+
+def test_preview_score_constants_are_exported():
+    assert (binding.PREVIEW_SCORE_REWARD, binding.PREVIEW_SCORE_GOAL_REWARD, binding.PREVIEW_SCORE_OFFROAD,
+            binding.PREVIEW_SCORE_COLLISION, binding.PREVIEW_SCORE_COUNT) == (0, 1, 2, 3, 4)
+
+
+@pytest.mark.parametrize(
+    "score_out",
+    [np.zeros(3, dtype=np.float32), np.zeros(5, dtype=np.float32), np.zeros(4, dtype=np.float64),
+     np.zeros(8, dtype=np.float32)[::2], [0.0, 0.0, 0.0, 0.0]],
+    ids=["short", "long", "float64", "strided", "list"],
+)
+def test_preview_step_rejects_a_bad_score_buffer(env, score_out):
+    assert env.begin_preview() == HUMAN_ACTION_ROW
+    try:
+        with pytest.raises(TypeError):
+            env.preview_step(np.zeros(PREVIEW_PIECE_COUNT, dtype=np.float32), score_out)
+    finally:
+        env.end_preview()
+
+
+def test_blend_steering_override_reaches_the_assist_state_and_the_car(env):
+    env.set_assist_mode(binding.ASSIST_MODE_BLEND, 1.0)
+    for _ in range(10):
+        step(env, steering_norm=0.0)
+    override_rad = 0.05
+    env.set_blend_steering(override_rad)
+    state = step(env, steering_norm=0.0)
+    assert state["blend_reference_steering_rad"] == pytest.approx(override_rad)
+    assert state["blend_weight"] == 1.0
+    assert state["commanded_steering_rad"] == pytest.approx(override_rad)
+    env.set_blend_steering(None)
+    state = step(env, steering_norm=0.0)
+    assert state["blend_reference_steering_rad"] == state["reference_steering_rad"]
+
+
+@pytest.mark.parametrize("steering_rad", [math.nan, math.inf])
+def test_blend_steering_rejects_a_non_finite_angle(env, steering_rad):
+    with pytest.raises(ValueError):
+        env.set_blend_steering(steering_rad)
+
+
+def test_blend_steering_override_is_cleared_by_selecting_a_car_and_by_reset(env):
+    env.set_blend_steering(0.1)
+    env.select_human_agent(0)
+    assert env.get_assist_state()["blend_reference_steering_rad"] == env.get_assist_state()["reference_steering_rad"]
+    env.set_blend_steering(0.1)
+    env.reset()
+    assert env.get_human_state() is not None
+    assert env.get_assist_state()["blend_reference_steering_rad"] == env.get_assist_state()["reference_steering_rad"]
+
+
 def snapshot(env):
     human = env.get_human_state()
     return dict(human), env.observations.copy()
@@ -584,9 +643,11 @@ def test_preview_returns_the_human_slot_and_restores_the_env(env):
     assert slot == HUMAN_ACTION_ROW
     assert env.begin_preview() == -1
     steering_rad = np.zeros(PREVIEW_PIECE_COUNT, dtype=np.float32)
+    score = np.zeros(binding.PREVIEW_SCORE_COUNT, dtype=np.float32)
     for _ in range(PREVIEW_STEP_COUNT):
-        env.preview_step(steering_rad)
+        env.preview_step(steering_rad, score)
     assert np.all(np.isfinite(steering_rad))
+    assert np.all(np.isfinite(score))
     assert env.get_human_state() != human_before
     env.end_preview()
     human_after, observations_after = snapshot(env)
@@ -596,7 +657,7 @@ def test_preview_returns_the_human_slot_and_restores_the_env(env):
 
 def test_preview_step_without_a_preview_raises(env):
     with pytest.raises(RuntimeError):
-        env.preview_step(np.zeros(PREVIEW_PIECE_COUNT, dtype=np.float32))
+        env.preview_step(np.zeros(PREVIEW_PIECE_COUNT, dtype=np.float32), preview_score())
     env.end_preview()
 
 
@@ -609,7 +670,7 @@ def test_preview_step_rejects_an_unsafe_buffer(env, steering_out):
     assert env.begin_preview() == HUMAN_ACTION_ROW
     try:
         with pytest.raises(TypeError):
-            env.preview_step(steering_out)
+            env.preview_step(steering_out, preview_score())
     finally:
         env.end_preview()
 
@@ -618,7 +679,7 @@ def test_preview_step_rejects_an_empty_buffer(env):
     assert env.begin_preview() == HUMAN_ACTION_ROW
     try:
         with pytest.raises(RuntimeError):
-            env.preview_step(np.zeros(0, dtype=np.float32))
+            env.preview_step(np.zeros(0, dtype=np.float32), preview_score())
     finally:
         env.end_preview()
 
@@ -637,7 +698,7 @@ def drive_with_optional_previews(with_previews):
             actions = policy_actions(drive_env)
             if with_previews and drive_env.begin_preview() >= 0:
                 drive_env.actions[:] = actions
-                drive_env.preview_step(np.zeros(PREVIEW_PIECE_COUNT, dtype=np.float32))
+                drive_env.preview_step(np.zeros(PREVIEW_PIECE_COUNT, dtype=np.float32), preview_score())
                 drive_env.end_preview()
             pedal_step(drive_env, 0.0, 0.0, steering_norm=math.sin(0.3 * step_idx))
             trajectory.append((dict(drive_env.get_human_state()), drive_env.observations.copy()))

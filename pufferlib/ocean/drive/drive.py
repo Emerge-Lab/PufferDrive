@@ -925,6 +925,11 @@ class Drive(pufferlib.PufferEnv):
         valid = steering_rad is not None
         binding.vec_set_assist_steering(self.c_envs, int(valid), float(steering_rad) if valid else 0.0)
 
+    def set_blend_steering(self, steering_rad):
+        """the angle BLEND blends toward instead of the policy's own step, sim sign; None goes back to the step."""
+        valid = steering_rad is not None
+        binding.vec_set_blend_steering(self.c_envs, int(valid), float(steering_rad) if valid else 0.0)
+
     def get_assist_state(self):
         """The policy's reference steering/acceleration for the human car (sim sign: positive-left)."""
         return binding.vec_get_assist_state(self.c_envs)
@@ -981,9 +986,10 @@ class Drive(pufferlib.PufferEnv):
         """start imagining the human car forward; returns its action slot, or -1 when there is none to imagine."""
         return binding.vec_begin_preview(self.c_envs)
 
-    def preview_step(self, steering_out):
-        """one imagined policy step on actions[slot], in len(steering_out) pieces; writes each piece's steering."""
-        binding.vec_preview_step(self.c_envs, steering_out)
+    def preview_step(self, steering_out, score_out):
+        """one imagined policy step on actions[slot], in len(steering_out) pieces; writes each piece's steering and
+        the step's PREVIEW_SCORE_* (reward, its goal part, offroad, collision) as a real step would score it."""
+        binding.vec_preview_step(self.c_envs, steering_out, score_out)
 
     def end_preview(self):
         """put the real human car, its observation and the RNG back."""

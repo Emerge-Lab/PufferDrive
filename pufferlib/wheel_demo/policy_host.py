@@ -38,6 +38,9 @@ DEMO_ENV_OVERRIDES = {
     "simulation_mode": "gigaflow",
     "control_mode": "control_vehicles",
     "goal_source": "map",
+    # No last goal to slow down for: the third goal counts at any speed, and a new goal is appended per goal reached
+    "goal_reach_requires_speed": False,
+    "goal_regen_mode": "rolling",
     # Training spawns 0.8 m to 7 m boxes on purpose; a demo wants cars.
     "vehicle_size_profile": 1,
 }

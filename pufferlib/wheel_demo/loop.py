@@ -139,6 +139,13 @@ class WheelDemoLoop:
         self._sim_speed_ratio = 1.0
         self._last_step_start_s = None
         self._previous_lookahead_rad = None
+        # under BLEND, steer toward the look-ahead mean instead of the policy's step (dynamic blend turns it on)
+        self.blend_follows_lookahead = False
+
+    def set_blend_follows_lookahead(self, follows):
+        self.blend_follows_lookahead = follows
+        if not follows:
+            self.env.set_blend_steering(None)
 
     def set_full_steering(self, full_assist_dynamics, lookahead_window_seconds):
         """What steers your car under FULL and how far the look-ahead averages; safe between policy steps."""
@@ -153,8 +160,11 @@ class WheelDemoLoop:
         self.lookahead_policy_steps = int(np.ceil((2.0 * self.dt + ahead_seconds) / self.dt - 1e-9))
         past_count = round(0.5 * lookahead_window_seconds / self.substep_dt) if centred else 0
         self._recent_car_steering_rad = deque(maxlen=max(past_count, 1))
+        # the imagined steps whose scores make the policy's score: those the window reaches into
+        self.lookahead_score_steps = int(np.ceil(self.lookahead_window_count * self.lookahead_dt / self.dt - 1e-9))
         # drives imagined for the old window are the wrong length for the new one
         self._lookahead_rad = None
+        self._lookahead_scores = None
         self._previous_lookahead_rad = None
 
     @property
@@ -179,6 +189,7 @@ class WheelDemoLoop:
         self.human_agent_idx = agent_idx
         self._assist_wheel_target_rad = None
         self._lookahead_rad = None
+        self._lookahead_scores = None
         self._recent_car_steering_rad.clear()
         self._assist_wheel_target_motion = (None, 0.0, time.perf_counter())
 
@@ -208,7 +219,7 @@ class WheelDemoLoop:
             self._sim_speed_ratio = min(1.0, self.dt / max(policy_start - self._last_step_start_s, 1e-6))
         self._last_step_start_s = policy_start
         actions = self.traffic.act(self.observations)
-        if self.config.wheel_target == "lookahead" or self.lookahead_steers_car:
+        if self.config.wheel_target == "lookahead" or self.lookahead_steers_car or self.blend_follows_lookahead:
             self._look_ahead(actions)
         self.env.actions[:] = actions  # the sub-steps integrate this; step() only scores it
         env_start = time.perf_counter()
@@ -227,6 +238,9 @@ class WheelDemoLoop:
             if self.lookahead_steers_car:
                 lookahead_rad = self._lookahead_mean_rad(substep_idx)
                 self.env.set_assist_steering(None if lookahead_rad is None else -lookahead_rad)
+            if self.blend_follows_lookahead:
+                lookahead_rad = self._lookahead_mean_rad(substep_idx)
+                self.env.set_blend_steering(None if lookahead_rad is None else -lookahead_rad)
             self.env.substep()
             self._recent_car_steering_rad.append(-self.env.get_human_state()["steering_angle_rad"])
             previous_target_rad = self._assist_wheel_target_rad
@@ -295,7 +309,6 @@ class WheelDemoLoop:
             speed_mps=human["speed_mps"],
             accel_lat_mps2=self._felt_lateral_accel_mps2(human, steering_angle_rad),
             tire_grip_mps2=binding.HUMAN_TIRE_GRIP_MPS2,
-            collision=human["collision"] > 0.0,
             offroad=human["offroad"] > 0.0,
             assist_target_steering_rad=target_rad,
             assist_full=self.env.get_assist_state()["mode"] == binding.ASSIST_MODE_FULL,
@@ -357,19 +370,35 @@ class WheelDemoLoop:
         pieces_per_step = round(self.dt / self.lookahead_dt)
         self._previous_lookahead_rad = None if self._lookahead_rad is None else self._lookahead_rad[pieces_per_step:]
         self._lookahead_rad = None
+        self._lookahead_scores = None
         slot = self.env.begin_preview()
         if slot < 0:
             return
         steering_rad = np.zeros((self.lookahead_policy_steps, pieces_per_step), dtype=np.float32)
+        scores = np.zeros((self.lookahead_policy_steps, binding.PREVIEW_SCORE_COUNT), dtype=np.float32)
         try:
             self.env.actions[slot] = actions[slot]
             for step_idx in range(self.lookahead_policy_steps):
                 if step_idx > 0:
                     self.env.actions[slot] = self.traffic.act(self.env.observations[slot : slot + 1])[0]
-                self.env.preview_step(steering_rad[step_idx])
+                self.env.preview_step(steering_rad[step_idx], scores[step_idx])
         finally:
             self.env.end_preview()
         self._lookahead_rad = -steering_rad.reshape(-1)
+        self._lookahead_scores = scores
+
+    def lookahead_policy_score(self):
+        """(score, clean) of the policy's own imagined drive over the look-ahead window, from this step's look-ahead:
+        its mean reward per policy step without the goal part, and whether it stayed on the road without colliding.
+        None when this step imagined nothing."""
+        if self._lookahead_scores is None:
+            return None
+        window = self._lookahead_scores[: self.lookahead_score_steps]
+        score = float(np.mean(window[:, binding.PREVIEW_SCORE_REWARD] - window[:, binding.PREVIEW_SCORE_GOAL_REWARD]))
+        clean = not np.any(window[:, binding.PREVIEW_SCORE_OFFROAD]) and not np.any(
+            window[:, binding.PREVIEW_SCORE_COLLISION]
+        )
+        return score, clean
 
     def _lookahead_mean_rad(self, substep_idx):
         """Mean imagined angle (driver sign) over the window ahead of this sub-step's end, crossfaded across the

@@ -796,11 +796,13 @@ static int test_selector_request_moves_between_reverse_and_first_only(void) {
     return 0;
 }
 
-static int test_automatic_selector_refuses_while_rolling(void) {
-    float speeds[] = {SELECTOR_ROLLING_SPEED_MPS, -SELECTOR_ROLLING_SPEED_MPS, SELECTOR_REFUSED_SPEED_MPS};
-    for (int k = 0; k < 3; k++) {
+// R only from (near) rest; D out of R at any speed, so a car still rolling back can always be driven forward
+static int test_automatic_selector_refuses_reverse_while_rolling_but_always_allows_drive(void) {
+    float speeds[] = {SELECTOR_ROLLING_SPEED_MPS, -SELECTOR_ROLLING_SPEED_MPS, SELECTOR_REFUSED_SPEED_MPS,
+                      -SELECTOR_REFUSED_SPEED_MPS};
+    for (int k = 0; k < 4; k++) {
         EXPECT_TRUE(selector_gear_after(speeds[k], GEARBOX_MODE_AUTOMATIC, 1, -1, 0.0f) != GEAR_REVERSE);
-        EXPECT_EQ_INT(selector_gear_after(speeds[k], GEARBOX_MODE_AUTOMATIC, GEAR_REVERSE, +1, 0.0f), GEAR_REVERSE);
+        EXPECT_EQ_INT(selector_gear_after(speeds[k], GEARBOX_MODE_AUTOMATIC, GEAR_REVERSE, +1, 0.0f), 1);
     }
     EXPECT_NEAR(AUTO_SELECTOR_MAX_SPEED_MPS, 0.5f, EXACT_TOLERANCE);
     return 0;
@@ -965,6 +967,7 @@ static int test_blend_shares_the_longitudinal_command_with_the_clipped_reference
             EXPECT_NEAR(assisted_accel(&bench.env, human, LONG_BENCH_SPEED_MPS), 0.75f * human + 0.25f * LONG_REFERENCES_CLIPPED_MPS2[r], 1e-6f);
             bench.env.human_throttle_norm = 1.0f;
             bench.env.human_gear = GEAR_REVERSE;
+            bench.env.assist_reference_speed_mps = -MOVING_REFERENCE_SPEED_MPS;
             EXPECT_NEAR(assisted_accel(&bench.env, human, -LONG_BENCH_SPEED_MPS), 0.75f * human + 0.25f * LONG_REFERENCES_CLIPPED_MPS2[r], 1e-6f);
         }
     }
@@ -1499,7 +1502,7 @@ int main(void) {
     RUN_TEST(test_automatic_left_paddle_selects_reverse_at_a_standstill);
     RUN_TEST(test_automatic_right_paddle_leaves_reverse_for_first_at_a_standstill);
     RUN_TEST(test_selector_request_moves_between_reverse_and_first_only);
-    RUN_TEST(test_automatic_selector_refuses_while_rolling);
+    RUN_TEST(test_automatic_selector_refuses_reverse_while_rolling_but_always_allows_drive);
     RUN_TEST(test_refused_selector_request_is_not_remembered);
     RUN_TEST(test_reverse_selected_by_paddle_drives_backwards_and_stays_in_reverse);
     RUN_TEST(test_manual_gearbox_ignores_the_selector);

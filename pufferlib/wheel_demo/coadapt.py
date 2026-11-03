@@ -13,6 +13,11 @@ COADAPT_SHARES = (0.2, 0.4, 0.6, 0.8)
 COADAPT_TRIAL_SECONDS = 20.0
 
 
+def human_step_score(loop):
+    """The human car's reward on the latest policy step without its goal part: driving quality, not where goals fall."""
+    return float(loop.last_rewards[loop.human_agent_idx]) - loop.human_state()["step_goal_reward"]
+
+
 class UcbBandit:
     """UCB1 over a fixed set of arms. Scores have no known range, so means are rescaled to [0, 1] by the lowest
     and highest trial score seen so far before the exploration bonus sqrt(2 ln N / n) is added."""
@@ -100,8 +105,7 @@ class CoAdapt:
     def after_step(self, loop):
         if not self.active:
             return None
-        human = loop.human_state()
-        self._trial_score += float(loop.last_rewards[loop.human_agent_idx]) - human["step_goal_reward"]
+        self._trial_score += human_step_score(loop)
         self._trial_step_count += 1
         if self._trial_step_count < self.trial_steps:
             return None

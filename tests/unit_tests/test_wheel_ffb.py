@@ -39,9 +39,6 @@ from pufferlib.wheel_demo.ffb import (
     HIDPP_DEVICE_INDEX,
     HIDPP_FF_DOWNLOAD_EFFECT,
     HIDPP_REPORT_LONG,
-    IMPACT_DECAY_PER_SECOND,
-    IMPACT_FORCE,
-    IMPACT_WINDOW_SECONDS,
     OFFROAD_RUMBLE_FORCE,
     OFFROAD_RUMBLE_MIN_SPEED_MPS,
     STEADY_FORCE_LIMIT,
@@ -547,14 +544,11 @@ def contract_steady(feel, limit_rad):
     return steady
 
 
-def contract_force(feel, limit_rad, impact_age_s=None, elapsed_s=0.0):
+def contract_force(feel, limit_rad, elapsed_s=0.0):
     steady = contract_steady(feel, limit_rad)
     force = CONTRACT_STEADY_FORCE_LIMIT * math.tanh(steady / CONTRACT_STEADY_FORCE_LIMIT)
     if feel.offroad and abs(feel.speed_mps) > CONTRACT_OFFROAD_RUMBLE_MIN_SPEED_MPS:
         force += CONTRACT_OFFROAD_RUMBLE_FORCE * math.sin(2.0 * math.pi * CONTRACT_OFFROAD_RUMBLE_HZ * elapsed_s)
-    if impact_age_s is not None and impact_age_s >= 0.0:
-        direction = -1.0 if steady > 0.0 else 1.0
-        force += direction * IMPACT_FORCE * math.exp(-IMPACT_DECAY_PER_SECOND * impact_age_s)
     return contract_clamp(force)
 
 
@@ -580,7 +574,6 @@ def test_the_overspeed_haptic_is_gone():
         "speed_mps",
         "accel_lat_mps2",
         "tire_grip_mps2",
-        "collision",
         "offroad",
         "assist_target_steering_rad",
         "assist_full",
@@ -684,24 +677,22 @@ def contract_sweep_feels():
 def test_compute_force_matches_the_contract_model_everywhere():
     checked = 0
     for feel in contract_sweep_feels():
-        for impact_age in (None, 0.0, 0.05):
-            for elapsed in (0.0, RUMBLE_PEAK_ELAPSED_S, 0.013):
-                expected = contract_force(feel, STEERING_LIMIT_RAD, impact_age_s=impact_age, elapsed_s=elapsed)
-                actual = compute_force(feel, STEERING_LIMIT_RAD, impact_age_s=impact_age, elapsed_s=elapsed)
-                assert actual == pytest.approx(expected, abs=1e-12)
-                checked += 1
-    assert checked > 50_000
+        for elapsed in (0.0, RUMBLE_PEAK_ELAPSED_S, 0.013):
+            expected = contract_force(feel, STEERING_LIMIT_RAD, elapsed_s=elapsed)
+            actual = compute_force(feel, STEERING_LIMIT_RAD, elapsed_s=elapsed)
+            assert actual == pytest.approx(expected, abs=1e-12)
+            checked += 1
+    assert checked > 15_000
 
 
 def test_compute_force_stays_inside_the_device_range_across_a_wide_sweep():
     checked = 0
     for feel in contract_sweep_feels():
-        for impact_age in (None, 0.0, 0.05, 1.0):
-            force = compute_force(feel, STEERING_LIMIT_RAD, impact_age_s=impact_age, elapsed_s=0.013)
-            assert not math.isnan(force)
-            assert -FORCE_LIMIT <= force <= FORCE_LIMIT
-            checked += 1
-    assert checked > 10_000
+        force = compute_force(feel, STEERING_LIMIT_RAD, elapsed_s=0.013)
+        assert not math.isnan(force)
+        assert -FORCE_LIMIT <= force <= FORCE_LIMIT
+        checked += 1
+    assert checked > 5_000
 
 
 def test_steady_force_never_reaches_the_soft_limit():
@@ -755,20 +746,6 @@ def test_offroad_rumble_keeps_full_peak_to_peak_at_full_lock(speed_mps, driver_n
     assert abs(steady) > 0.5
     assert peak - trough == pytest.approx(2.0 * CONTRACT_OFFROAD_RUMBLE_FORCE, abs=1e-9)
     assert peak - steady == pytest.approx(CONTRACT_OFFROAD_RUMBLE_FORCE, abs=1e-9)
-
-
-@pytest.mark.parametrize("driver_norm", [+1, -1], ids=["holding_right", "holding_left"])
-def test_impact_jolt_is_felt_in_full_with_the_wheel_loaded_at_lock(driver_norm):
-    loaded = CarFeel(
-        steering_angle_rad=driver_norm * FULL_LOCK_RAD,
-        speed_mps=CORNERING_SPEED_MPS,
-        accel_lat_mps2=driver_norm * TIRE_GRIP_MPS2,
-    )
-    steady = compute_force(loaded, STEERING_LIMIT_RAD)
-    struck = compute_force(loaded, STEERING_LIMIT_RAD, impact_age_s=0.0)
-    assert abs(steady) > 0.5
-    assert struck - steady == pytest.approx(-sign_of(steady) * IMPACT_FORCE, abs=1e-12)
-    assert sign_of(struck) == -sign_of(steady)
 
 
 NUDGE_SPEED_MPS = 10.0
@@ -959,23 +936,6 @@ def test_offroad_rumble_is_absent_below_the_speed_threshold(speed):
         )
 
 
-def test_collision_pulse_decays_monotonically():
-    feel = CarFeel(speed_mps=10.0)
-    ages = [0.0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
-    magnitudes = [abs(compute_force(feel, STEERING_LIMIT_RAD, impact_age_s=age)) for age in ages]
-
-    assert all(b <= a for a, b in zip(magnitudes, magnitudes[1:]))
-    assert all(b < a for a, b in zip(magnitudes[1:], magnitudes[2:]))
-    assert magnitudes[0] > 0.0
-    assert magnitudes[-1] < 0.01
-
-
-def test_no_collision_pulse_when_no_impact_age_is_given():
-    feel = CarFeel(speed_mps=10.0)
-
-    assert compute_force(feel, STEERING_LIMIT_RAD, impact_age_s=None) == 0.0
-
-
 # ---------------------------------------------------------------------------------------------
 # 5. RecordingForceOutput.
 # ---------------------------------------------------------------------------------------------
@@ -1151,11 +1111,6 @@ def test_car_feel_passes_speed_and_grip_through_unchanged():
     assert feel.tire_grip_mps2 == TIRE_GRIP_MPS2
 
 
-def test_car_feel_reports_collision():
-    assert feel_from_sim_state(sim_human_state(0.0, 0.0, 5.0, collision=1.0)).collision is True
-    assert feel_from_sim_state(sim_human_state(0.0, 0.0, 5.0, collision=0.0)).collision is False
-
-
 def test_car_feel_steering_rate_follows_the_steering_angle():
     """A wheel turned one way between two samples must report a rate pointing the same way."""
     loop = feel_loop(FakeHumanEnv(sim_human_state(0.0, 0.0, 5.0)))
@@ -1174,17 +1129,10 @@ def test_car_feel_steering_rate_follows_the_steering_angle():
 
 
 # ---------------------------------------------------------------------------------------------
-# 9. The collision pulse through the LIVE loop.
-#
-# compute_force only ever sees an impact age; deciding WHEN an impact started is the loop's job,
-# and it was once not done at all, so the pulse never fired on a real car. These run the real
-# ForceFeedbackLoop thread over a scripted feel source and read what reached the output.
+# 9. The LIVE loop: the real ForceFeedbackLoop thread over a scripted feel source, reading what reached the output.
 # ---------------------------------------------------------------------------------------------
 
 FRAME_SECONDS = 1.0 / LOOP_UPDATE_HZ
-# compute_force is in DRIVER signs, like car_feel: a positive force pushes the wheel clockwise,
-# i.e. towards positive steering_norm, i.e. RIGHT. With the wheel centred the jolt kicks right.
-JOLT_AT_CENTRE_TURNS_WHEEL_TOWARDS_NORM = +1
 SEND_BURST_FRAMES = 50
 
 
@@ -1236,113 +1184,32 @@ def run_scripted_loop(monkeypatch, frames):
     return output.sent
 
 
-# Cruising straight and level: every steady term is zero, so anything non-zero is the pulse.
+# Cruising straight and level: every steady term is zero.
 QUIET_FRAME = CarFeel(speed_mps=CORNERING_SPEED_MPS)
-STRUCK_FRAME = CarFeel(speed_mps=CORNERING_SPEED_MPS, collision=True)
 
 
-def test_loop_sends_no_impact_pulse_before_any_collision(monkeypatch):
-    assert run_scripted_loop(monkeypatch, [QUIET_FRAME] * 20) == [0.0] * 20
+def test_the_collision_effect_is_gone():
+    assert not [name for name in dir(ffb_module) if name.upper().startswith("IMPACT")]
+    assert "collision" not in CarFeel.__dataclass_fields__
+    assert "impact_age_s" not in inspect.signature(compute_force).parameters
+    with pytest.raises(TypeError):
+        CarFeel(collision=True)
 
 
-def test_loop_fires_a_full_pulse_on_the_frame_the_collision_rises(monkeypatch):
-    sent = run_scripted_loop(monkeypatch, [QUIET_FRAME] * 5 + [STRUCK_FRAME] + [QUIET_FRAME] * 5)
-
-    assert sent[:5] == [0.0] * 5
-    assert sent[5] == pytest.approx(IMPACT_FORCE)
-    assert sign_of(sent[5]) == JOLT_AT_CENTRE_TURNS_WHEEL_TOWARDS_NORM
-
-
-def test_loop_pulse_decays_from_the_impact_frame_on_the_loop_clock(monkeypatch):
-    sent = run_scripted_loop(monkeypatch, [QUIET_FRAME] + [STRUCK_FRAME] + [QUIET_FRAME] * 20)
-    pulse = sent[1:]
-
-    assert all(later < earlier for earlier, later in zip(pulse, pulse[1:]))
-    for frames_since_impact, force in enumerate(pulse):
-        age_s = frames_since_impact * FRAME_SECONDS
-        assert force == pytest.approx(IMPACT_FORCE * math.exp(-IMPACT_DECAY_PER_SECOND * age_s))
+@pytest.mark.parametrize("steering_rad", [0.0, SIM_LEFT * HELD_STEERING_RAD])
+def test_a_collision_in_the_sim_changes_the_feel_and_the_force_not_at_all(steering_rad):
+    quiet = feel_from_sim_state(sim_human_state(steering_rad, 0.0, CORNERING_SPEED_MPS, collision=0.0))
+    struck = feel_from_sim_state(sim_human_state(steering_rad, 0.0, CORNERING_SPEED_MPS, collision=1.0))
+    assert replace(struck, steering_rate_rad_s=0.0) == replace(quiet, steering_rate_rad_s=0.0)
+    assert compute_force(replace(struck, steering_rate_rad_s=0.0), STEERING_LIMIT_RAD) == compute_force(
+        replace(quiet, steering_rate_rad_s=0.0), STEERING_LIMIT_RAD)
 
 
-def test_loop_stops_the_pulse_once_the_impact_window_has_passed(monkeypatch):
-    frames_in_window = int(IMPACT_WINDOW_SECONDS / FRAME_SECONDS)
-    sent = run_scripted_loop(monkeypatch, [STRUCK_FRAME] * (frames_in_window + 5))
-
-    assert sent[0] == pytest.approx(IMPACT_FORCE)
-    assert sent[frames_in_window - 5] != 0.0
-    assert sent[frames_in_window + 2 :] == [0.0] * 3
-
-
-def test_loop_does_not_retrigger_while_one_collision_stays_latched(monkeypatch):
-    """A collision flag held True for many frames is ONE impact, so it must feel identical to a
-    flag that rose for a single frame and cleared."""
-    latched = run_scripted_loop(monkeypatch, [QUIET_FRAME] + [STRUCK_FRAME] * 20)
-    single_frame = run_scripted_loop(monkeypatch, [QUIET_FRAME] + [STRUCK_FRAME] + [QUIET_FRAME] * 19)
-
-    assert latched[1] == pytest.approx(IMPACT_FORCE)
-    assert latched == single_frame
-
-
-def test_loop_retriggers_the_pulse_for_a_second_separate_collision(monkeypatch):
-    sent = run_scripted_loop(
-        monkeypatch,
-        [QUIET_FRAME] * 2 + [STRUCK_FRAME] * 2 + [QUIET_FRAME] * 2 + [STRUCK_FRAME] * 2 + [QUIET_FRAME] * 4,
-    )
-
-    assert sent[:2] == [0.0, 0.0]
-    assert sent[2] == pytest.approx(IMPACT_FORCE)
-    first_pulse = sent[2:6]
-    assert all(later < earlier for earlier, later in zip(first_pulse, first_pulse[1:]))
-    assert sent[6] == pytest.approx(IMPACT_FORCE)
-    assert sent[6] > sent[5]
-    second_pulse = sent[6:]
-    assert all(later < earlier for earlier, later in zip(second_pulse, second_pulse[1:]))
-
-
-def test_loop_retriggers_after_the_impact_window_has_closed(monkeypatch):
-    """The window reset must re-arm the edge detector, not disable it for the rest of the drive."""
-    frames_in_window = int(IMPACT_WINDOW_SECONDS / FRAME_SECONDS)
-    sent = run_scripted_loop(
-        monkeypatch,
-        [STRUCK_FRAME] + [QUIET_FRAME] * (frames_in_window + 4) + [STRUCK_FRAME] + [QUIET_FRAME] * 3,
-    )
-    second_impact_idx = frames_in_window + 5
-
-    assert sent[0] == pytest.approx(IMPACT_FORCE)
-    assert sent[second_impact_idx - 1] == 0.0
-    assert sent[second_impact_idx] == pytest.approx(IMPACT_FORCE)
-
-
-def test_loop_adds_the_pulse_on_top_of_the_steady_force(monkeypatch):
-    """Damping gives a non-zero steady force the jolt must add to rather than replace."""
+def test_the_loop_sends_only_the_steady_force(monkeypatch):
     turning = CarFeel(steering_rate_rad_s=2.0, speed_mps=CORNERING_SPEED_MPS)
-    turning_and_struck = CarFeel(steering_rate_rad_s=2.0, speed_mps=CORNERING_SPEED_MPS, collision=True)
-    sent = run_scripted_loop(monkeypatch, [turning, turning_and_struck])
-
+    sent = run_scripted_loop(monkeypatch, [QUIET_FRAME] * 5 + [turning] * 3 + [QUIET_FRAME] * 5)
     soft_damping = -STEADY_FORCE_LIMIT * math.tanh(DAMPING_GAIN * 2.0 / STEADY_FORCE_LIMIT)
-    assert sent[0] == pytest.approx(soft_damping)
-    assert sent[1] == pytest.approx(soft_damping + IMPACT_FORCE)
-
-
-@pytest.mark.parametrize("driver_norm", [+1, -1], ids=["holding_right", "holding_left"])
-@pytest.mark.parametrize("steering_rad", [LIGHT_STEERING_RAD, HELD_STEERING_RAD])
-def test_impact_jolt_kicks_against_the_steady_force(driver_norm, steering_rad):
-    """car_feel is in driver signs: a held-right wheel is centred leftwards, so the jolt kicks right."""
-    feel = CarFeel(steering_angle_rad=driver_norm * steering_rad, speed_mps=CORNERING_SPEED_MPS)
-    steady = compute_force(feel, STEERING_LIMIT_RAD)
-    jolt = compute_force(feel, STEERING_LIMIT_RAD, impact_age_s=0.0) - steady
-
-    assert sign_of(steady) == -driver_norm
-    assert sign_of(jolt) == driver_norm
-    assert jolt == pytest.approx(driver_norm * IMPACT_FORCE)
-
-
-def test_impact_jolt_treats_both_signed_zeroes_as_a_centred_wheel():
-    """-0.0 is a real float the sim can report, and it is not the driver holding left."""
-    centred = CarFeel(steering_angle_rad=0.0, speed_mps=CORNERING_SPEED_MPS)
-    negative_zero = CarFeel(steering_angle_rad=-0.0, speed_mps=CORNERING_SPEED_MPS)
-
-    assert compute_force(centred, STEERING_LIMIT_RAD, impact_age_s=0.0) == pytest.approx(IMPACT_FORCE)
-    assert compute_force(negative_zero, STEERING_LIMIT_RAD, impact_age_s=0.0) == pytest.approx(IMPACT_FORCE)
+    assert sent == pytest.approx([0.0] * 5 + [soft_damping] * 3 + [0.0] * 5)
 
 
 # ---------------------------------------------------------------------------------------------

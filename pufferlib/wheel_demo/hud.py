@@ -37,6 +37,10 @@ MINIMAP_MARGIN_M = 20.0
 MINIMAP_EGO_RADIUS_PX = 6
 MINIMAP_GOAL_RADIUS_PX = 6
 MINIMAP_LANE_WIDTH_PX = 2
+# Heading-up: the goal dot and the north marker sit this far inside the panel edge when they would fall outside it
+MINIMAP_EDGE_INSET_PX = 10
+MINIMAP_NOSE_LENGTH_RADII = 2.2
+MINIMAP_NOSE_WIDTH_PX = 3
 OVERSPEED_FLASH_HZ = 2.0
 
 COLOR_TEXT = (240, 242, 245)
@@ -50,10 +54,10 @@ COLOR_SIGN_FACE = (250, 250, 250)
 COLOR_SIGN_RING = (210, 30, 30)
 COLOR_SIGN_TEXT = (20, 20, 20)
 COLOR_ARROW = (90, 200, 255)
-COLOR_MINIMAP_BG = (22, 26, 32, 200)
 COLOR_MINIMAP_LANE = (120, 126, 136)
 COLOR_MINIMAP_EGO = (90, 200, 255)
 COLOR_MINIMAP_GOAL = (255, 200, 60)
+COLOR_MINIMAP_NORTH = (240, 242, 245)
 COLOR_MIRROR_FRAME = (20, 20, 24)
 COLOR_ASSIST_YOU = (240, 242, 245)
 COLOR_ASSIST_POLICY = (90, 200, 255)
@@ -156,7 +160,7 @@ class AssistReadout:
 def assist_readout(assist, human_accel_long_mps2, steering_ratio):
     """Delta = policy - you: a positive steering delta means the policy would turn further RIGHT."""
     your_rad = -assist["human_steering_rad"]
-    policy_rad = -assist["reference_steering_rad"]
+    policy_rad = -assist["blend_reference_steering_rad"]
     return AssistReadout(
         your_steering_rad=your_rad,
         policy_steering_rad=policy_rad,
@@ -218,14 +222,36 @@ class HudInfo:
     coadapt_line: str = ""
     # co-adapt's belief about the best share: (label, probability, on trial now) per share
     coadapt_belief: tuple = ()
+    # dynamic blend's status while it runs (the sim reports Full Self Driving or Blend underneath); empty otherwise
+    dynamic_line: str = ""
+    # dynamic blend's live policy share; read only while dynamic_line is set
+    dynamic_share: float = 0.0
 
 
 def pedal_fraction(value):
     return min(1.0, max(0.0, float(value)))
 
 
+def heading_up_offset_px(offset_px, heading_rad):
+    """A north-up minimap offset (pixels, y down) turned so the car's heading points up the panel."""
+    # the counter-clockwise screen turn that brings the heading to straight up
+    up_rad = math.pi / 2.0 - heading_rad
+    dx, dy = offset_px
+    return (dx * math.cos(up_rad) + dy * math.sin(up_rad), -dx * math.sin(up_rad) + dy * math.cos(up_rad))
+
+
+def pinned_inside(offset_px, half_size_px, inset_px):
+    """An offset from the panel centre, pulled in along its own direction so it stays inside the panel."""
+    reach_px = half_size_px - inset_px
+    largest_px = max(abs(offset_px[0]), abs(offset_px[1]))
+    if largest_px <= reach_px:
+        return offset_px
+    return (offset_px[0] * reach_px / largest_px, offset_px[1] * reach_px / largest_px)
+
+
 class MinimapProjection:
-    """Bin-frame metres to minimap pixels, north-up (bin +y is up), whole town in view."""
+    """Bin-frame metres to minimap pixels, north-up (bin +y is up), whole town in view. The HUD then turns it
+    heading-up around the car."""
 
     def __init__(self, lane_points_xy, size_px=MINIMAP_SIZE_PX, margin_m=MINIMAP_MARGIN_M):
         if len(lane_points_xy) == 0:
@@ -265,13 +291,13 @@ class Hud:
         self.font_sign = pygame.font.Font(None, int(SPEED_SIGN_RADIUS_PX * 1.05))
         polylines = bin_lane_polylines(bin_path)
         self.minimap = MinimapProjection(np.vstack(polylines))
-        self.minimap_surface = self._render_minimap_base(polylines)
+        self.minimap_lanes = self._render_minimap_lanes(polylines)
         self._wheel_sprites = {}
 
-    def _render_minimap_base(self, polylines):
+    def _render_minimap_lanes(self, polylines):
+        """The town's lanes, north-up, on a transparent layer: it is rotated every frame, the background is not."""
         pygame = self.pygame
         surface = pygame.Surface((MINIMAP_SIZE_PX, MINIMAP_SIZE_PX), pygame.SRCALPHA)
-        surface.fill(COLOR_MINIMAP_BG)
         for line in polylines:
             points = [self.minimap.to_px(x, y) for x, y in line]
             pygame.draw.lines(surface, COLOR_MINIMAP_LANE, False, points, MINIMAP_LANE_WIDTH_PX)
@@ -312,12 +338,24 @@ class Hud:
         ffb = "off" if info.ffb_gain is None else f"{round(100 * info.ffb_gain)}%"
         self._text(surface, self.font_label, f"Force feedback: {ffb}", (PANEL_MARGIN_PX, INFO_TOP_PX + INFO_LINE_PX))
         if assist is not None:
-            assist_name = "co-adapt" if info.coadapt_line else ASSIST_MODE_NAMES[assist["mode"]]
+            assist_name = ASSIST_MODE_NAMES[assist["mode"]]
+            if info.coadapt_line:
+                assist_name = "co-adapt"
+            elif info.dynamic_line:
+                assist_name = f"dynamic blend {round(100 * info.dynamic_share)}%"
             self._text(surface, self.font_label, f"Assist: {assist_name}", (PANEL_MARGIN_PX, INFO_TOP_PX + 2 * INFO_LINE_PX))
         if info.coadapt_line:
             self._text(surface, self.font_label, f"Co-adapt: {info.coadapt_line}", (PANEL_MARGIN_PX, INFO_TOP_PX + 3 * INFO_LINE_PX))
         if info.coadapt_belief:
             self._draw_coadapt_belief(surface, info.coadapt_belief, INFO_TOP_PX + 4 * INFO_LINE_PX)
+        if info.dynamic_line:
+            self._text(
+                surface,
+                self.font_label,
+                f"Dynamic: {info.dynamic_line}",
+                (PANEL_MARGIN_PX, INFO_TOP_PX + 3 * INFO_LINE_PX),
+            )
+            return
         from pufferlib.ocean.drive import binding
 
         if assist is None or assist["mode"] != binding.ASSIST_MODE_FULL:
@@ -419,7 +457,7 @@ class Hud:
         surface.blit(rotated, rotated.get_rect(center=center))
         if assist is None:
             return
-        policy_deg = wheel_display_deg(assist["reference_steering_rad"], ratio, limit)
+        policy_deg = wheel_display_deg(assist["blend_reference_steering_rad"], ratio, limit)
         head = ASSIST_ARROW_HEAD_FRACTION * radius
         tip = clockwise_point(center, radius + head, policy_deg)
         pygame.draw.line(surface, COLOR_ASSIST_POLICY, center, tip, max(2, rim // 2))
@@ -492,23 +530,35 @@ class Hud:
             )
 
     def _draw_minimap(self, surface, human, width, height):
+        """Heading-up: your car sits at the centre pointing up, and the town turns around it."""
         pygame = self.pygame
-        origin = (width - PANEL_MARGIN_PX - MINIMAP_SIZE_PX, height - PANEL_MARGIN_PX - MINIMAP_SIZE_PX)
-        surface.blit(self.minimap_surface, origin)
-        goal_px = self.minimap.to_px(human["goal_x"], human["goal_y"])
-        pygame.draw.circle(
-            surface, COLOR_MINIMAP_GOAL, (origin[0] + goal_px[0], origin[1] + goal_px[1]), MINIMAP_GOAL_RADIUS_PX
-        )
-        ego_px = self.minimap.to_px(human["sim_x"], human["sim_y"])
-        ego = (origin[0] + ego_px[0], origin[1] + ego_px[1])
+        half_px = MINIMAP_SIZE_PX / 2.0
         heading = human["sim_heading"]
-        # bin +y is screen up, so the sim's CCW-positive heading maps to screen with y negated
-        nose = (
-            ego[0] + 2.2 * MINIMAP_EGO_RADIUS_PX * math.cos(heading),
-            ego[1] - 2.2 * MINIMAP_EGO_RADIUS_PX * math.sin(heading),
+        panel = pygame.Surface((MINIMAP_SIZE_PX, MINIMAP_SIZE_PX), pygame.SRCALPHA)
+        ego_px = self.minimap.to_px(human["sim_x"], human["sim_y"])
+        # rotozoom turns counter-clockwise about the layer's centre and grows the layer to fit
+        lanes = pygame.transform.rotozoom(self.minimap_lanes, math.degrees(math.pi / 2.0 - heading), 1.0)
+        ego_turned = heading_up_offset_px((ego_px[0] - half_px, ego_px[1] - half_px), heading)
+        ego_in_lanes = (lanes.get_width() / 2.0 + ego_turned[0], lanes.get_height() / 2.0 + ego_turned[1])
+        panel.blit(lanes, (round(half_px - ego_in_lanes[0]), round(half_px - ego_in_lanes[1])))
+
+        goal_px = self.minimap.to_px(human["goal_x"], human["goal_y"])
+        goal_turned = heading_up_offset_px((goal_px[0] - ego_px[0], goal_px[1] - ego_px[1]), heading)
+        goal = pinned_inside(goal_turned, half_px, MINIMAP_EDGE_INSET_PX)
+        pygame.draw.circle(panel, COLOR_MINIMAP_GOAL, (half_px + goal[0], half_px + goal[1]), MINIMAP_GOAL_RADIUS_PX)
+        north = heading_up_offset_px((0.0, -(half_px - MINIMAP_EDGE_INSET_PX)), heading)
+        self._text(
+            panel,
+            self.font_small,
+            "N",
+            (half_px + north[0], half_px + north[1]),
+            color=COLOR_MINIMAP_NORTH,
+            anchor="center",
         )
-        pygame.draw.circle(surface, COLOR_MINIMAP_EGO, ego, MINIMAP_EGO_RADIUS_PX)
-        pygame.draw.line(surface, COLOR_MINIMAP_EGO, ego, nose, 3)
+        nose = (half_px, half_px - MINIMAP_NOSE_LENGTH_RADII * MINIMAP_EGO_RADIUS_PX)
+        pygame.draw.circle(panel, COLOR_MINIMAP_EGO, (half_px, half_px), MINIMAP_EGO_RADIUS_PX)
+        pygame.draw.line(panel, COLOR_MINIMAP_EGO, (half_px, half_px), nose, MINIMAP_NOSE_WIDTH_PX)
+        surface.blit(panel, (width - PANEL_MARGIN_PX - MINIMAP_SIZE_PX, height - PANEL_MARGIN_PX - MINIMAP_SIZE_PX))
 
     def _draw_panel(self, surface, human, wheel_state, height, assist=None):
         from pufferlib.ocean.drive import binding

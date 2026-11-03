@@ -31,11 +31,6 @@ CENTRING_FADE_SPEED_MPS = 10.0
 DAMPING_GAIN = 0.10
 # Past the grip limit the tyre's self-aligning torque collapses rather than growing.
 GRIP_FALLOFF = 0.55
-# A collision is a sharp jolt that decays over a few frames.
-IMPACT_FORCE = 1.0
-IMPACT_DECAY_PER_SECOND = 6.0
-# Past this the pulse has decayed to nothing, so it stops being applied.
-IMPACT_WINDOW_SECONDS = 1.0
 # Offroad is a buzz, not a push.
 OFFROAD_RUMBLE_FORCE = 0.22
 OFFROAD_RUMBLE_HZ = 22.0
@@ -49,7 +44,7 @@ ASSIST_FULL_FULL_ERROR_FRACTION = 0.04
 
 FORCE_LIMIT = 1.0
 # Centring, aligning torque and damping are soft-limited to this, leaving headroom so the rumble
-# and the impact jolt are still felt with the wheel loaded in a corner.
+# is still felt with the wheel loaded in a corner.
 STEADY_FORCE_LIMIT = 0.75
 
 
@@ -62,7 +57,6 @@ class CarFeel:
     speed_mps: float = 0.0
     accel_lat_mps2: float = 0.0
     tire_grip_mps2: float = 8.5
-    collision: bool = False
     offroad: bool = False
     # Steering assist: the policy's road-wheel angle in driver terms, or None when the assist is not steering.
     assist_target_steering_rad: float = None
@@ -111,7 +105,7 @@ def centring_spring(steering_angle_rad, steering_limit_rad, speed_mps, grip_fact
     return -CENTRING_PEAK_FORCE * speed_scale * grip_factor * _clamp(steering_fraction)
 
 
-def compute_force(feel, steering_limit_rad, impact_age_s=None, elapsed_s=0.0):
+def compute_force(feel, steering_limit_rad, elapsed_s=0.0):
     """Signed device force in [-1, 1]. Positive pushes the wheel clockwise."""
     steady = self_aligning_torque(feel.accel_lat_mps2, feel.tire_grip_mps2)
     grip_factor = saturated_grip_factor(grip_utilisation(feel.accel_lat_mps2, feel.tire_grip_mps2))
@@ -131,12 +125,6 @@ def compute_force(feel, steering_limit_rad, impact_age_s=None, elapsed_s=0.0):
 
     if feel.offroad and abs(feel.speed_mps) > OFFROAD_RUMBLE_MIN_SPEED_MPS:
         force += OFFROAD_RUMBLE_FORCE * math.sin(2.0 * math.pi * OFFROAD_RUMBLE_HZ * elapsed_s)
-
-    if impact_age_s is not None and impact_age_s >= 0.0:
-        decay = math.exp(-IMPACT_DECAY_PER_SECOND * impact_age_s)
-        # Kicks against whatever the wheel is already pushing, so it is felt even when loaded.
-        jolt_direction = -1.0 if steady > 0.0 else 1.0
-        force += jolt_direction * IMPACT_FORCE * decay
 
     return _clamp(force)
 
@@ -483,29 +471,11 @@ class ForceFeedbackLoop:
 
     def _run(self):
         started = time.monotonic()
-        impact_started_s = None
-        was_colliding = False
         try:
             while self._running:
                 feel = self.feel_source()
                 if feel is not None:
-                    now_s = time.monotonic()
-                    if feel.collision and not was_colliding:
-                        impact_started_s = now_s
-                    was_colliding = feel.collision
-                    impact_age_s = None
-                    if impact_started_s is not None:
-                        impact_age_s = now_s - impact_started_s
-                        if impact_age_s > IMPACT_WINDOW_SECONDS:
-                            impact_started_s, impact_age_s = None, None
-                    self.output.send(
-                        compute_force(
-                            feel,
-                            self.steering_limit_rad,
-                            impact_age_s=impact_age_s,
-                            elapsed_s=now_s - started,
-                        )
-                    )
+                    self.output.send(compute_force(feel, self.steering_limit_rad, elapsed_s=time.monotonic() - started))
                 time.sleep(self.interval_s)
         except Exception as error:
             self.error = error

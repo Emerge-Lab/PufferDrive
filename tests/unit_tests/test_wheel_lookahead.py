@@ -623,3 +623,150 @@ def test_blend_pulls_the_wheel_toward_where_the_car_is_steered():
                if abs(target_rad - wheel_rad) > BLEND_MIN_PULL_GAP_RAD]
     assert pulling, "the policy never steered away from the straight wheel"
     assert all(math.copysign(1.0, force) == math.copysign(1.0, gap_rad) for gap_rad, force in pulling)
+
+
+def test_the_demo_env_regenerates_goals_and_needs_no_goal_speed():
+    from pufferlib.wheel_demo import policy_host
+
+    assert policy_host.DEMO_ENV_OVERRIDES["goal_reach_requires_speed"] is False
+    assert policy_host.DEMO_ENV_OVERRIDES["goal_regen_mode"] == "rolling"
+
+
+@requires_checkpoint
+def test_the_loops_env_uses_rolling_goals():
+    loop = real_loop()
+    try:
+        assert loop.env.goal_regen_mode == binding.GOAL_REGEN_ROLLING == 1
+        assert loop.env.goal_reach_requires_speed == 0
+    finally:
+        loop.close()
+
+
+@pytest.mark.parametrize("preset,expected_steps", [("car", 2), ("wheel", 3)])
+def test_the_scored_steps_cover_the_window(preset, expected_steps):
+    loop = bare_loop(*FULL_STEERING_PRESETS[preset])
+    expected = math.ceil(round(loop.lookahead_window_count * LOOKAHEAD_DT_SECONDS / POLICY_DT_SECONDS, 9))
+    assert loop.lookahead_score_steps == expected == expected_steps
+
+
+def fabricated_scores(loop, rows):
+    scores = np.zeros((loop.lookahead_policy_steps, binding.PREVIEW_SCORE_COUNT), dtype=np.float32)
+    for step_idx, (reward, goal_reward, offroad, collision) in enumerate(rows):
+        scores[step_idx] = (reward, goal_reward, offroad, collision)
+    return scores
+
+
+def test_the_policy_score_is_the_mean_goal_free_reward_over_the_scored_steps():
+    loop = bare_loop()
+    assert loop.lookahead_score_steps == 2
+    loop._lookahead_scores = None
+    assert loop.lookahead_policy_score() is None
+    loop._lookahead_scores = fabricated_scores(loop, [(0.5, 1.0, 0, 0), (0.25, 0.0, 0, 0), (-9.0, 0.0, 1, 1)])
+    score, clean = loop.lookahead_policy_score()
+    assert score == pytest.approx(((0.5 - 1.0) + 0.25) / 2.0)
+    assert clean is True
+
+
+@pytest.mark.parametrize("dirty_column", [binding.PREVIEW_SCORE_OFFROAD, binding.PREVIEW_SCORE_COLLISION])
+def test_an_offroad_or_crash_inside_the_scored_steps_is_not_clean(dirty_column):
+    loop = bare_loop()
+    rows = [[0.1, 0.0, 0.0, 0.0], [0.1, 0.0, 0.0, 0.0]]
+    rows[1][dirty_column] = 1.0
+    loop._lookahead_scores = fabricated_scores(loop, rows)
+    assert loop.lookahead_policy_score()[1] is False
+
+
+class BlendSteeringEnv(FakeLoopEnv):
+    def __init__(self):
+        super().__init__()
+        self.blend_steering_calls = []
+
+    def set_blend_steering(self, steering_rad):
+        self.blend_steering_calls.append(steering_rad)
+
+
+def test_switching_off_blend_follow_clears_the_override():
+    loop = bare_loop()
+    loop.env = BlendSteeringEnv()
+    loop.set_blend_follows_lookahead(True)
+    assert loop.blend_follows_lookahead and loop.env.blend_steering_calls == []
+    loop.set_blend_follows_lookahead(False)
+    assert not loop.blend_follows_lookahead and loop.env.blend_steering_calls == [None]
+
+
+@requires_checkpoint
+def test_blend_follow_defaults_off_and_scores_reset_on_selection_and_preset_change():
+    loop = real_loop()
+    try:
+        assert loop.blend_follows_lookahead is False
+        loop._look_ahead(loop.traffic.act(loop.observations))
+        assert loop._lookahead_scores.shape == (loop.lookahead_policy_steps, binding.PREVIEW_SCORE_COUNT)
+        assert loop.lookahead_policy_score() is not None
+        loop.select_human_agent(loop.human_agent_idx)
+        assert loop.lookahead_policy_score() is None
+        loop._look_ahead(loop.traffic.act(loop.observations))
+        loop.set_full_steering(*FULL_STEERING_PRESETS["wheel"])
+        assert loop.lookahead_policy_score() is None
+    finally:
+        loop.close()
+
+
+@requires_checkpoint
+def test_the_look_ahead_score_matches_its_own_imagined_steps_and_leaves_rewards_alone():
+    loop = real_loop()
+    try:
+        loop.step_once()
+        rewards_before = np.array(loop.env.rewards, copy=True)
+        human_before = dict(loop.env.get_human_state())
+        loop._look_ahead(loop.traffic.act(loop.observations))
+        np.testing.assert_array_equal(loop.env.rewards, rewards_before)
+        assert loop.env.get_human_state() == human_before
+        window = loop._lookahead_scores[: loop.lookahead_score_steps]
+        expected = float(np.mean(window[:, binding.PREVIEW_SCORE_REWARD] - window[:, binding.PREVIEW_SCORE_GOAL_REWARD]))
+        score, clean = loop.lookahead_policy_score()
+        assert score == pytest.approx(expected)
+        assert clean == (not window[:, binding.PREVIEW_SCORE_OFFROAD].any() and
+                         not window[:, binding.PREVIEW_SCORE_COLLISION].any())
+        assert np.all(np.isfinite(loop._lookahead_scores))
+    finally:
+        loop.close()
+
+
+@requires_checkpoint
+def test_blend_follow_runs_the_look_ahead_and_steers_blend_toward_its_mean_every_substep():
+    loop = real_loop(wheel_target="filtered", full_assist_dynamics=binding.FULL_ASSIST_DYNAMICS_JERK_SPEED)
+    try:
+        assert not loop.lookahead_steers_car
+        loop.env.set_assist_mode(binding.ASSIST_MODE_BLEND, 0.5)
+        loop.step_once()
+        assert loop._lookahead_rad is None
+        loop.set_blend_follows_lookahead(True)
+        events = []
+        real_set_blend_steering = loop.env.set_blend_steering
+        real_substep = loop.env.substep
+
+        def set_blend_steering(steering_rad):
+            events.append(("set", steering_rad))
+            real_set_blend_steering(steering_rad)
+
+        def substep():
+            events.append(("substep",))
+            real_substep()
+
+        loop.env.set_blend_steering = set_blend_steering
+        loop.env.substep = substep
+        for _ in range(2):
+            events.clear()
+            loop.step_once()
+            assert loop._lookahead_rad is not None
+            assert [event[0] for event in events] == ["set", "substep"] * SUBSTEPS_PER_POLICY_STEP
+            sets = [event[1] for event in events if event[0] == "set"]
+            for substep_idx, steering_rad in enumerate(sets):
+                assert steering_rad == pytest.approx(-loop._lookahead_mean_rad(substep_idx))
+            assert loop.env.get_assist_state()["blend_reference_steering_rad"] == pytest.approx(sets[-1])
+        loop.env.set_blend_steering = real_set_blend_steering
+        loop.set_blend_follows_lookahead(False)
+        assist = loop.env.get_assist_state()
+        assert assist["blend_reference_steering_rad"] == assist["reference_steering_rad"]
+    finally:
+        loop.close()
