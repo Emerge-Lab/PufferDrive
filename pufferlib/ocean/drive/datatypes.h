@@ -141,6 +141,18 @@ struct Agent {
     unsigned char is_phantom_braker;      // episode-level flag: agent may phantom-brake
 };
 
+struct ScriptedPedestrian {
+    int agent_idx;        // slot in Drive.agents
+    int target_agent_idx; // car the crossing was armed for, -1 while idle
+    int state;            // PEDESTRIAN_STATE_*
+    float timer_s;        // cooldown left while idle, linger left at the far kerb
+    float dir_x;          // unit crossing direction
+    float dir_y;
+    float crossing_m; // kerb to kerb path length
+    float remaining_m;
+    float speed_mps;
+};
+
 typedef struct {
     float mid_x_m;
     float mid_y_m;

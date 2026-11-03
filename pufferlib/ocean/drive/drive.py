@@ -1,3 +1,4 @@
+import math
 import pickle
 import zlib
 import numpy as np
@@ -82,6 +83,7 @@ class Drive(pufferlib.PufferEnv):
         max_agents_per_env=64,
         cosim_partner_slots=0,
         cosim_eval_semantics=False,
+        scripted_pedestrian_ratio=0.0,
         action_type="discrete",
         dynamics_model="classic",
         reset_accel_on_stop=False,
@@ -318,6 +320,12 @@ class Drive(pufferlib.PufferEnv):
         # Co-sim envs stay out of eval_mode (its scenario batching needs a full agent pool) but still want the
         # eval-only observation/action semantics: perceived-size margin and standstill jerk deadband.
         self.cosim_eval_semantics = int(bool(cosim_eval_semantics))
+        # Scripted crossing walkers per env = ceil(ratio * agents in the env); static partners, never policy-controlled.
+        self.scripted_pedestrian_ratio = float(scripted_pedestrian_ratio)
+        if not np.isfinite(self.scripted_pedestrian_ratio) or self.scripted_pedestrian_ratio < 0.0:
+            raise ValueError(f"scripted_pedestrian_ratio must be finite and >= 0. Got: {scripted_pedestrian_ratio}")
+        if self.scripted_pedestrian_ratio > 0.0 and (simulation_mode != "gigaflow" or self.cosim_partner_slots > 0):
+            raise ValueError("scripted_pedestrian_ratio > 0 needs gigaflow simulation_mode without cosim_partner_slots")
         if goal_source == "external" and simulation_mode != "gigaflow":
             raise ValueError("goal_source 'external' is only supported in gigaflow simulation_mode (co-sim)")
 
@@ -670,6 +678,7 @@ class Drive(pufferlib.PufferEnv):
             "max_agents_per_env": self.max_agents_per_env,
             "cosim_partner_slots": self.cosim_partner_slots,
             "cosim_eval_semantics": self.cosim_eval_semantics,
+            "scripted_pedestrian_slots": self._scripted_pedestrian_slots(max_agents),
             "init_step": self._sample_init_step(),
             "init_step_min_horizon": self.init_step_min_horizon,
             "stagger_first_episode": self.stagger_first_episode,
@@ -720,6 +729,11 @@ class Drive(pufferlib.PufferEnv):
             "phantom_braking_duration_seconds": self.phantom_braking_duration_seconds,
             "phantom_braking_freeze_steering": self.phantom_braking_freeze_steering,
         }
+
+    def _scripted_pedestrian_slots(self, agents_in_env):
+        if self.scripted_pedestrian_ratio <= 0.0:
+            return 0
+        return int(math.ceil(round(self.scripted_pedestrian_ratio * agents_in_env, 6)))
 
     def _sample_init_step(self):
         # randomizer for the initialization of the C environment
@@ -869,14 +883,20 @@ class Drive(pufferlib.PufferEnv):
     def get_global_agent_state(self, include_static=False):
         """Get current global state of all active agents.
 
-        include_static: also return the co-sim partner slots after the active agents
-        (num_active_agents + cosim_partner_slots * num_envs rows).
+        include_static: also return the static slots (co-sim partners, scripted pedestrians) after the
+        active agents, in env order.
 
         Returns:
             dict with keys 'x', 'y', 'z', 'heading', 'id', 'length', 'width' containing numpy arrays
             of shape (num_active_agents,)
         """
-        num_agents = self.num_agents + (self.cosim_partner_slots * self.num_envs if include_static else 0)
+        static_slots = 0
+        if include_static:
+            env_agent_counts = np.diff(np.asarray(self.agent_offsets))
+            static_slots = sum(
+                self.cosim_partner_slots + self._scripted_pedestrian_slots(int(count)) for count in env_agent_counts
+            )
+        num_agents = self.num_agents + static_slots
 
         states = {
             "x": np.zeros(num_agents, dtype=np.float32),

@@ -371,6 +371,7 @@ class DriveEnvConfig:
     phantom_braking_trigger_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     phantom_braking_duration_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     phantom_braking_freeze_steering: bool = MISSING
+    scripted_pedestrian_ratio: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
 
     # Added by benchmark overlays after the base Hydra config is composed.
     eval_mode: bool | int = 0

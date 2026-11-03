@@ -2127,6 +2127,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->num_max_agents = (int) unpack(kwargs, "max_agents_per_env");
     env->cosim_partner_slots = (int) unpack(kwargs, "cosim_partner_slots");
     env->cosim_eval_semantics = (int) unpack(kwargs, "cosim_eval_semantics");
+    env->scripted_pedestrian_slots = (int) unpack(kwargs, "scripted_pedestrian_slots");
+    if (env->scripted_pedestrian_slots < 0) {
+        PyErr_SetString(PyExc_ValueError, "scripted_pedestrian_slots must be >= 0");
+        return -1;
+    }
     int init_step = (int) unpack(kwargs, "init_step");
     env->init_step = init_step;
     env->timestep = init_step;
@@ -2146,6 +2151,13 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->non_vehicle_controller = (int) unpack(kwargs, "non_vehicle_controller");
     env->replay_expert_agents = (int) unpack(kwargs, "replay_expert_agents");
     env->simulation_mode = (int) unpack(kwargs, "simulation_mode");
+    if (env->scripted_pedestrian_slots > 0
+        && (env->simulation_mode != SIMULATION_MODE_GIGAFLOW || env->cosim_partner_slots > 0)) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "scripted_pedestrian_slots needs gigaflow simulation_mode without cosim_partner_slots");
+        return -1;
+    }
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
     env->reward_log_sampling = (bool) unpack(kwargs, "reward_log_sampling");
@@ -2284,6 +2296,8 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "spawn_failed_goal", log->spawn_failed_goal);
     assign_to_dict(dict, "stopped_at_reset", log->stopped_at_reset);
     assign_to_dict(dict, "early_reset_short", log->early_reset_short);
+    assign_to_dict(dict, "pedestrian_collision_rate", log->pedestrian_collision_rate);
+    assign_to_dict(dict, "pedestrian_crossings", log->pedestrian_crossings);
     assign_to_dict(dict, "offroad_rate", log->offroad_rate);
     assign_to_dict(dict, "episode_length", log->episode_length);
     assign_to_dict(dict, "collision_rate", log->collision_rate);

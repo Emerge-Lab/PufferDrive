@@ -273,6 +273,11 @@ env:
   phantom_braking_duration_seconds: 3.0
   # Zero the steering command while a phantom brake is active (false keeps the policy's steering)
   phantom_braking_freeze_steering: false
+  # Scripted pedestrian crossings (CARLA Leaderboard Scenario3): each env gets ceil(ratio * agents) walker slots. A slot
+  # pops in at the right kerb 12-20 m ahead of a random moving car and crosses to the far kerb at 2-4.2 m/s as a
+  # 1.0-1.5 m box (CARLA walker plus the 0.8 m eval VRU pad), then vanishes for 5-20 s. Scripted, never policy-controlled,
+  # no observations of their own; cars see them as partners and collide with them normally. 0 disables.
+  scripted_pedestrian_ratio: 0.0
 policy:
   # Encoder layer (per-encoder embedding width)
   ego_input_size: 128

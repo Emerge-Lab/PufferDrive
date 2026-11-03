@@ -22,6 +22,7 @@ typedef struct {
 typedef struct Drive Drive;
 typedef struct Log Log;
 typedef struct Agent Agent;
+typedef struct ScriptedPedestrian ScriptedPedestrian;
 typedef struct RoadMapElement RoadMapElement;
 typedef struct TrafficControlElement TrafficControlElement;
 typedef struct GridMapEntity GridMapEntity;
@@ -95,6 +96,8 @@ struct Log {
     float spawn_failed_goal;
     float stopped_at_reset;
     float early_reset_short;
+    float pedestrian_collision_rate;
+    float pedestrian_crossings;
 };
 
 struct GridMapEntity {
@@ -172,7 +175,9 @@ struct Drive {
     // Agents
     Agent *agents;
     int num_controllable_agents;
-    int cosim_partner_slots; // gigaflow co-sim: static slots owned by the external sim (never spawned/stepped)
+    int cosim_partner_slots;       // gigaflow co-sim: static slots owned by the external sim (never spawned/stepped)
+    int scripted_pedestrian_slots; // gigaflow: scripted crossing walkers appended after the policy agents
+    ScriptedPedestrian *pedestrians;
     int active_agent_count;
     int *active_agent_indices;
     int num_total_agents;
@@ -2525,6 +2530,8 @@ static void add_log(Drive *env) {
         episode_log.spawn_failed_goal += env->logs[i].spawn_failed_goal;
         episode_log.stopped_at_reset += env->logs[i].stopped_at_reset;
         episode_log.early_reset_short += env->logs[i].early_reset_short;
+        episode_log.pedestrian_collision_rate += env->logs[i].pedestrian_collision_rate;
+        episode_log.pedestrian_crossings += env->logs[i].pedestrian_crossings;
         // Per-component reward sums (mirrors compute_rewards' env->rewards[i]+= sites).
         episode_log.reward_collision += env->logs[i].reward_collision;
         episode_log.reward_offroad += env->logs[i].reward_offroad;
@@ -2955,6 +2962,235 @@ static bool check_spawn_offroad(Drive *env, Agent *tmp_agent, float edge_clearan
         }
     }
     return false;
+}
+
+// ========================================
+// Scripted Pedestrian Crossings
+// ========================================
+
+// Ray from (qx, qy) along the unit direction against segment AB; t_out = ray distance of the crossing.
+static bool ray_hits_segment(
+    float qx,
+    float qy,
+    float dir_x,
+    float dir_y,
+    float ax,
+    float ay,
+    float bx,
+    float by,
+    float *t_out) {
+    float seg_dx = bx - ax;
+    float seg_dy = by - ay;
+    float denom = dir_x * seg_dy - dir_y * seg_dx;
+    if (fabsf(denom) < 1e-6f) {
+        return false;
+    }
+    float to_a_x = ax - qx;
+    float to_a_y = ay - qy;
+    float t = (to_a_x * seg_dy - to_a_y * seg_dx) / denom;
+    float u = (to_a_x * dir_y - to_a_y * dir_x) / denom;
+    if (t < 0.0f || u < 0.0f || u > 1.0f) {
+        return false;
+    }
+    *t_out = t;
+    return true;
+}
+
+// Nearest road-edge crossings of the lateral ray through a lane point: near kerb along +right, far kerb along -right.
+static bool find_kerb_distances(
+    Drive *env,
+    float qx,
+    float qy,
+    float qz,
+    float right_x,
+    float right_y,
+    float *near_m,
+    float *far_m) {
+    GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
+    int list_size = get_neighbors_entities(env, qx, qy, entity_list, ROAD_QUERY_ENTITY_COUNT, ROAD_OFFSETS, 25);
+    *near_m = PEDESTRIAN_KERB_SEARCH_MAX_M;
+    *far_m = PEDESTRIAN_KERB_SEARCH_MAX_M;
+    for (int i = 0; i < list_size; i++) {
+        RoadMapElement *element = &env->road_elements[entity_list[i].entity_idx];
+        int geometry_idx = entity_list[i].geometry_idx;
+        if (!is_road_edge(element->type) || fabsf(element->z[geometry_idx] - qz) > Z_BUFFER) {
+            continue;
+        }
+        float ax = element->x[geometry_idx];
+        float ay = element->y[geometry_idx];
+        float bx = element->x[geometry_idx + 1];
+        float by = element->y[geometry_idx + 1];
+        float t;
+        if (ray_hits_segment(qx, qy, right_x, right_y, ax, ay, bx, by, &t) && t < *near_m) {
+            *near_m = t;
+        }
+        if (ray_hits_segment(qx, qy, -right_x, -right_y, ax, ay, bx, by, &t) && t < *far_m) {
+            *far_m = t;
+        }
+    }
+    return *near_m < PEDESTRIAN_KERB_SEARCH_MAX_M && *far_m < PEDESTRIAN_KERB_SEARCH_MAX_M;
+}
+
+static bool place_pedestrian_crossing(Drive *env, ScriptedPedestrian *pedestrian, const Agent *car) {
+    RoadMapElement *car_lane = &env->road_elements[car->current_lane_idx];
+    float car_s_m
+        = compute_lane_progress(car_lane, car->sim_x, car->sim_y, car->cos_heading, car->sin_heading, true, NULL);
+    float ahead_m = sample_uniform(&env->rng_state, PEDESTRIAN_SPAWN_AHEAD_MIN_M, PEDESTRIAN_SPAWN_AHEAD_MAX_M);
+    float qx, qy, qz, landed_s_m, lane_heading;
+    int lane_idx, cursor_idx;
+    if (!route_point_at_distance(
+            env,
+            NULL,
+            0,
+            car->current_lane_idx,
+            car_s_m,
+            ahead_m,
+            &qx,
+            &qy,
+            &qz,
+            &lane_idx,
+            &cursor_idx,
+            &landed_s_m,
+            &lane_heading)) {
+        return false;
+    }
+    if (env->num_speed_zones > 0 && env->road_elements[lane_idx].speed_zone_idx < 0) {
+        return false; // junction lane
+    }
+    float right_x = sinf(lane_heading);
+    float right_y = -cosf(lane_heading);
+    float near_m, far_m;
+    if (!find_kerb_distances(env, qx, qy, qz, right_x, right_y, &near_m, &far_m)) {
+        return false;
+    }
+    float start_offset_m = near_m + PEDESTRIAN_KERB_OFFSET_M;
+    float crossing_m = start_offset_m + far_m + PEDESTRIAN_FAR_KERB_OVERSHOOT_M;
+    float dir_x = -right_x;
+    float dir_y = -right_y;
+
+    Agent *agent = &env->agents[pedestrian->agent_idx];
+    agent->sim_length = sample_uniform(&env->rng_state, PEDESTRIAN_SIZE_MIN_M, PEDESTRIAN_SIZE_MAX_M);
+    agent->sim_width = sample_uniform(&env->rng_state, PEDESTRIAN_SIZE_MIN_M, PEDESTRIAN_SIZE_MAX_M);
+    agent->sim_height = PEDESTRIAN_HEIGHT_M;
+    update_agent_radius(agent);
+
+    // The whole path as one box: nothing may stand on it when the walker sets off
+    Agent path_probe = *agent;
+    path_probe.sim_x = qx + right_x * start_offset_m + dir_x * 0.5f * crossing_m;
+    path_probe.sim_y = qy + right_y * start_offset_m + dir_y * 0.5f * crossing_m;
+    path_probe.sim_z = qz;
+    path_probe.sim_heading = atan2f(dir_y, dir_x);
+    path_probe.cos_heading = dir_x;
+    path_probe.sin_heading = dir_y;
+    path_probe.sim_length = crossing_m;
+    update_agent_radius(&path_probe);
+    copy_pose_to_prev(&path_probe);
+    if (check_spawn_collision(env, &path_probe)) {
+        return false;
+    }
+
+    agent->sim_x = qx + right_x * start_offset_m;
+    agent->sim_y = qy + right_y * start_offset_m;
+    agent->sim_z = qz;
+    agent->sim_heading = path_probe.sim_heading;
+    agent->cos_heading = dir_x;
+    agent->sin_heading = dir_y;
+    copy_pose_to_prev(agent);
+    pedestrian->speed_mps = sample_uniform(&env->rng_state, PEDESTRIAN_SPEED_MIN_MPS, PEDESTRIAN_SPEED_MAX_MPS);
+    agent->sim_vx = dir_x * pedestrian->speed_mps;
+    agent->sim_vy = dir_y * pedestrian->speed_mps;
+    agent->yaw_rate = 0.0f;
+    update_agent_speed(agent);
+    agent->seconds_stopped = 0.0f;
+    agent->sim_valid = 1;
+    pedestrian->dir_x = dir_x;
+    pedestrian->dir_y = dir_y;
+    pedestrian->crossing_m = crossing_m;
+    pedestrian->remaining_m = crossing_m;
+    pedestrian->state = PEDESTRIAN_STATE_CROSSING;
+    return true;
+}
+
+static bool arm_scripted_pedestrian(Drive *env, ScriptedPedestrian *pedestrian) {
+    if (env->active_agent_count == 0) {
+        return false;
+    }
+    for (int attempt = 0; attempt < PEDESTRIAN_ARM_ATTEMPTS; attempt++) {
+        int target_slot = rng_below(&env->rng_state, env->active_agent_count);
+        int target_agent_idx = env->active_agent_indices[target_slot];
+        Agent *car = &env->agents[target_agent_idx];
+        bool car_eligible = car->sim_valid == 1 && !car->stopped && !car->removed && car->current_lane_idx != -1
+            && car->sim_speed >= PEDESTRIAN_TARGET_MIN_SPEED_MPS
+            && car->metrics_array[LANE_ANGLE_IDX] >= LANE_ALIGN_COS_THRESHOLD;
+        if (!car_eligible || !place_pedestrian_crossing(env, pedestrian, car)) {
+            continue;
+        }
+        pedestrian->target_agent_idx = target_agent_idx;
+        env->logs[target_slot].pedestrian_crossings += 1.0f;
+        return true;
+    }
+    return false;
+}
+
+static void reset_scripted_pedestrians(Drive *env) {
+    for (int k = 0; k < env->scripted_pedestrian_slots; k++) {
+        ScriptedPedestrian *pedestrian = &env->pedestrians[k];
+        Agent *agent = &env->agents[pedestrian->agent_idx];
+        invalidate_agent(agent);
+        copy_pose_to_prev(agent);
+        pedestrian->target_agent_idx = -1;
+        pedestrian->state = PEDESTRIAN_STATE_IDLE;
+        pedestrian->timer_s = sample_uniform(&env->rng_state, PEDESTRIAN_COOLDOWN_MIN_S, PEDESTRIAN_COOLDOWN_MAX_S);
+        pedestrian->remaining_m = 0.0f;
+    }
+}
+
+static void step_pedestrian_idle(Drive *env, ScriptedPedestrian *pedestrian) {
+    pedestrian->timer_s -= env->dt;
+    if (pedestrian->timer_s > 0.0f) {
+        return;
+    }
+    arm_scripted_pedestrian(env, pedestrian); // a failed attempt retries next step
+}
+
+static void step_pedestrian_crossing(Drive *env, ScriptedPedestrian *pedestrian, Agent *agent) {
+    float step_m = fminf(pedestrian->speed_mps * env->dt, pedestrian->remaining_m);
+    agent->sim_x += pedestrian->dir_x * step_m;
+    agent->sim_y += pedestrian->dir_y * step_m;
+    pedestrian->remaining_m -= step_m;
+    if (pedestrian->remaining_m > 0.0f) {
+        return;
+    }
+    clear_agent_motion(agent);
+    pedestrian->state = PEDESTRIAN_STATE_LINGER;
+    pedestrian->timer_s = sample_uniform(&env->rng_state, PEDESTRIAN_LINGER_MIN_S, PEDESTRIAN_LINGER_MAX_S);
+}
+
+static void step_pedestrian_linger(Drive *env, ScriptedPedestrian *pedestrian, Agent *agent) {
+    pedestrian->timer_s -= env->dt;
+    if (pedestrian->timer_s > 0.0f) {
+        return;
+    }
+    invalidate_agent(agent);
+    copy_pose_to_prev(agent);
+    pedestrian->target_agent_idx = -1;
+    pedestrian->state = PEDESTRIAN_STATE_IDLE;
+    pedestrian->timer_s = sample_uniform(&env->rng_state, PEDESTRIAN_COOLDOWN_MIN_S, PEDESTRIAN_COOLDOWN_MAX_S);
+}
+
+static void move_scripted_pedestrians(Drive *env) {
+    for (int k = 0; k < env->scripted_pedestrian_slots; k++) {
+        ScriptedPedestrian *pedestrian = &env->pedestrians[k];
+        Agent *agent = &env->agents[pedestrian->agent_idx];
+        copy_pose_to_prev(agent);
+        if (pedestrian->state == PEDESTRIAN_STATE_CROSSING) {
+            step_pedestrian_crossing(env, pedestrian, agent);
+        } else if (pedestrian->state == PEDESTRIAN_STATE_LINGER) {
+            step_pedestrian_linger(env, pedestrian, agent);
+        } else {
+            step_pedestrian_idle(env, pedestrian);
+        }
+    }
 }
 
 static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
@@ -3394,10 +3630,12 @@ void set_active_agents(Drive *env) {
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         int num_agents_to_create = env->num_controllable_agents;
         int partner_slots = env->cosim_partner_slots;
+        int pedestrian_slots = env->scripted_pedestrian_slots;
+        int static_slots = partner_slots + pedestrian_slots;
 
         // Initialize agents for GIGAFLOW mode
-        env->agents = (Agent *) calloc(num_agents_to_create + partner_slots, sizeof(Agent));
-        env->num_total_agents = num_agents_to_create + partner_slots;
+        env->agents = (Agent *) calloc(num_agents_to_create + static_slots, sizeof(Agent));
+        env->num_total_agents = num_agents_to_create + static_slots;
         int *active_agent_indices = (int *) malloc(num_agents_to_create * sizeof(int));
 
         int successfully_created = 0;
@@ -3413,7 +3651,7 @@ void set_active_agents(Drive *env) {
         }
 
         env->active_agent_indices = (int *) malloc(successfully_created * sizeof(int));
-        env->static_agent_indices = partner_slots > 0 ? (int *) malloc(partner_slots * sizeof(int)) : NULL;
+        env->static_agent_indices = static_slots > 0 ? (int *) malloc(static_slots * sizeof(int)) : NULL;
         env->expert_static_agent_indices = NULL;
         for (int k = 0; k < partner_slots; k++) {
             int partner_idx = num_agents_to_create + k;
@@ -3429,7 +3667,24 @@ void set_active_agents(Drive *env) {
             invalidate_agent(partner);
             env->static_agent_indices[k] = partner_idx;
         }
-        env->static_agent_count = partner_slots;
+        env->pedestrians
+            = pedestrian_slots > 0 ? (ScriptedPedestrian *) calloc(pedestrian_slots, sizeof(ScriptedPedestrian)) : NULL;
+        for (int k = 0; k < pedestrian_slots; k++) {
+            int pedestrian_idx = num_agents_to_create + partner_slots + k;
+            Agent *pedestrian = &env->agents[pedestrian_idx];
+            pedestrian->id = pedestrian_idx;
+            pedestrian->type = PEDESTRIAN;
+            pedestrian->controller = CONTROLLER_STATIC;
+            pedestrian->sim_length = PEDESTRIAN_SIZE_MIN_M;
+            pedestrian->sim_width = PEDESTRIAN_SIZE_MIN_M;
+            pedestrian->sim_height = PEDESTRIAN_HEIGHT_M;
+            update_agent_radius(pedestrian);
+            invalidate_agent(pedestrian);
+            env->static_agent_indices[partner_slots + k] = pedestrian_idx;
+            env->pedestrians[k].agent_idx = pedestrian_idx;
+        }
+        reset_scripted_pedestrians(env);
+        env->static_agent_count = static_slots;
 
         for (int i = 0; i < successfully_created; i++) {
             env->active_agent_indices[i] = active_agent_indices[i];
@@ -3447,7 +3702,7 @@ void set_active_agents(Drive *env) {
                 env->map_name);
         }
         env->active_agent_count = successfully_created;
-        env->num_agents = successfully_created + partner_slots;
+        env->num_agents = successfully_created + static_slots;
 
         return;
     }
@@ -3788,6 +4043,7 @@ void c_close(Drive *env) {
     free(env->obs_neighbor_scratch);
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
+    free(env->pedestrians);
     free_loaded_map_data(env);
 }
 
@@ -4709,6 +4965,8 @@ static void compute_rewards(Drive *env, int i) {
         float reward_collision = -(agent->reward_coefs[REWARD_COEF_COLLISION] + 0.1f * agent->sim_speed);
         env->rewards[i] += reward_collision;
         agent_log->collision_rate = 1.0f;
+        agent_log->pedestrian_collision_rate
+            = env->agents[agent->first_collision_partner_idx].type == PEDESTRIAN ? 1.0f : 0.0f;
         agent_log->reward_collision += reward_collision;
     }
 
@@ -5702,6 +5960,7 @@ void c_reset(Drive *env) {
         for (int x = 0; x < env->active_agent_count; x++) {
             invalidate_agent(&env->agents[env->active_agent_indices[x]]);
         }
+        reset_scripted_pedestrians(env);
         int num_reset = 0;
         for (int x = 0; x < env->active_agent_count; x++) {
             int agent_idx = env->active_agent_indices[x];
@@ -5847,6 +6106,7 @@ void c_step(Drive *env) {
             move_expert(env, background_idx);
         }
     }
+    move_scripted_pedestrians(env);
     // Move active agents with policy actions
     for (int i = 0; i < env->active_agent_count; i++) {
         env->logs[i].score = 0.0f;

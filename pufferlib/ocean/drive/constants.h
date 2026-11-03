@@ -184,6 +184,27 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define REPLAY_MAX_CONTROLLED_LENGTH_M 6.0f                     // Longer vehicles (trucks, buses) are made static
 #define REPLAY_SPAWN_MAX_LANE_DISTANCE_M 2.5f                   // Car must be this close to a lane center line
 
+// Scripted pedestrian crossings: CARLA Leaderboard Scenario3 geometry (walker pops in at the right kerb and crosses)
+#define PEDESTRIAN_STATE_IDLE 0 // hidden, cooldown running
+#define PEDESTRIAN_STATE_CROSSING 1
+#define PEDESTRIAN_STATE_LINGER 2          // stands at the far kerb before vanishing
+#define PEDESTRIAN_SPAWN_AHEAD_MIN_M 12.0f // CARLA: 12 m plus 1.5 m per lane between the car and the kerb
+#define PEDESTRIAN_SPAWN_AHEAD_MAX_M 20.0f
+#define PEDESTRIAN_KERB_OFFSET_M 1.0f        // start this far outside the near road edge
+#define PEDESTRIAN_KERB_SEARCH_MAX_M 10.0f   // lateral reach per side; wider roads get no crossing
+#define PEDESTRIAN_FAR_KERB_OVERSHOOT_M 1.0f // walk this far past the far road edge
+#define PEDESTRIAN_SPEED_MIN_MPS 2.0f        // Leaderboard 2.0 walkers; 1.0 walkers do 3.4-4.2 m/s
+#define PEDESTRIAN_SPEED_MAX_MPS 4.2f
+#define PEDESTRIAN_SIZE_MIN_M 1.0f // CARLA walker box (0.4-0.5 m) plus the 0.8 m eval VRU pad
+#define PEDESTRIAN_SIZE_MAX_M 1.5f
+#define PEDESTRIAN_HEIGHT_M 1.8f
+#define PEDESTRIAN_LINGER_MIN_S 1.0f
+#define PEDESTRIAN_LINGER_MAX_S 3.0f
+#define PEDESTRIAN_COOLDOWN_MIN_S 5.0f
+#define PEDESTRIAN_COOLDOWN_MAX_S 20.0f
+#define PEDESTRIAN_TARGET_MIN_SPEED_MPS 1.0f // only moving cars get a crossing
+#define PEDESTRIAN_ARM_ATTEMPTS 4            // target cars tried per step once the cooldown ran out
+
 // Stop line geometry (spawn overlap check and IDM braking)
 #define STOP_LINE_DIST_SQ (10.0f * 10.0f)
 #define STOP_LINE_EXTENSION_FACTOR 1.5f
