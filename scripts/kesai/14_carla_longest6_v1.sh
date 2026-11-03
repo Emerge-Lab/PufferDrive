@@ -39,14 +39,16 @@
 # (0 = skip the HTML report), MAX_ATTEMPTS, CARLA_ROOT, GARAGE_WORK_DIR, GARAGE_PY, SERVER_PY, PD,
 # COSIM_MAX_SPEED_MPS (ego speed cap, default 30), COSIM_ZERO_PARTNER_STOPPED_TIME (default 1),
 # COSIM_VRU_SIZE_PAD_M (default 0.8: added to the length and width of every walker and two-wheeler box, so they read
-# strictly larger than the smallest training vehicle; 0 = true boxes), LIBTIFF5_COMPAT (1: when `import carla` fails for
+# strictly larger than the smallest training vehicle; 0 = true boxes), COSIM_OBS_SLOTS_PARTNERS_N (default 40: partner slots
+# in the policy's obs, GIGAFLOW's eval value; the slots are max-pooled, so a checkpoint trained with 20 transfers; empty =
+# the checkpoint's training value), LIBTIFF5_COMPAT (1: when `import carla` fails for
 # the egg's missing libtiff.so.5, try the garage env's lib dir (`conda install -n garage "libtiff<4.5"`), then link the
 # system libtiff.so.6 under that name; 0: never link).
 #
 # Completing a partial run (routes lost to CARLA crashes or the job time limit): COMPLETE_RUN=<existing $OUT folder>
 # reruns, in place, only its routes without a valid record (no result.json, or a crash status the leaderboard would
-# resubmit; ROUTE_SUBSET narrows the candidates, deleting a route run's result.json forces it). SCENARIOS, SEEDS, REPETITIONS
-# and COSIM_VRU_SIZE_PAD_M default to the run's own values from run_info.txt (a run from before the seeds layout has no
+# resubmit; ROUTE_SUBSET narrows the candidates, deleting a route run's result.json forces it). SCENARIOS, SEEDS, REPETITIONS,
+# COSIM_VRU_SIZE_PAD_M and COSIM_OBS_SLOTS_PARTNERS_N default to the run's own values from run_info.txt (a run from before the seeds layout has no
 # seeds line and is completed as it was driven: single default seed, route_<id> folders), CKPT must be the run's checkpoint. The replaced
 # route folders and worker logs move to $OUT/pre_completion_<stamp>/, timing.csv grows, run_info.txt gets a completion
 # line, and results.csv, the report and the gallery are rebuilt over all routes.
@@ -58,7 +60,7 @@ export GARAGE_PY=${GARAGE_PY:-$HOME/miniconda3/envs/garage/bin/python}   # cp37:
 export SERVER_PY=${SERVER_PY:-$HOME/miniconda3/envs/carl/bin/python}     # any PufferDrive-capable python
 export CARLA_ROOT=${CARLA_ROOT:-$HOME/CARLA_0.9.10}
 export GARAGE_WORK_DIR=${GARAGE_WORK_DIR:-$HOME/carla_garage_1}
-RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0045_1000}
+RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0069_1000}
 # the agent finds config.yaml next to final_model.pt (or one level above a models/*.pt)
 export CKPT=${CKPT:-$RUN_DIR/final_model.pt}
 ROUTE_DIR=${ROUTE_DIR:-$GARAGE_WORK_DIR/leaderboard/data/longest6_split}
@@ -74,6 +76,7 @@ if [ -n "$COMPLETE_RUN" ]; then
     # the rest of the line: several seeds; a run from before the seeds layout has no such line -> SEEDS stays empty
     SEEDS=${SEEDS-$(awk '$1 == "seeds" {$1 = ""; print substr($0, 2); exit}' "$COMPLETE_RUN/run_info.txt")}
     COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-$(run_info_value vru_size_pad_m)}
+    COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-$(run_info_value obs_slots_partners_n)}   # a run from before the knob: empty = the checkpoint's value
 fi
 SCENARIOS=${SCENARIOS:-1}
 if [ "$SCENARIOS" = "1" ]; then
@@ -98,6 +101,8 @@ CARLA_VIEW=${CARLA_VIEW:-0}
 OBS_HTML=${OBS_HTML:-1}
 REPORT=${REPORT:-$LOGGING}
 export COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-0.8}
+export COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-40}   # GIGAFLOW's eval value; empty = the checkpoint's training value
+[[ -z "$COSIM_OBS_SLOTS_PARTNERS_N" || "$COSIM_OBS_SLOTS_PARTNERS_N" =~ ^[1-9][0-9]*$ ]] || { echo "COSIM_OBS_SLOTS_PARTNERS_N=\"$COSIM_OBS_SLOTS_PARTNERS_N\" must be a positive integer or empty"; exit 1; }
 EVALUATOR=$GARAGE_WORK_DIR/leaderboard/leaderboard/leaderboard_evaluator_local.py
 CARLA_EGG=$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
 AGENT=$PD/pufferlib/ocean/cosim/carla/lb1/leaderboard_agent.py
@@ -116,7 +121,7 @@ if [ "$NUM_GPUS" -lt 1 ] || [ "$NUM_GPUS" -gt 8 ]; then echo "NUM_GPUS=$NUM_GPUS
 if [ "$WORKERS" -lt 1 ] || [ "$WORKERS" -gt 64 ]; then echo "WORKERS=$WORKERS must be 1..64"; exit 1; fi
 
 TAG=longest6_v1$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")${SEEDS:+_seeds$(echo "$SEEDS" | tr ' ' '-')}
-TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
+TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")${COSIM_OBS_SLOTS_PARTNERS_N:+_partners$COSIM_OBS_SLOTS_PARTNERS_N}
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 OUT=${COMPLETE_RUN:-$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
@@ -126,6 +131,7 @@ if [ -z "$COMPLETE_RUN" ]; then
     {
         echo "checkpoint $CKPT"; echo "routes $ROUTE_DIR ($ROUTES_XML)"; echo "scenarios $SCENARIO_FILE"
         echo "seeds $SEEDS"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"; echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
+        echo "obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N"
         echo "git $GIT_STATE"
     } > "$OUT/run_info.txt"
 else
@@ -221,7 +227,7 @@ if [ -n "$COMPLETE_RUN" ]; then
         rm -f "$(unit_json "${unit%%:*}" "${unit##*:}")"
     done
     for f in "$OUT"/worker_w*.log; do [ -e "$f" ] && mv "$f" "$PREVIOUS/"; done
-    echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
+    echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
 fi
 [ "$WORKERS" -gt "${#UNITS[@]}" ] && WORKERS=${#UNITS[@]}
 # longest route first to the least loaded worker; length = the xml's waypoint polyline (an earlier run's duration would

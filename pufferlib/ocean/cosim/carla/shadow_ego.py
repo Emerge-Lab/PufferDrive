@@ -48,6 +48,9 @@ Environment variables:
                                (nuPlan's vru_size_pad_m; the training spawn floor is 0.8 m, CARLA walkers
                                are 0.4-0.5 m and bicycles 0.4 m wide, so 0.8 lifts them strictly above
                                the smallest training vehicle)
+  COSIM_OBS_SLOTS_PARTNERS_N=40
+                               partner slots in the policy's obs (default: the checkpoint's training value;
+                               the slots are max-pooled, so any count transfers; 40 = GIGAFLOW's eval value)
   COSIM_TELEMETRY=/dir         write a per-policy-step CSV per route, with the shadow env's and the
                                simulator's infraction flags as columns
   COSIM_OBS_HTML=/dir          write an interactive pufferlib.viz replay per route (the exact obs +
@@ -169,6 +172,17 @@ def cosim_max_speed_mps(env_cfg):
     return max_speed_mps
 
 
+def cosim_obs_slots_partners_n():
+    """COSIM_OBS_SLOTS_PARTNERS_N as a positive int, or None when unset/empty (the checkpoint's training value)."""
+    raw = os.environ.get("COSIM_OBS_SLOTS_PARTNERS_N")
+    if not raw:
+        return None
+    obs_slots_partners_n = int(raw)
+    if obs_slots_partners_n < 1:
+        raise ValueError(f"COSIM_OBS_SLOTS_PARTNERS_N must be >= 1, got {raw!r}")
+    return obs_slots_partners_n
+
+
 def env_flag(name, default="0"):
     raw = os.environ.get(name, default)
     if raw not in ("0", "1"):
@@ -205,6 +219,7 @@ class ShadowEgo:
             raise ValueError(f"COSIM_DYNAMICS_SOURCE must be one of {DYNAMICS_SOURCES}, got {self.dynamics_source!r}")
         env_cfg = self.cfg["env"]
         self.max_speed_mps = cosim_max_speed_mps(env_cfg)
+        self.obs_slots_partners_n = cosim_obs_slots_partners_n()
         self.zero_partner_stopped_time = env_flag("COSIM_ZERO_PARTNER_STOPPED_TIME")
         self.vru_size_pad_m = float(os.environ.get("COSIM_VRU_SIZE_PAD_M", "0.0"))
         if not (self.vru_size_pad_m >= 0.0):
@@ -267,6 +282,7 @@ class ShadowEgo:
                 offroad_behavior="ignore",
                 traffic_light_behavior="ignore",
                 **({} if self.max_speed_mps is None else {"max_speed_mps": self.max_speed_mps}),
+                **({} if self.obs_slots_partners_n is None else {"obs_slots_partners_n": self.obs_slots_partners_n}),
             ),
         )
         self.dynamics_model = arch.get("dynamics_model", "classic")
@@ -305,7 +321,7 @@ class ShadowEgo:
         self.policy = policy_cls(env_for_policy, **self.cfg["policy"]).to(self.device)
         self.policy.load_state_dict(policy_state_dict)
         self.policy.eval()
-        print(f"[puffer_agent] loaded policy from {self.checkpoint}")
+        print(f"[puffer_agent] loaded policy from {self.checkpoint} (obs partner slots {self.env.obs_slots_partners_n})")
 
     def init_route(self, route):
         """Build the shadow env for this route's town and seed it from the simulator's ground truth (see
