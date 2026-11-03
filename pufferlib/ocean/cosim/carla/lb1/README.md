@@ -68,8 +68,9 @@ launch config "Cosim: CARLA leaderboard 1.0 agent (garage)" runs `run_evaluator.
 `LD_LIBRARY_PATH` at `experiments/compat_lib` (gitignored), which holds the `libtiff.so.5` link:
 `mkdir -p experiments/compat_lib && ln -s /usr/lib/x86_64-linux-gnu/libtiff.so.6 experiments/compat_lib/libtiff.so.5`.
 
-All 36 longest6 routes on the cluster: `scripts/kesai/14_carla_longest6_v1.sh` (one CARLA 0.9.10 server
-+ evaluator per GPU over the `longest6_split` files, retries, garage's `result_parser.py` aggregation,
+All 36 longest6 routes on the cluster: `scripts/kesai/14_carla_longest6_v1.sh` (WORKERS CARLA 0.9.10 server
++ evaluator pairs sharing the GPUs, each pulling the next `longest6_split` route run from one longest-first
+queue, retries, garage's `result_parser.py` aggregation,
 the nuPlan-style HTML report and the obs replay gallery, like `11_carla_longest6_v2.sh`).
 
 The evaluator reads `BENCHMARK=longest6` (background traffic on every spawn point, stop-sign penalty

@@ -14,12 +14,13 @@
 # 11_carla_longest6_v2.sh. The garage evaluator runs in the `garage` conda env (Python 3.7, the CARLA 0.9.10 egg);
 # the agent starts pufferlib/ocean/cosim/carla/lb1/policy_server.py in a PufferDrive python ($SERVER_PY) per route.
 #
-# WORKERS parallel workers (default 16), each one CARLA server + one evaluator at a time, spread round-robin over the
+# WORKERS parallel workers (default 32), each one CARLA server + one evaluator at a time, spread round-robin over the
 # GPUs of the allocation (1-8, e.g. `sbatch --gres gpu:2`): a server needs ~2 cores and no GPU once the agent has
 # turned the spectator render off, so several share a GPU. The 36 routes (one split xml each) x SEEDS passes (route
-# runs, $OUT/routes/route_<id>_s<seed>/) go longest-first to the least loaded worker (route length from the xml), every
-# route run gets its own server (restarted per route), worker launches are staggered, a crashed route run is retried on
-# the next GPU, and the result jsons are aggregated at the end with garage's tools/result_parser.py over
+# runs, $OUT/routes/route_<id>_s<seed>/) wait in one queue, longest first (route length from the xml), and a worker pulls
+# the next one whenever it is free (a static split left one worker alone for the last hour whenever its routes ran their
+# clock out). Every route run gets its own server (restarted per route), worker launches are staggered, a crashed route
+# run is retried on the next GPU, and the result jsons are aggregated at the end with garage's tools/result_parser.py over
 # $OUT/aggregate/s<seed>/ (results.csv) plus the nuPlan-style HTML report
 # ($OUT/report/index.html) and the obs replay gallery of all routes ($OUT/obs_html/index.html, as in
 # 11_carla_longest6_v2.sh). Speed: wall and game time of every route go to $OUT/timing.csv, the run totals to
@@ -31,7 +32,7 @@
 # --num_repetitions 3; results.csv then carries mean and std over the seeds per route and per town, the stdout summary the
 # DS of every seed and mean +- std over the seeds; SEEDS= (empty) = one pass with the evaluator's default seed 100 and the
 # folder layout of the runs before 26 Oct 2026), REPETITIONS (leaderboard-internal repetitions within a pass, 1),
-# ROUTE_SUBSET ("0 5 17": only these route ids), WORKERS, NUM_GPUS, STAGGER_S (15: seconds between worker launches), PORT_BASE
+# ROUTE_SUBSET ("0 5 17": only these route ids), WORKERS, NUM_GPUS, STAGGER_S (5: seconds between worker launches), PORT_BASE
 # (CARLA rpc port of worker 0; worker w uses PORT_BASE+50w, TM PORT_BASE+6000+50w), OMP_NUM_THREADS (policy server
 # threads; 2 from 16 workers on, else 4), LOGGING (1, default: telemetry, world log and the HTML report per route; 0: scores
 # only), CARLA_VIEW (0, default: no chase-cam; 1: chase-cam mp4 per route, needs LOGGING=1), OBS_HTML (1 = also
@@ -93,8 +94,8 @@ unit_json() { printf "%s%s/longest_weathers_%s.json" "$OUT/aggregate" "${2:+/s$2
 ROUTE_SUBSET=${ROUTE_SUBSET:-}
 PORT_BASE=${PORT_BASE:-2000}
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
-WORKERS=${WORKERS:-16}
-STAGGER_S=${STAGGER_S:-15}
+WORKERS=${WORKERS:-32}
+STAGGER_S=${STAGGER_S:-5}
 LOGGING=${LOGGING:-1}
 CARLA_VIEW=${CARLA_VIEW:-0}
 [ "$CARLA_VIEW" = "1" ] && [ "$LOGGING" != "1" ] && { echo "CARLA_VIEW=1 needs LOGGING=1"; exit 1; }
@@ -119,6 +120,7 @@ echo "Evaluating checkpoint: $CKPT"
 NUM_GPUS=${NUM_GPUS:-$(nvidia-smi -L 2>/dev/null | grep -c "^GPU")}
 if [ "$NUM_GPUS" -lt 1 ] || [ "$NUM_GPUS" -gt 8 ]; then echo "NUM_GPUS=$NUM_GPUS must be 1..8"; exit 1; fi
 if [ "$WORKERS" -lt 1 ] || [ "$WORKERS" -gt 64 ]; then echo "WORKERS=$WORKERS must be 1..64"; exit 1; fi
+command -v flock >/dev/null 2>&1 || { echo "flock (util-linux) is needed for the route queue"; exit 1; }
 
 TAG=longest6_v1$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")${SEEDS:+_seeds$(echo "$SEEDS" | tr ' ' '-')}
 TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")${COSIM_OBS_SLOTS_PARTNERS_N:+_partners$COSIM_OBS_SLOTS_PARTNERS_N}
@@ -230,25 +232,23 @@ if [ -n "$COMPLETE_RUN" ]; then
     echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
 fi
 [ "$WORKERS" -gt "${#UNITS[@]}" ] && WORKERS=${#UNITS[@]}
-# longest route first to the least loaded worker; length = the xml's waypoint polyline (an earlier run's duration would
-# read a route that failed early as short)
-mapfile -t ASSIGNMENT < <("$SERVER_PY" - "$ROUTE_DIR" "$WORKERS" "${UNITS[@]}" <<'EOF'
+# one shared queue, longest route first; length = the xml's waypoint polyline (an earlier run's duration would read a
+# route that failed early as short)
+QUEUE=$OUT/queue
+"$SERVER_PY" - "$ROUTE_DIR" "${UNITS[@]}" > "$QUEUE" <<'EOF'
 import math, sys, xml.etree.ElementTree as ET
-route_dir, workers, units = sys.argv[1], int(sys.argv[2]), sys.argv[3:]  # unit = "<route id>:<seed>"
-SETUP_M = 300.0  # server start + world load per route, in route-length-equivalent metres
+route_dir, units = sys.argv[1], sys.argv[2:]  # unit = "<route id>:<seed>"
 def length(rid):
     pts = [(float(w.get("x")), float(w.get("y"))) for w in ET.parse(f"{route_dir}/longest_weathers_{rid}.xml").iter("waypoint")]
     return sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
 lengths = {u.split(":")[0]: length(int(u.split(":")[0])) for u in units}
-loads = [0.0] * workers; assign = [[] for _ in range(workers)]
 for unit in sorted(units, key=lambda u: -lengths[u.split(":")[0]]):
-    w = min(range(workers), key=lambda i: loads[i]); assign[w].append(unit); loads[w] += lengths[unit.split(":")[0]] + SETUP_M
-for w in range(workers):
-    print(w, " ".join(assign[w]), f"# {loads[w] / 1000:.1f} km")
+    print(unit)
 EOF
-)
+[ "$(wc -l < "$QUEUE")" -eq "${#UNITS[@]}" ] || { echo "ERROR: route queue $QUEUE holds $(wc -l < "$QUEUE") of ${#UNITS[@]} route runs"; exit 1; }
+: > "$QUEUE.lock"
 echo "${#ROUTE_IDS[@]} routes x ${#SEED_LIST[@]} seeds = ${#UNITS[@]} route runs over $WORKERS workers on $NUM_GPUS GPUs, policy server threads $OMP_THREADS"
-printf "  worker %s\n" "${ASSIGNMENT[@]}"
+echo "  queue, longest first: $(tr '\n' ' ' < "$QUEUE")"
 [ -f "$OUT/timing.csv" ] || echo "route,worker,gpu,attempt,start,wall_s,game_s,pace,status,driving_score,seed" > "$OUT/timing.csv"
 TIMING_ROWS_BEFORE=$(($(wc -l < "$OUT/timing.csv") - 1))
 
@@ -326,11 +326,19 @@ except Exception:
     return 0
 }
 
-run_worker() {  # $1 worker: its assigned route runs, sequentially, each retried up to MAX_ATTEMPTS on the next GPU
-    local w=$1 units unit route_id seed attempt gpu
-    units=${ASSIGNMENT[w]#* }
-    units=${units%%#*}
-    for unit in $units; do
+next_unit() {  # pops the longest remaining route run off $QUEUE under its lock; status 1 once the queue is empty
+    (
+        flock 9 || exit 1
+        unit=$(head -n 1 "$QUEUE")
+        [ -n "$unit" ] || exit 1
+        tail -n +2 "$QUEUE" > "$QUEUE.next" && mv "$QUEUE.next" "$QUEUE" || exit 1
+        echo "$unit"
+    ) 9>>"$QUEUE.lock"
+}
+
+run_worker() {  # $1 worker: pulls route runs from the queue until it is empty, each retried up to MAX_ATTEMPTS on the next GPU
+    local w=$1 unit route_id seed attempt gpu
+    while unit=$(next_unit); do
         route_id=${unit%%:*}; seed=${unit##*:}
         for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
             gpu=$(( (w + attempt - 1) % NUM_GPUS ))
@@ -339,6 +347,7 @@ run_worker() {  # $1 worker: its assigned route runs, sequentially, each retried
             echo "[w$w] route $route_id${seed:+ seed $seed} attempt $attempt failed"
         done
     done
+    echo "[w$w] queue empty $(date +%H:%M:%S)"
 }
 
 # never attach to a server that is not ours (a peer's test server, a leftover of an earlier job)
@@ -360,6 +369,7 @@ for ((w = 0; w < WORKERS; w++)); do
 done
 wait "${WORKER_PIDS[@]}"
 ROUTES_WALL_S=$(( $(date +%s) - ROUTES_T0 ))
+rm -f "$QUEUE" "$QUEUE.lock"
 cat "$OUT"/worker_w*.log
 "$SERVER_PY" - "$OUT/timing.csv" "$ROUTES_WALL_S" "$WORKERS" "$NUM_GPUS" "${#UNITS[@]}" "$TIMING_ROWS_BEFORE" <<'EOF' | tee -a "$OUT/run_info.txt"
 import csv, sys
