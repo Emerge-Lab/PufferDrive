@@ -27,7 +27,8 @@
 # per town, the stdout summary the DS of every seed and mean +- std over the seeds; "0" = one pass with the evaluator's
 # default seed), REPETITIONS (leaderboard-internal repetitions within a pass, 1), ROUTE_SUBSET ("0 5 17": only these
 # route ids), WORKERS, NUM_GPUS, STAGGER_S (15: seconds between worker launches),
-# PORT_BASE (CARLA rpc port of worker 0; worker w uses PORT_BASE+50w, TM PORT_BASE+6000+50w), OMP_NUM_THREADS (policy
+# PORT_BASE (12000: CARLA rpc port of worker 0; worker w uses PORT_BASE+50w, TM PORT_BASE+6000+50w; a range with a port
+# already listening is skipped for 12000, then 22000, see run_info.txt port_base), OMP_NUM_THREADS (policy
 # threads; 2 from 16 workers on, else 4), LOGGING (1, default: telemetry, world log and the HTML report per
 # route; 0: scores only), CARLA_VIEW (0, default: CARLA runs without rendering (-nullrhi; collision sensors
 # and telemetry work, an RGB camera segfaults the server); 1: chase-cam mp4 per route on a rendering server,
@@ -58,7 +59,7 @@ for seed in $SEEDS; do [[ "$seed" =~ ^[0-9]+$ ]] || { echo "SEEDS=\"$SEEDS\" mus
 read -r -a SEED_LIST <<< "$SEEDS"
 [ "${#SEED_LIST[@]}" -gt 0 ] || { echo "SEEDS must name at least one seed"; exit 1; }
 ROUTE_SUBSET=${ROUTE_SUBSET:-}
-PORT_BASE=${PORT_BASE:-2000}
+PORT_BASE=${PORT_BASE:-12000}
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
 WORKERS=${WORKERS:-16}
 STAGGER_S=${STAGGER_S:-15}
@@ -80,6 +81,26 @@ echo "Evaluating checkpoint: $CKPT"
 NUM_GPUS=${NUM_GPUS:-$(nvidia-smi -L 2>/dev/null | grep -c "^GPU")}
 if [ "$NUM_GPUS" -lt 1 ] || [ "$NUM_GPUS" -gt 8 ]; then echo "NUM_GPUS=$NUM_GPUS must be 1..8"; exit 1; fi
 if [ "$WORKERS" -lt 1 ] || [ "$WORKERS" -gt 64 ]; then echo "WORKERS=$WORKERS must be 1..64"; exit 1; fi
+
+# Every port of the worker layout (rpc, streaming = rpc+1, TM) must be free of listeners; the first clear base wins.
+# Bases stay below the ephemeral range (32768+); the old 2000 put node_exporter (9100) and dcgm-exporter (9400) inside it.
+pick_port_base() {
+    local listening base w port busy
+    listening=" $(ss -ltun 2>/dev/null | awk 'NR > 1 {sub(/.*:/, "", $5); print $5}' | sort -u | tr '\n' ' ') "
+    for base in "$@"; do
+        busy=0
+        for ((w = 0; w < WORKERS; w++)); do
+            for port in $((base + 50 * w)) $((base + 50 * w + 1)) $((base + 6000 + 50 * w)); do
+                [[ "$listening" == *" $port "* ]] && { busy=$port; break 2; }
+            done
+        done
+        [ "$busy" = 0 ] && { echo "$base"; return 0; }
+        echo "port base $base: port $busy is in use, trying the next range" >&2
+    done
+    return 1
+}
+PORT_BASE=$(pick_port_base "$PORT_BASE" 12000 22000) || { echo "no free port range for $WORKERS workers (ss -ltun)"; exit 1; }
+echo "port base $PORT_BASE: rpc $PORT_BASE+50w, TM $((PORT_BASE + 6000))+50w"
 
 # PD first, and drop inherited entries from other PufferDrive checkouts (see 9_nuPlan.sh)
 INHERITED_PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
@@ -105,6 +126,7 @@ mkdir -p "$OUT/routes" "$OUT/aggregate"
     echo "checkpoint $CKPT"; echo "routes $ROUTES"; echo "seeds $SEEDS"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"
     echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
     echo "git $(git -C "$PD" rev-parse --short HEAD 2>/dev/null) $(git -C "$PD" diff --quiet 2>/dev/null || echo dirty)"
+    echo "port_base $PORT_BASE"
 } > "$OUT/run_info.txt"
 echo "Results -> $OUT"
 
