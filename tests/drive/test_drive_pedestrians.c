@@ -104,13 +104,19 @@ static int test_pedestrian_crossing_geometry_and_lifecycle(void) {
     EXPECT_TRUE(agent->sim_length >= PEDESTRIAN_SIZE_MIN_M && agent->sim_length <= PEDESTRIAN_SIZE_MAX_M);
     EXPECT_TRUE(agent->sim_width >= PEDESTRIAN_SIZE_MIN_M && agent->sim_width <= PEDESTRIAN_SIZE_MAX_M);
     EXPECT_NEAR(agent->sim_height, PEDESTRIAN_HEIGHT_M, 0.0f);
-    EXPECT_TRUE(pedestrian->speed_mps >= PEDESTRIAN_SPEED_MIN_MPS && pedestrian->speed_mps <= PEDESTRIAN_SPEED_MAX_MPS);
-    EXPECT_NEAR(agent->sim_speed, pedestrian->speed_mps, 1e-4f);
+    float min_speed_mps = PEDESTRIAN_LB1_SPEED_BASE_MPS + PEDESTRIAN_LB1_SPEED_PER_LANE_MPS - PEDESTRIAN_SPEED_JITTER_MPS;
+    float max_speed_mps
+        = PEDESTRIAN_LB1_SPEED_BASE_MPS + 3.0f * PEDESTRIAN_LB1_SPEED_PER_LANE_MPS + PEDESTRIAN_SPEED_JITTER_MPS;
+    EXPECT_TRUE(pedestrian->speed_mps >= min_speed_mps && pedestrian->speed_mps <= max_speed_mps);
+    EXPECT_NEAR(agent->sim_speed, 0.0f, 0.0f);
+    EXPECT_TRUE(pedestrian->timer_s >= PEDESTRIAN_WAIT_MIN_S && pedestrian->timer_s <= PEDESTRIAN_WAIT_MAX_S);
+    EXPECT_TRUE(pedestrian->ramp_s >= PEDESTRIAN_RAMP_MIN_S && pedestrian->ramp_s <= PEDESTRIAN_RAMP_MAX_S);
     EXPECT_NEAR(pedestrian->dir_x * pedestrian->dir_x + pedestrian->dir_y * pedestrian->dir_y, 1.0f, 1e-4f);
     EXPECT_NEAR(agent->cos_heading, pedestrian->dir_x, 1e-5f);
     EXPECT_NEAR(agent->sin_heading, pedestrian->dir_y, 1e-5f);
-    float min_crossing_m = PEDESTRIAN_KERB_OFFSET_M + PEDESTRIAN_FAR_KERB_OVERSHOOT_M;
-    float max_crossing_m = min_crossing_m + 2.0f * PEDESTRIAN_KERB_SEARCH_MAX_M;
+    float min_crossing_m = PEDESTRIAN_KERB_OFFSET_MIN_M + PEDESTRIAN_FAR_KERB_OVERSHOOT_M;
+    float max_crossing_m
+        = PEDESTRIAN_KERB_OFFSET_MAX_M + PEDESTRIAN_FAR_KERB_OVERSHOOT_M + 2.0f * PEDESTRIAN_KERB_SEARCH_MAX_M;
     EXPECT_TRUE(pedestrian->crossing_m > min_crossing_m && pedestrian->crossing_m < max_crossing_m);
     EXPECT_TRUE(pedestrian->remaining_m > 0.0f && pedestrian->remaining_m <= pedestrian->crossing_m);
 
@@ -119,7 +125,9 @@ static int test_pedestrian_crossing_geometry_and_lifecycle(void) {
     EXPECT_TRUE(fabsf(along_car) < 0.5f);
     float rel_x, rel_y;
     project_point_to_ego_frame(car, agent->sim_x, agent->sim_y, &rel_x, &rel_y);
-    EXPECT_TRUE(rel_x > 0.0f && rel_x < PEDESTRIAN_SPAWN_AHEAD_MAX_M + 5.0f);
+    float max_appear_m
+        = PEDESTRIAN_LB1_APPEAR_BASE_M + 2.0f * PEDESTRIAN_LB1_APPEAR_PER_LANE_M + PEDESTRIAN_APPEAR_JITTER_M;
+    EXPECT_TRUE(rel_x > 0.0f && rel_x < max_appear_m + 5.0f);
     EXPECT_TRUE(rel_y < 0.0f);
 
     int target_slot = -1;
@@ -188,12 +196,48 @@ static int test_car_hitting_pedestrian_logs_pedestrian_collision(void) {
     return 0;
 }
 
+static int test_pedestrian_stands_then_ramps_to_speed(void) {
+    srand(7);
+    Drive env = make_pedestrian_env(16, 2, 5.0f);
+    int crossing_k = step_until_crossing(&env, 60);
+    EXPECT_TRUE(crossing_k != -1);
+    ScriptedPedestrian *pedestrian = &env.pedestrians[crossing_k];
+    Agent *agent = &env.agents[pedestrian->agent_idx];
+    float start_x = agent->sim_x;
+    float start_y = agent->sim_y;
+    int standing_steps = 0;
+    while (pedestrian->timer_s > 0.0f && standing_steps < 10) {
+        drive_set_neutral_actions(&env);
+        c_step(&env);
+        standing_steps++;
+        EXPECT_NEAR(agent->sim_x, start_x, 0.0f);
+        EXPECT_NEAR(agent->sim_y, start_y, 0.0f);
+        EXPECT_NEAR(agent->sim_speed, 0.0f, 0.0f);
+    }
+    EXPECT_TRUE(standing_steps <= (int) ceilf(PEDESTRIAN_WAIT_MAX_S / env.dt) + 1);
+    float previous_speed_mps = 0.0f;
+    int ramp_steps = (int) ceilf(pedestrian->ramp_s / env.dt);
+    for (int t = 0; t < ramp_steps; t++) {
+        drive_set_neutral_actions(&env);
+        c_step(&env);
+        EXPECT_TRUE(agent->sim_speed > previous_speed_mps || previous_speed_mps >= pedestrian->speed_mps - 1e-4f);
+        EXPECT_TRUE(agent->sim_speed <= pedestrian->speed_mps + 1e-4f);
+        previous_speed_mps = agent->sim_speed;
+    }
+    EXPECT_NEAR(agent->sim_speed, pedestrian->speed_mps, 1e-4f);
+    EXPECT_EQ_INT(pedestrian->state, PEDESTRIAN_STATE_CROSSING);
+    EXPECT_TRUE(hypotf(agent->sim_x - start_x, agent->sim_y - start_y) > 0.0f);
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_ray_hits_segment);
     RUN_TEST(test_pedestrian_slots_are_hidden_static_partners);
     RUN_TEST(test_pedestrian_slots_keep_initial_spawns);
     RUN_TEST(test_pedestrian_crossing_geometry_and_lifecycle);
+    RUN_TEST(test_pedestrian_stands_then_ramps_to_speed);
     RUN_TEST(test_car_hitting_pedestrian_logs_pedestrian_collision);
     return test_summary(failures);
 }

@@ -3035,9 +3035,31 @@ static bool place_pedestrian_crossing(Drive *env, ScriptedPedestrian *pedestrian
     RoadMapElement *car_lane = &env->road_elements[car->current_lane_idx];
     float car_s_m
         = compute_lane_progress(car_lane, car->sim_x, car->sim_y, car->cos_heading, car->sin_heading, true, NULL);
-    float ahead_m = sample_uniform(&env->rng_state, PEDESTRIAN_SPAWN_AHEAD_MIN_M, PEDESTRIAN_SPAWN_AHEAD_MAX_M);
     float qx, qy, qz, landed_s_m, lane_heading;
     int lane_idx, cursor_idx;
+    if (!route_point_at_distance(
+            env,
+            NULL,
+            0,
+            car->current_lane_idx,
+            car_s_m,
+            0.0f,
+            &qx,
+            &qy,
+            &qz,
+            &lane_idx,
+            &cursor_idx,
+            &landed_s_m,
+            &lane_heading)) {
+        return false;
+    }
+    float car_near_m, car_far_m;
+    if (!find_kerb_distances(env, qx, qy, qz, sinf(lane_heading), -cosf(lane_heading), &car_near_m, &car_far_m)) {
+        return false;
+    }
+    int lanes_to_kerb = (int) (car_near_m / PEDESTRIAN_LB1_LANE_WIDTH_M + 1.0f);
+    float ahead_m = PEDESTRIAN_LB1_APPEAR_BASE_M + PEDESTRIAN_LB1_APPEAR_PER_LANE_M * (float) (lanes_to_kerb - 1)
+        + sample_uniform(&env->rng_state, -PEDESTRIAN_APPEAR_JITTER_M, PEDESTRIAN_APPEAR_JITTER_M);
     if (!route_point_at_distance(
             env,
             NULL,
@@ -3063,7 +3085,8 @@ static bool place_pedestrian_crossing(Drive *env, ScriptedPedestrian *pedestrian
     if (!find_kerb_distances(env, qx, qy, qz, right_x, right_y, &near_m, &far_m)) {
         return false;
     }
-    float start_offset_m = near_m + PEDESTRIAN_KERB_OFFSET_M;
+    float start_offset_m
+        = near_m + sample_uniform(&env->rng_state, PEDESTRIAN_KERB_OFFSET_MIN_M, PEDESTRIAN_KERB_OFFSET_MAX_M);
     float crossing_m = start_offset_m + far_m + PEDESTRIAN_FAR_KERB_OVERSHOOT_M;
     float dir_x = -right_x;
     float dir_y = -right_y;
@@ -3096,13 +3119,14 @@ static bool place_pedestrian_crossing(Drive *env, ScriptedPedestrian *pedestrian
     agent->cos_heading = dir_x;
     agent->sin_heading = dir_y;
     copy_pose_to_prev(agent);
-    pedestrian->speed_mps = sample_uniform(&env->rng_state, PEDESTRIAN_SPEED_MIN_MPS, PEDESTRIAN_SPEED_MAX_MPS);
-    agent->sim_vx = dir_x * pedestrian->speed_mps;
-    agent->sim_vy = dir_y * pedestrian->speed_mps;
-    agent->yaw_rate = 0.0f;
-    update_agent_speed(agent);
+    clear_agent_motion(agent);
     agent->seconds_stopped = 0.0f;
     agent->sim_valid = 1;
+    pedestrian->speed_mps = PEDESTRIAN_LB1_SPEED_BASE_MPS + PEDESTRIAN_LB1_SPEED_PER_LANE_MPS * (float) lanes_to_kerb
+        + sample_uniform(&env->rng_state, -PEDESTRIAN_SPEED_JITTER_MPS, PEDESTRIAN_SPEED_JITTER_MPS);
+    pedestrian->ramp_s = sample_uniform(&env->rng_state, PEDESTRIAN_RAMP_MIN_S, PEDESTRIAN_RAMP_MAX_S);
+    pedestrian->current_speed_mps = 0.0f;
+    pedestrian->timer_s = sample_uniform(&env->rng_state, PEDESTRIAN_WAIT_MIN_S, PEDESTRIAN_WAIT_MAX_S);
     pedestrian->dir_x = dir_x;
     pedestrian->dir_y = dir_y;
     pedestrian->crossing_m = crossing_m;
@@ -3154,7 +3178,16 @@ static void step_pedestrian_idle(Drive *env, ScriptedPedestrian *pedestrian) {
 }
 
 static void step_pedestrian_crossing(Drive *env, ScriptedPedestrian *pedestrian, Agent *agent) {
-    float step_m = fminf(pedestrian->speed_mps * env->dt, pedestrian->remaining_m);
+    if (pedestrian->timer_s > 0.0f) {
+        pedestrian->timer_s -= env->dt; // standing at the kerb
+        return;
+    }
+    float ramp_step_mps = pedestrian->speed_mps * env->dt / pedestrian->ramp_s;
+    pedestrian->current_speed_mps = fminf(pedestrian->speed_mps, pedestrian->current_speed_mps + ramp_step_mps);
+    agent->sim_vx = pedestrian->dir_x * pedestrian->current_speed_mps;
+    agent->sim_vy = pedestrian->dir_y * pedestrian->current_speed_mps;
+    update_agent_speed(agent);
+    float step_m = fminf(pedestrian->current_speed_mps * env->dt, pedestrian->remaining_m);
     agent->sim_x += pedestrian->dir_x * step_m;
     agent->sim_y += pedestrian->dir_y * step_m;
     pedestrian->remaining_m -= step_m;

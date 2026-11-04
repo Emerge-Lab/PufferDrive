@@ -145,12 +145,14 @@ struct ScriptedPedestrian {
     int agent_idx;        // slot in Drive.agents
     int target_agent_idx; // car the crossing was armed for, -1 while idle
     int state;            // PEDESTRIAN_STATE_*
-    float timer_s;        // cooldown left while idle, linger left at the far kerb
+    float timer_s;        // cooldown left while idle, standstill left at the kerb, linger left at the far kerb
     float dir_x;          // unit crossing direction
     float dir_y;
     float crossing_m; // kerb to kerb path length
     float remaining_m;
-    float speed_mps;
+    float speed_mps; // crossing speed once the ramp is over
+    float ramp_s;    // seconds from setting off to speed_mps
+    float current_speed_mps;
 };
 
 typedef struct {

@@ -44,7 +44,8 @@
 # COSIM_VRU_SIZE_PAD_M (default 0.8: added to the length and width of every walker and two-wheeler box, so they read
 # strictly larger than the smallest training vehicle; 0 = true boxes), COSIM_OBS_SLOTS_PARTNERS_N (default 40: partner slots
 # in the policy's obs, GIGAFLOW's eval value; the slots are max-pooled, so a checkpoint trained with 20 transfers; empty =
-# the checkpoint's training value), LIBTIFF5_COMPAT (1: when `import carla` fails for
+# the checkpoint's training value), COSIM_WALKER_SPEED_FLOOR_MPS (default 0; the diagnostic walker speed floor of
+# shadow_ego.py, tags the folder _walkerfloor<value>), LIBTIFF5_COMPAT (1: when `import carla` fails for
 # the egg's missing libtiff.so.5, try the garage env's lib dir (`conda install -n garage "libtiff<4.5"`), then link the
 # system libtiff.so.6 under that name; 0: never link).
 #
@@ -88,6 +89,7 @@ if [ -n "$COMPLETE_RUN" ]; then
     SEEDS=${SEEDS-$(awk '$1 == "seeds" {$1 = ""; print substr($0, 2); exit}' "$COMPLETE_RUN/run_info.txt")}
     COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-$(run_info_value vru_size_pad_m)}
     COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-$(run_info_value obs_slots_partners_n)}   # a run from before the knob: empty = the checkpoint's value
+    COSIM_WALKER_SPEED_FLOOR_MPS=${COSIM_WALKER_SPEED_FLOOR_MPS:-$(run_info_value walker_speed_floor_mps)}
 fi
 SCENARIOS=${SCENARIOS:-1}
 if [ "$SCENARIOS" = "1" ]; then
@@ -114,6 +116,8 @@ REPORT=${REPORT:-$LOGGING}
 export COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-0.8}
 export COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-40}   # GIGAFLOW's eval value; empty = the checkpoint's training value
 [[ -z "$COSIM_OBS_SLOTS_PARTNERS_N" || "$COSIM_OBS_SLOTS_PARTNERS_N" =~ ^[1-9][0-9]*$ ]] || { echo "COSIM_OBS_SLOTS_PARTNERS_N=\"$COSIM_OBS_SLOTS_PARTNERS_N\" must be a positive integer or empty"; exit 1; }
+export COSIM_WALKER_SPEED_FLOOR_MPS=${COSIM_WALKER_SPEED_FLOOR_MPS:-0}   # diagnostic only, see shadow_ego.py
+[[ "$COSIM_WALKER_SPEED_FLOOR_MPS" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "COSIM_WALKER_SPEED_FLOOR_MPS=\"$COSIM_WALKER_SPEED_FLOOR_MPS\" must be a non-negative number"; exit 1; }
 EVALUATOR=$GARAGE_WORK_DIR/leaderboard/leaderboard/leaderboard_evaluator_local.py
 CARLA_EGG=$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
 AGENT=$PD/pufferlib/ocean/cosim/carla/lb1/leaderboard_agent.py
@@ -154,6 +158,7 @@ echo "port base $PORT_BASE: rpc $PORT_BASE+50w, TM $((PORT_BASE + 6000))+50w"
 
 TAG=longest6_v1$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")${SEEDS:+_seeds$(echo "$SEEDS" | tr ' ' '-')}
 TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")${COSIM_OBS_SLOTS_PARTNERS_N:+_partners$COSIM_OBS_SLOTS_PARTNERS_N}
+TAG=$TAG$([ "$COSIM_WALKER_SPEED_FLOOR_MPS" = "0" ] || echo "_walkerfloor$COSIM_WALKER_SPEED_FLOOR_MPS")
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 OUT=${COMPLETE_RUN:-$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
@@ -163,7 +168,8 @@ if [ -z "$COMPLETE_RUN" ]; then
     {
         echo "checkpoint $CKPT"; echo "routes $ROUTE_DIR ($ROUTES_XML)"; echo "scenarios $SCENARIO_FILE"
         echo "seeds $SEEDS"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"; echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
-        echo "obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N"; echo "port_base $PORT_BASE"
+        echo "obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N"; echo "walker_speed_floor_mps $COSIM_WALKER_SPEED_FLOOR_MPS"
+        echo "port_base $PORT_BASE"
         echo "git $GIT_STATE"
     } > "$OUT/run_info.txt"
 else
@@ -262,7 +268,7 @@ if [ -n "$COMPLETE_RUN" ]; then
         done
         for f in "$OUT"/worker_w*.log; do [ -e "$f" ] && mv "$f" "$PREVIOUS/"; done
     fi
-    echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]:-none}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
+    echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]:-none}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N; walker_speed_floor_mps $COSIM_WALKER_SPEED_FLOOR_MPS; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
 fi
 [ "$WORKERS" -gt "${#UNITS[@]}" ] && WORKERS=${#UNITS[@]}
 # one shared queue, longest route first; length = the xml's waypoint polyline (an earlier run's duration would read a

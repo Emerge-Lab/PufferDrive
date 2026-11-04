@@ -188,13 +188,22 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define PEDESTRIAN_STATE_IDLE 0 // hidden, cooldown running
 #define PEDESTRIAN_STATE_CROSSING 1
 #define PEDESTRIAN_STATE_LINGER 2          // stands at the far kerb before vanishing
-#define PEDESTRIAN_SPAWN_AHEAD_MIN_M 12.0f // CARLA: 12 m plus 1.5 m per lane between the car and the kerb
-#define PEDESTRIAN_SPAWN_AHEAD_MAX_M 20.0f
-#define PEDESTRIAN_KERB_OFFSET_M 1.0f        // start this far outside the near road edge
+// Leaderboard 1.0 Scenario3 sits at the centre of every range; lanes = driving lanes from the car's lane to the kerb (>= 1)
+#define PEDESTRIAN_LB1_LANE_WIDTH_M 3.5f
+#define PEDESTRIAN_LB1_APPEAR_BASE_M 12.0f   // walker pops in 12 m + 1.5 m per extra lane ahead of the car
+#define PEDESTRIAN_LB1_APPEAR_PER_LANE_M 1.5f
+#define PEDESTRIAN_APPEAR_JITTER_M 2.0f
+#define PEDESTRIAN_KERB_OFFSET_MIN_M 0.75f   // LB1 stands half a lane (1.75 m) outside the road edge
+#define PEDESTRIAN_KERB_OFFSET_MAX_M 2.75f
 #define PEDESTRIAN_KERB_SEARCH_MAX_M 10.0f   // lateral reach per side; wider roads get no crossing
 #define PEDESTRIAN_FAR_KERB_OVERSHOOT_M 1.0f // walk this far past the far road edge
-#define PEDESTRIAN_SPEED_MIN_MPS 2.0f        // Leaderboard 2.0 walkers; 1.0 walkers do 3.4-4.2 m/s
-#define PEDESTRIAN_SPEED_MAX_MPS 4.2f
+#define PEDESTRIAN_LB1_SPEED_BASE_MPS 3.4f   // LB1 walks at 3 + 0.4 m/s x (lanes + 1)
+#define PEDESTRIAN_LB1_SPEED_PER_LANE_MPS 0.4f
+#define PEDESTRIAN_SPEED_JITTER_MPS 1.0f
+#define PEDESTRIAN_WAIT_MIN_S 0.0f           // LB1 walker stands ~0.25 s after popping in
+#define PEDESTRIAN_WAIT_MAX_S 0.6f
+#define PEDESTRIAN_RAMP_MIN_S 0.3f           // LB1 walker reaches its speed ~0.5 s after setting off
+#define PEDESTRIAN_RAMP_MAX_S 0.7f
 #define PEDESTRIAN_SIZE_MIN_M 1.0f // CARLA walker box (0.4-0.5 m) plus the 0.8 m eval VRU pad
 #define PEDESTRIAN_SIZE_MAX_M 1.5f
 #define PEDESTRIAN_HEIGHT_M 1.8f

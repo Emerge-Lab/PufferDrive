@@ -47,7 +47,10 @@ untouched; ablation for the parked-car / red-light-queue avoidance), `COSIM_VRU_
 (added to the length and width of every walker and two-wheeler box in the policy's obs; the
 longest6 scripts set 0.8 m), `COSIM_OBS_SLOTS_PARTNERS_N` (partner slots in the policy's obs;
 default = the checkpoint's training value, the slots are max-pooled so any count transfers; the
-longest6 v1 script sets 40, GIGAFLOW's eval value), `COSIM_OBS_HTML`,
+longest6 v1 script sets 40, GIGAFLOW's eval value), `COSIM_WALKER_SPEED_FLOOR_MPS` (diagnostic,
+default 0: for 1.5 s after a walker first appears the policy reads it as moving at least this fast
+along its facing direction, so CARLA's standing-then-ramping Scenario3 walker looks like a training
+walker; world logs and collision checks stay raw), `COSIM_OBS_HTML`,
 `COSIM_DEBUG_CARLA_VIEW`, `COSIM_RECORD_INFRACTIONS`.
 
 ### Ego dynamics source

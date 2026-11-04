@@ -48,6 +48,10 @@ Environment variables:
                                (nuPlan's vru_size_pad_m; the training spawn floor is 0.8 m, CARLA walkers
                                are 0.4-0.5 m and bicycles 0.4 m wide, so 0.8 lifts them strictly above
                                the smallest training vehicle)
+  COSIM_WALKER_SPEED_FLOOR_MPS=0  diagnostic: for WALKER_SPEED_FLOOR_WINDOW_S after a walker is first seen, the
+                               policy's obs carry at least this speed along the walker's facing direction (CARLA's
+                               Scenario3 walker stands ~0.3 s and ramps up over ~0.5 s; training walkers set off
+                               at once). Shadow-env state only; world logs and collision checks stay raw.
   COSIM_OBS_SLOTS_PARTNERS_N=40
                                partner slots in the policy's obs (default: the checkpoint's training value;
                                the slots are max-pooled, so any count transfers; 40 = GIGAFLOW's eval value)
@@ -106,6 +110,7 @@ PARTNER_ROW_COLUMNS = 17
 
 FAR_AWAY = 1.0e6  # park unused shadow-env agent slots out of observation range
 PARTNER_MAX_ABS_DZ_M = 20.0  # CARLA actors farther above/below the ego are hidden scenario props, not traffic
+WALKER_SPEED_FLOOR_WINDOW_S = 1.5  # covers the standstill + ramp of a CARLA Scenario3 walker
 DEFAULT_BASE_MAX_SPEED_MPS = 20.0  # Drive() defaults, for checkpoints whose config predates the keys
 DEFAULT_CONDITIONING_SPEED_SCALE = 1.5
 MAX_POLICY_STEPS = 100_000  # shadow-env episode cap (~1.4 h at the 0.05 s CARLA tick); sizes the light state buffers
@@ -224,6 +229,9 @@ class ShadowEgo:
         self.vru_size_pad_m = float(os.environ.get("COSIM_VRU_SIZE_PAD_M", "0.0"))
         if not (self.vru_size_pad_m >= 0.0):
             raise ValueError(f"COSIM_VRU_SIZE_PAD_M must be >= 0, got {self.vru_size_pad_m}")
+        self.walker_speed_floor_mps = float(os.environ.get("COSIM_WALKER_SPEED_FLOOR_MPS", "0.0"))
+        if not (self.walker_speed_floor_mps >= 0.0):
+            raise ValueError(f"COSIM_WALKER_SPEED_FLOOR_MPS must be >= 0, got {self.walker_speed_floor_mps}")
         # Shadow agent pool == the training per-env cap
         self.num_agents = int(env_cfg["max_agents_per_env"])
 
@@ -235,7 +243,9 @@ class ShadowEgo:
         self.world_log_dir = os.environ.get("COSIM_WORLD_LOG", None)
         self._world_log = {"ego": [], "partners": [], "lights": [], "light_yellow_s": []}
         self._last_partners = None
+        self._partner_raw_velocity = None
         self._partner_stopped_s = {}  # CARLA actor id -> seconds at standstill
+        self._walker_first_seen_s = {}  # CARLA actor id -> sim time the walker first appeared
         from pufferlib.ocean.drive import binding
 
         self._partner_stopped_speed_threshold = float(binding.AGENT_STOPPED_SPEED_THRESHOLD)
@@ -437,15 +447,23 @@ class ShadowEgo:
             f"[puffer_agent] town={town} tick_dt={self.tick_dt} dt={self.dt} route_goals={len(self.route_goals)} "
             f"max_speed_mps={self.env.max_speed_mps:.1f} (C_vel={self.env.max_speed_mps / self.env.base_max_speed_mps:.2f}) "
             f"zero_partner_stopped_time={int(self.zero_partner_stopped_time)} "
-            f"vru_size_pad_m={self.vru_size_pad_m:g}"
+            f"vru_size_pad_m={self.vru_size_pad_m:g} walker_speed_floor_mps={self.walker_speed_floor_mps:g}"
         )
         self.initialized = True
 
     # --- shadow-env sync (read-only w.r.t. the simulator) -------------------
 
+    def _floored_walker_velocity(self, actor_id, now_s, heading, vx, vy):
+        first_seen_s = self._walker_first_seen_s.setdefault(actor_id, now_s)
+        if now_s - first_seen_s > WALKER_SPEED_FLOOR_WINDOW_S or math.hypot(vx, vy) >= self.walker_speed_floor_mps:
+            return vx, vy
+        return self.walker_speed_floor_mps * math.cos(heading), self.walker_speed_floor_mps * math.sin(heading)
+
     def _read_states(self, partners):
         idx, x, y, z, h, vx, vy, yaw_rate, accel_long, stopped_s = [], [], [], [], [], [], [], [], [], []
+        raw_vx, raw_vy = [], []
         stopped_by_id = {}
+        now_s = self.step_count * self.tick_dt
         for j, row in enumerate(partners):
             idx.append(1 + j)  # agent 0 = ego; others fill 1..M
             bx, by, bz, bh, bvx, bvy, byr, bal = self.transform.state_to_bin(
@@ -461,6 +479,10 @@ class ShadowEgo:
                 row[PARTNER_BOX_Z],
                 row[PARTNER_EXTENT_Z],
             )
+            raw_vx.append(bvx)
+            raw_vy.append(bvy)
+            if self.walker_speed_floor_mps > 0.0 and row[PARTNER_IS_WALKER] > 0.0:
+                bvx, bvy = self._floored_walker_velocity(int(row[PARTNER_ACTOR_ID]), now_s, bh, bvx, bvy)
             x.append(bx)
             y.append(by)
             z.append(bz)
@@ -475,6 +497,7 @@ class ShadowEgo:
             stopped_by_id[actor_id] = self._partner_stopped_s.get(actor_id, 0.0) + self.dt if is_stopped else 0.0
             stopped_s.append(stopped_by_id[actor_id])
         self._partner_stopped_s = stopped_by_id
+        self._partner_raw_velocity = (np.array(raw_vx, np.float32), np.array(raw_vy, np.float32))
         if self.zero_partner_stopped_time:
             stopped_s = [0.0] * len(partners)
         return (
@@ -582,7 +605,8 @@ class ShadowEgo:
             self.env.set_agent_states(*states)
             self.env.set_agent_sizes(*sizes)
             is_walker = (partners[:, PARTNER_IS_WALKER] > 0.0).astype(np.float32)
-            self._last_partners = (states[1], states[2], states[4], states[5], states[6], sizes[1], sizes[2], is_walker)
+            raw_vx, raw_vy = self._partner_raw_velocity
+            self._last_partners = (states[1], states[2], states[4], raw_vx, raw_vy, sizes[1], sizes[2], is_walker)
         else:
             self._last_partners = None
         n_used = 1 + len(partners)
