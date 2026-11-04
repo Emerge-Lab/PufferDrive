@@ -7,6 +7,7 @@
 #   DRY=1 ./scripts/launch_nuplan_sdc_only_displacement.sh
 #
 # Overridable via the environment:
+#   PROGRAM_CONFIG       submit_cluster.py program config naming the experiment (default the displacement one)
 #   COEFS                colon list of env.reward_displacement values (default 0.05)
 #   SEEDS                colon list of train.seed values (default 0:1:2:3)
 #   ACCOUNT/PARTITION/TIME   SLURM overrides
@@ -18,7 +19,7 @@
 #   EXTRA_ARGS           space-separated extra key=value overrides
 set -euo pipefail
 
-PROGRAM_CONFIG="scripts/cluster_configs/nuplan_sdc_only_displacement.yaml"
+PROGRAM_CONFIG="${PROGRAM_CONFIG:-scripts/cluster_configs/nuplan_sdc_only_displacement.yaml}"
 COMPUTE_CONFIG="scripts/cluster_configs/nyu_greene.yaml"
 ACCOUNT="${ACCOUNT:-torch_pr_355_general}"
 PARTITION="${PARTITION:-l40s_public}"

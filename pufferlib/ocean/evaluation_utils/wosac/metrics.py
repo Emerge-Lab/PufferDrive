@@ -9,6 +9,8 @@ from typing import Tuple
 from pufferlib.ocean.evaluation_utils.wosac import interaction_features, map_metric_features
 from pufferlib.ocean.evaluation_utils.wosac import kinematic_features
 
+EVALUATED_AGENTS_PER_CHUNK = 16
+
 
 def _to_tensor(value, dtype, device=None):
     """Utility to convert numpy inputs to tensors on the requested device."""
@@ -255,43 +257,40 @@ def compute_interaction_features(
         scenario_heading = heading_t[scenario_mask]
         scenario_valid = valid_t[scenario_mask]
 
-        scenario_eval_mask_np = eval_mask[scenario_mask_np]
-        scenario_eval_mask = torch.as_tensor(scenario_eval_mask_np, dtype=torch.bool, device=x_t.device)
+        scenario_eval_rows = np.flatnonzero(eval_mask[scenario_mask_np])
+        # Chunked to bound GPU memory; an evaluated agent's features do not depend on the other evaluated agents.
+        for chunk_start in range(0, len(scenario_eval_rows), EVALUATED_AGENTS_PER_CHUNK):
+            chunk_rows = scenario_eval_rows[chunk_start : chunk_start + EVALUATED_AGENTS_PER_CHUNK]
+            chunk_mask = torch.zeros(len(agent_indices), dtype=torch.bool, device=x_t.device)
+            chunk_mask[torch.as_tensor(chunk_rows, device=x_t.device)] = True
 
-        distances_to_objects = interaction_features.compute_distance_to_nearest_object(
-            center_x=scenario_x,
-            center_y=scenario_y,
-            length=scenario_length,
-            width=scenario_width,
-            heading=scenario_heading,
-            valid=scenario_valid,
-            corner_rounding_factor=corner_rounding_factor,
-            evaluated_object_mask=scenario_eval_mask,
-        )
+            distances_to_objects = interaction_features.compute_distance_to_nearest_object(
+                center_x=scenario_x,
+                center_y=scenario_y,
+                length=scenario_length,
+                width=scenario_width,
+                heading=scenario_heading,
+                valid=scenario_valid,
+                corner_rounding_factor=corner_rounding_factor,
+                evaluated_object_mask=chunk_mask,
+            )
+            times_to_collision = interaction_features.compute_time_to_collision(
+                center_x=scenario_x,
+                center_y=scenario_y,
+                length=scenario_length,
+                width=scenario_width,
+                heading=scenario_heading,
+                valid=scenario_valid,
+                seconds_per_step=seconds_per_step,
+                evaluated_object_mask=chunk_mask,
+            )
 
-        is_colliding_per_step = distances_to_objects < interaction_features.COLLISION_DISTANCE_THRESHOLD
-
-        times_to_collision = interaction_features.compute_time_to_collision(
-            center_x=scenario_x,
-            center_y=scenario_y,
-            length=scenario_length,
-            width=scenario_width,
-            heading=scenario_heading,
-            valid=scenario_valid,
-            seconds_per_step=seconds_per_step,
-            evaluated_object_mask=scenario_eval_mask,
-        )
-
-        eval_agents_in_scenario = agent_indices[scenario_eval_mask_np]
-        result_indices = [eval_to_result[idx] for idx in eval_agents_in_scenario]
-
-        distances_np = distances_to_objects.cpu().numpy()
-        collisions_np = is_colliding_per_step.cpu().numpy()
-        ttc_np = times_to_collision.cpu().numpy()
-
-        result_distances[result_indices] = distances_np
-        result_collisions[result_indices] = collisions_np
-        result_ttc[result_indices] = ttc_np
+            result_indices = [eval_to_result[idx] for idx in agent_indices[chunk_rows]]
+            result_distances[result_indices] = distances_to_objects.cpu().numpy()
+            result_collisions[result_indices] = (
+                (distances_to_objects < interaction_features.COLLISION_DISTANCE_THRESHOLD).cpu().numpy()
+            )
+            result_ttc[result_indices] = times_to_collision.cpu().numpy()
 
     return result_distances, result_collisions, result_ttc
 

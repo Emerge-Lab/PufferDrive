@@ -13,6 +13,36 @@ uv pip install -e .
 python setup.py build_ext --inplace --force
 ```
 
+## Install (fresh GPU machine, e.g. vast.ai)
+
+Requirements:
+
+- **Image:** Linux x86_64 with a CUDA *devel* toolkit (`nvcc` and headers), e.g. `pytorch/pytorch:2.14.0-cuda13.0-cudnn9-devel` or `nvidia/cuda:13.0.2-devel-ubuntu24.04`.
+- **Tools:** `gcc`/`g++` and `git`.
+- **Driver:** CUDA 13.0 needs NVIDIA driver 580 or newer. On vast.ai, filter hosts by CUDA ≥ 13.0.
+- **Versions:** torch **2.14.0+cu130** and Python 3.13, so results match the reference setup; numpy **< 2.0**.
+- **Network:** the first build downloads raylib and inih from GitHub.
+
+```bash
+git clone -b <branch> <repo-url> PufferDrive && cd PufferDrive
+uv venv --python 3.13 .venv && source .venv/bin/activate
+uv pip install "torch==2.14.0" --index-url https://download.pytorch.org/whl/cu130
+uv pip install "numpy<2.0" "setuptools<81" wheel Cython
+# One _C build for A100 (8.0), 3090/A6000 (8.6), 4090/L40S (8.9) and H100/H200 (9.0)
+export TORCH_CUDA_ARCH_LIST="8.0 8.6 8.9 9.0"
+uv pip install --no-build-isolation -e .   # builds the Drive binding and the CUDA _C kernel
+
+# Check: expect "CUDA kernel built: True | in use: True"
+python -c "import torch, pufferlib._C, pufferlib.pufferl as p; from pufferlib.ocean.drive import binding; \
+print('CUDA kernel built:', '\nCUDA:' in torch._C._dispatch_dump('pufferlib::compute_puff_advantage'), '| in use:', p.ADVANTAGE_CUDA)"
+```
+
+Notes:
+
+- **`--no-build-isolation` is required.** It makes the build use the torch you installed instead of fetching another one.
+- **`nvcc` must be visible.** If it isn't on `PATH`, set `CUDA_HOME`. Without it, `_C` silently builds CPU-only, and training computes advantages on the CPU.
+- **Rebuilding after a `.c`/`.h` change:** use `python setup.py build_ext --inplace --force`. On a shared tree whose `_C` was built for another torch, `python setup.py build_c --inplace --force` rebuilds only the Drive binding.
+
 ## Tests
 
 ```bash

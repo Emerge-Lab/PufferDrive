@@ -173,7 +173,7 @@ env:
   reward_displacement: 0.0
   # --- Map ---
   # Path to map used for training
-  map_dir: /home/ricky/pufferdata/nuplan_val/nuplan_val_moving
+  map_dir: pufferlib/resources/drive/binaries/nuplan
   # Number of maps to load from map_dir
   num_maps: 100000
   # --- Observation slot counts ---

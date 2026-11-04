@@ -1083,9 +1083,12 @@ static PyObject *get_ground_truth_trajectories(PyObject *self, PyObject *args) {
     int *valid_data = (int *) PyArray_DATA((PyArrayObject *) valid_arr);
     int *id_data = (int *) PyArray_DATA((PyArrayObject *) id_arr);
     int *scenario_id_data = (int *) PyArray_DATA((PyArrayObject *) scenario_id_arr);
+    int num_timesteps = PyArray_DIMS((PyArrayObject *) x_arr)[1];
 
     c_get_global_ground_truth_trajectories(
         drive,
+        num_timesteps,
+        0,
         x_data,
         y_data,
         z_data,
@@ -1153,6 +1156,8 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
 
         c_get_global_ground_truth_trajectories(
             drive,
+            num_timesteps,
+            i,
             &x_base[traj_offset],
             &y_base[traj_offset],
             &z_base[traj_offset],
@@ -1220,12 +1225,143 @@ static PyObject *vec_get_road_edge_polylines(PyObject *self, PyObject *args) {
         c_get_road_edge_counts(drive, &np, &tp);
         c_get_road_edge_polylines(
             drive,
+            i,
             &x_base[pt_offset],
             &y_base[pt_offset],
             &lengths_base[poly_offset],
             &scenario_ids_base[poly_offset]);
         poly_offset += np;
         pt_offset += tp;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_get_context_agent_count(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    int context_agent_count = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        context_agent_count += c_get_context_agent_count((Drive *) vec->envs[i]);
+    }
+    return PyLong_FromLong(context_agent_count);
+}
+
+static PyObject *vec_get_context_agent_trajectories(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 9) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_context_agent_trajectories requires 9 arguments");
+        return NULL;
+    }
+
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    PyObject *output_arrays[8];
+    for (int arg_idx = 0; arg_idx < 8; arg_idx++) {
+        output_arrays[arg_idx] = PyTuple_GetItem(args, arg_idx + 1);
+        if (!PyArray_Check(output_arrays[arg_idx])) {
+            PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
+            return NULL;
+        }
+    }
+
+    float *x_base = (float *) PyArray_DATA((PyArrayObject *) output_arrays[0]);
+    float *y_base = (float *) PyArray_DATA((PyArrayObject *) output_arrays[1]);
+    float *z_base = (float *) PyArray_DATA((PyArrayObject *) output_arrays[2]);
+    float *heading_base = (float *) PyArray_DATA((PyArrayObject *) output_arrays[3]);
+    int *valid_base = (int *) PyArray_DATA((PyArrayObject *) output_arrays[4]);
+    float *length_base = (float *) PyArray_DATA((PyArrayObject *) output_arrays[5]);
+    float *width_base = (float *) PyArray_DATA((PyArrayObject *) output_arrays[6]);
+    int *scenario_id_base = (int *) PyArray_DATA((PyArrayObject *) output_arrays[7]);
+    int num_timesteps = PyArray_DIMS((PyArrayObject *) output_arrays[0])[1];
+
+    int agent_offset = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *drive = (Drive *) vec->envs[i];
+        int traj_offset = agent_offset * num_timesteps;
+        c_get_context_agent_trajectories(
+            drive,
+            num_timesteps,
+            i,
+            &x_base[traj_offset],
+            &y_base[traj_offset],
+            &z_base[traj_offset],
+            &heading_base[traj_offset],
+            &valid_base[traj_offset],
+            &length_base[agent_offset],
+            &width_base[agent_offset],
+            &scenario_id_base[agent_offset]);
+        agent_offset += c_get_context_agent_count(drive);
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_get_context_agent_state(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 5) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_context_agent_state requires 5 arguments");
+        return NULL;
+    }
+
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    PyObject *output_arrays[4];
+    for (int arg_idx = 0; arg_idx < 4; arg_idx++) {
+        output_arrays[arg_idx] = PyTuple_GetItem(args, arg_idx + 1);
+        if (!PyArray_Check(output_arrays[arg_idx])) {
+            PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
+            return NULL;
+        }
+    }
+
+    float *x_base = (float *) PyArray_DATA((PyArrayObject *) output_arrays[0]);
+    float *y_base = (float *) PyArray_DATA((PyArrayObject *) output_arrays[1]);
+    float *heading_base = (float *) PyArray_DATA((PyArrayObject *) output_arrays[2]);
+    int *valid_base = (int *) PyArray_DATA((PyArrayObject *) output_arrays[3]);
+
+    int agent_offset = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *drive = (Drive *) vec->envs[i];
+        c_get_context_agent_state(
+            drive,
+            &x_base[agent_offset],
+            &y_base[agent_offset],
+            &heading_base[agent_offset],
+            &valid_base[agent_offset]);
+        agent_offset += c_get_context_agent_count(drive);
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_get_controlled_agent_indices(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_controlled_agent_indices requires 2 arguments");
+        return NULL;
+    }
+
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    PyObject *agent_idx_arr = PyTuple_GetItem(args, 1);
+    if (!PyArray_Check(agent_idx_arr)) {
+        PyErr_SetString(PyExc_TypeError, "Output array must be a NumPy array");
+        return NULL;
+    }
+    int *agent_idx_base = (int *) PyArray_DATA((PyArrayObject *) agent_idx_arr);
+
+    int row_offset = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *drive = (Drive *) vec->envs[i];
+        c_get_controlled_agent_indices(drive, &agent_idx_base[row_offset]);
+        row_offset += drive->active_agent_count;
     }
     Py_RETURN_NONE;
 }
@@ -1333,6 +1469,22 @@ static PyMethodDef methods[]
         vec_get_road_edge_polylines,
         METH_VARARGS,
         "Get road edge polylines from vectorized env"},
+       {"vec_get_context_agent_count",
+        vec_get_context_agent_count,
+        METH_VARARGS,
+        "Count non-controlled agents in a vectorized env"},
+       {"vec_get_context_agent_trajectories",
+        vec_get_context_agent_trajectories,
+        METH_VARARGS,
+        "Get logged trajectories of non-controlled agents from vectorized env"},
+       {"vec_get_context_agent_state",
+        vec_get_context_agent_state,
+        METH_VARARGS,
+        "Get current simulated poses of non-controlled agents from vectorized env"},
+       {"vec_get_controlled_agent_indices",
+        vec_get_controlled_agent_indices,
+        METH_VARARGS,
+        "Get the agent index of every controlled row from vectorized env"},
        MY_METHODS,
        {NULL, NULL, 0, NULL}};
 

@@ -1050,7 +1050,8 @@ class Drive(pufferlib.PufferEnv):
         """Get ground truth trajectories for all active agents.
 
         Returns:
-            dict with keys 'x', 'y', 'z', 'heading', 'valid', 'id', 'scenario_id' containing numpy arrays.
+            dict with keys 'x', 'y', 'z', 'heading', 'valid', 'id', 'scenario_id' containing numpy arrays;
+            trajectories span scenario_length - init_step steps and scenario_id is the scene's env index.
         """
         num_agents = self.num_agents
 
@@ -1105,6 +1106,57 @@ class Drive(pufferlib.PufferEnv):
         )
 
         return polylines
+
+    def get_context_agent_trajectories(self):
+        """Logged trajectories of non-controlled agents, in the ground-truth window and frame."""
+        context_agent_count = binding.vec_get_context_agent_count(self.c_envs)
+        num_timesteps = self.scenario_length - self.init_step
+
+        trajectories = {
+            "x": np.zeros((context_agent_count, num_timesteps), dtype=np.float32),
+            "y": np.zeros((context_agent_count, num_timesteps), dtype=np.float32),
+            "z": np.zeros((context_agent_count, num_timesteps), dtype=np.float32),
+            "heading": np.zeros((context_agent_count, num_timesteps), dtype=np.float32),
+            "valid": np.zeros((context_agent_count, num_timesteps), dtype=np.int32),
+            "length": np.zeros(context_agent_count, dtype=np.float32),
+            "width": np.zeros(context_agent_count, dtype=np.float32),
+            "scenario_id": np.zeros(context_agent_count, dtype=np.int32),
+        }
+
+        binding.vec_get_context_agent_trajectories(
+            self.c_envs,
+            trajectories["x"],
+            trajectories["y"],
+            trajectories["z"],
+            trajectories["heading"],
+            trajectories["valid"],
+            trajectories["length"],
+            trajectories["width"],
+            trajectories["scenario_id"],
+        )
+
+        for key in ("x", "y", "z", "heading", "valid", "scenario_id"):
+            trajectories[key] = trajectories[key][:, None]
+
+        return trajectories
+
+    def get_context_agent_state(self):
+        """Current simulated poses of non-controlled agents, rows ordered as get_context_agent_trajectories."""
+        context_agent_count = binding.vec_get_context_agent_count(self.c_envs)
+        state = {
+            "x": np.zeros(context_agent_count, dtype=np.float32),
+            "y": np.zeros(context_agent_count, dtype=np.float32),
+            "heading": np.zeros(context_agent_count, dtype=np.float32),
+            "valid": np.zeros(context_agent_count, dtype=np.int32),
+        }
+        binding.vec_get_context_agent_state(self.c_envs, state["x"], state["y"], state["heading"], state["valid"])
+        return state
+
+    def get_controlled_agent_indices(self):
+        """Scene agent index of every controlled row; rows past the active agents stay 0."""
+        agent_indices = np.zeros(self.num_agents, dtype=np.int32)
+        binding.vec_get_controlled_agent_indices(self.c_envs, agent_indices)
+        return agent_indices
 
     def render(self, env_idx=0, view_mode=0):
         # view_mode: 0=default fixed perspective, 1=BEV ego-centered ortho.

@@ -61,6 +61,45 @@ def _positive_int(value, label):
     return value
 
 
+WOSAC_CONFIG_KEYS = {"num_rollouts", "scenes_per_batch", "score_horizons_steps", "scored_agents"}
+WOSAC_SCORED_AGENT_SETS = ("controlled", "sdc")
+
+
+def _resolve_wosac_config(wosac_config, name, simulation_mode, num_scenarios, num_maps):
+    if wosac_config is None:
+        return None
+    wosac_config = _require_mapping(wosac_config, f"Benchmark {name} wosac")
+    unknown_keys = set(wosac_config) - WOSAC_CONFIG_KEYS
+    if unknown_keys:
+        raise pufferlib.APIUsageError(f"Benchmark {name} wosac has unsupported keys: {', '.join(sorted(unknown_keys))}")
+    if simulation_mode != "replay":
+        raise pufferlib.APIUsageError(f"WOSAC benchmark {name} must use replay simulation_mode")
+    if num_scenarios > num_maps:
+        raise pufferlib.APIUsageError(f"WOSAC benchmark {name} scores {num_scenarios} scenes from {num_maps} maps")
+    horizons = wosac_config.get("score_horizons_steps")
+    if not isinstance(horizons, list) or not horizons:
+        raise pufferlib.APIUsageError(f"Benchmark {name} wosac score_horizons_steps must be a non-empty list")
+    scored_agents = wosac_config.get("scored_agents")
+    if (
+        not isinstance(scored_agents, list)
+        or not scored_agents
+        or not set(scored_agents) <= set(WOSAC_SCORED_AGENT_SETS)
+    ):
+        raise pufferlib.APIUsageError(
+            f"Benchmark {name} wosac scored_agents must be a non-empty list from {WOSAC_SCORED_AGENT_SETS}"
+        )
+    return {
+        "num_rollouts": _positive_int(wosac_config.get("num_rollouts"), f"Benchmark {name} wosac num_rollouts"),
+        "scenes_per_batch": _positive_int(
+            wosac_config.get("scenes_per_batch"), f"Benchmark {name} wosac scenes_per_batch"
+        ),
+        "score_horizons_steps": [
+            _positive_int(horizon, f"Benchmark {name} wosac score_horizons_steps entry") for horizon in horizons
+        ],
+        "scored_agents": list(dict.fromkeys(scored_agents)),
+    }
+
+
 def _resolve_map_indices(map_dir, map_names):
     """Map each logged map name back to its index in the sorted .bin map set."""
     if os.path.isfile(map_dir) and str(map_dir).endswith(".bin"):
@@ -185,6 +224,7 @@ def load_benchmark_config(config_path, selected_names):
                 f"{available_map_count} maps"
             )
 
+        wosac_config = _resolve_wosac_config(benchmark.get("wosac"), name, simulation_mode, num_scenarios, num_maps)
         resolved_environment_config = copy.deepcopy(benchmark_environment_config)
         resolved_environment_config["map_dir"] = map_dir
         if max_agents_per_env is None:
@@ -195,6 +235,7 @@ def load_benchmark_config(config_path, selected_names):
                 "seed": seed,
                 "num_scenarios": num_scenarios,
                 "env": resolved_environment_config,
+                "wosac": wosac_config,
             }
         )
     return environment_config, resolved_benchmarks

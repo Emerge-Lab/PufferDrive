@@ -6,9 +6,13 @@ import pandas as pd
 from typing import Dict
 import matplotlib.pyplot as plt
 import configparser
+import itertools
 import os
 
 import pufferlib
+import pufferlib.pytorch
+import pufferlib.spaces
+from pufferlib.ocean.drive import binding
 from pufferlib.ocean.evaluation_utils.wosac import metrics
 from pufferlib.ocean.evaluation_utils.wosac import estimators
 
@@ -26,12 +30,21 @@ _METRIC_FIELD_NAMES = [
 ]
 
 
+def truncate_trajectories(trajectories: Dict, num_steps: int) -> Dict:
+    return {key: values[..., :num_steps] if values.ndim == 3 else values for key, values in trajectories.items()}
+
+
+def _append_context_rows(values: np.ndarray, context_values: np.ndarray, num_rollouts: int) -> np.ndarray:
+    context_count, _, num_steps = context_values.shape
+    return np.concatenate([values, np.broadcast_to(context_values, (context_count, num_rollouts, num_steps))])
+
+
 class WOSACEvaluator:
     """Evaluates policys on the Waymo Open Sim Agent Challenge (WOSAC) in PufferDrive. Info and links in the readme."""
 
     def __init__(self, config: Dict):
         self.config = config
-        self.num_steps = 91  # Hardcoded for WOSAC (9.1s at 10Hz)
+        self.num_steps = config["env"]["scenario_length"]
         self.init_steps = config.get("env", {}).get("init_step", 0)
         self.sim_steps = self.num_steps - self.init_steps
         self.num_rollouts = config.get("eval", {}).get("wosac_num_rollouts", 32)
@@ -130,6 +143,119 @@ class WOSACEvaluator:
 
         return trajectories
 
+    def _scene_copy_rows(self, row_offsets: np.ndarray) -> np.ndarray:
+        """Buffer row of every (agent of a scene, rollout copy), scenes in batch order; copies must hold the same agents."""
+        copy_row_counts = np.diff(row_offsets).reshape(-1, self.num_rollouts)
+        if not np.all(copy_row_counts == copy_row_counts[:, :1]):
+            raise ValueError("Every copy of a scene must hold the same agents")
+        copy_starts = row_offsets[:-1].reshape(-1, self.num_rollouts)
+        return np.concatenate(
+            [starts[None, :] + np.arange(count)[:, None] for starts, count in zip(copy_starts, copy_row_counts[:, 0])]
+        )
+
+    def collect_scene_copy_batch(self, puffer_env, policy, device, obs):
+        """Roll out the current batch, whose scenes each appear num_rollouts times in a row, grouped by scene;
+        also returns the observations after the last step, by which time the env holds its next batch."""
+        driver = puffer_env.driver_env
+        scene_copy_count = driver.num_envs
+        if scene_copy_count % self.num_rollouts != 0:
+            raise ValueError(f"Batch of {scene_copy_count} scenes is not a whole number of {self.num_rollouts} copies")
+        num_scenes = scene_copy_count // self.num_rollouts
+        map_ids = np.asarray(driver.map_ids[:scene_copy_count]).reshape(num_scenes, self.num_rollouts)
+        if not np.all(map_ids == map_ids[:, :1]):
+            raise ValueError("Each scene's rollouts must be consecutive copies of one map")
+
+        context_log = driver.get_context_agent_trajectories()
+        context_counts = np.bincount(context_log["scenario_id"][:, 0], minlength=scene_copy_count)
+        controlled_rows = self._scene_copy_rows(np.asarray(driver.agent_offsets[: scene_copy_count + 1]))
+        context_rows = self._scene_copy_rows(np.concatenate([[0], np.cumsum(context_counts)]))
+        first_copy_rows = controlled_rows[:, 0]
+
+        ground_truth = {key: values[first_copy_rows] for key, values in driver.get_ground_truth_trajectories().items()}
+        agent_state = {key: values[first_copy_rows] for key, values in driver.get_global_agent_state().items()}
+        context = {key: values[context_rows[:, 0]] for key, values in context_log.items()}
+        is_sdc = driver.get_controlled_agent_indices()[first_copy_rows] == binding.EGO_IDX
+        scene_ids = np.arange(num_scenes) * self.num_rollouts
+
+        road_edges = driver.get_road_edge_polylines()
+        polyline_rows = np.isin(road_edges["scenario_id"], scene_ids)
+        point_rows = np.repeat(polyline_rows, road_edges["lengths"])
+        road_edges = {
+            "x": road_edges["x"][point_rows],
+            "y": road_edges["y"][point_rows],
+            "lengths": road_edges["lengths"][polyline_rows],
+            "scenario_id": road_edges["scenario_id"][polyline_rows],
+        }
+
+        rollout_shape = (len(first_copy_rows), self.num_rollouts, self.sim_steps)
+        simulated = {key: np.zeros(rollout_shape, dtype=np.float32) for key in ("x", "y", "z", "heading")}
+        context_rollout_shape = (len(context_rows), self.num_rollouts, self.sim_steps)
+        simulated_context = {key: np.zeros(context_rollout_shape, dtype=np.float32) for key in ("x", "y", "heading")}
+        simulated_context["valid"] = np.zeros(context_rollout_shape, dtype=np.int32)
+        env_continuous = isinstance(puffer_env.single_action_space, pufferlib.spaces.Box)
+        discrete_policy_on_continuous_env = env_continuous and not policy.is_continuous
+        for time_idx in range(self.sim_steps):
+            state = driver.get_global_agent_state()
+            for key in simulated:
+                simulated[key][:, :, time_idx] = state[key][controlled_rows]
+            context_state = driver.get_context_agent_state()
+            for key in simulated_context:
+                simulated_context[key][:, :, time_idx] = context_state[key][context_rows]
+
+            with torch.no_grad():
+                logits, _ = policy.forward_eval(torch.as_tensor(obs, device=device))
+                action, _, _, cont_action = pufferlib.pytorch.sample_logits(
+                    logits,
+                    action_selection=pufferlib.pytorch.ACTION_SELECT_SAMPLE,
+                    env_continuous=env_continuous,
+                    policy=policy,
+                )
+            if discrete_policy_on_continuous_env:
+                env_action = cont_action.reshape(-1, *puffer_env.single_action_space.shape).float().cpu().numpy()
+            else:
+                env_action = action.cpu().numpy().reshape(puffer_env.action_space.shape)
+            if env_continuous:
+                env_action = np.clip(env_action, puffer_env.action_space.low, puffer_env.action_space.high)
+            obs, _, _, _, _ = puffer_env.step(env_action)
+
+        simulated["id"] = np.broadcast_to(ground_truth["id"][:, :, None], rollout_shape).copy()
+        batch = {
+            "ground_truth": ground_truth,
+            "simulated": simulated,
+            "agent_state": agent_state,
+            "context": context,
+            "simulated_context": simulated_context,
+            "road_edges": road_edges,
+            "scene_ids": scene_ids,
+            "is_sdc": is_sdc,
+            "map_files": [driver.map_files[map_id] for map_id in map_ids[:, 0]],
+        }
+        return batch, obs
+
+    def score_scene_copy_batch(self, batch: Dict, horizons_steps: list, scored_agents: list) -> pd.DataFrame:
+        """Scene-level WOSAC metrics of a collected batch for each horizon and each scored set ('controlled', 'sdc')."""
+        scored_masks = {"controlled": np.ones(len(batch["is_sdc"]), dtype=bool), "sdc": batch["is_sdc"]}
+        map_names = {
+            scene_id: os.path.basename(map_file).split(".")[0]
+            for scene_id, map_file in zip(batch["scene_ids"], batch["map_files"])
+        }
+        scene_metric_frames = []
+        for horizon_steps, scored_name in itertools.product(horizons_steps, scored_agents):
+            scene_metrics = self.compute_metrics(
+                truncate_trajectories(batch["ground_truth"], horizon_steps),
+                truncate_trajectories(batch["simulated"], horizon_steps),
+                batch["agent_state"],
+                batch["road_edges"],
+                eval_mask=scored_masks[scored_name],
+                context_trajectories=truncate_trajectories(batch["context"], horizon_steps),
+                simulated_context_trajectories=truncate_trajectories(batch["simulated_context"], horizon_steps),
+            ).reset_index()
+            scene_metrics.insert(0, "scored_agents", scored_name)
+            scene_metrics.insert(0, "horizon_steps", horizon_steps)
+            scene_metrics.insert(0, "map_name", scene_metrics.pop("scenario_id").map(map_names))
+            scene_metric_frames.append(scene_metrics)
+        return pd.concat(scene_metric_frames, ignore_index=True)
+
     def compute_metrics(
         self,
         ground_truth_trajectories: Dict,
@@ -137,6 +263,9 @@ class WOSACEvaluator:
         agent_state: Dict,
         road_edge_polylines: Dict,
         aggregate_results: bool = False,
+        eval_mask: np.ndarray | None = None,
+        context_trajectories: Dict | None = None,
+        simulated_context_trajectories: Dict | None = None,
     ) -> Dict:
         """Compute realism metrics comparing simulated and ground truth trajectories.
 
@@ -145,6 +274,11 @@ class WOSACEvaluator:
             simulated_trajectories: Dict with keys ['x', 'y', 'z', 'heading', 'id']
             agent_state: Dict with length and width of agents.
             road_edge_polylines: Dict with keys ['x', 'y', 'lengths', 'scenario_id']
+            eval_mask: Shape (num_agents,), the scored agents; defaults to the tracks to predict (id >= 0).
+            context_trajectories: Logged trajectories of unscored agents that only enter the interaction
+                features, from drive.py get_context_agent_trajectories.
+            simulated_context_trajectories: The same agents' simulated poses per rollout, with keys
+                ['x', 'y', 'heading', 'valid']; defaults to their logged trajectories in every rollout.
 
         Note: z-position currently not used.
 
@@ -156,7 +290,8 @@ class WOSACEvaluator:
             "Agent IDs don't match between simulated and ground truth trajectories"
         )
 
-        eval_mask = ground_truth_trajectories["id"][:, 0] >= 0
+        if eval_mask is None:
+            eval_mask = ground_truth_trajectories["id"][:, 0] >= 0
 
         # Extract trajectories
         sim_x = simulated_trajectories["x"]
@@ -198,18 +333,54 @@ class WOSACEvaluator:
         speed_validity, acceleration_validity = metrics.compute_kinematic_validity(ref_valid[eval_mask])
 
         # Interaction-related features
+        sim_valid = np.ones(sim_x.shape, dtype=np.int32)
+        interaction_scenario_ids = scenario_ids
+        interaction_length = agent_length
+        interaction_width = agent_width
+        interaction_eval_mask = eval_mask
+        if context_trajectories is not None:
+            num_rollouts = sim_x.shape[1]
+            simulated_context = (
+                context_trajectories if simulated_context_trajectories is None else simulated_context_trajectories
+            )
+            sim_x, sim_y, sim_heading, sim_valid = (
+                _append_context_rows(sim_x, simulated_context["x"], num_rollouts),
+                _append_context_rows(sim_y, simulated_context["y"], num_rollouts),
+                _append_context_rows(sim_heading, simulated_context["heading"], num_rollouts),
+                _append_context_rows(sim_valid, simulated_context["valid"], num_rollouts),
+            )
+            ref_x, ref_y, ref_heading, ref_valid = (
+                _append_context_rows(ref_x, context_trajectories["x"], 1),
+                _append_context_rows(ref_y, context_trajectories["y"], 1),
+                _append_context_rows(ref_heading, context_trajectories["heading"], 1),
+                _append_context_rows(ref_valid, context_trajectories["valid"], 1),
+            )
+            interaction_scenario_ids = np.concatenate([scenario_ids, context_trajectories["scenario_id"]])
+            interaction_length = np.concatenate([agent_length, context_trajectories["length"]])
+            interaction_width = np.concatenate([agent_width, context_trajectories["width"]])
+            context_count = context_trajectories["length"].shape[0]
+            interaction_eval_mask = np.concatenate([eval_mask, np.zeros(context_count, dtype=bool)])
+
         sim_signed_distances, sim_collision_per_step, sim_time_to_collision = metrics.compute_interaction_features(
-            sim_x, sim_y, sim_heading, scenario_ids, agent_length, agent_width, eval_mask, device=self.device
+            sim_x,
+            sim_y,
+            sim_heading,
+            interaction_scenario_ids,
+            interaction_length,
+            interaction_width,
+            interaction_eval_mask,
+            device=self.device,
+            valid=sim_valid,
         )
 
         ref_signed_distances, ref_collision_per_step, ref_time_to_collision = metrics.compute_interaction_features(
             ref_x,
             ref_y,
             ref_heading,
-            scenario_ids,
-            agent_length,
-            agent_width,
-            eval_mask,
+            interaction_scenario_ids,
+            interaction_length,
+            interaction_width,
+            interaction_eval_mask,
             device=self.device,
             valid=ref_valid,
         )

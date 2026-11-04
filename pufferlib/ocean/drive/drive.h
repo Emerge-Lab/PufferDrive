@@ -3558,8 +3558,40 @@ void c_get_global_agent_state(
     }
 }
 
+// Writes num_timesteps log poses from init_step in world frame; steps past the log are invalid.
+static void copy_log_window_world_frame(
+    Drive *env,
+    Agent *agent,
+    int num_timesteps,
+    int out_offset,
+    float *x_out,
+    float *y_out,
+    float *z_out,
+    float *heading_out,
+    int *valid_out) {
+    for (int t = 0; t < num_timesteps; t++) {
+        int log_t = env->init_step + t;
+        int out_idx = out_offset + t;
+        if (log_t >= agent->trajectory_size) {
+            x_out[out_idx] = 0.0f;
+            y_out[out_idx] = 0.0f;
+            z_out[out_idx] = 0.0f;
+            heading_out[out_idx] = 0.0f;
+            valid_out[out_idx] = 0;
+            continue;
+        }
+        x_out[out_idx] = agent->log_trajectory_x[log_t] + env->world_mean_x;
+        y_out[out_idx] = agent->log_trajectory_y[log_t] + env->world_mean_y;
+        z_out[out_idx] = agent->log_trajectory_z[log_t];
+        heading_out[out_idx] = agent->log_heading[log_t];
+        valid_out[out_idx] = agent->log_valid[log_t];
+    }
+}
+
 void c_get_global_ground_truth_trajectories(
     Drive *env,
+    int num_timesteps,
+    int scenario_id,
     float *x_out,
     float *y_out,
     float *z_out,
@@ -3571,17 +3603,95 @@ void c_get_global_ground_truth_trajectories(
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
         id_out[i] = get_track_id_or_placeholder(env, agent_idx);
-        scenario_id_out[i] = 0; // TODO: FIXME
+        scenario_id_out[i] = scenario_id;
+        copy_log_window_world_frame(
+            env,
+            agent,
+            num_timesteps,
+            i * num_timesteps,
+            x_out,
+            y_out,
+            z_out,
+            heading_out,
+            valid_out);
+    }
+}
 
-        for (int t = env->init_step; t < agent->trajectory_size; t++) {
-            int out_idx = i * (agent->trajectory_size - env->init_step) + (t - env->init_step);
-            // Add world means back to get original world coordinates
-            x_out[out_idx] = agent->log_trajectory_x[t] + env->world_mean_x;
-            y_out[out_idx] = agent->log_trajectory_y[t] + env->world_mean_y;
-            z_out[out_idx] = agent->log_trajectory_z[t];
-            heading_out[out_idx] = agent->log_heading[t];
-            valid_out[out_idx] = agent->log_valid[t];
+// Context agents are every non-controlled agent, whatever drives them (log replay, static, IDM).
+static inline bool is_context_agent(Agent *agent) {
+    return !agent->active_agent;
+}
+
+int c_get_context_agent_count(Drive *env) {
+    int context_agent_count = 0;
+    for (int i = 0; i < env->num_total_agents; i++) {
+        context_agent_count += is_context_agent(&env->agents[i]);
+    }
+    return context_agent_count;
+}
+
+void c_get_context_agent_trajectories(
+    Drive *env,
+    int num_timesteps,
+    int scenario_id,
+    float *x_out,
+    float *y_out,
+    float *z_out,
+    float *heading_out,
+    int *valid_out,
+    float *length_out,
+    float *width_out,
+    int *scenario_id_out) {
+    int row_idx = 0;
+    for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
+        Agent *agent = &env->agents[agent_idx];
+        if (!is_context_agent(agent)) {
+            continue;
         }
+        scenario_id_out[row_idx] = scenario_id;
+        copy_log_window_world_frame(
+            env,
+            agent,
+            num_timesteps,
+            row_idx * num_timesteps,
+            x_out,
+            y_out,
+            z_out,
+            heading_out,
+            valid_out);
+        int window_end = env->init_step + num_timesteps;
+        if (window_end > agent->trajectory_size) {
+            window_end = agent->trajectory_size;
+        }
+        int size_step = env->init_step;
+        while (size_step < window_end && !agent->log_valid[size_step]) {
+            size_step++;
+        }
+        bool has_valid_step = size_step < window_end;
+        length_out[row_idx] = has_valid_step ? agent->log_length[size_step] : 0.0f;
+        width_out[row_idx] = has_valid_step ? agent->log_width[size_step] : 0.0f;
+        row_idx++;
+    }
+}
+
+void c_get_context_agent_state(Drive *env, float *x_out, float *y_out, float *heading_out, int *valid_out) {
+    int row_idx = 0;
+    for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
+        Agent *agent = &env->agents[agent_idx];
+        if (!is_context_agent(agent)) {
+            continue;
+        }
+        x_out[row_idx] = agent->sim_x + env->world_mean_x;
+        y_out[row_idx] = agent->sim_y + env->world_mean_y;
+        heading_out[row_idx] = agent->sim_heading;
+        valid_out[row_idx] = agent->sim_valid;
+        row_idx++;
+    }
+}
+
+void c_get_controlled_agent_indices(Drive *env, int *agent_idx_out) {
+    for (int i = 0; i < env->active_agent_count; i++) {
+        agent_idx_out[i] = env->active_agent_indices[i];
     }
 }
 
@@ -3597,13 +3707,19 @@ void c_get_road_edge_counts(Drive *env, int *num_polylines_out, int *total_point
     *total_points_out = points;
 }
 
-void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *lengths_out, int *scenario_ids_out) {
+void c_get_road_edge_polylines(
+    Drive *env,
+    int scenario_id,
+    float *x_out,
+    float *y_out,
+    int *lengths_out,
+    int *scenario_ids_out) {
     int poly_idx = 0, pt_idx = 0;
     for (int i = 0; i < env->num_road_elements; i++) {
         RoadMapElement *e = &env->road_elements[i];
         if (is_road_edge(e->type)) {
             lengths_out[poly_idx] = e->segment_size;
-            scenario_ids_out[poly_idx] = 0; // TODO: FIXME
+            scenario_ids_out[poly_idx] = scenario_id;
             for (int j = 0; j < e->segment_size; j++) {
                 x_out[pt_idx] = e->x[j] + env->world_mean_x;
                 y_out[pt_idx] = e->y[j] + env->world_mean_y;

@@ -1,0 +1,76 @@
+# WOSAC realism of SDC-only nuPlan policies: sampled rollouts of the SDC per scene, scored against its log,
+# with the log-replay traffic as unscored context. Each checkpoint keeps its own training env otherwise.
+# Usage: puffer eval puffer_drive nuplan_single_wosac load_model_path=<pt> eval.benchmark_config=pufferlib/config/evaluation/wosac_nuplan.yaml
+env:
+  # WOSAC scores collisions and offroad as likelihoods, so nothing may freeze the SDC before the horizon
+  collision_behavior: ignore
+  offroad_behavior: ignore
+  traffic_light_behavior: ignore
+  goal_reached_behavior: ignore
+  terminate_on_goal: 0
+  # Rollouts differ only by the policy's sampled actions
+  obs_dropout_lane: 0.0
+  obs_dropout_boundary: 0.0
+  partner_blindness_prob: 0.0
+  partner_blindness_trigger_prob: 0.0
+  phantom_braking_prob: 0.0
+  phantom_braking_trigger_prob: 0.0
+  # A scene's rollout copies share its map geometry
+  use_map_cache: 1
+  use_neighbor_cache: 0
+
+benchmarks:
+  - name: nuplan_single_wosac
+    seed: 42
+    num_scenarios: 1000
+    wosac:
+      num_rollouts: 32
+      scenes_per_batch: 16
+      # 91 steps is the WOSAC horizon; 200 is the whole nuPlan episode
+      score_horizons_steps: [91, 200]
+      scored_agents: [controlled]
+    env:
+      simulation_mode: replay
+      num_maps: 1000
+      scenario_length: 200
+      control_mode: control_sdc_only
+      map_dir: /home/ricky/pufferdata/nuplan_val/nuplan_val_moving
+
+  - name: nuplan_single_wosac_official_window
+    seed: 42
+    num_scenarios: 1000
+    wosac:
+      num_rollouts: 32
+      scenes_per_batch: 16
+      # Steps 10-90: the log drives steps 0-10 as WOSAC's given history, the policy the 80 steps after
+      score_horizons_steps: [81]
+      scored_agents: [controlled]
+    env:
+      simulation_mode: replay
+      num_maps: 1000
+      init_step: 10
+      scenario_length: 91
+      control_mode: control_sdc_only
+      map_dir: /home/ricky/pufferdata/nuplan_val/nuplan_val_moving
+
+  - name: nuplan_selfplay_wosac_official_window
+    seed: 42
+    num_scenarios: 1000
+    wosac:
+      num_rollouts: 32
+      scenes_per_batch: 4
+      score_horizons_steps: [81]
+      # Every controlled car, and the SDC alone for comparison with the SDC-only benchmarks
+      scored_agents: [controlled, sdc]
+    env:
+      simulation_mode: replay
+      num_maps: 1000
+      init_step: 10
+      scenario_length: 91
+      # The policy drives every car; pedestrians and cyclists replay their logs
+      control_mode: control_vehicles
+      sdc_controller: policy
+      non_sdc_controller: policy
+      non_vehicle_controller: replay
+      max_agents_per_env: 120
+      map_dir: /home/ricky/pufferdata/nuplan_val/nuplan_val_moving

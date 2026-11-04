@@ -5,6 +5,8 @@
 import contextlib
 import copy
 import inspect
+import itertools
+import json
 import warnings
 
 import pandas as pd
@@ -188,11 +190,21 @@ LOGREPLAY_ENV_SETUP = {
     "log_sdc_only": True,
     "learner_agents": "sdc",
 }
+WOSAC_CONTROL_MODES = ("control_sdc_only", "control_vehicles")
 VALID_ACTION_SELECTIONS = (
     pufferlib.pytorch.ACTION_SELECT_SAMPLE,
     pufferlib.pytorch.ACTION_SELECT_MODE,
     pufferlib.pytorch.ACTION_SELECT_MEAN,
 )
+# WOSAC rollouts: no event may freeze a controlled agent before the horizon.
+WOSAC_ROLLOUT_ENV_SETUP = {
+    "simulation_mode": "replay",
+    "collision_behavior": "ignore",
+    "offroad_behavior": "ignore",
+    "traffic_light_behavior": "ignore",
+    "goal_reached_behavior": "ignore",
+    "terminate_on_goal": 0,
+}
 
 
 def policy_io_layout(policy, label):
@@ -2507,6 +2519,15 @@ def eval(
         )
 
         np.random.seed(run_args["train"]["seed"])
+        if benchmark["wosac"] is not None:
+            if failure_replay_csv is not None or render_scenarios:
+                raise pufferlib.APIUsageError(
+                    f"WOSAC benchmark {benchmark['name']} cannot replay failures or render scenarios"
+                )
+            benchmark_results[benchmark["name"]] = _run_wosac_benchmark(
+                env_name, run_args, benchmark, benchmark_output_dir, evaluation_policy_cache
+            )
+            continue
         if failure_replay_csv is not None:
             benchmark_results[benchmark["name"]] = _render_eval_failures(
                 env_name,
@@ -2989,6 +3010,97 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
         if hasattr(policy, "train"):
             policy.train(policy_was_training)
         restore_rng_state({"rng_state": rng_state})
+
+
+def _run_wosac_benchmark(env_name, args, benchmark, output_dir, evaluation_policy_cache):
+    """WOSAC for SDC-only replay: each scene is loaded num_rollouts times per batch, so one pass samples all."""
+    from pufferlib.ocean.evaluation_utils.wosac.evaluator import WOSACEvaluator
+
+    wosac_config = benchmark["wosac"]
+    mismatched_keys = [key for key, value in WOSAC_ROLLOUT_ENV_SETUP.items() if args["env"][key] != value]
+    if mismatched_keys:
+        required = ", ".join(f"{key}={WOSAC_ROLLOUT_ENV_SETUP[key]}" for key in mismatched_keys)
+        raise pufferlib.APIUsageError(f"WOSAC benchmark {benchmark['name']} needs env {required}")
+    if args["env"]["control_mode"] not in WOSAC_CONTROL_MODES:
+        raise pufferlib.APIUsageError(
+            f"WOSAC benchmark {benchmark['name']} control_mode must be one of {WOSAC_CONTROL_MODES}"
+        )
+    if args["rnn_name"] is not None:
+        raise pufferlib.APIUsageError("WOSAC rollouts support feed-forward policies only")
+
+    num_rollouts = wosac_config["num_rollouts"]
+    scenes_per_batch = wosac_config["scenes_per_batch"]
+    num_scenes = args["num_scenarios"]
+    rollout_steps = args["env"]["scenario_length"] - args["env"]["init_step"]
+    if max(wosac_config["score_horizons_steps"]) > rollout_steps:
+        raise pufferlib.APIUsageError(
+            f"WOSAC benchmark {benchmark['name']} horizons exceed the {rollout_steps}-step rollouts"
+        )
+    sdc_only = args["env"]["control_mode"] == "control_sdc_only"
+    controlled_agents_per_scene = 1 if sdc_only else args["env"]["max_agents_per_env"]
+    env_kwargs = copy.deepcopy(args["env"])
+    env_kwargs.update(
+        eval_mode=1,
+        num_agents=scenes_per_batch * num_rollouts * controlled_agents_per_scene,
+        max_scenarios_per_batch=scenes_per_batch * num_rollouts,
+        num_eval_scenarios=num_scenes * num_rollouts,
+        eval_map_indices=[map_idx for map_idx in range(num_scenes) for _ in range(num_rollouts)],
+        eval_scenario_seeds=[benchmark["seed"]] * (num_scenes * num_rollouts),
+        resample_frequency=rollout_steps,
+    )
+    package = args["package"]
+    module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
+    make_env = importlib.import_module(module_name).env_creator(env_name)
+    vecenv = pufferlib.vector.make(
+        [make_env], env_args=[[]], env_kwargs=[env_kwargs], backend="Serial", num_envs=1, seed=args["vec"]["seed"]
+    )
+
+    wosac_args = copy.deepcopy(args)
+    wosac_args["eval"]["wosac_num_rollouts"] = num_rollouts
+    evaluator = WOSACEvaluator(wosac_args)
+    device = torch_device(args["train"]["device"])
+    scene_metric_frames = []
+    try:
+        if evaluation_policy_cache["policy"] is None:
+            evaluation_policy_cache["policy"] = load_policy(args, vecenv, env_name)
+        policy = base_policy(evaluation_policy_cache["policy"])
+        policy.eval()
+        torch.manual_seed(args["train"]["seed"])
+        obs, _ = vecenv.reset(args["vec"]["seed"])
+        num_batches = -(-num_scenes // scenes_per_batch)
+        for _ in tqdm(range(num_batches), desc=f"WOSAC {benchmark['name']}", unit="batch"):
+            batch, obs = evaluator.collect_scene_copy_batch(vecenv, policy, device, obs)
+            scene_metric_frames.append(
+                evaluator.score_scene_copy_batch(
+                    batch, wosac_config["score_horizons_steps"], wosac_config["scored_agents"]
+                )
+            )
+    finally:
+        vecenv.close()
+
+    scene_metrics = pd.concat(scene_metric_frames, ignore_index=True)
+    if scene_metrics["map_name"].nunique() != num_scenes:
+        raise RuntimeError(f"WOSAC scored {scene_metrics['map_name'].nunique()} scenes, expected {num_scenes}")
+    os.makedirs(output_dir, exist_ok=True)
+    scene_metrics.to_csv(os.path.join(output_dir, "wosac_scene_metrics.csv"), index=False)
+    group_means = scene_metrics.drop(columns="map_name").groupby(["horizon_steps", "scored_agents"]).mean()
+    metrics_mean = {
+        f"wosac_{horizon_steps}_steps_{scored_name}/{column}": float(value)
+        for (horizon_steps, scored_name, column), value in group_means.stack().items()
+    }
+    summary = {
+        "num_scenarios": num_scenes,
+        "num_episodes": num_scenes * num_rollouts,
+        "metrics_mean": metrics_mean,
+    }
+    with open(os.path.join(output_dir, "wosac_summary.json"), "w") as summary_file:
+        json.dump(summary, summary_file, indent=2)
+    for horizon_steps, scored_name in itertools.product(
+        wosac_config["score_horizons_steps"], wosac_config["scored_agents"]
+    ):
+        score = metrics_mean[f"wosac_{horizon_steps}_steps_{scored_name}/realism_meta_score"]
+        print(f"WOSAC {benchmark['name']} realism meta score, {scored_name}, {horizon_steps} steps: {score:.4f}")
+    return {"episodes": [], "summary": summary}
 
 
 def _render_eval_failures(
