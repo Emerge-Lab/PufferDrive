@@ -1,0 +1,10 @@
+# @package _global_
+# The nuPlan SDC-only displacement recipe, but collisions, offroad and red lights no longer stop the SDC; episodes end at the final goal or scenario_length.
+# Usage: puffer train puffer_drive +experiment=nuplan_sdc_only_displacement_ignore [env.reward_comfort=<coef>]
+defaults:
+  - nuplan_sdc_only_displacement
+  - _self_
+env:
+  collision_behavior: ignore
+  offroad_behavior: ignore
+  traffic_light_behavior: ignore
