@@ -42,6 +42,8 @@
 # DS of results.csv becomes the training run's final_eval/longest6_v2_DS in wandb, replacing an earlier report; 0 for
 # ablations, so the run keeps the number of its standard eval; never reported: a run with missing route records, the
 # scenario-free variant and a walker speed floor run).
+# COSIM_DYNAMICS_SOURCE (pufferdrive, default: the ego is teleported along PufferDrive's own dynamics; carla_pedals: CARLA's
+# physics moves it, driven only by the VehicleControl the agent returns; tags the folder _carla_pedals).
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
 
@@ -115,7 +117,8 @@ cd "$PD" || exit 1
 OMP_THREADS=${OMP_NUM_THREADS:-$([ "$WORKERS" -ge 16 ] && echo 2 || echo 4)}
 export OMP_NUM_THREADS=$OMP_THREADS MKL_NUM_THREADS=$OMP_THREADS OPENBLAS_NUM_THREADS=$OMP_THREADS NUMEXPR_NUM_THREADS=$OMP_THREADS
 export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
-export COSIM_DYNAMICS_SOURCE=pufferdrive
+export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-pufferdrive}   # carla_pedals: CARLA's physics moves the ego, see shadow_ego.py
+[[ "$COSIM_DYNAMICS_SOURCE" =~ ^(pufferdrive|carla_pedals)$ ]] || { echo "COSIM_DYNAMICS_SOURCE=\"$COSIM_DYNAMICS_SOURCE\" must be pufferdrive or carla_pedals"; exit 1; }
 export COSIM_MAX_SPEED_MPS=${COSIM_MAX_SPEED_MPS:-30}
 export COSIM_ZERO_PARTNER_STOPPED_TIME=${COSIM_ZERO_PARTNER_STOPPED_TIME:-1}
 export COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-0.8}
@@ -127,6 +130,7 @@ export COSIM_OBS_HTML_RENDER=0  # routes save the compact replay only; render_ca
 TAG=longest6_v2$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")_seeds$(echo "$SEEDS" | tr ' ' '-')
 TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
 TAG=$TAG$([ "$COSIM_WALKER_SPEED_FLOOR_MPS" = "0" ] || echo "_walkerfloor$COSIM_WALKER_SPEED_FLOOR_MPS")
+TAG=$TAG$([ "$COSIM_DYNAMICS_SOURCE" = "pufferdrive" ] || echo "_$COSIM_DYNAMICS_SOURCE")
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 OUT=$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
@@ -134,6 +138,7 @@ mkdir -p "$OUT/routes" "$OUT/aggregate"
     echo "checkpoint $CKPT"; echo "routes $ROUTES"; echo "seeds $SEEDS"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"
     echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
     echo "walker_speed_floor_mps $COSIM_WALKER_SPEED_FLOOR_MPS"
+    echo "dynamics_source $COSIM_DYNAMICS_SOURCE"
     echo "git $(git -C "$PD" rev-parse --short HEAD 2>/dev/null) $(git -C "$PD" diff --quiet 2>/dev/null || echo dirty)"
     echo "port_base $PORT_BASE"
 } > "$OUT/run_info.txt"

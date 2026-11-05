@@ -454,6 +454,7 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
                 "extent": [body.extent.x, body.extent.y, body.extent.z],
                 "box_z": body.location.z,
                 "wheels": wheels,
+                "blueprint": self.vehicle.type_id,
                 "state": actor_state_row(self.vehicle),
             },
             "sparse_plan": plan_xyz(self._global_plan_world_coord),

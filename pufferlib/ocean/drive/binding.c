@@ -2298,6 +2298,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "early_reset_short", log->early_reset_short);
     assign_to_dict(dict, "pedestrian_collision_rate", log->pedestrian_collision_rate);
     assign_to_dict(dict, "pedestrian_crossings", log->pedestrian_crossings);
+    assign_to_dict(dict, "pedestrian_bystanders", log->pedestrian_bystanders);
     assign_to_dict(dict, "offroad_rate", log->offroad_rate);
     assign_to_dict(dict, "episode_length", log->episode_length);
     assign_to_dict(dict, "collision_rate", log->collision_rate);

@@ -273,12 +273,16 @@ env:
   phantom_braking_duration_seconds: 3.0
   # Zero the steering command while a phantom brake is active (false keeps the policy's steering)
   phantom_braking_freeze_steering: false
-  # Scripted pedestrian crossings (CARLA Leaderboard 1.0 Scenario3 at the centre of every range): each env gets
-  # ceil(ratio * agents) walker slots. A slot pops in standing at the right kerb 10-17 m ahead of a random moving car
-  # (12 m + 1.5 m per extra lane to the kerb, +-2 m), half a lane outside the road edge (0.75-2.75 m), waits 0-0.6 s,
-  # ramps up over 0.3-0.7 s to 3.4 m/s + 0.4 m/s per lane (+-1 m/s) and crosses to the far kerb as a 1.0-1.5 m box
-  # (CARLA walker plus the 0.8 m eval VRU pad), then vanishes for 5-20 s. Scripted, never policy-controlled,
-  # no observations of their own; cars see them as partners and collide with them normally. 0 disables.
+  # Scripted pedestrians: each env gets ceil(ratio * agents) walker slots (1.0-1.5 m boxes = CARLA walker plus the 0.8 m
+  # eval VRU pad). A slot appears beside a random moving car's lane, plays one behaviour and vanishes for 5-20 s:
+  #   40% pop-in crosser (CARLA Leaderboard 1.0 Scenario3): standing at the right kerb 10-17 m ahead, half a lane outside
+  #       the road edge, waits 0-0.6 s, ramps over 0.3-0.7 s to 3.4 m/s + 0.4 m/s per lane (+-1) and crosses;
+  #   15% slow crosser: either kerb, 25-70 m ahead, waits 0-5 s, crosses at 0.8-2 m/s up to 34 deg off the perpendicular;
+  #   20% stander: either kerb, 15-60 m ahead, stands 8-25 s with a stopped time already running (0-60 s);
+  #   15% kerb walker: either kerb, walks 8-25 m along it at 0.7-1.7 m/s, with or against traffic, never on the road;
+  #   10% kerb stepper: pops in like a crosser, steps 0.5-1.5 m toward the road edge or away from it, stands 8-25 s.
+  # Shares and ranges are the PEDESTRIAN_* constants in constants.h. Scripted, never policy-controlled, no observations
+  # of their own; cars see them as partners and collide with them normally. 0 disables.
   scripted_pedestrian_ratio: 0.0
 policy:
   # Encoder layer (per-encoder embedding width)

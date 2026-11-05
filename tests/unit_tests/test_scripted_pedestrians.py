@@ -1,5 +1,5 @@
-"""Scripted pedestrian crossings (env.scripted_pedestrian_ratio): config validation, per-env slot
-rounding, and a short gigaflow rollout in which walkers appear as static partners and get logged."""
+"""Scripted pedestrians (env.scripted_pedestrian_ratio): config validation, per-env slot rounding, and a
+short gigaflow rollout in which walkers appear as static partners and get logged."""
 
 import numpy as np
 import pytest
@@ -48,7 +48,7 @@ def test_slot_rounding_matches_ceil_of_ratio_times_agents():
     assert env._env_init_kwargs("unused.bin", 30)["scripted_pedestrian_slots"] == 3
 
 
-def test_rollout_spawns_crossings_as_static_partners():
+def test_rollout_spawns_pedestrians_as_static_partners():
     env = Drive(**_kwargs(scripted_pedestrian_ratio=0.125))
     try:
         env.reset(seed=3)
@@ -59,7 +59,7 @@ def test_rollout_spawns_crossings_as_static_partners():
 
         actions = np.zeros_like(env.actions)
         walkers_seen = 0
-        crossings_logged = 0.0
+        appearances_logged = 0.0
         for _ in range(env.scenario_length + 1):
             obs, _, _, _, infos = env.step(actions)
             assert np.all(np.isfinite(obs))
@@ -67,9 +67,9 @@ def test_rollout_spawns_crossings_as_static_partners():
             walker_x = state["x"][env.num_agents :]
             walkers_seen += int(np.sum(walker_x > -9000.0))
             for info in infos:
-                crossings_logged += float(info.get("pedestrian_crossings", 0.0))
+                appearances_logged += float(info["pedestrian_crossings"]) + float(info["pedestrian_bystanders"])
         assert walkers_seen > 0
-        assert crossings_logged > 0.0
+        assert appearances_logged > 0.0
     finally:
         env.close()
 

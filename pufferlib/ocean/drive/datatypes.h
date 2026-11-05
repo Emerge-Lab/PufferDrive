@@ -143,17 +143,33 @@ struct Agent {
 
 struct ScriptedPedestrian {
     int agent_idx;        // slot in Drive.agents
-    int target_agent_idx; // car the crossing was armed for, -1 while idle
+    int target_agent_idx; // car it appeared for, -1 while idle
     int state;            // PEDESTRIAN_STATE_*
-    float timer_s;        // cooldown left while idle, standstill left at the kerb, linger left at the far kerb
-    float dir_x;          // unit crossing direction
+    int mode;             // PEDESTRIAN_MODE_*, drawn when it goes idle
+    float timer_s;        // cooldown left while idle, standstill left before the leg, standing time left after it
+    float dir_x;          // unit walking (and facing) direction
     float dir_y;
-    float crossing_m; // kerb to kerb path length
+    float path_m; // length of the leg, 0 for a stander
     float remaining_m;
-    float speed_mps; // crossing speed once the ramp is over
+    float speed_mps; // walking speed once the ramp is over
     float ramp_s;    // seconds from setting off to speed_mps
     float current_speed_mps;
+    float stand_s;     // standing time after the leg
+    float climb_per_m; // z change per metre walked: legs that run along a sloped road
 };
+
+// Lane point with the road edge distance on both sides
+typedef struct {
+    float x;
+    float y;
+    float z;
+    float right_x; // unit vector to the right of the lane heading
+    float right_y;
+    float right_kerb_m;
+    float left_kerb_m;
+    int lane_idx;
+    float lane_s_m;
+} KerbSite;
 
 typedef struct {
     float mid_x_m;

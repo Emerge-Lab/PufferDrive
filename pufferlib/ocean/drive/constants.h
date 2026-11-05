@@ -184,31 +184,62 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define REPLAY_MAX_CONTROLLED_LENGTH_M 6.0f                     // Longer vehicles (trucks, buses) are made static
 #define REPLAY_SPAWN_MAX_LANE_DISTANCE_M 2.5f                   // Car must be this close to a lane center line
 
-// Scripted pedestrian crossings: CARLA Leaderboard Scenario3 geometry (walker pops in at the right kerb and crosses)
-#define PEDESTRIAN_STATE_IDLE 0 // hidden, cooldown running
-#define PEDESTRIAN_STATE_CROSSING 1
-#define PEDESTRIAN_STATE_LINGER 2          // stands at the far kerb before vanishing
-// Leaderboard 1.0 Scenario3 sits at the centre of every range; lanes = driving lanes from the car's lane to the kerb (>= 1)
+// Scripted pedestrians: one behaviour per appearance, drawn with the PEDESTRIAN_*_PROB shares
+#define PEDESTRIAN_STATE_IDLE 0        // hidden, cooldown running
+#define PEDESTRIAN_STATE_WALKING 1     // stands where it appeared, then walks its leg
+#define PEDESTRIAN_STATE_STANDING 2    // leg done: stands until it vanishes
+#define PEDESTRIAN_MODE_POP_IN_CROSS 0 // CARLA Scenario3: pops in at the right kerb close ahead, crosses fast
+#define PEDESTRIAN_MODE_SLOW_CROSS 1   // crosses at walking speed from either kerb, visible from afar
+#define PEDESTRIAN_MODE_STAND 2        // stands beside the road, never enters it
+#define PEDESTRIAN_MODE_KERB_WALK 3    // walks along the kerb, never enters the road
+#define PEDESTRIAN_MODE_KERB_STEP 4    // pops in like a crosser, steps toward or away from the road, then stands
+#define PEDESTRIAN_POP_IN_CROSS_PROB 0.40f
+#define PEDESTRIAN_SLOW_CROSS_PROB 0.15f
+#define PEDESTRIAN_STAND_PROB 0.20f
+#define PEDESTRIAN_KERB_WALK_PROB 0.15f // the rest: PEDESTRIAN_MODE_KERB_STEP
+// Leaderboard 1.0 Scenario3 is the centre of every LB1 range; lanes = driving lanes from the car to the kerb, >= 1
 #define PEDESTRIAN_LB1_LANE_WIDTH_M 3.5f
-#define PEDESTRIAN_LB1_APPEAR_BASE_M 12.0f   // walker pops in 12 m + 1.5 m per extra lane ahead of the car
+#define PEDESTRIAN_LB1_APPEAR_BASE_M 12.0f // walker pops in 12 m + 1.5 m per extra lane ahead of the car
 #define PEDESTRIAN_LB1_APPEAR_PER_LANE_M 1.5f
 #define PEDESTRIAN_APPEAR_JITTER_M 2.0f
-#define PEDESTRIAN_KERB_OFFSET_MIN_M 0.75f   // LB1 stands half a lane (1.75 m) outside the road edge
+#define PEDESTRIAN_KERB_OFFSET_MIN_M 0.75f // LB1 stands half a lane (1.75 m) outside the road edge
 #define PEDESTRIAN_KERB_OFFSET_MAX_M 2.75f
 #define PEDESTRIAN_KERB_SEARCH_MAX_M 10.0f   // lateral reach per side; wider roads get no crossing
 #define PEDESTRIAN_FAR_KERB_OVERSHOOT_M 1.0f // walk this far past the far road edge
 #define PEDESTRIAN_LB1_SPEED_BASE_MPS 3.4f   // LB1 walks at 3 + 0.4 m/s x (lanes + 1)
 #define PEDESTRIAN_LB1_SPEED_PER_LANE_MPS 0.4f
 #define PEDESTRIAN_SPEED_JITTER_MPS 1.0f
-#define PEDESTRIAN_WAIT_MIN_S 0.0f           // LB1 walker stands ~0.25 s after popping in
+#define PEDESTRIAN_WAIT_MIN_S 0.0f // LB1 walker stands ~0.25 s after popping in
 #define PEDESTRIAN_WAIT_MAX_S 0.6f
-#define PEDESTRIAN_RAMP_MIN_S 0.3f           // LB1 walker reaches its speed ~0.5 s after setting off
+#define PEDESTRIAN_RAMP_MIN_S 0.3f // LB1 walker reaches its speed ~0.5 s after setting off
 #define PEDESTRIAN_RAMP_MAX_S 0.7f
 #define PEDESTRIAN_SIZE_MIN_M 1.0f // CARLA walker box (0.4-0.5 m) plus the 0.8 m eval VRU pad
 #define PEDESTRIAN_SIZE_MAX_M 1.5f
 #define PEDESTRIAN_HEIGHT_M 1.8f
-#define PEDESTRIAN_LINGER_MIN_S 1.0f
+#define PEDESTRIAN_LINGER_MIN_S 1.0f // crossers and kerb walkers at the end of their leg
 #define PEDESTRIAN_LINGER_MAX_S 3.0f
+#define PEDESTRIAN_FAR_APPEAR_MIN_M 15.0f // standers and kerb walkers appear this far ahead of the car
+#define PEDESTRIAN_FAR_APPEAR_MAX_M 60.0f
+#define PEDESTRIAN_SLOW_APPEAR_MIN_M 25.0f // slow crossers: far enough to yield without an emergency stop
+#define PEDESTRIAN_SLOW_APPEAR_MAX_M 70.0f
+#define PEDESTRIAN_SLOW_SPEED_MIN_MPS 0.8f // nuPlan pedestrians cross at 0.6-1.7 m/s
+#define PEDESTRIAN_SLOW_SPEED_MAX_MPS 2.0f
+#define PEDESTRIAN_SLOW_WAIT_MAX_S 5.0f           // standstill at the kerb before setting off
+#define PEDESTRIAN_SLOW_SKEW_MAX_RAD 0.6f         // crossing direction off the perpendicular
+#define PEDESTRIAN_SLOW_AGAINST_TRAFFIC_PROB 0.5f // which way a skewed crossing leans
+#define PEDESTRIAN_KERB_WALK_SPEED_MIN_MPS 0.7f
+#define PEDESTRIAN_KERB_WALK_SPEED_MAX_MPS 1.7f
+#define PEDESTRIAN_KERB_WALK_MIN_M 8.0f
+#define PEDESTRIAN_KERB_WALK_MAX_M 25.0f
+#define PEDESTRIAN_KERB_WALK_BEND_TOLERANCE_M 0.5f // the straight walk may leave the kerb line by this much mid-way
+#define PEDESTRIAN_KERB_WALK_AGAINST_TRAFFIC_PROB 0.5f
+#define PEDESTRIAN_KERB_STEP_MIN_M 0.5f // CARLA's stuck Scenario3 walkers move 0.7-1.4 m and stand
+#define PEDESTRIAN_KERB_STEP_MAX_M 1.5f
+#define PEDESTRIAN_KERB_STEP_EDGE_CLEARANCE_M 0.3f // a step toward the road ends this far outside the road edge
+#define PEDESTRIAN_KERB_STEP_AWAY_PROB 0.5f
+#define PEDESTRIAN_BYSTANDER_STAND_MIN_S 8.0f // standers and kerb steppers before they vanish
+#define PEDESTRIAN_BYSTANDER_STAND_MAX_S 25.0f
+#define PEDESTRIAN_LEFT_KERB_PROB 0.5f // every mode but the two Scenario3 ones
 #define PEDESTRIAN_COOLDOWN_MIN_S 5.0f
 #define PEDESTRIAN_COOLDOWN_MAX_S 20.0f
 #define PEDESTRIAN_TARGET_MIN_SPEED_MPS 1.0f // only moving cars get a crossing

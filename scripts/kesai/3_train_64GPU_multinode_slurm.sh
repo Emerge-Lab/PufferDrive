@@ -24,7 +24,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=${RUN_NAME:-k_scaled_0071_${SEED}}
+export RUN_NAME=${RUN_NAME:-k_scaled_0072_${SEED}}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -54,7 +54,7 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # Blocking env workers: kesai nodes give 60 threads per rank (--exclusive); vec.num_envs=60 is one worker per thread (0053/0059,
 # ~25 M SPS vs ~21.5 M with 32). 0063 ran 256 workers per rank (4.3x oversubscribed, 75 GB per GPU): +18% SPS from the worker count
 # but ~55% sample efficiency on goals/speed at 1e12 steps, so 60 stays the default. GPU memory ~21 GB fixed + 0.22 GB per 1024-agent worker (fp16).
-# A second instance needs its own RUN_NAME (plain VAR=... sbatch did not propagate on kesai): sbatch --export=ALL,RUN_NAME=k_scaled_0071_1000 scripts/kesai/3_train_64GPU_multinode_slurm.sh
+# A second instance needs its own RUN_NAME (plain VAR=... sbatch did not propagate on kesai): sbatch --export=ALL,RUN_NAME=k_scaled_0072_1000 scripts/kesai/3_train_64GPU_multinode_slurm.sh
 # 0067 = 0066 (the 0059 config, puffer_drive.yaml defaults, float16 rollout buffer, static footprint red light test) with the
 # training light cycle green U(3,10) / yellow U(2,3) s instead of GIGAFLOW's U(1,10) / U(1.5,2.25) and no training rear margin:
 # 0066's training red-light rate sat at 3.7% because committed slow crossings could not clear CARLA's tail band within a
@@ -67,6 +67,10 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # 0071 = 0070 with the Leaderboard 1.0 walker profile (drive.h, 2026-11-04): walkers appear standing 12 m + 1.5 m per extra
 # lane ahead (+-2 m), half a lane outside the kerb, wait 0-0.6 s and ramp up over 0.3-0.7 s to 3.4 + 0.4 m/s per lane (+-1);
 # 0070's walkers set off at 2-4.2 m/s from their first frame, so its policy never learned to brake for a standing walker.
+# 0072 = 0071 with five pedestrian behaviours (constants.h PEDESTRIAN_*, 2026-11-05): 40% the 0071 pop-in crossers, 15% slow
+# crossers from either kerb, 20% standers, 15% kerb walkers, 10% kerb steppers. 0071 waited for every standing or passing
+# pedestrian (longest6 v1 timeouts at stuck walkers, nuPlan CLS -0.02 / -0.035). Ratio 0.1 -> 0.3 keeps the pop-in crossings
+# per car where 0071 had them (1.8 per episode); the walker slots are visible 48% of the time.
 # Other overrides are run identity, logging, maps and hardware.
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
@@ -85,7 +89,7 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     env.map_dir=$PD/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v20 \
     env.num_maps=128 \
     env.obs_traffic_light_yellow_remaining=true \
-    env.scripted_pedestrian_ratio=0.1 \
+    env.scripted_pedestrian_ratio=0.3 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \

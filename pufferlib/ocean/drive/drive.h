@@ -98,6 +98,7 @@ struct Log {
     float early_reset_short;
     float pedestrian_collision_rate;
     float pedestrian_crossings;
+    float pedestrian_bystanders;
 };
 
 struct GridMapEntity {
@@ -176,7 +177,7 @@ struct Drive {
     Agent *agents;
     int num_controllable_agents;
     int cosim_partner_slots;       // gigaflow co-sim: static slots owned by the external sim (never spawned/stepped)
-    int scripted_pedestrian_slots; // gigaflow: scripted crossing walkers appended after the policy agents
+    int scripted_pedestrian_slots; // gigaflow: scripted pedestrians appended after the policy agents
     ScriptedPedestrian *pedestrians;
     int active_agent_count;
     int *active_agent_indices;
@@ -2532,6 +2533,7 @@ static void add_log(Drive *env) {
         episode_log.early_reset_short += env->logs[i].early_reset_short;
         episode_log.pedestrian_collision_rate += env->logs[i].pedestrian_collision_rate;
         episode_log.pedestrian_crossings += env->logs[i].pedestrian_crossings;
+        episode_log.pedestrian_bystanders += env->logs[i].pedestrian_bystanders;
         // Per-component reward sums (mirrors compute_rewards' env->rewards[i]+= sites).
         episode_log.reward_collision += env->logs[i].reward_collision;
         episode_log.reward_offroad += env->logs[i].reward_offroad;
@@ -2965,7 +2967,7 @@ static bool check_spawn_offroad(Drive *env, Agent *tmp_agent, float edge_clearan
 }
 
 // ========================================
-// Scripted Pedestrian Crossings
+// Scripted Pedestrians
 // ========================================
 
 // Ray from (qx, qy) along the unit direction against segment AB; t_out = ray distance of the crossing.
@@ -3031,65 +3033,235 @@ static bool find_kerb_distances(
     return *near_m < PEDESTRIAN_KERB_SEARCH_MAX_M && *far_m < PEDESTRIAN_KERB_SEARCH_MAX_M;
 }
 
-static bool place_pedestrian_crossing(Drive *env, ScriptedPedestrian *pedestrian, const Agent *car) {
+// Lane point `ahead_m` beyond (lane_idx, lane_s_m) and its road edges; false at dead ends or with an edge out of reach.
+static bool find_kerb_site(Drive *env, int lane_idx, float lane_s_m, float ahead_m, KerbSite *site) {
+    int cursor_idx;
+    float lane_heading;
+    if (!route_point_at_distance(
+            env,
+            NULL,
+            0,
+            lane_idx,
+            lane_s_m,
+            ahead_m,
+            &site->x,
+            &site->y,
+            &site->z,
+            &site->lane_idx,
+            &cursor_idx,
+            &site->lane_s_m,
+            &lane_heading)) {
+        return false;
+    }
+    site->right_x = sinf(lane_heading);
+    site->right_y = -cosf(lane_heading);
+    return find_kerb_distances(
+        env,
+        site->x,
+        site->y,
+        site->z,
+        site->right_x,
+        site->right_y,
+        &site->right_kerb_m,
+        &site->left_kerb_m);
+}
+
+// Point `offset_m` outside the road edge of a site; side = +1 right kerb, -1 left kerb.
+static void kerb_point(const KerbSite *site, float side, float offset_m, float *x, float *y) {
+    float kerb_m = side > 0.0f ? site->right_kerb_m : site->left_kerb_m;
+    *x = site->x + side * site->right_x * (kerb_m + offset_m);
+    *y = site->y + side * site->right_y * (kerb_m + offset_m);
+}
+
+// Straight walk along the kerb: the chord between two kerb points of one lane, refused where the road bends.
+static bool find_kerb_walk(
+    Drive *env,
+    ScriptedPedestrian *pedestrian,
+    const KerbSite *site,
+    float side,
+    float kerb_offset_m,
+    float *start_x,
+    float *start_y,
+    float *start_z) {
+    float walk_m = sample_uniform(&env->rng_state, PEDESTRIAN_KERB_WALK_MIN_M, PEDESTRIAN_KERB_WALK_MAX_M);
+    KerbSite mid_site, end_site;
+    if (!find_kerb_site(env, site->lane_idx, site->lane_s_m, 0.5f * walk_m, &mid_site)
+        || !find_kerb_site(env, site->lane_idx, site->lane_s_m, walk_m, &end_site)
+        || end_site.lane_idx != site->lane_idx) {
+        return false;
+    }
+    float near_x, near_y, mid_x, mid_y, far_x, far_y;
+    kerb_point(site, side, kerb_offset_m, &near_x, &near_y);
+    kerb_point(&mid_site, side, kerb_offset_m, &mid_x, &mid_y);
+    kerb_point(&end_site, side, kerb_offset_m, &far_x, &far_y);
+    float bend_m = hypotf(0.5f * (near_x + far_x) - mid_x, 0.5f * (near_y + far_y) - mid_y);
+    if (bend_m > PEDESTRIAN_KERB_WALK_BEND_TOLERANCE_M) {
+        return false;
+    }
+    float chord_m = hypotf(far_x - near_x, far_y - near_y);
+    bool against_traffic = sample_uniform(&env->rng_state, 0.0f, 1.0f) < PEDESTRIAN_KERB_WALK_AGAINST_TRAFFIC_PROB;
+    float travel_sign = against_traffic ? -1.0f : 1.0f;
+    *start_x = against_traffic ? far_x : near_x;
+    *start_y = against_traffic ? far_y : near_y;
+    *start_z = against_traffic ? end_site.z : site->z;
+    pedestrian->dir_x = travel_sign * (far_x - near_x) / chord_m;
+    pedestrian->dir_y = travel_sign * (far_y - near_y) / chord_m;
+    pedestrian->path_m = chord_m;
+    pedestrian->climb_per_m = travel_sign * (end_site.z - site->z) / chord_m;
+    return true;
+}
+
+// Crossing from one kerb to past the other, up to PEDESTRIAN_SLOW_SKEW_MAX_RAD off the perpendicular along one lane.
+static bool find_slow_crossing(
+    Drive *env,
+    ScriptedPedestrian *pedestrian,
+    const KerbSite *site,
+    float side,
+    float kerb_offset_m,
+    float *start_x,
+    float *start_y,
+    float *start_z) {
+    float skew_rad = sample_uniform(&env->rng_state, 0.0f, PEDESTRIAN_SLOW_SKEW_MAX_RAD);
+    float along_m = (site->right_kerb_m + site->left_kerb_m) * tanf(skew_rad);
+    KerbSite ahead_site;
+    if (!find_kerb_site(env, site->lane_idx, site->lane_s_m, along_m, &ahead_site)
+        || ahead_site.lane_idx != site->lane_idx) {
+        return false;
+    }
+    bool against_traffic = sample_uniform(&env->rng_state, 0.0f, 1.0f) < PEDESTRIAN_SLOW_AGAINST_TRAFFIC_PROB;
+    const KerbSite *start_site = against_traffic ? &ahead_site : site;
+    const KerbSite *end_site = against_traffic ? site : &ahead_site;
+    float end_x, end_y;
+    kerb_point(start_site, side, kerb_offset_m, start_x, start_y);
+    kerb_point(end_site, -side, PEDESTRIAN_FAR_KERB_OVERSHOOT_M, &end_x, &end_y);
+    *start_z = start_site->z;
+    pedestrian->path_m = hypotf(end_x - *start_x, end_y - *start_y);
+    pedestrian->dir_x = (end_x - *start_x) / pedestrian->path_m;
+    pedestrian->dir_y = (end_y - *start_y) / pedestrian->path_m;
+    pedestrian->climb_per_m = (end_site->z - start_site->z) / pedestrian->path_m;
+    return true;
+}
+
+static int sample_pedestrian_mode(Drive *env) {
+    float draw = sample_uniform(&env->rng_state, 0.0f, 1.0f);
+    if (draw < PEDESTRIAN_POP_IN_CROSS_PROB) {
+        return PEDESTRIAN_MODE_POP_IN_CROSS;
+    }
+    draw -= PEDESTRIAN_POP_IN_CROSS_PROB;
+    if (draw < PEDESTRIAN_SLOW_CROSS_PROB) {
+        return PEDESTRIAN_MODE_SLOW_CROSS;
+    }
+    draw -= PEDESTRIAN_SLOW_CROSS_PROB;
+    if (draw < PEDESTRIAN_STAND_PROB) {
+        return PEDESTRIAN_MODE_STAND;
+    }
+    draw -= PEDESTRIAN_STAND_PROB;
+    return draw < PEDESTRIAN_KERB_WALK_PROB ? PEDESTRIAN_MODE_KERB_WALK : PEDESTRIAN_MODE_KERB_STEP;
+}
+
+// Start point and leg of the pedestrian's mode at `site`; false where a kerb walk or skewed crossing leaves the lane.
+static bool plan_pedestrian_leg(
+    Drive *env,
+    ScriptedPedestrian *pedestrian,
+    const KerbSite *site,
+    int lanes_to_kerb,
+    float *start_x,
+    float *start_y,
+    float *start_z) {
+    int mode = pedestrian->mode;
+    bool is_scenario3 = mode == PEDESTRIAN_MODE_POP_IN_CROSS || mode == PEDESTRIAN_MODE_KERB_STEP;
+    float side = 1.0f; // +1 right kerb, -1 left kerb
+    float scenario3_speed_mps = 0.0f;
+    if (is_scenario3) {
+        scenario3_speed_mps = PEDESTRIAN_LB1_SPEED_BASE_MPS + PEDESTRIAN_LB1_SPEED_PER_LANE_MPS * (float) lanes_to_kerb
+            + sample_uniform(&env->rng_state, -PEDESTRIAN_SPEED_JITTER_MPS, PEDESTRIAN_SPEED_JITTER_MPS);
+    } else if (sample_uniform(&env->rng_state, 0.0f, 1.0f) < PEDESTRIAN_LEFT_KERB_PROB) {
+        side = -1.0f;
+    }
+    float kerb_offset_m = sample_uniform(&env->rng_state, PEDESTRIAN_KERB_OFFSET_MIN_M, PEDESTRIAN_KERB_OFFSET_MAX_M);
+    kerb_point(site, side, kerb_offset_m, start_x, start_y);
+    *start_z = site->z;
+    float into_road_x = -side * site->right_x;
+    float into_road_y = -side * site->right_y;
+    float road_crossing_m = kerb_offset_m + site->right_kerb_m + site->left_kerb_m + PEDESTRIAN_FAR_KERB_OVERSHOOT_M;
+    pedestrian->dir_x = into_road_x;
+    pedestrian->dir_y = into_road_y;
+    pedestrian->timer_s = 0.0f;
+    pedestrian->climb_per_m = 0.0f;
+    pedestrian->ramp_s = sample_uniform(&env->rng_state, PEDESTRIAN_RAMP_MIN_S, PEDESTRIAN_RAMP_MAX_S);
+    pedestrian->stand_s = sample_uniform(&env->rng_state, PEDESTRIAN_LINGER_MIN_S, PEDESTRIAN_LINGER_MAX_S);
+
+    if (mode == PEDESTRIAN_MODE_POP_IN_CROSS) {
+        pedestrian->path_m = road_crossing_m;
+        pedestrian->speed_mps = scenario3_speed_mps;
+        pedestrian->timer_s = sample_uniform(&env->rng_state, PEDESTRIAN_WAIT_MIN_S, PEDESTRIAN_WAIT_MAX_S);
+        return true;
+    }
+    if (mode == PEDESTRIAN_MODE_SLOW_CROSS) {
+        pedestrian->speed_mps
+            = sample_uniform(&env->rng_state, PEDESTRIAN_SLOW_SPEED_MIN_MPS, PEDESTRIAN_SLOW_SPEED_MAX_MPS);
+        pedestrian->timer_s = sample_uniform(&env->rng_state, 0.0f, PEDESTRIAN_SLOW_WAIT_MAX_S);
+        return find_slow_crossing(env, pedestrian, site, side, kerb_offset_m, start_x, start_y, start_z);
+    }
+    if (mode == PEDESTRIAN_MODE_STAND) {
+        float facing_rad = sample_uniform(&env->rng_state, -(float) M_PI, (float) M_PI);
+        pedestrian->dir_x = cosf(facing_rad);
+        pedestrian->dir_y = sinf(facing_rad);
+        pedestrian->path_m = 0.0f;
+        pedestrian->speed_mps = 0.0f;
+        pedestrian->stand_s
+            = sample_uniform(&env->rng_state, PEDESTRIAN_BYSTANDER_STAND_MIN_S, PEDESTRIAN_BYSTANDER_STAND_MAX_S);
+        return true;
+    }
+    if (mode == PEDESTRIAN_MODE_KERB_STEP) {
+        float step_m = sample_uniform(&env->rng_state, PEDESTRIAN_KERB_STEP_MIN_M, PEDESTRIAN_KERB_STEP_MAX_M);
+        if (sample_uniform(&env->rng_state, 0.0f, 1.0f) < PEDESTRIAN_KERB_STEP_AWAY_PROB) {
+            pedestrian->dir_x = -into_road_x;
+            pedestrian->dir_y = -into_road_y;
+        } else {
+            step_m = fminf(step_m, fmaxf(0.0f, kerb_offset_m - PEDESTRIAN_KERB_STEP_EDGE_CLEARANCE_M));
+        }
+        pedestrian->path_m = step_m;
+        pedestrian->speed_mps = scenario3_speed_mps;
+        pedestrian->timer_s = sample_uniform(&env->rng_state, PEDESTRIAN_WAIT_MIN_S, PEDESTRIAN_WAIT_MAX_S);
+        pedestrian->stand_s
+            = sample_uniform(&env->rng_state, PEDESTRIAN_BYSTANDER_STAND_MIN_S, PEDESTRIAN_BYSTANDER_STAND_MAX_S);
+        return true;
+    }
+    pedestrian->speed_mps
+        = sample_uniform(&env->rng_state, PEDESTRIAN_KERB_WALK_SPEED_MIN_MPS, PEDESTRIAN_KERB_WALK_SPEED_MAX_MPS);
+    return find_kerb_walk(env, pedestrian, site, side, kerb_offset_m, start_x, start_y, start_z);
+}
+
+static bool place_scripted_pedestrian(Drive *env, ScriptedPedestrian *pedestrian, const Agent *car) {
     RoadMapElement *car_lane = &env->road_elements[car->current_lane_idx];
     float car_s_m
         = compute_lane_progress(car_lane, car->sim_x, car->sim_y, car->cos_heading, car->sin_heading, true, NULL);
-    float qx, qy, qz, landed_s_m, lane_heading;
-    int lane_idx, cursor_idx;
-    if (!route_point_at_distance(
-            env,
-            NULL,
-            0,
-            car->current_lane_idx,
-            car_s_m,
-            0.0f,
-            &qx,
-            &qy,
-            &qz,
-            &lane_idx,
-            &cursor_idx,
-            &landed_s_m,
-            &lane_heading)) {
+    KerbSite car_site, site;
+    if (!find_kerb_site(env, car->current_lane_idx, car_s_m, 0.0f, &car_site)) {
         return false;
     }
-    float car_near_m, car_far_m;
-    if (!find_kerb_distances(env, qx, qy, qz, sinf(lane_heading), -cosf(lane_heading), &car_near_m, &car_far_m)) {
+    int mode = pedestrian->mode;
+    int lanes_to_kerb = (int) (car_site.right_kerb_m / PEDESTRIAN_LB1_LANE_WIDTH_M + 1.0f);
+    float ahead_m;
+    if (mode == PEDESTRIAN_MODE_POP_IN_CROSS || mode == PEDESTRIAN_MODE_KERB_STEP) {
+        ahead_m = PEDESTRIAN_LB1_APPEAR_BASE_M + PEDESTRIAN_LB1_APPEAR_PER_LANE_M * (float) (lanes_to_kerb - 1)
+            + sample_uniform(&env->rng_state, -PEDESTRIAN_APPEAR_JITTER_M, PEDESTRIAN_APPEAR_JITTER_M);
+    } else if (mode == PEDESTRIAN_MODE_SLOW_CROSS) {
+        ahead_m = sample_uniform(&env->rng_state, PEDESTRIAN_SLOW_APPEAR_MIN_M, PEDESTRIAN_SLOW_APPEAR_MAX_M);
+    } else {
+        ahead_m = sample_uniform(&env->rng_state, PEDESTRIAN_FAR_APPEAR_MIN_M, PEDESTRIAN_FAR_APPEAR_MAX_M);
+    }
+    if (!find_kerb_site(env, car->current_lane_idx, car_s_m, ahead_m, &site)) {
         return false;
     }
-    int lanes_to_kerb = (int) (car_near_m / PEDESTRIAN_LB1_LANE_WIDTH_M + 1.0f);
-    float ahead_m = PEDESTRIAN_LB1_APPEAR_BASE_M + PEDESTRIAN_LB1_APPEAR_PER_LANE_M * (float) (lanes_to_kerb - 1)
-        + sample_uniform(&env->rng_state, -PEDESTRIAN_APPEAR_JITTER_M, PEDESTRIAN_APPEAR_JITTER_M);
-    if (!route_point_at_distance(
-            env,
-            NULL,
-            0,
-            car->current_lane_idx,
-            car_s_m,
-            ahead_m,
-            &qx,
-            &qy,
-            &qz,
-            &lane_idx,
-            &cursor_idx,
-            &landed_s_m,
-            &lane_heading)) {
-        return false;
-    }
-    if (env->num_speed_zones > 0 && env->road_elements[lane_idx].speed_zone_idx < 0) {
+    if (env->num_speed_zones > 0 && env->road_elements[site.lane_idx].speed_zone_idx < 0) {
         return false; // junction lane
     }
-    float right_x = sinf(lane_heading);
-    float right_y = -cosf(lane_heading);
-    float near_m, far_m;
-    if (!find_kerb_distances(env, qx, qy, qz, right_x, right_y, &near_m, &far_m)) {
+    float start_x, start_y, start_z;
+    if (!plan_pedestrian_leg(env, pedestrian, &site, lanes_to_kerb, &start_x, &start_y, &start_z)) {
         return false;
     }
-    float start_offset_m
-        = near_m + sample_uniform(&env->rng_state, PEDESTRIAN_KERB_OFFSET_MIN_M, PEDESTRIAN_KERB_OFFSET_MAX_M);
-    float crossing_m = start_offset_m + far_m + PEDESTRIAN_FAR_KERB_OVERSHOOT_M;
-    float dir_x = -right_x;
-    float dir_y = -right_y;
 
     Agent *agent = &env->agents[pedestrian->agent_idx];
     agent->sim_length = sample_uniform(&env->rng_state, PEDESTRIAN_SIZE_MIN_M, PEDESTRIAN_SIZE_MAX_M);
@@ -3097,41 +3269,47 @@ static bool place_pedestrian_crossing(Drive *env, ScriptedPedestrian *pedestrian
     agent->sim_height = PEDESTRIAN_HEIGHT_M;
     update_agent_radius(agent);
 
-    // The whole path as one box: nothing may stand on it when the walker sets off
+    // The whole leg as one box: nothing may stand on it when the pedestrian appears
     Agent path_probe = *agent;
-    path_probe.sim_x = qx + right_x * start_offset_m + dir_x * 0.5f * crossing_m;
-    path_probe.sim_y = qy + right_y * start_offset_m + dir_y * 0.5f * crossing_m;
-    path_probe.sim_z = qz;
-    path_probe.sim_heading = atan2f(dir_y, dir_x);
-    path_probe.cos_heading = dir_x;
-    path_probe.sin_heading = dir_y;
-    path_probe.sim_length = crossing_m;
+    path_probe.sim_x = start_x + pedestrian->dir_x * 0.5f * pedestrian->path_m;
+    path_probe.sim_y = start_y + pedestrian->dir_y * 0.5f * pedestrian->path_m;
+    path_probe.sim_z = start_z;
+    path_probe.sim_heading = atan2f(pedestrian->dir_y, pedestrian->dir_x);
+    path_probe.cos_heading = pedestrian->dir_x;
+    path_probe.sin_heading = pedestrian->dir_y;
+    path_probe.sim_length = fmaxf(pedestrian->path_m, agent->sim_length);
     update_agent_radius(&path_probe);
     copy_pose_to_prev(&path_probe);
     if (check_spawn_collision(env, &path_probe)) {
         return false;
     }
 
-    agent->sim_x = qx + right_x * start_offset_m;
-    agent->sim_y = qy + right_y * start_offset_m;
-    agent->sim_z = qz;
+    agent->sim_x = start_x;
+    agent->sim_y = start_y;
+    agent->sim_z = start_z;
     agent->sim_heading = path_probe.sim_heading;
-    agent->cos_heading = dir_x;
-    agent->sin_heading = dir_y;
+    agent->cos_heading = pedestrian->dir_x;
+    agent->sin_heading = pedestrian->dir_y;
     copy_pose_to_prev(agent);
     clear_agent_motion(agent);
     agent->seconds_stopped = 0.0f;
     agent->sim_valid = 1;
-    pedestrian->speed_mps = PEDESTRIAN_LB1_SPEED_BASE_MPS + PEDESTRIAN_LB1_SPEED_PER_LANE_MPS * (float) lanes_to_kerb
-        + sample_uniform(&env->rng_state, -PEDESTRIAN_SPEED_JITTER_MPS, PEDESTRIAN_SPEED_JITTER_MPS);
-    pedestrian->ramp_s = sample_uniform(&env->rng_state, PEDESTRIAN_RAMP_MIN_S, PEDESTRIAN_RAMP_MAX_S);
+    pedestrian->remaining_m = pedestrian->path_m;
     pedestrian->current_speed_mps = 0.0f;
-    pedestrian->timer_s = sample_uniform(&env->rng_state, PEDESTRIAN_WAIT_MIN_S, PEDESTRIAN_WAIT_MAX_S);
-    pedestrian->dir_x = dir_x;
-    pedestrian->dir_y = dir_y;
-    pedestrian->crossing_m = crossing_m;
-    pedestrian->remaining_m = crossing_m;
-    pedestrian->state = PEDESTRIAN_STATE_CROSSING;
+    pedestrian->state = PEDESTRIAN_STATE_WALKING;
+    if (mode == PEDESTRIAN_MODE_STAND) {
+        // a stander has been there for a while
+        agent->seconds_stopped = sample_uniform(&env->rng_state, 0.0f, MAX_STOPPED_SECONDS);
+        pedestrian->state = PEDESTRIAN_STATE_STANDING;
+        pedestrian->timer_s = pedestrian->stand_s;
+    }
+    if (mode == PEDESTRIAN_MODE_KERB_WALK) {
+        // already walking when it appears
+        pedestrian->current_speed_mps = pedestrian->speed_mps;
+        agent->sim_vx = pedestrian->dir_x * pedestrian->speed_mps;
+        agent->sim_vy = pedestrian->dir_y * pedestrian->speed_mps;
+        update_agent_speed(agent);
+    }
     return true;
 }
 
@@ -3139,6 +3317,8 @@ static bool arm_scripted_pedestrian(Drive *env, ScriptedPedestrian *pedestrian) 
     if (env->active_agent_count == 0) {
         return false;
     }
+    bool enters_road
+        = pedestrian->mode == PEDESTRIAN_MODE_POP_IN_CROSS || pedestrian->mode == PEDESTRIAN_MODE_SLOW_CROSS;
     for (int attempt = 0; attempt < PEDESTRIAN_ARM_ATTEMPTS; attempt++) {
         int target_slot = rng_below(&env->rng_state, env->active_agent_count);
         int target_agent_idx = env->active_agent_indices[target_slot];
@@ -3146,26 +3326,31 @@ static bool arm_scripted_pedestrian(Drive *env, ScriptedPedestrian *pedestrian) 
         bool car_eligible = car->sim_valid == 1 && !car->stopped && !car->removed && car->current_lane_idx != -1
             && car->sim_speed >= PEDESTRIAN_TARGET_MIN_SPEED_MPS
             && car->metrics_array[LANE_ANGLE_IDX] >= LANE_ALIGN_COS_THRESHOLD;
-        if (!car_eligible || !place_pedestrian_crossing(env, pedestrian, car)) {
+        if (!car_eligible || !place_scripted_pedestrian(env, pedestrian, car)) {
             continue;
         }
         pedestrian->target_agent_idx = target_agent_idx;
-        env->logs[target_slot].pedestrian_crossings += 1.0f;
+        env->logs[target_slot].pedestrian_crossings += enters_road ? 1.0f : 0.0f;
+        env->logs[target_slot].pedestrian_bystanders += enters_road ? 0.0f : 1.0f;
         return true;
     }
     return false;
 }
 
+static void idle_scripted_pedestrian(Drive *env, ScriptedPedestrian *pedestrian) {
+    Agent *agent = &env->agents[pedestrian->agent_idx];
+    invalidate_agent(agent);
+    copy_pose_to_prev(agent);
+    pedestrian->target_agent_idx = -1;
+    pedestrian->state = PEDESTRIAN_STATE_IDLE;
+    pedestrian->mode = sample_pedestrian_mode(env);
+    pedestrian->timer_s = sample_uniform(&env->rng_state, PEDESTRIAN_COOLDOWN_MIN_S, PEDESTRIAN_COOLDOWN_MAX_S);
+    pedestrian->remaining_m = 0.0f;
+}
+
 static void reset_scripted_pedestrians(Drive *env) {
     for (int k = 0; k < env->scripted_pedestrian_slots; k++) {
-        ScriptedPedestrian *pedestrian = &env->pedestrians[k];
-        Agent *agent = &env->agents[pedestrian->agent_idx];
-        invalidate_agent(agent);
-        copy_pose_to_prev(agent);
-        pedestrian->target_agent_idx = -1;
-        pedestrian->state = PEDESTRIAN_STATE_IDLE;
-        pedestrian->timer_s = sample_uniform(&env->rng_state, PEDESTRIAN_COOLDOWN_MIN_S, PEDESTRIAN_COOLDOWN_MAX_S);
-        pedestrian->remaining_m = 0.0f;
+        idle_scripted_pedestrian(env, &env->pedestrians[k]);
     }
 }
 
@@ -3177,9 +3362,9 @@ static void step_pedestrian_idle(Drive *env, ScriptedPedestrian *pedestrian) {
     arm_scripted_pedestrian(env, pedestrian); // a failed attempt retries next step
 }
 
-static void step_pedestrian_crossing(Drive *env, ScriptedPedestrian *pedestrian, Agent *agent) {
+static void step_pedestrian_walking(Drive *env, ScriptedPedestrian *pedestrian, Agent *agent) {
     if (pedestrian->timer_s > 0.0f) {
-        pedestrian->timer_s -= env->dt; // standing at the kerb
+        pedestrian->timer_s -= env->dt; // standing where it appeared
         return;
     }
     float ramp_step_mps = pedestrian->speed_mps * env->dt / pedestrian->ramp_s;
@@ -3190,25 +3375,22 @@ static void step_pedestrian_crossing(Drive *env, ScriptedPedestrian *pedestrian,
     float step_m = fminf(pedestrian->current_speed_mps * env->dt, pedestrian->remaining_m);
     agent->sim_x += pedestrian->dir_x * step_m;
     agent->sim_y += pedestrian->dir_y * step_m;
+    agent->sim_z += pedestrian->climb_per_m * step_m;
     pedestrian->remaining_m -= step_m;
     if (pedestrian->remaining_m > 0.0f) {
         return;
     }
     clear_agent_motion(agent);
-    pedestrian->state = PEDESTRIAN_STATE_LINGER;
-    pedestrian->timer_s = sample_uniform(&env->rng_state, PEDESTRIAN_LINGER_MIN_S, PEDESTRIAN_LINGER_MAX_S);
+    pedestrian->state = PEDESTRIAN_STATE_STANDING;
+    pedestrian->timer_s = pedestrian->stand_s;
 }
 
-static void step_pedestrian_linger(Drive *env, ScriptedPedestrian *pedestrian, Agent *agent) {
+static void step_pedestrian_standing(Drive *env, ScriptedPedestrian *pedestrian) {
     pedestrian->timer_s -= env->dt;
     if (pedestrian->timer_s > 0.0f) {
         return;
     }
-    invalidate_agent(agent);
-    copy_pose_to_prev(agent);
-    pedestrian->target_agent_idx = -1;
-    pedestrian->state = PEDESTRIAN_STATE_IDLE;
-    pedestrian->timer_s = sample_uniform(&env->rng_state, PEDESTRIAN_COOLDOWN_MIN_S, PEDESTRIAN_COOLDOWN_MAX_S);
+    idle_scripted_pedestrian(env, pedestrian);
 }
 
 static void move_scripted_pedestrians(Drive *env) {
@@ -3216,10 +3398,10 @@ static void move_scripted_pedestrians(Drive *env) {
         ScriptedPedestrian *pedestrian = &env->pedestrians[k];
         Agent *agent = &env->agents[pedestrian->agent_idx];
         copy_pose_to_prev(agent);
-        if (pedestrian->state == PEDESTRIAN_STATE_CROSSING) {
-            step_pedestrian_crossing(env, pedestrian, agent);
-        } else if (pedestrian->state == PEDESTRIAN_STATE_LINGER) {
-            step_pedestrian_linger(env, pedestrian, agent);
+        if (pedestrian->state == PEDESTRIAN_STATE_WALKING) {
+            step_pedestrian_walking(env, pedestrian, agent);
+        } else if (pedestrian->state == PEDESTRIAN_STATE_STANDING) {
+            step_pedestrian_standing(env, pedestrian);
         } else {
             step_pedestrian_idle(env, pedestrian);
         }

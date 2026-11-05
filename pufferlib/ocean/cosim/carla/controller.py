@@ -16,6 +16,7 @@ disambiguates "bad policy" from "bad controller" when scores are low.
 """
 
 import math
+from typing import NamedTuple
 
 import numpy as np
 
@@ -134,3 +135,108 @@ class TrackingController:
             "yaw_err_max": float(ye.max()),
             "ticks": len(se),
         }
+
+
+YAW_TRACKING_MIN_SPEED_MPS = 2.0
+
+
+class PedalGains(NamedTuple):
+    throttle_holding_speed_at_rest: float
+    throttle_holding_cruise_speed: float
+    cruise_speed_mps: float  # the speed-holding throttle rises linearly from rest to here, then stays
+    throttle_per_mps2: float
+    engine_braking_mps2: float  # what the released throttle gives even in a high gear; the brake supplies the rest
+    brake_per_mps2: float
+    steer_per_curvature_m: float
+
+
+# measured open loop on a straight road (pedal steps, coast-downs, steer steps): CARLA 0.9.15 and 0.9.10.1
+PEDAL_GAINS_BY_BLUEPRINT = {
+    "vehicle.lincoln.mkz_2020": PedalGains(
+        throttle_holding_speed_at_rest=0.30,
+        throttle_holding_cruise_speed=0.42,
+        cruise_speed_mps=4.0,
+        throttle_per_mps2=0.10,
+        engine_braking_mps2=2.0,
+        brake_per_mps2=0.185,
+        steer_per_curvature_m=2.8,
+    ),
+    "vehicle.lincoln.mkz2017": PedalGains(
+        throttle_holding_speed_at_rest=0.26,
+        throttle_holding_cruise_speed=0.43,
+        cruise_speed_mps=6.0,
+        throttle_per_mps2=0.22,
+        engine_braking_mps2=1.0,
+        brake_per_mps2=0.20,
+        steer_per_curvature_m=2.8,
+    ),
+}
+
+
+def pedal_gains_for(blueprint):
+    if blueprint not in PEDAL_GAINS_BY_BLUEPRINT:
+        raise ValueError(
+            f"no measured pedal gains for ego blueprint {blueprint!r}; known: {sorted(PEDAL_GAINS_BY_BLUEPRINT)}"
+        )
+    return PEDAL_GAINS_BY_BLUEPRINT[blueprint]
+
+
+def pedals(gains, target_accel_mps2, speed_mps):
+    """(throttle, brake) for a target acceleration: one straight line each."""
+    throttle_holding_speed = gains.throttle_holding_speed_at_rest + (
+        gains.throttle_holding_cruise_speed - gains.throttle_holding_speed_at_rest
+    ) * float(np.clip(speed_mps / gains.cruise_speed_mps, 0.0, 1.0))
+    throttle = float(np.clip(throttle_holding_speed + gains.throttle_per_mps2 * target_accel_mps2, 0.0, 1.0))
+    brake = float(np.clip(gains.brake_per_mps2 * (-target_accel_mps2 - gains.engine_braking_mps2), 0.0, 1.0))
+    return throttle, brake
+
+
+class PedalMap:
+    """Jerk-integrator targets -> (steer, throttle, brake) through constant gains; the policy is the only feedback loop."""
+
+    def __init__(self, gains):
+        self.gains = gains
+        self.reset()
+
+    def reset(self):
+        self._command = None
+        self._accel_rows = []
+        self._yaw_rate_rows = []
+
+    def observe(self, speed_mps, yaw_rate_radps, tick_dt):
+        """CARLA's response to the previous tick's command, kept for stats()."""
+        if self._command is None:
+            return
+        target_accel_mps2, target_curvature_per_m, commanded_speed_mps, brake = self._command
+        self._accel_rows.append((target_accel_mps2, (speed_mps - commanded_speed_mps) / tick_dt, brake))
+        if speed_mps > YAW_TRACKING_MIN_SPEED_MPS:
+            self._yaw_rate_rows.append((target_curvature_per_m * speed_mps, yaw_rate_radps))
+
+    def step(self, target_accel_mps2, target_curvature_per_m, speed_mps, hold_standstill):
+        """One tick -> (steer, throttle, brake); curvature and yaw rate are positive to the right, like CARLA's steer."""
+        steer = float(np.clip(self.gains.steer_per_curvature_m * target_curvature_per_m, -1.0, 1.0))
+        if hold_standstill:
+            self._command = None
+            return steer, 0.0, 1.0
+        throttle, brake = pedals(self.gains, target_accel_mps2, speed_mps)
+        self._command = (target_accel_mps2, target_curvature_per_m, speed_mps, brake)
+        return steer, throttle, brake
+
+    def stats(self):
+        """How far the gains are off: realised minus target acceleration per pedal, realised over target yaw rate."""
+        if not self._accel_rows:
+            return {}
+        target_accel, realised_accel, brake = np.array(self._accel_rows).T
+        accel_error = realised_accel - target_accel
+        on_brake = brake > 0.0
+        out = {"accel_abs_err_mps2": float(np.abs(accel_error).mean()), "ticks": len(accel_error)}
+        if not on_brake.all():
+            out["accel_bias_throttle_mps2"] = float(accel_error[~on_brake].mean())
+        if on_brake.any():
+            out["accel_bias_brake_mps2"] = float(accel_error[on_brake].mean())
+        if self._yaw_rate_rows:
+            target_yaw_rate, realised_yaw_rate = np.array(self._yaw_rate_rows).T
+            target_power = float(target_yaw_rate @ target_yaw_rate)
+            if target_power > 0.0:
+                out["yaw_rate_gain"] = float(target_yaw_rate @ realised_yaw_rate) / target_power
+        return out

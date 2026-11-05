@@ -16,7 +16,7 @@ Actor state rows (CARLA frame, physics quantities from CARLA's own physics):
 
 init_route(route) once the ego exists, route = {
   town, tick_dt,
-  ego: {extent: [x, y, z], box_z, wheels: controller.wheel_rows, state: ACTOR_STATE},
+  ego: {extent: [x, y, z], box_z, wheels: controller.wheel_rows, blueprint: actor type_id, state: ACTOR_STATE},
   sparse_plan: (N, 3) leaderboard target points, dense_plan: (M, 3) the dense route,
   driving_waypoints: carla_bridge.driving_waypoint_samples rows,
   lights: carla_bridge.light_geometry_from_carla dicts, stop_signs: carla_bridge.stop_sign_geometry_from_carla dicts,
@@ -36,6 +36,9 @@ Environment variables:
                                "carla": TrackingController converts the shadow env's target (speed, yaw)
                                into StepResult.control = (steer, throttle, brake) and CARLA's own vehicle
                                physics moves the ego (subject to dynamics-mismatch tracking lag).
+                               "carla_pedals": CARLA's physics moves the ego, driven only by the (steer, throttle,
+                               brake) the leaderboard applies. controller.PedalMap maps the jerk integrator's
+                               acceleration and steering to them; pose, speed and yaw rate are re-read every tick.
   COSIM_MAX_SPEED_MPS=20       ego speed cap; sets the shadow env's C_vel = cap / base_max_speed_mps.
                                Default: the checkpoint's base_max_speed_mps (C_vel = 1). Must lie in the
                                trained range base * [1/conditioning_speed_scale, scale]
@@ -78,7 +81,12 @@ import numpy as np
 
 from pufferlib.ocean.cosim import carla_bridge as cb
 from pufferlib.ocean.cosim.arch import checkpoint_config_path, shadow_env_kwargs
-from pufferlib.ocean.cosim.carla.controller import TrackingController, vehicle_geometry_from_wheels
+from pufferlib.ocean.cosim.carla.controller import (
+    PedalMap,
+    TrackingController,
+    pedal_gains_for,
+    vehicle_geometry_from_wheels,
+)
 from pufferlib.ocean.cosim.goals import RouteGoalWindow, route_goals_from_target_points
 from pufferlib.ocean.cosim.light_timing import YellowCountdown
 from pufferlib.ocean.drive.drive import Drive
@@ -118,7 +126,10 @@ SCENARIO_LENGTH_MARGIN_STEPS = 2
 MIN_PARTNER_SIZE_M = 0.1
 # Shadow-env metrics_array indices (datatypes.h): collision/offroad/red-light/stop-sign flags.
 EGO_INFRACTION_METRICS = {"collision": 0, "offroad": 1, "red_light": 2, "stop_sign": 3}
-DYNAMICS_SOURCES = ("carla", "pufferdrive")
+DYNAMICS_SOURCES = ("carla", "pufferdrive", "carla_pedals")
+EGO_OBS_STEERING_IDX = 3  # write_ego_obs column order: speed, width, length, steering, accel_long, ...
+DRIVE_WHEELBASE_PER_LENGTH = 0.6  # must equal the jerk model's wheelbase / sim_length
+STANDSTILL_SPEED_MPS = 0.1  # carla_pedals: below this, with no intent to accelerate, the ego is held on the brake
 TELEMETRY_HEADER = (
     "step,current_speed,target_speed,ego_action,goal_cursor,goal_dist_m,"
     "near_light_dist_m,near_light_state,"
@@ -204,7 +215,7 @@ class StepResult:
     """One policy step: `actions` (num_agents, act_dim), the shadow env's infraction flags (None unless
     requested), and the ego command -- `motion` = [x0, y0, yaw0_deg, speed0, x1, y1, yaw1_deg, speed1, z1]
     (CARLA frame, pre- and post-step pose to teleport along) in pufferdrive mode, `control` = (steer,
-    throttle, brake) in carla mode; `target` = (speed_mps, yaw_deg) the policy intends one dt ahead."""
+    throttle, brake) in the carla modes; `target` = (speed_mps, yaw_deg) the policy intends one dt ahead."""
 
     def __init__(self, actions, target, motion=None, control=None, pd_flags=None):
         self.actions = actions
@@ -249,6 +260,11 @@ class ShadowEgo:
         from pufferlib.ocean.drive import binding
 
         self._partner_stopped_speed_threshold = float(binding.AGENT_STOPPED_SPEED_THRESHOLD)
+        self._steering_limit_rad = float(binding.STEERING_LIMIT)
+        self._intent_accel_mps2 = 0.0  # carla_pedals: the jerk integrator's own state, never re-read from CARLA
+        self._intent_steering_rad = 0.0
+        self._plant_speed_mps = 0.0
+        self._standstill = False
         self.obs_html_max_steps = int(os.environ.get("COSIM_OBS_HTML_MAX_STEPS", "12000"))
         self.obs_html_render = env_flag("COSIM_OBS_HTML_RENDER", "1")
         self._obs_html = None
@@ -427,8 +443,11 @@ class ShadowEgo:
         self.last_yellow_remaining_s = np.zeros(self.num_traffic, np.float32)
         self._yellow_countdown = YellowCountdown(self.env.traffic_light_yellow_min_s, self.dt)
 
-        wheelbase, max_steer = vehicle_geometry_from_wheels(ego["wheels"])
-        self.controller = TrackingController(wheelbase_m=wheelbase, max_steer_rad=max_steer, horizon_s=self.dt)
+        if self.dynamics_source == "carla_pedals":
+            self.controller = PedalMap(pedal_gains_for(ego.get("blueprint")))
+        else:
+            wheelbase, max_steer = vehicle_geometry_from_wheels(ego["wheels"])
+            self.controller = TrackingController(wheelbase_m=wheelbase, max_steer_rad=max_steer, horizon_s=self.dt)
 
         if self.obs_html_dir:
             from pufferlib.ocean.cosim.obs_replay import ObsReplayCapture
@@ -563,7 +582,7 @@ class ShadowEgo:
             remaining_by_id[light_id] = countdown_s[light_id] if timed_s is None else timed_s
         return remaining_by_id
 
-    def _sync_ego(self, ego_state, zero_velocity=False):
+    def _sync_ego(self, ego_state, zero_velocity=False, keep_integrator_state=False):
         """Overwrite agent 0 (ego) from the simulator's ground-truth pose/size."""
         bin_state = self.transform.state_to_bin(
             ego_state[STATE_X],
@@ -581,12 +600,29 @@ class ShadowEgo:
         if zero_velocity:
             x, y, z, heading, *_ = bin_state
             bin_state = (x, y, z, heading, 0.0, 0.0, 0.0, 0.0)
-        self.env.set_agent_states(np.array([0], np.int32), *[np.array([v], np.float32) for v in bin_state])
+        steering = None
+        if keep_integrator_state:
+            bin_state = self._plant_state(bin_state)
+            steering = np.array([self._intent_steering_rad], np.float32)
+        self.env.set_agent_states(
+            np.array([0], np.int32), *[np.array([v], np.float32) for v in bin_state], steering=steering
+        )
         self.env.set_agent_sizes(
             np.array([0], np.int32),
             np.array([2.0 * self.ego_extent[0]], np.float32),
             np.array([2.0 * self.ego_extent[1]], np.float32),
         )
+
+    def _plant_state(self, bin_state):
+        """carla_pedals: pose, velocity and yaw rate from CARLA's physics, acceleration from the jerk integrator."""
+        x, y, z, heading, vx, vy, yaw_rate, _ = bin_state
+        self._plant_speed_mps = vx * math.cos(heading) + vy * math.sin(heading)
+        self.controller.observe(self._plant_speed_mps, -yaw_rate, self.tick_dt)
+        self._standstill = self._plant_speed_mps < STANDSTILL_SPEED_MPS and self._intent_accel_mps2 <= 0.0
+        if self._standstill:
+            # the held car reads exactly stopped, as in training; a negative intent would wind up against the brake
+            vx, vy, self._intent_accel_mps2 = 0.0, 0.0, 0.0
+        return (x, y, z, heading, vx, vy, yaw_rate, self._intent_accel_mps2)
 
     def _sync(self, snapshot):
         """Overwrite the shadow env's background agents/lights (+ ego, only in
@@ -596,6 +632,8 @@ class ShadowEgo:
         self._ego_speed_carla = ego_speed_from_state(ego_state)
         if self.dynamics_source == "carla":
             self._sync_ego(ego_state)
+        if self.dynamics_source == "carla_pedals":
+            self._sync_ego(ego_state, keep_integrator_state=True)
         ego = self.env.get_global_agent_state()
         ebx, eby = float(ego["x"][0]), float(ego["y"][0])
 
@@ -692,6 +730,19 @@ class ShadowEgo:
             return StepResult(
                 actions, self.target, motion=[x0, y0, yaw0_deg, speed_before, x1, y1, target_yaw_deg, speed_after, z1]
             )
+
+        if self.dynamics_source == "carla_pedals":
+            self._intent_accel_mps2 = accel_after
+            steering_obs = float(np.asarray(self.env.observations)[0][EGO_OBS_STEERING_IDX])
+            self._intent_steering_rad = steering_obs * self._steering_limit_rad
+            wheelbase_m = DRIVE_WHEELBASE_PER_LENGTH * 2.0 * self.ego_extent[0]
+            # the bin frame is y-mirrored: its left-positive curvature is a negative CARLA steer
+            curvature_per_m = -math.tan(self._intent_steering_rad) / wheelbase_m
+            self.target = (speed_after, target_yaw_deg)
+            control = self.controller.step(
+                accel_after, curvature_per_m, self._plant_speed_mps, self._standstill and accel_after <= 0.0
+            )
+            return StepResult(actions, self.target, control=control)
 
         target_speed = speed_after + max(accel_after, 0.0) * self.speed_intent_extension_s
         self.target = (target_speed, target_yaw_deg)

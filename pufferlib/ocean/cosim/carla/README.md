@@ -83,6 +83,22 @@ of the ego no longer being a physically-simulated CARLA vehicle; the
 leaderboard's route/collision/infraction criteria still see it correctly since
 they only read its pose.
 
+`COSIM_DYNAMICS_SOURCE=carla_pedals` drives the CARLA vehicle the way the leaderboard
+prescribes: the agent only returns a `carla.VehicleControl` from `run_step`, nothing else touches
+the ego. Like nuPlan's `ego_dynamics=nuplan_bicycle`, CARLA is the plant: pose, speed and yaw rate
+are re-read every tick, while acceleration and steering angle stay the jerk integrator's own state.
+`controller.py`'s `PedalMap` turns those two into pedals and steer with constant gains and no
+feedback (the policy closes the loop). Throttle = the throttle that holds the current speed + a
+gain per m/s², clipped at zero: CARLA's engine braking makes the throttle the main brake too
+(released, it gives up to -5 m/s² on 0.9.15's `mkz_2020`). The brake pedal only adds what exceeds
+the engine braking of a high gear (full brake is worth about 5 m/s²). Steer = a gain times the
+path curvature. The gains are per ego blueprint (`PEDAL_GAINS_BY_BLUEPRINT`: `mkz_2020` for
+longest6 v2, `mkz2017` for v1, both measured open loop on a straight road); an unmeasured car is
+refused. Below `STANDSTILL_SPEED_MPS` with no intent to accelerate the ego is held on the full
+brake and reads exactly stopped. The route summary line prints how far the gains are off
+(`accel_bias_*`, `yaw_rate_gain`). Not handled yet: reversing (a policy that wants to back up
+stands still for good) and road grade (gravity is not compensated).
+
 ### Bin frame calibration
 
 The exported bins sit a constant fraction of a metre off the CARLA frame (2026-09-23, stored
