@@ -13,7 +13,9 @@ set -u
 source scripts/kesai/cluster_env.sh || exit 1
 
 export PY=$(conda info --base)/envs/carl_nuplan/bin/python
-# Overridable env: RUN_DIR (3_train_64GPU_multinode_slurm.sh submits this job with RUN_DIR=<its run dir>), CHALLENGES
+# Overridable env: RUN_DIR (3_train_64GPU_multinode_slurm.sh submits this job with RUN_DIR=<its run dir>), CHALLENGES,
+# WANDB_REPORT (1, default: the CLS becomes the training run's final_eval/nuplan_{reactive,nonreactive}_CLS in wandb,
+# replacing an earlier report of that challenge; 0 for ablations, so the run keeps the number of its standard eval)
 RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0059_1000}
 case "$RUN_DIR" in /*) ;; *) RUN_DIR=$PD/$RUN_DIR ;; esac # relative to the checkout: $PD is only defined inside the job
 # the planner finds config.yaml next to final_model.pt (or one level above a models/*.pt)
@@ -22,10 +24,12 @@ export CKPT=$RUN_DIR/final_model.pt
 # reactive = IDM agents (CLS-R), nonreactive = log-replay agents (CLS-NR)
 export CHALLENGES=${CHALLENGES:-closed_loop_reactive_agents_pufferdrive}
 case "$CHALLENGES" in
-    closed_loop_reactive_agents_pufferdrive) CHALLENGE_TAG="" ;;
-    closed_loop_nonreactive_agents_pufferdrive) CHALLENGE_TAG="_nonreactive" ;;
+    closed_loop_reactive_agents_pufferdrive) CHALLENGE_TAG=""; WANDB_EVAL_TYPE=nuplan_reactive ;;
+    closed_loop_nonreactive_agents_pufferdrive) CHALLENGE_TAG="_nonreactive"; WANDB_EVAL_TYPE=nuplan_nonreactive ;;
     *) echo "CHALLENGES must be closed_loop_reactive_agents_pufferdrive or closed_loop_nonreactive_agents_pufferdrive"; exit 1 ;;
 esac
+WANDB_REPORT=${WANDB_REPORT:-1}
+VAL14_SCENARIO_COUNT=1118  # a run that scored fewer scenarios (LIMIT_TOTAL_SCENARIOS, failed simulations) is not reported
 echo "Evaluating checkpoint: $CKPT"
 export CITY_BIN_DIR=${CITY_BIN_DIR:-$SHARED_DATA/nuplan/PufferDrive}
 # shell env still exports the pre-rename nuPlan casing; pin the renamed paths here
@@ -143,6 +147,12 @@ esac
 
 bash "$PD/pufferlib/ocean/cosim/nuplan/run_nuplan_planner.sh"
 RUNNER_STATUS=$?
+# the repo .venv holds wandb; the script reads overview.csv and never imports pufferlib
+if [ "$WANDB_REPORT" = "1" ] && [ $RUNNER_STATUS -eq 0 ]; then
+    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/pufferlib/ocean/evaluation_utils/eval_wandb_report.py" \
+        "$WANDB_EVAL_TYPE" "$GROUP/overview.csv" --run-dir "$RUN_DIR" --expected-episode-count "$VAL14_SCENARIO_COUNT" \
+        || echo "wandb report failed (results above are unaffected)"
+fi
 # the job's own log next to the results (the SBATCH --output of this script or of 13_nuPlan_nonreactive.sh)
 JOB_LOGS=(experiments/logs/nuPlan_*_"${SLURM_JOB_ID:-none}".out experiments/logs/nuPlan_*_"${SLURM_JOB_ID:-none}".err)
 for job_log in "${JOB_LOGS[@]}"; do

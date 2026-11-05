@@ -14,8 +14,9 @@ source scripts/kesai/cluster_env.sh || exit 1
 
 # CARLA self-play eval only (no co-sim follow-ups), same overrides as the post-training eval in 3_train.
 # Defaults below evaluate k_scaled_0059 on the 9000-step layout; override per job with sbatch --export, e.g. the 400 s A/B:
-#   sbatch --export=ALL,SCENARIO_LENGTH=6000,EVAL_OUTPUT_DIR_NAME=eval80k_400s scripts/kesai/21_selfplay_eval_slurm.sh
-# EVAL_OUTPUT_DIR_NAME names the output folder and the wandb prefix (final_<name>_carla), so re-evals never overwrite the training run's eval.
+#   sbatch --export=ALL,SCENARIO_LENGTH=6000,EVAL_OUTPUT_DIR_NAME=eval80k_400s,WANDB_REPORT=0 scripts/kesai/21_selfplay_eval_slurm.sh
+# EVAL_OUTPUT_DIR_NAME names the output folder, so re-evals never overwrite the training run's eval on disk. WANDB_REPORT=1
+# (default) makes this eval's km/infraction the run's final_eval/selfplay_km_per_infraction in wandb; 0 for A/B variants.
 echo "START TIME: $(date)"
 start=$(date +%s)
 
@@ -56,7 +57,7 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND:-cuda} .venv/bin/python scrip
     eval.output_dir_name=${EVAL_OUTPUT_DIR_NAME} \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
-    wandb=True
+    wandb=${WANDB_REPORT:-1}
 
 end=$(date +%s)
 echo "END TIME: $(date)"

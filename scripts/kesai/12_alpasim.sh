@@ -54,6 +54,7 @@ SIM_TIMEOUT_S=3600   # per batch of PARALLEL scenes
 ALPASIM_LOG_LEVEL=WARNING  # AlpaSim services; INFO also keeps the per-event INFO lines runtime workers and renderer print anyway (~110 MB per 400 scenes)
 PROMETHEUS=0         # AlpaSim performance telemetry (~80 MB per run); only alpagym_runtime.perf reads it
 KEEP_ROLLOUT_LOGS=none  # rollout.asl (~36 MB per scene, offline re-scoring/failure analysis only): all | imperfect (score < 1) | failed | none (never written)
+WANDB_REPORT=1       # the official score becomes the training run's final_eval/alpasim_score in wandb, replacing an earlier report; 0 for ablations
 ALPAGYM_ROOT=$HOME/alpasim-training
 # held-out split Damiano evaluates on; empty = every converted scene that passed the checks (2149 on the cluster, 1584 of them train)
 SCENE_LIST=$ALPAGYM_ROOT/scene_splits/eval_405.txt
@@ -338,6 +339,12 @@ text = "".join(line + "\n" for line in lines)
 Path(sys.argv[3]).write_text(text)
 sys.stdout.write("\n" + text)
 EOF
+fi
+# the repo .venv holds wandb; the script reads results.txt and never imports pufferlib. A subset (N_SCENES) or a run with failed scenes is not reported.
+if [ "$WANDB_REPORT" = "1" ] && [ $EVAL_STATUS -eq 0 ] && [ "$N_SCENES" = "0" ]; then
+    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/pufferlib/ocean/evaluation_utils/eval_wandb_report.py" \
+        alpasim "$OUT/results.txt" --run-dir "$RUN_DIR" --expected-episode-count ${#SCENES[@]} \
+        || echo "wandb report failed (results above are unaffected)"
 fi
 if [ $EVAL_STATUS -ne 0 ]; then
     echo "AlpaSim evaluation failed (exit $EVAL_STATUS); last host lines of $OUT/evaluate.log:"

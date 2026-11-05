@@ -38,7 +38,10 @@
 # COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: vehicles' stopped-time obs held at 0, walkers keep theirs; 0 = all real),
 # COSIM_VRU_SIZE_PAD_M (default 0.8: added to the length and width of every walker and two-wheeler box, so they
 # read strictly larger than the smallest training vehicle; 0 = true CARLA boxes), COSIM_WALKER_SPEED_FLOOR_MPS (default 0;
-# the diagnostic walker speed floor of shadow_ego.py, tags the folder _walkerfloor<value>).
+# the diagnostic walker speed floor of shadow_ego.py, tags the folder _walkerfloor<value>), WANDB_REPORT (1, default: the
+# DS of results.csv becomes the training run's final_eval/longest6_v2_DS in wandb, replacing an earlier report; 0 for
+# ablations, so the run keeps the number of its standard eval; never reported: a run with missing route records, the
+# scenario-free variant and a walker speed floor run).
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
 
@@ -69,6 +72,7 @@ CARLA_VIEW=${CARLA_VIEW:-0}
 [ "$CARLA_VIEW" = "1" ] && [ "$LOGGING" != "1" ] && { echo "CARLA_VIEW=1 needs LOGGING=1"; exit 1; }
 OBS_HTML=${OBS_HTML:-1}
 REPORT=${REPORT:-$LOGGING}
+WANDB_REPORT=${WANDB_REPORT:-1}
 EVALUATOR=$CARL_WORK_DIR/original_leaderboard/leaderboard/leaderboard/leaderboard_evaluator.py
 for path in "$CKPT" "$PY" "$CARLA_ROOT/CarlaUE4.sh" "$EVALUATOR" "$ROUTES" "$CARL_WORK_DIR/tools/result_parser.py"; do
     [ -e "$path" ] || { echo "missing $path"; exit 1; }
@@ -147,10 +151,12 @@ esac
 mapfile -t ROUTE_IDS < <("$PY" -c "
 import sys, xml.etree.ElementTree as ET
 print('\n'.join(r.attrib['id'] for r in ET.parse(sys.argv[1]).getroot().iter('route')))" "$ROUTES")
+TOTAL_ROUTES=${#ROUTE_IDS[@]}
 [ -n "$ROUTE_SUBSET" ] && read -r -a ROUTE_IDS <<< "$ROUTE_SUBSET"
 # work units = route x seed ("<route id>:<seed>"), each its own server run and result folder
 UNITS=()
 for seed in "${SEED_LIST[@]}"; do for route_id in "${ROUTE_IDS[@]}"; do UNITS+=("$route_id:$seed"); done; done
+TOTAL_UNITS=$((TOTAL_ROUTES * ${#SEED_LIST[@]}))
 [ "$WORKERS" -gt "${#UNITS[@]}" ] && WORKERS=${#UNITS[@]}
 # longest route first to the least loaded worker; length = the xml's waypoint polyline (an earlier run's duration would
 # read a route that failed early as short)
@@ -332,6 +338,12 @@ if rows:
         print(f"over seeds: DS {statistics.mean(ds.values()):.2f} +- {statistics.pstdev(ds.values()):.2f}  "
               f"RC {statistics.mean(rc.values()):.2f} +- {statistics.pstdev(rc.values()):.2f}  (population std over {len(by_seed)} seeds, as in results.csv)")
 EOF
+# the repo .venv holds wandb; the script reads results.csv and the route records and never imports pufferlib
+if [ "$WANDB_REPORT" = "1" ] && [ "$SCENARIOS" = "1" ] && [ "$COSIM_WALKER_SPEED_FLOOR_MPS" = "0" ]; then
+    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/pufferlib/ocean/evaluation_utils/eval_wandb_report.py" \
+        longest6_v2 "$OUT/aggregate/results.csv" --run-dir "$RUN_DIR" --expected-episode-count $((TOTAL_UNITS * REPETITIONS)) \
+        || echo "wandb report failed (results above are unaffected)"
+fi
 
 REPORT_ARGS=()
 [ "$OBS_HTML" = "1" ] && REPORT_ARGS+=(--obs-html-dir "$OUT/obs_html")

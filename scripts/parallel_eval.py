@@ -2,7 +2,8 @@
 
 Each shard runs an independent `puffer eval` process over a disjoint scenario
 window (eval.scenario_offset), then the per-shard episode_metrics.csv files are
-merged into a single report and optionally attached to the training wandb run.
+merged into a single report; wandb=True writes its km/infraction into the summary
+of the training wandb run (self-play benchmark only).
 --num-gpus runs one shard per local GPU; --num-nodes runs the shards as srun steps
 of the surrounding SLURM allocation, --shards-per-node of them per node (default 1),
 each with one GPU and an equal share of the node's CPUs (SLURM_CPUS_PER_TASK).
@@ -128,7 +129,13 @@ def main():
     report_wandb = str(override_value(overrides, "wandb")).lower() in ("true", "1")
     shard_overrides = [o for o in overrides if o.partition("=")[0] != "wandb"] + ["wandb=False"]
 
-    from pufferlib.ocean.evaluation_utils import evaluation_utils
+    from pufferlib.ocean.evaluation_utils import eval_wandb_report, evaluation_utils
+
+    if report_wandb and arguments.benchmark != eval_wandb_report.SELFPLAY_BENCHMARK_NAME:
+        raise SystemExit(
+            f"wandb=True reports only the {eval_wandb_report.SELFPLAY_BENCHMARK_NAME} benchmark's headline metric; "
+            f"remove it for {arguments.benchmark}"
+        )
 
     run_dir = evaluation_utils.resolve_run_dir(model_path)
     output_dir_name = override_value(overrides, "eval.output_dir_name") or "eval"
@@ -213,18 +220,10 @@ def main():
     print(f"Aggregated {summary['num_episodes']} episodes from {len(processes)} shards into {aggregate_dir}")
 
     if report_wandb:
-        import pufferlib.pufferl as pufferl
-
-        sys.argv = [sys.argv[0]] + [o for o in overrides if o.partition("=")[0] != "wandb"]
-        config_args = pufferl.load_config(arguments.env_name)
-        config_args["wandb"] = True
-        checkpoint_config_path = os.path.join(run_dir, "config.yaml")
-        wandb_run_identity = evaluation_utils.load_checkpoint_run_identity(checkpoint_config_path)
-        pufferl.report_eval_to_wandb(
-            config_args,
-            {arguments.benchmark: {"summary": summary}},
-            wandb_run_identity,
-            output_dir_name,
+        eval_wandb_report.report_headline_metric(
+            eval_wandb_report.EVAL_TYPE_SELFPLAY,
+            os.path.join(aggregate_dir, eval_wandb_report.SELFPLAY_SUMMARY_FILE_NAME),
+            run_dir,
         )
 
 

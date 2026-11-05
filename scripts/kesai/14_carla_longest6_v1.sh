@@ -48,7 +48,10 @@
 # the checkpoint's training value), COSIM_WALKER_SPEED_FLOOR_MPS (default 0; the diagnostic walker speed floor of
 # shadow_ego.py, tags the folder _walkerfloor<value>), LIBTIFF5_COMPAT (1: when `import carla` fails for
 # the egg's missing libtiff.so.5, try the garage env's lib dir (`conda install -n garage "libtiff<4.5"`), then link the
-# system libtiff.so.6 under that name; 0: never link).
+# system libtiff.so.6 under that name; 0: never link), WANDB_REPORT (1, default: the DS of results.csv becomes the training
+# run's final_eval/longest6_v1_DS in wandb, replacing an earlier report; 0 for ablations, so the run keeps the number of
+# its standard eval; never reported: a run with missing route records (a completion reports once every route has one),
+# the scenario-free variant and a walker speed floor run).
 #
 # Completing a partial run (routes lost to CARLA crashes or the job time limit): COMPLETE_RUN=<existing $OUT folder>
 # reruns, in place, only its routes without a valid record (no result.json, or a crash status the leaderboard would
@@ -114,6 +117,7 @@ CARLA_VIEW=${CARLA_VIEW:-0}
 [ "$CARLA_VIEW" = "1" ] && [ "$LOGGING" != "1" ] && { echo "CARLA_VIEW=1 needs LOGGING=1"; exit 1; }
 OBS_HTML=${OBS_HTML:-1}
 REPORT=${REPORT:-$LOGGING}
+WANDB_REPORT=${WANDB_REPORT:-1}
 export COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-0.8}
 export COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-40}   # GIGAFLOW's eval value; empty = the checkpoint's training value
 [[ -z "$COSIM_OBS_SLOTS_PARTNERS_N" || "$COSIM_OBS_SLOTS_PARTNERS_N" =~ ^[1-9][0-9]*$ ]] || { echo "COSIM_OBS_SLOTS_PARTNERS_N=\"$COSIM_OBS_SLOTS_PARTNERS_N\" must be a positive integer or empty"; exit 1; }
@@ -464,6 +468,12 @@ if rows:
         print(f"over seeds: DS {statistics.mean(ds.values()):.2f} +- {statistics.pstdev(ds.values()):.2f}  "
               f"RC {statistics.mean(rc.values()):.2f} +- {statistics.pstdev(rc.values()):.2f}  (population std over {len(by_seed)} seeds, as in results.csv)")
 EOF
+# the repo .venv holds wandb; the script reads results.csv and the route records and never imports pufferlib
+if [ "$WANDB_REPORT" = "1" ] && [ "$SCENARIOS" = "1" ] && [ "$COSIM_WALKER_SPEED_FLOOR_MPS" = "0" ]; then
+    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/pufferlib/ocean/evaluation_utils/eval_wandb_report.py" \
+        longest6_v1 "$OUT/aggregate/results.csv" --run-dir "$(dirname "$CKPT")" --expected-episode-count $((TOTAL_UNITS * REPETITIONS)) \
+        || echo "wandb report failed (results above are unaffected)"
+fi
 
 REPORT_ARGS=()
 [ "$OBS_HTML" = "1" ] && REPORT_ARGS+=(--obs-html-dir "$OUT/obs_html")

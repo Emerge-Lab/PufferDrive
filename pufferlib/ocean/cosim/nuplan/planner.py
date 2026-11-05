@@ -306,6 +306,7 @@ class PufferDrivePlanner(AbstractPlanner):
         self._last_light_states = None  # traffic-light state array from the most recent _sync
         self._yellow_countdown = None  # YellowCountdown, built with the env
         self._static_on_lane: Dict[str, bool] = {}  # static object track_token -> its box overlaps a lane polygon
+        self._partner_stopped_s: Dict[str, float] = {}  # track_token -> seconds below the stopped speed threshold
 
     # --- AbstractPlanner interface -------------------------------------------
     def initialize(self, initialization: PlannerInitialization) -> None:
@@ -639,6 +640,18 @@ class PufferDrivePlanner(AbstractPlanner):
         )
 
     # --- world sync -----------------------------------------------------------
+    def _advance_partner_stopped_s(self, tracked_objects) -> None:
+        """One observation step of the stopped time per nuPlan track; a track missing from the step starts over."""
+        step_s = float(self._arch["dt"])
+        stopped_s = {}
+        for obj in tracked_objects:
+            velocity = getattr(obj, "velocity", None)
+            speed_mps = math.hypot(velocity.x, velocity.y) if velocity is not None else 0.0
+            is_stopped = speed_mps < binding.AGENT_STOPPED_SPEED_THRESHOLD
+            previous_s = self._partner_stopped_s.get(obj.track_token, 0.0)
+            stopped_s[obj.track_token] = previous_s + step_s if is_stopped else 0.0
+        self._partner_stopped_s = stopped_s
+
     def _sync(self, ego_state: EgoState, detections: DetectionsTracks, traffic_light_data) -> None:
         tf = self._transform
         env = self._env
@@ -682,25 +695,32 @@ class PufferDrivePlanner(AbstractPlanner):
         # background (slots 1..): streamed from nuPlan, never simulated here. nuPlan's TrackedObject
         # carries no acceleration/angular-velocity (perception detections, not ego telemetry), but
         # write_partner_obs never reads those fields for non-ego agents, so zero is exact, not a stopgap.
+        # stopped time follows the nuPlan track, not the shadow slot (slots shift whenever a track appears or ends)
+        self._advance_partner_stopped_s(detections.tracked_objects)
         objs = nb.partner_tracked_objects(
             detections.tracked_objects, self._initialization.map_api, self._static_on_lane
         )
         partner_count = 0
         if objs:
             _, x, y, z, hh, vx, vy, tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
+            stopped_s = np.array([self._partner_stopped_s[obj.track_token] for obj in objs], np.float32)
             if self._vru_size_pad_m > 0:
                 ln, wd = nb.pad_vru_partner_sizes(tp, ln, wd, self._vru_size_pad_m)
             if self._partner_split_max_length_m > 0:
-                x, y, z, hh, vx, vy, tp, ln, wd = nb.split_long_partners(
-                    x, y, z, hh, vx, vy, tp, ln, wd, self._partner_split_max_length_m
-                )
+                max_length_m = self._partner_split_max_length_m
+                piece_counts = np.maximum(1, np.ceil(ln.astype(np.float64) / max_length_m)).astype(np.int64)
+                stopped_s = np.repeat(stopped_s, piece_counts)
+                x, y, z, hh, vx, vy, tp, ln, wd = nb.split_long_partners(x, y, z, hh, vx, vy, tp, ln, wd, max_length_m)
+                assert len(stopped_s) == len(x)
             # nearest first only when the slots run out: devkit ordering is by type/token, so blind truncation
             # could drop a close vehicle while keeping far ones
             keep = nb.nearest_partner_slots(x, y, ex, ey, self._num_agents - 1)
             partner_count = len(keep)
             idx = np.arange(1, 1 + partner_count, dtype=np.int32)
             zeros = np.zeros(partner_count, np.float32)
-            env.set_agent_states(idx, x[keep], y[keep], z[keep], hh[keep], vx[keep], vy[keep], zeros, zeros)
+            env.set_agent_states(
+                idx, x[keep], y[keep], z[keep], hh[keep], vx[keep], vy[keep], zeros, zeros, stopped_s[keep]
+            )
             env.set_agent_sizes(idx, ln[keep], wd[keep])
         surplus = np.arange(1 + partner_count, self._num_agents, dtype=np.int32)
         if len(surplus):
@@ -789,6 +809,9 @@ class PufferDrivePlanner(AbstractPlanner):
         ego_state, detections = current_input.history.current_state
         if self._env is None:
             self._build(ego_state)
+            # nuPlan's history buffer: its last entry is the current observation, which _sync counts
+            for past_observation in current_input.history.observations[:-1]:
+                self._advance_partner_stopped_s(past_observation.tracked_objects)
 
         self._sync(ego_state, detections, current_input.traffic_light_data)
         if self._env.tick >= self._arch["scenario_length"] - 1:

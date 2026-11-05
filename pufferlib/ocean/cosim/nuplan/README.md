@@ -175,8 +175,11 @@ lane graph (`n: 0`), which silently zeroes the GPS goal columns.
   perception tracks, not telemetry. Zeros are exact for partner observations
   (never read for non-ego agents); ego telemetry comes from
   `EgoState.dynamic_car_state`.
-- Partner `seconds_stopped` is approximated at the planner's 10 Hz cadence from
-  the synced speeds (same caveat as the CARLA side).
+- Partner `seconds_stopped` is counted per nuPlan track token at the planner's
+  10 Hz cadence from the synced speeds and injected with the partner states
+  (shadow slots change owner whenever a track appears or ends). It starts from
+  the planner's history buffer, about 2 s before the scenario; a track that
+  leaves the detections starts over.
 
 ## Remaining TODOs
 

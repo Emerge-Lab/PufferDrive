@@ -40,6 +40,7 @@ import pufferlib
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
 from pufferlib.ocean.evaluation_utils import cosim_evaluator as drive_cosim_eval
+from pufferlib.ocean.evaluation_utils import eval_wandb_report as drive_eval_report
 import pufferlib.sweep
 import pufferlib.utils
 import pufferlib.vector
@@ -1348,7 +1349,7 @@ class NeptuneLogger:
 
 
 class WandbLogger:
-    def __init__(self, args, load_id=None, resume="allow", upload_config=True, disable_meta=False):
+    def __init__(self, args, load_id=None):
         import wandb
 
         # run_name is the run id: with resume="allow" wandb attaches to the
@@ -1360,10 +1361,10 @@ class WandbLogger:
             group=args["wandb_group"],
             allow_val_change=True,
             save_code=False,
-            resume=resume,
-            config=args if upload_config else None,
+            resume="allow",
+            config=args,
             tags=[args["tag"]] if args["tag"] is not None else [],
-            settings=wandb.Settings(console="off", x_disable_meta=disable_meta),
+            settings=wandb.Settings(console="off"),
         )
         self.wandb = wandb
         self.run_id = wandb.run.id
@@ -1371,10 +1372,6 @@ class WandbLogger:
 
     def log(self, logs, step):
         self.wandb.log(logs, step=step)
-
-    def finish(self):
-        """End the wandb session without the model upload and early_stop that close() adds."""
-        self.wandb.finish()
 
     def upload_model(self, model_path):
         artifact = self.wandb.Artifact(self.run_id, type="model")
@@ -1858,9 +1855,8 @@ def eval(
         base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
     base_args["env"]["eval_training_render"] = eval_training_render
 
-    wandb_run_identity = (
-        drive_benchmark.load_checkpoint_run_identity(checkpoint_config_path) if report_to_wandb else None
-    )
+    if report_to_wandb:
+        drive_eval_report.load_run_identity(checkpoint_config_path)
     if eval_output_dir is None:
         run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
         eval_output_dir = os.path.join(run_dir, eval_config["output_dir_name"])
@@ -1871,6 +1867,7 @@ def eval(
         failure_replay_csv = os.path.abspath(failure_replay_csv)
         failure_replay_output_dir = os.path.dirname(failure_replay_csv)
     benchmark_results = {}
+    selfplay_summary_path = None
     evaluation_policy_cache = {"policy": policy}
     for benchmark in benchmarks:
         if benchmark.get("simulation_mode") in drive_cosim_eval.COSIM_SIMULATION_MODES:
@@ -1976,6 +1973,8 @@ def eval(
             "episodes": summaries,
             "summary": summary,
         }
+        if benchmark["name"] == drive_eval_report.SELFPLAY_BENCHMARK_NAME and summary is not None:
+            selfplay_summary_path = os.path.join(benchmark_output_dir, drive_eval_report.SELFPLAY_SUMMARY_FILE_NAME)
 
         if render_scenarios:
             max_renderer_count = (
@@ -1997,27 +1996,15 @@ def eval(
                 evaluation_policy_cache=evaluation_policy_cache,
             )
 
-    if wandb_run_identity is not None:
-        report_eval_to_wandb(args, benchmark_results, wandb_run_identity, eval_config["output_dir_name"])
+    if report_to_wandb and selfplay_summary_path is not None:
+        drive_eval_report.report_headline_metric(
+            drive_eval_report.EVAL_TYPE_SELFPLAY, selfplay_summary_path, os.path.dirname(checkpoint_config_path)
+        )
+    elif report_to_wandb:
+        print(
+            f"wandb: nothing reported; only the {drive_eval_report.SELFPLAY_BENCHMARK_NAME} benchmark has a headline metric."
+        )
     return benchmark_results
-
-
-def report_eval_to_wandb(args, benchmark_results, wandb_run_identity, output_dir_name):
-    """Attach standalone eval results to the wandb run that trained the checkpoint."""
-    metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, f"final_{output_dir_name}_")
-    if not metrics:
-        print("No evaluation metrics to report to wandb.")
-        return
-
-    run_args = copy.copy(args)
-    run_args.update(wandb_run_identity)
-
-    logger = WandbLogger(run_args, resume="must", upload_config=False, disable_meta=True)
-    try:
-        logger.log(metrics, step=None)
-    finally:
-        logger.finish()
-    print(f"Reported {len(metrics)} eval metrics to wandb run {wandb_run_identity['run_name']}")
 
 
 def sweep(args=None, env_name=None):
