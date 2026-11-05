@@ -45,7 +45,7 @@ source scripts/kesai/cluster_env.sh || exit 1
 export PY=${PY:-$HOME/miniconda3/envs/carl/bin/python}   # cp310: CARLA 0.9.15 ships no newer wheel
 export CARLA_ROOT=${CARLA_ROOT:-$HOME/CARLA_0.9.15}
 export CARL_WORK_DIR=${CARL_WORK_DIR:-$HOME/CaRL/CARLA}
-RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0045_1000}
+RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0071_1000}
 # the agent finds config.yaml next to final_model.pt (or one level above a models/*.pt)
 export CKPT=$RUN_DIR/final_model.pt
 SCENARIOS=${SCENARIOS:-1}
