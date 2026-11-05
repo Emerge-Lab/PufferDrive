@@ -74,3 +74,15 @@ carla_128_affine_zones_stop:
     behind the k_scaled_004x runs.
   license: >-
     CARLA assets are CC BY 4.0 — attribution required.
+
+carla_128_affine_zones_stop_ndshoulders_v20:
+  s3_uri: s3://pufferdrive-bins/carla/0.3.2/128_affine_zones_stop_ndshoulders_v20/
+  size: ~107 MB, 128 bins
+  public: true
+  description: >-
+    CARLA Towns 01-07/10HD as PufferDrive bins with 16 affine augmentations
+    each (flips, shears, scales), per-lane speed zones, stop signs and
+    shoulders outside junctions made off-road (map set v20). The training
+    set behind the runs from k_scaled_0067 on.
+  license: >-
+    CARLA assets are CC BY 4.0 — attribution required.
