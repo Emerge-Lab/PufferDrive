@@ -35,7 +35,7 @@
 # needs LOGGING=1), OBS_HTML (1 = also the interactive obs replay per route, rendered into the one gallery
 # folder $OUT/obs_html at the end, large; needs LOGGING=1), REPORT (0 = skip the HTML report),
 # MAX_ATTEMPTS, CARLA_ROOT, CARL_WORK_DIR, PY, PD, COSIM_MAX_SPEED_MPS (ego speed cap, default 30),
-# COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: partners' stopped-time obs held at 0; 0 = real stopped times),
+# COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: vehicles' stopped-time obs held at 0, walkers keep theirs; 0 = all real),
 # COSIM_VRU_SIZE_PAD_M (default 0.8: added to the length and width of every walker and two-wheeler box, so they
 # read strictly larger than the smallest training vehicle; 0 = true CARLA boxes), COSIM_WALKER_SPEED_FLOOR_MPS (default 0;
 # the diagnostic walker speed floor of shadow_ego.py, tags the folder _walkerfloor<value>).

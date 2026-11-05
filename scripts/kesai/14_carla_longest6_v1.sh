@@ -40,7 +40,8 @@
 # only), CARLA_VIEW (0, default: no chase-cam; 1: chase-cam mp4 per route, needs LOGGING=1), OBS_HTML (1 = also
 # the interactive obs replay per route, rendered into $OUT/obs_html at the end, large; needs LOGGING=1), REPORT
 # (0 = skip the HTML report), MAX_ATTEMPTS, CARLA_ROOT, GARAGE_WORK_DIR, GARAGE_PY, SERVER_PY, PD,
-# COSIM_MAX_SPEED_MPS (ego speed cap, default 30), COSIM_ZERO_PARTNER_STOPPED_TIME (default 1),
+# COSIM_MAX_SPEED_MPS (ego speed cap, default 30), COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: vehicles' stopped-time
+# obs held at 0, walkers keep theirs; 0 = all real),
 # COSIM_VRU_SIZE_PAD_M (default 0.8: added to the length and width of every walker and two-wheeler box, so they read
 # strictly larger than the smallest training vehicle; 0 = true boxes), COSIM_OBS_SLOTS_PARTNERS_N (default 40: partner slots
 # in the policy's obs, GIGAFLOW's eval value; the slots are max-pooled, so a checkpoint trained with 20 transfers; empty =

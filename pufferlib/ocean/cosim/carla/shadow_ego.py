@@ -41,9 +41,9 @@ Environment variables:
                                trained range base * [1/conditioning_speed_scale, scale]
                                (0036: 13.3-30 m/s, 0038+: 10-40 m/s).
   COSIM_ZERO_PARTNER_STOPPED_TIME=0
-                               1: every partner's seconds_stopped observation feature is held at 0 (the
-                               ego's own counter is untouched). Ablates the stopped-time cue behind
-                               parked-car / red-light-queue avoidance.
+                               1: every vehicle partner's seconds_stopped observation feature is held at 0
+                               (the ego's own counter is untouched). Ablates the stopped-time cue behind
+                               parked-car / red-light-queue avoidance. Walkers keep their real counter.
   COSIM_VRU_SIZE_PAD_M=0.0     added to the length and width of every walker and two-wheeler partner box
                                (nuPlan's vru_size_pad_m; the training spawn floor is 0.8 m, CARLA walkers
                                are 0.4-0.5 m and bicycles 0.4 m wide, so 0.8 lifts them strictly above
@@ -499,7 +499,8 @@ class ShadowEgo:
         self._partner_stopped_s = stopped_by_id
         self._partner_raw_velocity = (np.array(raw_vx, np.float32), np.array(raw_vy, np.float32))
         if self.zero_partner_stopped_time:
-            stopped_s = [0.0] * len(partners)
+            # walkers keep their counter: held at 0, a walker that stays standing reads as about to cross forever
+            stopped_s = [s if row[PARTNER_IS_WALKER] > 0.0 else 0.0 for s, row in zip(stopped_s, partners)]
         return (
             np.array(idx, np.int32),
             np.array(x, np.float32),

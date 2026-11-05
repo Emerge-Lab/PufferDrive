@@ -42,8 +42,8 @@ srun --jobid=$JOBID --overlap \
 Optional env vars (see `leaderboard_agent.py` docstring): `COSIM_DEVICE`,
 `COSIM_DYNAMICS_SOURCE`, `COSIM_NUM_AGENTS`, `COSIM_MAX_SPEED_MPS` (ego speed cap via
 C_vel; default = the checkpoint's `base_max_speed_mps`, must stay inside the trained range),
-`COSIM_ZERO_PARTNER_STOPPED_TIME` (1 = partners' `seconds_stopped` obs feature held at 0, ego
-untouched; ablation for the parked-car / red-light-queue avoidance), `COSIM_VRU_SIZE_PAD_M`
+`COSIM_ZERO_PARTNER_STOPPED_TIME` (1 = vehicle partners' `seconds_stopped` obs feature held at 0, ego
+and walkers untouched; ablation for the parked-car / red-light-queue avoidance), `COSIM_VRU_SIZE_PAD_M`
 (added to the length and width of every walker and two-wheeler box in the policy's obs; the
 longest6 scripts set 0.8 m), `COSIM_OBS_SLOTS_PARTNERS_N` (partner slots in the policy's obs;
 default = the checkpoint's training value, the slots are max-pooled so any count transfers; the
