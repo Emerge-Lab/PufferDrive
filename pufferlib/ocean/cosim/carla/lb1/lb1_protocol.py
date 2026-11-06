@@ -8,7 +8,7 @@ Handshake, then one request/reply pair per CARLA tick:
   client -> server  {"type": "init", "route": shadow_ego.init_route dict}        -> {"type": "ready"}
   client -> server  {"type": "tick", "snapshot": shadow_ego.step dict,
                      "ground_truth": lb1/ground_truth.py observation or null}     -> {"type": "control",
-                     "motion": [...] | null, "control": [steer, throttle, brake] | null,
+                     "motion": [...] | null, "control": [steer, throttle, brake, reverse] | null,
                      "pd_flags": {...} | null, "carla_flags": {...} | null}
   client -> server  {"type": "finish"}                                            -> {"type": "done"}
 """

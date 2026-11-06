@@ -448,8 +448,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
 
         if result.control is None:
             return carla.VehicleControl()
-        steer, throttle, brake = result.control
-        return carla.VehicleControl(steer=steer, throttle=throttle, brake=brake)
+        steer, throttle, brake, reverse = result.control
+        return carla.VehicleControl(steer=steer, throttle=throttle, brake=brake, reverse=reverse)
 
     def destroy(self, results=None):
         if not self.initialized:

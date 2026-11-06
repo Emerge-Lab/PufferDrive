@@ -635,8 +635,8 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
             self._maybe_save_infraction_clip(reply.get("pd_flags"), reply.get("carla_flags"))
         if reply.get("control") is None:
             return carla.VehicleControl()
-        steer, throttle, brake = reply["control"]
-        return carla.VehicleControl(steer=steer, throttle=throttle, brake=brake)
+        steer, throttle, brake, reverse = reply["control"]
+        return carla.VehicleControl(steer=steer, throttle=throttle, brake=brake, reverse=bool(reverse))
 
     def destroy(self, results=None):
         if not hasattr(self, "server"):

@@ -138,6 +138,7 @@ class TrackingController:
 
 
 YAW_TRACKING_MIN_SPEED_MPS = 2.0
+REVERSE_GEAR = -1  # what CARLA reports as the gear while VehicleControl.reverse is set
 
 
 class GearGains(NamedTuple):
@@ -148,6 +149,7 @@ class GearGains(NamedTuple):
 
 class PedalGains(NamedTuple):
     gears: tuple  # GearGains of forward gear 1, 2, ...
+    reverse: GearGains
     gear_shift_seconds: float  # the automatic gearbox gives no drive for this long while it shifts
     max_engine_braking_mps2: float  # the brake starts beyond this even in a gear that brakes harder: it acts at once
     brake_per_mps2: float
@@ -157,7 +159,7 @@ class PedalGains(NamedTuple):
 
 
 # measured open loop on a straight road with each gear held (pedal steps from rest and from speed, steer steps):
-# CARLA 0.9.15 and 0.9.10.1. First gear at rest holds the throttle at which the standing car starts to move.
+# CARLA 0.9.15 and 0.9.10.1. First gear and reverse hold at rest the throttle at which the standing car starts to move.
 PEDAL_GAINS_BY_BLUEPRINT = {
     "vehicle.lincoln.mkz_2020": PedalGains(
         gears=(
@@ -168,6 +170,7 @@ PEDAL_GAINS_BY_BLUEPRINT = {
             GearGains((18.3, 26.5), (0.38, 0.48), (4.3, 5.3)),
             GearGains((24.5, 28.0), (0.44, 0.52), (3.2, 3.6)),
         ),
+        reverse=GearGains((0.0, 2.0), (0.21, 0.21), (4.8, 4.8)),
         gear_shift_seconds=0.1,
         max_engine_braking_mps2=2.0,
         brake_per_mps2=0.22,
@@ -183,6 +186,7 @@ PEDAL_GAINS_BY_BLUEPRINT = {
             GearGains((10.2, 15.3), (0.38, 0.49), (2.8, 3.2)),
             GearGains((13.9, 28.0), (0.44, 0.71), (2.7, 2.7)),
         ),
+        reverse=GearGains((0.0, 2.0), (0.20, 0.20), (4.4, 4.4)),
         gear_shift_seconds=0.5,
         max_engine_braking_mps2=1.0,
         brake_per_mps2=0.16,
@@ -202,7 +206,8 @@ def pedal_gains_for(blueprint):
 
 
 def pedals(gear_gains, max_engine_braking_mps2, brake_per_mps2, shifting, target_accel_mps2, speed_mps):
-    """(throttle, brake) for a target acceleration in one gear: one straight line each."""
+    """(throttle, brake) for a target acceleration in one gear: one straight line each. Acceleration and speed are
+    along the direction the gear drives in."""
     accel_per_throttle = float(np.interp(speed_mps, gear_gains.speeds_mps, gear_gains.accel_per_throttle_mps2))
     throttle_holding_speed = float(np.interp(speed_mps, gear_gains.speeds_mps, gear_gains.throttle_holding_speed))
     # a released throttle brakes by the holding throttle's worth; while the gearbox shifts the engine is disconnected
@@ -213,8 +218,8 @@ def pedals(gear_gains, max_engine_braking_mps2, brake_per_mps2, shifting, target
 
 
 class PedalMap:
-    """Jerk-integrator targets -> (steer, throttle, brake) through the gains of the gear the automatic gearbox is in;
-    the policy is the only feedback loop."""
+    """Jerk-integrator targets -> (steer, throttle, brake, reverse) through the gains of the gear the automatic gearbox
+    is in, or of reverse; the policy is the only feedback loop."""
 
     def __init__(self, gains):
         self.gains = gains
@@ -235,10 +240,10 @@ class PedalMap:
         if speed_mps > YAW_TRACKING_MIN_SPEED_MPS:
             self._yaw_rate_rows.append((target_curvature_per_m * speed_mps, yaw_rate_radps))
 
-    def step(self, target_accel_mps2, target_curvature_per_m, speed_mps, gear, hold_standstill):
-        """One tick -> (steer, throttle, brake); curvature and yaw rate are positive to the right, like CARLA's steer.
-        gear is the one CARLA reports for the ego: 1.. forward, 0 while the gearbox shifts."""
-        assert gear >= 0
+    def step(self, target_accel_mps2, target_curvature_per_m, speed_mps, gear, hold_standstill, reverse):
+        """One tick -> (steer, throttle, brake, reverse) of the carla.VehicleControl. Speed and acceleration are along
+        the car's forward axis, curvature and yaw rate positive to the right, like CARLA's steer. gear is the one CARLA
+        reports for the ego: 1.. forward, 0 while the gearbox shifts, REVERSE_GEAR in reverse."""
         if gear > 0:
             self._engaged_gear = gear
         forward_speed_mps = max(speed_mps, 0.0)
@@ -248,17 +253,18 @@ class PedalMap:
         steer = float(np.clip(target_curvature_per_m / curvature_per_steer, -1.0, 1.0))
         if hold_standstill:
             self._command = None
-            return steer, 0.0, 1.0
+            return steer, 0.0, 1.0, False
+        drive_direction = -1.0 if reverse else 1.0
         throttle, brake = pedals(
-            self.gains.gears[self._engaged_gear - 1],
+            self.gains.reverse if reverse else self.gains.gears[self._engaged_gear - 1],
             self.gains.max_engine_braking_mps2,
             self.gains.brake_per_mps2,
             gear == 0,
-            target_accel_mps2,
-            forward_speed_mps,
+            drive_direction * target_accel_mps2,
+            max(drive_direction * speed_mps, 0.0),
         )
-        self._command = (target_accel_mps2, target_curvature_per_m, speed_mps, brake, gear)
-        return steer, throttle, brake
+        self._command = (target_accel_mps2, target_curvature_per_m, speed_mps, brake, REVERSE_GEAR if reverse else gear)
+        return steer, throttle, brake, reverse
 
     def stats(self):
         """How far the gains are off: realised minus target acceleration per pedal and per gear (ticks, bias),

@@ -22,7 +22,7 @@ init_route(route) once the ego exists, route = {
   lights: carla_bridge.light_geometry_from_carla dicts, stop_signs: carla_bridge.stop_sign_geometry_from_carla dicts,
   infraction_flags: bool, also compute the shadow env's own infraction flags when no telemetry is written }
 step(snapshot) every simulator tick, snapshot = {
-  ego: ACTOR_STATE, ego_gear: the gear CARLA reports for the ego (1.. forward, 0 while the gearbox shifts),
+  ego: ACTOR_STATE, ego_gear: the gear CARLA reports for the ego (1.. forward, 0 while the gearbox shifts, -1 reverse),
   partners: PARTNER_ROW list (nearest first, at most partner_slots, |dz| <= PARTNER_MAX_ABS_DZ_M),
   light_states: [[light_id, carla.TrafficLightState name], ...], ego_light_id: id reported for the ego or -1,
   light_timers: [[light_id, get_elapsed_time(), get_yellow_time()], ...] (the light's own phase timer; required when
@@ -38,9 +38,14 @@ Environment variables:
                                into StepResult.control = (steer, throttle, brake) and CARLA's own vehicle
                                physics moves the ego (subject to dynamics-mismatch tracking lag).
                                "carla_pedals": CARLA's physics moves the ego, driven only by the (steer, throttle,
-                               brake) the leaderboard applies. controller.PedalMap maps the jerk integrator's
+                               brake, reverse) the leaderboard applies. controller.PedalMap maps the jerk integrator's
                                acceleration and steering to them with the gains of the gear the automatic gearbox
                                is in; pose, speed, yaw rate and gear are re-read every tick.
+  COSIM_PEDAL_REVERSE=1        carla_pedals: 1 (default) = a standing car that is asked to go backwards reverses;
+                               0 = it stays on the brake, as before reverse existed.
+  COSIM_PEDAL_YELLOW_MARGIN=1  carla_pedals: 1 (default) = the policy sees the remaining yellow shortened by the
+                               car's gear shift time, so it stops where a shift would make it late; 0 = it sees
+                               CARLA's remaining yellow.
   COSIM_MAX_SPEED_MPS=20       ego speed cap; sets the shadow env's C_vel = cap / base_max_speed_mps.
                                Default: the checkpoint's base_max_speed_mps (C_vel = 1). Must lie in the
                                trained range base * [1/conditioning_speed_scale, scale]
@@ -131,7 +136,7 @@ EGO_INFRACTION_METRICS = {"collision": 0, "offroad": 1, "red_light": 2, "stop_si
 DYNAMICS_SOURCES = ("carla", "pufferdrive", "carla_pedals")
 EGO_OBS_STEERING_IDX = 3  # write_ego_obs column order: speed, width, length, steering, accel_long, ...
 DRIVE_WHEELBASE_PER_LENGTH = 0.6  # must equal the jerk model's wheelbase / sim_length
-STANDSTILL_SPEED_MPS = 0.1  # carla_pedals: below this, with no intent to accelerate, the ego is held on the brake
+STANDSTILL_SPEED_MPS = 0.1  # carla_pedals: below this, in either direction, the ego counts as standing
 TELEMETRY_HEADER = (
     "step,current_speed,target_speed,ego_action,goal_cursor,goal_dist_m,"
     "near_light_dist_m,near_light_state,"
@@ -217,7 +222,7 @@ class StepResult:
     """One policy step: `actions` (num_agents, act_dim), the shadow env's infraction flags (None unless
     requested), and the ego command -- `motion` = [x0, y0, yaw0_deg, speed0, x1, y1, yaw1_deg, speed1, z1]
     (CARLA frame, pre- and post-step pose to teleport along) in pufferdrive mode, `control` = (steer,
-    throttle, brake) in the carla modes; `target` = (speed_mps, yaw_deg) the policy intends one dt ahead."""
+    throttle, brake, reverse) in the carla modes; `target` = (speed_mps, yaw_deg) the policy intends one dt ahead."""
 
     def __init__(self, actions, target, motion=None, control=None, pd_flags=None):
         self.actions = actions
@@ -239,6 +244,8 @@ class ShadowEgo:
         self.max_speed_mps = cosim_max_speed_mps(env_cfg)
         self.obs_slots_partners_n = cosim_obs_slots_partners_n()
         self.zero_partner_stopped_time = env_flag("COSIM_ZERO_PARTNER_STOPPED_TIME")
+        self.pedal_reverse = env_flag("COSIM_PEDAL_REVERSE", "1")
+        self.pedal_yellow_margin = env_flag("COSIM_PEDAL_YELLOW_MARGIN", "1")
         self.vru_size_pad_m = float(os.environ.get("COSIM_VRU_SIZE_PAD_M", "0.0"))
         if not (self.vru_size_pad_m >= 0.0):
             raise ValueError(f"COSIM_VRU_SIZE_PAD_M must be >= 0, got {self.vru_size_pad_m}")
@@ -265,9 +272,11 @@ class ShadowEgo:
         self._steering_limit_rad = float(binding.STEERING_LIMIT)
         self._intent_accel_mps2 = 0.0  # carla_pedals: the jerk integrator's own state, never re-read from CARLA
         self._intent_steering_rad = 0.0
-        self._plant_speed_mps = 0.0
+        self._plant_speed_mps = 0.0  # along the car's forward axis, negative in reverse
         self._plant_gear = 0
-        self._standstill = False
+        self._standing = False  # carla_pedals: too slow to count as moving
+        self._held = False  # carla_pedals: braked to a stop and kept on the brake until the policy asks to move
+        self._moving_direction = 1.0  # carla_pedals: +1 forward, -1 reverse, of the last motion
         self._yellow_margin_s = 0.0  # carla_pedals: the policy sees this much less yellow than CARLA has left
         self.obs_html_max_steps = int(os.environ.get("COSIM_OBS_HTML_MAX_STEPS", "12000"))
         self.obs_html_render = env_flag("COSIM_OBS_HTML_RENDER", "1")
@@ -449,8 +458,9 @@ class ShadowEgo:
 
         if self.dynamics_source == "carla_pedals":
             self.controller = PedalMap(pedal_gains_for(ego.get("blueprint")))
-            # a sprint through a yellow can lose one gear shift without drive, which the policy does not know about
-            self._yellow_margin_s = self.controller.gains.gear_shift_seconds
+            if self.pedal_yellow_margin:
+                # a sprint through a yellow can lose one gear shift without drive, which the policy does not know about
+                self._yellow_margin_s = self.controller.gains.gear_shift_seconds
         else:
             wheelbase, max_steer = vehicle_geometry_from_wheels(ego["wheels"])
             self.controller = TrackingController(wheelbase_m=wheelbase, max_steer_rad=max_steer, horizon_s=self.dt)
@@ -624,10 +634,20 @@ class ShadowEgo:
         x, y, z, heading, vx, vy, yaw_rate, _ = bin_state
         self._plant_speed_mps = vx * math.cos(heading) + vy * math.sin(heading)
         self.controller.observe(self._plant_speed_mps, -yaw_rate, self.tick_dt)
-        self._standstill = self._plant_speed_mps < STANDSTILL_SPEED_MPS and self._intent_accel_mps2 <= 0.0
-        if self._standstill:
-            # the held car reads exactly stopped, as in training; a negative intent would wind up against the brake
-            vx, vy, self._intent_accel_mps2 = 0.0, 0.0, 0.0
+        # without reverse a car that rolls backwards is stopped like a standing one
+        backward_standstill_mps = STANDSTILL_SPEED_MPS if self.pedal_reverse else math.inf
+        self._standing = -backward_standstill_mps < self._plant_speed_mps < STANDSTILL_SPEED_MPS
+        if not self._standing:
+            self._held = False
+            self._moving_direction = math.copysign(1.0, self._plant_speed_mps)
+        else:
+            braked_to_a_stop = not self._held and self._intent_accel_mps2 * self._moving_direction <= 0.0
+            if braked_to_a_stop or (self._intent_accel_mps2 < 0.0 and not self.pedal_reverse):
+                # like the jerk model's, the acceleration starts again from zero; without reverse it cannot go below
+                self._held, self._intent_accel_mps2 = True, 0.0
+            if self._plant_speed_mps * self._intent_accel_mps2 <= 0.0:
+                # held, or creeping against the launch: the jerk model would read that as a stop and cancel the launch
+                vx, vy = 0.0, 0.0
         # the jerk model moves the box centre along its heading; CARLA's centre swings about the rear axle instead
         wheelbase_m = DRIVE_WHEELBASE_PER_LENGTH * 2.0 * self.ego_extent[0]
         curvature_per_m = math.tan(self._intent_steering_rad) / wheelbase_m
@@ -750,22 +770,25 @@ class ShadowEgo:
             # the bin frame is y-mirrored: its left-positive curvature is a negative CARLA steer
             curvature_per_m = -math.tan(self._intent_steering_rad) / wheelbase_m
             self.target = (speed_after, target_yaw_deg)
+            launch_backwards = self._standing and accel_after < 0.0
+            reverse = self.pedal_reverse and (launch_backwards or not self._standing and self._plant_speed_mps < 0.0)
             control = self.controller.step(
                 accel_after,
                 curvature_per_m,
                 self._plant_speed_mps,
                 self._plant_gear,
-                self._standstill and accel_after <= 0.0,
+                self._held and (accel_after == 0.0 or (launch_backwards and not self.pedal_reverse)),
+                reverse,
             )
             return StepResult(actions, self.target, control=control)
 
         target_speed = speed_after + max(accel_after, 0.0) * self.speed_intent_extension_s
         self.target = (target_speed, target_yaw_deg)
         # Controller runs every tick against the latest CARLA state, chasing the target of this policy step.
-        control = self.controller.step(
+        steer, throttle, brake = self.controller.step(
             self._ego_speed_carla, ego_state[STATE_YAW_DEG], target_speed, target_yaw_deg, self.tick_dt
         )
-        return StepResult(actions, self.target, control=control)
+        return StepResult(actions, self.target, control=(steer, throttle, brake, False))
 
     def step(self, snapshot):
         """Shadow env <- simulator ground truth, policy, one dt of dynamics -> StepResult."""
