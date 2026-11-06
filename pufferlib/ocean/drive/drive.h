@@ -1100,6 +1100,75 @@ static void commit_goals(
     agent->current_goal_z = agent->list_goal_z[start_slot_idx];
 }
 
+static int pick_straightest_exit_lane(const RoadMapElement *road_elements, int lane_idx) {
+    const RoadMapElement *lane = &road_elements[lane_idx];
+    int straightest_exit_idx = -1;
+    float smallest_turn_rad = 2.0f * (float) M_PI;
+    for (int exit_slot = 0; exit_slot < lane->num_exits; exit_slot++) {
+        int exit_idx = lane->exit_lanes[exit_slot];
+        if (exit_idx == -1 || road_elements[exit_idx].segment_size < 2) {
+            continue;
+        }
+        const RoadMapElement *exit_lane = &road_elements[exit_idx];
+        float turn_rad
+            = fabsf(normalize_heading(exit_lane->headings[exit_lane->segment_size - 2] - exit_lane->headings[0]));
+        if (turn_rad < smallest_turn_rad) {
+            smallest_turn_rad = turn_rad;
+            straightest_exit_idx = exit_idx;
+        }
+    }
+    return straightest_exit_idx;
+}
+
+// Up to num_goals goals every spacing_m along the agent's lane and its straightest exits; returns the count placed.
+static int place_lane_goals_ahead(Drive *env, Agent *agent, float spacing_m) {
+    if (agent->current_lane_idx == -1) {
+        return 0;
+    }
+    RoadMapElement *start_lane = &env->road_elements[agent->current_lane_idx];
+    float start_s_on_lane = compute_lane_progress(
+        start_lane,
+        agent->sim_x,
+        agent->sim_y,
+        agent->cos_heading,
+        agent->sin_heading,
+        true,
+        NULL);
+    float needed_route_m = start_s_on_lane + spacing_m * (float) env->num_goals;
+    int route[MAX_ROUTE_LENGTH];
+    int route_length = 0;
+    float route_m = 0.0f;
+    int lane_idx = agent->current_lane_idx;
+    for (int hop = 0; hop < MAX_ROUTE_LENGTH && lane_idx != -1 && route_m < needed_route_m; hop++) {
+        route[route_length++] = lane_idx;
+        route_m += env->road_elements[lane_idx].length;
+        lane_idx = pick_straightest_exit_lane(env->road_elements, lane_idx);
+    }
+    float goal_spacings_m[MAX_GOALS];
+    for (int goal_idx = 0; goal_idx < env->num_goals; goal_idx++) {
+        goal_spacings_m[goal_idx] = spacing_m;
+    }
+    float goal_x[MAX_GOALS], goal_y[MAX_GOALS], goal_z[MAX_GOALS];
+    int goal_lane[MAX_GOALS];
+    int placed_goal_count = chain_goals(
+        env,
+        route,
+        route_length,
+        0,
+        start_s_on_lane,
+        agent->sim_heading,
+        goal_spacings_m,
+        env->num_goals,
+        goal_x,
+        goal_y,
+        goal_z,
+        goal_lane);
+    if (placed_goal_count > 0) {
+        commit_goals(env, agent, goal_x, goal_y, goal_z, goal_lane, placed_goal_count, 0);
+    }
+    return placed_goal_count;
+}
+
 static bool compute_new_route(Drive *env, Agent *agent, int current_lane_idx) {
     RoadMapElement *road_elements = env->road_elements;
     int candidate_route[MAX_ROUTE_LENGTH];
@@ -4865,6 +4934,24 @@ void c_get_agent_goal_progress(Drive *env, int agent_idx, int *current_goal_idx_
     *goal_count_out = agent->goal_count;
 }
 
+// Co-sim: rewind or advance the consumed-goal count of the current window (undoes a forecast rollout's progress).
+int c_set_agent_goal_progress(Drive *env, int agent_idx, int current_goal_idx) {
+    if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
+        return -1;
+    }
+    Agent *agent = &env->agents[agent_idx];
+    if (current_goal_idx < 0 || current_goal_idx > agent->goal_count) {
+        return -1;
+    }
+    agent->current_goal_idx = current_goal_idx;
+    if (current_goal_idx < agent->goal_count) {
+        agent->current_goal_x = agent->list_goal_x[current_goal_idx];
+        agent->current_goal_y = agent->list_goal_y[current_goal_idx];
+        agent->current_goal_z = agent->list_goal_z[current_goal_idx];
+    }
+    return 0;
+}
+
 int c_set_agent_goals(
     Drive *env,
     int agent_idx,
@@ -4896,6 +4983,27 @@ int c_set_agent_goals(
     agent->current_goal_x = agent->list_goal_x[0];
     agent->current_goal_y = agent->list_goal_y[0];
     agent->current_goal_z = agent->list_goal_z[0];
+    agent->lane_goal_spacing_m = 0.0f;
+    return 0;
+}
+
+// Co-sim forecast agents have no known route: their goals follow the lane ahead and c_step renews them when reached.
+int c_set_agent_lane_goals(Drive *env, int count, const int *idx, float spacing_m, int *placed_goal_counts_out) {
+    if (!isfinite(spacing_m) || spacing_m <= 0.0f) {
+        return -1;
+    }
+    for (int k = 0; k < count; k++) {
+        if (idx[k] < 0 || idx[k] >= env->num_total_agents || !env->agents[idx[k]].sim_valid) {
+            return -1;
+        }
+    }
+    for (int k = 0; k < count; k++) {
+        Agent *agent = &env->agents[idx[k]];
+        agent->lane_goal_spacing_m = spacing_m;
+        agent->goal_count = 0;
+        agent->current_goal_idx = 0;
+        placed_goal_counts_out[k] = place_lane_goals_ahead(env, agent, spacing_m);
+    }
     return 0;
 }
 // ───────────────────────────────────────
@@ -6424,6 +6532,10 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
         if (agent->metrics_array[REACHED_GOAL_IDX] == 0.0f) {
+            continue;
+        }
+        if (env->goal_source == GOAL_SOURCE_EXTERNAL && agent->lane_goal_spacing_m > 0.0f) {
+            place_lane_goals_ahead(env, agent, agent->lane_goal_spacing_m); // a dead end keeps the goals still ahead
             continue;
         }
         if (env->goal_source == GOAL_SOURCE_GT || env->goal_source == GOAL_SOURCE_GT_MAP

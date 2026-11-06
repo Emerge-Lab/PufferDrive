@@ -85,19 +85,26 @@ they only read its pose.
 
 `COSIM_DYNAMICS_SOURCE=carla_pedals` drives the CARLA vehicle the way the leaderboard
 prescribes: the agent only returns a `carla.VehicleControl` from `run_step`, nothing else touches
-the ego. Like nuPlan's `ego_dynamics=nuplan_bicycle`, CARLA is the plant: pose, speed and yaw rate
-are re-read every tick, while acceleration and steering angle stay the jerk integrator's own state.
-`controller.py`'s `PedalMap` turns those two into pedals and steer with constant gains and no
-feedback (the policy closes the loop). Throttle = the throttle that holds the current speed + a
-gain per m/s², clipped at zero: CARLA's engine braking makes the throttle the main brake too
-(released, it gives up to -5 m/s² on 0.9.15's `mkz_2020`). The brake pedal only adds what exceeds
-the engine braking of a high gear (full brake is worth about 5 m/s²). Steer = a gain times the
-path curvature. The gains are per ego blueprint (`PEDAL_GAINS_BY_BLUEPRINT`: `mkz_2020` for
-longest6 v2, `mkz2017` for v1, both measured open loop on a straight road); an unmeasured car is
-refused. Below `STANDSTILL_SPEED_MPS` with no intent to accelerate the ego is held on the full
-brake and reads exactly stopped. The route summary line prints how far the gains are off
-(`accel_bias_*`, `yaw_rate_gain`). Not handled yet: reversing (a policy that wants to back up
-stands still for good) and road grade (gravity is not compensated).
+the ego, and the gearbox stays automatic. Like nuPlan's `ego_dynamics=nuplan_bicycle`, CARLA is the
+plant: pose, speed, yaw rate and the current gear are re-read every tick, while acceleration and
+steering angle stay the jerk integrator's own state. `controller.py`'s `PedalMap` turns those two
+into pedals and steer with constant gains and no feedback (the policy closes the loop). The gains
+are per ego blueprint and per gear (`PEDAL_GAINS_BY_BLUEPRINT`: `mkz_2020` for longest6 v2,
+`mkz2017` for v1, measured open loop on a straight road with each gear held); an unmeasured car is
+refused. For the gear CARLA reports, throttle = the throttle that holds the current speed + the
+target acceleration divided by that gear's acceleration per unit throttle, clipped at zero: CARLA's
+engine braking makes the throttle the main brake too. The brake pedal supplies what exceeds the
+gear's engine braking, capped at `max_engine_braking_mps2` so that hard braking acts at once, and
+the whole deceleration while the gearbox shifts (gear 0: the engine is disconnected). Steer = path
+curvature divided by the curvature one unit of steer gives, which falls with speed. Below
+`STANDSTILL_SPEED_MPS` with no intent to accelerate the ego is held on the full brake and reads
+exactly stopped. The route summary line prints how far the gains are off (`accel_bias_*`, per gear
+`accel_bias_by_gear_mps2` = (ticks, bias), `yaw_rate_gain`). An automatic shift leaves the car
+without drive for `gear_shift_seconds` (0.5 s on the v1 car), which no pedal value can make up for
+and the policy has never seen: it would sprint through a yellow and arrive late. So in this mode
+the policy sees that much less remaining yellow than CARLA reports and stops at those lights
+instead. Not handled: reversing (a policy that wants to back up stands still for good) and road
+grade (gravity is not compensated).
 
 ### Bin frame calibration
 

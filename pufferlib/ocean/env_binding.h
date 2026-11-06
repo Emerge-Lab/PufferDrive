@@ -1253,6 +1253,31 @@ static PyObject *vec_get_agent_goal_progress(PyObject *self, PyObject *args) {
     return Py_BuildValue("(ii)", current_goal_idx, goal_count);
 }
 
+static PyObject *vec_set_agent_goal_progress(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(
+            PyExc_TypeError,
+            "vec_set_agent_goal_progress requires 3 arguments (vec_env, agent_idx, current_goal_idx)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int agent_idx = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
+    int current_goal_idx = (int) PyLong_AsLong(PyTuple_GetItem(args, 2));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (c_set_agent_goal_progress((Drive *) vec->envs[0], agent_idx, current_goal_idx) != 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "vec_set_agent_goal_progress: agent index out of range or current_goal_idx outside 0..goal_count");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyObject *vec_set_agent_goals(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 7) {
         PyErr_SetString(PyExc_TypeError, "vec_set_agent_goals requires 7 arguments");
@@ -1290,6 +1315,44 @@ static PyObject *vec_set_agent_goals(PyObject *self, PyObject *args) {
             PyExc_ValueError,
             "vec_set_agent_goals: agent index out of range, waypoint count outside 1..%d, or non-finite goal",
             MAX_GOALS);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_set_agent_lane_goals(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 4) {
+        PyErr_SetString(
+            PyExc_TypeError,
+            "vec_set_agent_lane_goals requires 4 arguments (vec_env, idx, spacing_m, placed_goal_counts)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    PyObject *idx_arr = PyTuple_GetItem(args, 1);
+    PyObject *counts_arr = PyTuple_GetItem(args, 3);
+    double spacing_m = PyFloat_AsDouble(PyTuple_GetItem(args, 2));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (!PyArray_Check(idx_arr) || !PyArray_Check(counts_arr) || PyArray_TYPE((PyArrayObject *) idx_arr) != NPY_INT32
+        || PyArray_TYPE((PyArrayObject *) counts_arr) != NPY_INT32) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_agent_lane_goals: idx and placed_goal_counts must be int32 arrays");
+        return NULL;
+    }
+    int count = (int) PyArray_SIZE((PyArrayObject *) idx_arr);
+    if ((int) PyArray_SIZE((PyArrayObject *) counts_arr) != count) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_agent_lane_goals: placed_goal_counts must have the length of idx");
+        return NULL;
+    }
+    const int *idx = (const int *) PyArray_DATA((PyArrayObject *) idx_arr);
+    int *placed_goal_counts = (int *) PyArray_DATA((PyArrayObject *) counts_arr);
+    if (c_set_agent_lane_goals((Drive *) vec->envs[0], count, idx, (float) spacing_m, placed_goal_counts) != 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "vec_set_agent_lane_goals: agent index out of range, agent without a pose, or spacing_m not > 0");
         return NULL;
     }
     Py_RETURN_NONE;
@@ -1585,6 +1648,14 @@ static PyMethodDef methods[]
         METH_VARARGS,
         "Move traffic-light stop lines onto the external sim's own (co-sim)"},
        {"vec_set_agent_goals", vec_set_agent_goals, METH_VARARGS, "Set an agent's goal waypoints (co-sim)"},
+       {"vec_set_agent_lane_goals",
+        vec_set_agent_lane_goals,
+        METH_VARARGS,
+        "Give agents goals along their lane ahead (co-sim forecast)"},
+       {"vec_set_agent_goal_progress",
+        vec_set_agent_goal_progress,
+        METH_VARARGS,
+        "Set the consumed-goal count of one agent's window (co-sim)"},
        {"vec_get_agent_goal_progress",
         vec_get_agent_goal_progress,
         METH_VARARGS,

@@ -28,7 +28,8 @@ pufferdrive_planner:
   # Ego plant. pufferdrive: the shadow env's jerk model integrates the ego, nuPlan's perfect_tracking_controller
   # replays the pose. nuplan_bicycle: nuPlan's KinematicBicycleModel is the plant (run with
   # ego_controller=one_stage_controller); the shadow ego takes nuPlan's pose/speed/yaw rate every step, keeps its own
-  # jerk-integrated accel/steering, and its post-step accel/steering are the model's commands.
+  # jerk-integrated accel/steering, and its post-step accel/steering are the model's commands. nuplan_tracker: the
+  # planner returns the ego trajectory of a forecast rollout and nuPlan's two-stage controller tracks it (see rollout_*).
   # bicycle_min_speed_mps: speed floor enforced on the command (0 = CaRL's
   # no-reverse driving, -2 = Drive's MAX_BACKWARD_SPEED). bicycle_undo_low_pass: pre-compensate the model's command
   # lag (CaRL default off). The time constants must match the motion model (devkit 0.2 / 0.05).
@@ -49,6 +50,16 @@ pufferdrive_planner:
   accel_cap_mps2: null
   # eval hack: partners longer than this [m] are shown as equal boxes along their heading (training max 7 m); 0 = off
   partner_split_max_length_m: 0.0
+  # ego_dynamics: nuplan_tracker, GIGAFLOW's nuPlan evaluation (run with ego_controller=two_stage_controller for the
+  # LQR tracker or two_stage_ilqr_controller for the iLQR tracker). Every step the shadow env takes the whole scene from
+  # nuPlan and is rolled out for horizon_seconds in rollout_step_seconds steps (0.3 = the training step); the policy
+  # drives the ego (from the plant's accel and steering) and the nearest rollout_policy_vehicles vehicles, which follow
+  # their lane, everything else moves at its observed velocity. The ego's rolled-out states are the trajectory nuPlan's
+  # tracker follows. rollout_allow_reverse: false = an agent the policy would back up stays at rest (as
+  # bicycle_min_speed_mps 0).
+  rollout_step_seconds: 0.3
+  rollout_policy_vehicles: 32
+  rollout_allow_reverse: false
   env_overrides:
     obs_slots_partners_n: 40 # GIGAFLOW eval value (Table A4); slots are max-pooled, so any checkpoint transfers
     stop_signs_enabled: false # nuPlan city bins export TURN_STOP zones as stop signs; keep them out of the obs

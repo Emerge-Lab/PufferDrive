@@ -87,6 +87,16 @@ export LANE_WIDTH_CLIP_MAX_M=${LANE_WIDTH_CLIP_MAX_M:-4.4}
 # BICYCLE_UNDO_LOW_PASS=true (feedforward inverse of the lag using the plant's time constants) scores 93.48 (run 428)
 # by trading +2.7 comfort for 6 collisions, 4 offroads and 1.2 TTC; kept off to stay faithful to the CaRL plant.
 export EGO_DYNAMICS=${EGO_DYNAMICS:-nuplan_bicycle}
+# EGO_DYNAMICS=nuplan_tracker = GIGAFLOW's nuPlan evaluation: every step the planner rolls the scene out for the 8 s
+# trajectory horizon in ROLLOUT_STEP_SECONDS steps (the policy drives the ego and the nearest ROLLOUT_POLICY_VEHICLES
+# vehicles, the rest moves at its observed velocity) and nuPlan's two_stage_controller tracks the ego's rolled-out
+# trajectory. EGO_TRACKER: lqr = nuPlan's default tracker, ilqr = its iLQR tracker without the wall-clock solve cap.
+# ROLLOUT_ALLOW_REVERSE=false holds an agent the policy would back up at rest (as BICYCLE_MIN_SPEED_MPS=0).
+# Set WANDB_REPORT=0 for a tracker run unless its CLS should replace the standard eval's number in wandb.
+export EGO_TRACKER=${EGO_TRACKER:-lqr}
+export ROLLOUT_STEP_SECONDS=${ROLLOUT_STEP_SECONDS:-0.3}
+export ROLLOUT_POLICY_VEHICLES=${ROLLOUT_POLICY_VEHICLES:-32}
+export ROLLOUT_ALLOW_REVERSE=${ROLLOUT_ALLOW_REVERSE:-false}
 export BICYCLE_MIN_SPEED_MPS=${BICYCLE_MIN_SPEED_MPS:-0}
 export BICYCLE_UNDO_LOW_PASS=${BICYCLE_UNDO_LOW_PASS:-false}
 # Comfort: nuPlan scores the center accel (rear + d*yaw_rate^2 + d*yaw_accel), which the bicycle plant exposes.
@@ -127,6 +137,10 @@ if [ "$EGO_DYNAMICS" = "nuplan_bicycle" ]; then
     fi
     [ "$BICYCLE_MAX_YAW_JERK" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_yawjerk${BICYCLE_MAX_YAW_JERK}"
     [ "$BICYCLE_FLOOR_ACCEL_CLAMP" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_clamp"
+fi
+if [ "$EGO_DYNAMICS" = "nuplan_tracker" ]; then
+    ABLATION_TAG="${ABLATION_TAG}_tracker_${EGO_TRACKER}_step${ROLLOUT_STEP_SECONDS}_veh${ROLLOUT_POLICY_VEHICLES}"
+    [ "$ROLLOUT_ALLOW_REVERSE" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_reverse"
 fi
 [ -n "$EGO_ACCEL_CAP_MPS2" ] && ABLATION_TAG="${ABLATION_TAG}_acap${EGO_ACCEL_CAP_MPS2}"
 [ -n "$PARTNER_SPLIT_MAX_LENGTH_M" ] && ABLATION_TAG="${ABLATION_TAG}_split${PARTNER_SPLIT_MAX_LENGTH_M}"

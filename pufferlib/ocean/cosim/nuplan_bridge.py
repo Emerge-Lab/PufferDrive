@@ -44,9 +44,15 @@ _NUPLAN_AGENT_TYPE = {"VEHICLE": 1, "PEDESTRIAN": 2, "BICYCLE": 3}
 
 # nuPlan TrafficLightStatusType -> PufferDrive light enum (datatypes.h: RED=1 YELLOW=2 GREEN=3).
 # Training never produces UNKNOWN (0), so an unknown or unreported light is treated as GREEN.
+LIGHT_STATE_RED = 1
 LIGHT_STATE_YELLOW = 2
 LIGHT_STATE_GREEN = 3
-_NUPLAN_LIGHT_STATE = {"RED": 1, "YELLOW": LIGHT_STATE_YELLOW, "GREEN": LIGHT_STATE_GREEN, "UNKNOWN": LIGHT_STATE_GREEN}
+_NUPLAN_LIGHT_STATE = {
+    "RED": LIGHT_STATE_RED,
+    "YELLOW": LIGHT_STATE_YELLOW,
+    "GREEN": LIGHT_STATE_GREEN,
+    "UNKNOWN": LIGHT_STATE_GREEN,
+}
 
 FAR_AWAY = 1.0e6  # park surplus PufferDrive agents out of observation range
 ROUTE_SEARCH_DEPTH_BLOCKS = 30  # PDM's Dijkstra window over route roadblocks

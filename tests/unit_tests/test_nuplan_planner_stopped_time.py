@@ -20,7 +20,7 @@ STEP_SECONDS = 0.1
 
 def _planner():
     planner = PufferDrivePlanner.__new__(PufferDrivePlanner)
-    planner.__dict__.update({"_arch": {"dt": STEP_SECONDS}, "_partner_stopped_s": {}})
+    planner.__dict__.update({"_planning_step_s": STEP_SECONDS, "_partner_stopped_s": {}})
     return planner
 
 

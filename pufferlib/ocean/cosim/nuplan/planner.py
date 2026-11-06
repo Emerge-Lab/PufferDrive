@@ -32,6 +32,7 @@ from pufferlib.ocean.cosim.nuplan_bicycle import (
     bicycle_response,
     floor_clamped_intent_accel,
 )
+from pufferlib.ocean.cosim.nuplan_rollout import forecast_light_states, rollout_step_count, split_rollout_slots
 from pufferlib.ocean.drive.drive import Drive
 
 from pufferlib.ocean.cosim.nuplan_bridge import DEFAULT_ARCH, FAR_AWAY
@@ -41,6 +42,9 @@ EGO_OBS_ACCEL_LONG_IDX = 4  # write_ego_obs column order: speed, width, length, 
 EGO_OBS_STEERING_IDX = 3
 EGO_DYNAMICS_PUFFERDRIVE = "pufferdrive"  # the shadow env integrates the ego, perfect_tracking_controller replays it
 EGO_DYNAMICS_NUPLAN_BICYCLE = "nuplan_bicycle"  # nuPlan's KinematicBicycleModel is the plant (one_stage_controller)
+EGO_DYNAMICS_NUPLAN_TRACKER = "nuplan_tracker"  # nuPlan's two_stage_controller tracks the ego of a forecast rollout
+EGO_DYNAMICS_MODES = (EGO_DYNAMICS_PUFFERDRIVE, EGO_DYNAMICS_NUPLAN_BICYCLE, EGO_DYNAMICS_NUPLAN_TRACKER)
+DUMMY_ROLLOUT_EGO_ACTION = (1.0, 0.0)  # no-checkpoint wiring test: full accelerating jerk, no steering
 BICYCLE_RESPONSE_TOL = 1e-4  # m/s^2 and m/s: nuPlan's ego state must be the bicycle model's response to our command
 EGO_TRACKING_TOL_M = 0.05  # perfect_tracking_controller hands back our integrated pose up to log-timestamp jitter
 EGO_TRACKING_TOL_RAD = 0.005
@@ -49,6 +53,7 @@ NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2 = 2.40  # ego_lon_acceleration_statistics.yaml
 TRAJECTORY_TAIL_SPACING_S = 0.5  # constant-velocity tail past the integrated step; the controller only reads t+dt
 COMFORT_ACCEL_MARGIN = 0.96  # nuPlan Savitzky-Golay-smooths the reported accel and overshoots a hard cap by ~0.5%
 ROADBLOCK_GOAL_MARGIN_M = 5.0  # first roadblock goal sits at least this far beyond the goal radius ahead of the ego
+ROLLOUT_SLOT_PROBE_SPACING_M = 10.0  # distinct x per policy slot in the build-time slot round trip
 LOG_EXCLUDED_STATE = ("_env", "_policy", "_goal_window", "_obs_replay")  # per-scenario runtime, never pickled
 
 
@@ -137,6 +142,9 @@ class PufferDrivePlanner(AbstractPlanner):
         bicycle_floor_accel_clamp: bool = True,
         accel_cap_mps2: Optional[float] = None,
         partner_split_max_length_m: float = 0.0,
+        rollout_step_seconds: float = 0.3,
+        rollout_policy_vehicles: int = 32,
+        rollout_allow_reverse: bool = False,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
         obs_html_max_steps: int = 800,
@@ -182,7 +190,20 @@ class PufferDrivePlanner(AbstractPlanner):
             the plant, driven through CaRL's one_stage_controller like CaRL: every step the shadow ego takes
             nuPlan's pose, speed and yaw rate, keeps its own jerk-integrated accel/steering (the state the
             policy was trained to observe; the plant lags behind it), and its post-step accel/steering
-            become the model's commands.
+            become the model's commands. "nuplan_tracker": the planner returns a trajectory and nuPlan's
+            two_stage_controller (LQR or iLQR tracker + KinematicBicycleModel) drives the ego along it, as in
+            GIGAFLOW's nuPlan evaluation. Every step the shadow env takes the whole scene from nuPlan (the ego
+            with the plant's acceleration and steering angle) and is rolled out for horizon_seconds in
+            rollout_step_seconds steps, the policy driving the ego and the nearest rollout_policy_vehicles
+            vehicles; the ego's rolled-out states are the trajectory.
+        :param rollout_step_seconds: nuplan_tracker: step of the forecast rollout [s] (0.3 = the training step).
+        :param rollout_policy_vehicles: nuplan_tracker: at most this many vehicles, nearest first, are driven by
+            the policy in the rollout. nuPlan gives no route for them, so their goals follow their lane and its
+            straightest exits. Farther vehicles, vehicles off the lane graph, pedestrians, bicycles and static
+            objects move at their observed velocity.
+        :param rollout_allow_reverse: nuplan_tracker: false = an agent the policy would back up stays where it
+            stood, at rest (what bicycle_min_speed_mps 0 does for nuplan_bicycle; nuPlan's IDM vehicles never
+            reverse). true = Drive's own floor (MAX_BACKWARD_SPEED).
         :param bicycle_min_speed_mps: nuplan_bicycle speed floor [m/s], enforced on the command (the model has
             none): 0 = CaRL's no-reverse driving, -2 = Drive's MAX_BACKWARD_SPEED.
         :param bicycle_undo_low_pass: nuplan_bicycle: pre-compensate the model's first-order command lag so one
@@ -242,12 +263,21 @@ class PufferDrivePlanner(AbstractPlanner):
         if self._vru_size_pad_m < 0:
             raise ValueError("vru_size_pad_m must be >= 0")
         self._symmetric_lane_widths = bool(symmetric_lane_widths)
-        if ego_dynamics not in (EGO_DYNAMICS_PUFFERDRIVE, EGO_DYNAMICS_NUPLAN_BICYCLE):
-            raise ValueError(
-                f"ego_dynamics must be '{EGO_DYNAMICS_PUFFERDRIVE}' or '{EGO_DYNAMICS_NUPLAN_BICYCLE}', "
-                f"got {ego_dynamics!r}"
-            )
+        if ego_dynamics not in EGO_DYNAMICS_MODES:
+            raise ValueError(f"ego_dynamics must be one of {EGO_DYNAMICS_MODES}, got {ego_dynamics!r}")
         self._ego_dynamics = ego_dynamics
+        self._rollout_step_seconds = float(rollout_step_seconds)
+        if not self._rollout_step_seconds > 0:
+            raise ValueError(f"rollout_step_seconds must be > 0, got {rollout_step_seconds}")
+        self._rollout_policy_vehicles = int(rollout_policy_vehicles)
+        if self._rollout_policy_vehicles < 0:
+            raise ValueError(f"rollout_policy_vehicles must be >= 0, got {rollout_policy_vehicles}")
+        if ego_dynamics == EGO_DYNAMICS_NUPLAN_TRACKER and self._rollout_policy_vehicles > self._num_agents - 1:
+            raise ValueError(
+                f"rollout_policy_vehicles={rollout_policy_vehicles} exceeds the {self._num_agents - 1} partners "
+                "the shadow env takes from nuPlan (num_agents - 1)"
+            )
+        self._rollout_allow_reverse = bool(rollout_allow_reverse)
         self._bicycle_min_speed_mps = float(bicycle_min_speed_mps)
         if not binding.MAX_BACKWARD_SPEED <= self._bicycle_min_speed_mps <= 0.0:
             raise ValueError(
@@ -307,6 +337,13 @@ class PufferDrivePlanner(AbstractPlanner):
         self._yellow_countdown = None  # YellowCountdown, built with the env
         self._static_on_lane: Dict[str, bool] = {}  # static object track_token -> its box overlaps a lane polygon
         self._partner_stopped_s: Dict[str, float] = {}  # track_token -> seconds below the stopped speed threshold
+        self._planning_step_s: Optional[float] = None  # nuPlan's planning interval, resolved in _build
+        # nuplan_tracker rollout state, refreshed by every _sync
+        self._rollout_steps = 0  # resolved in _build from the horizon and the rollout step
+        self._rollout_policy_rows = np.zeros(1, np.int64)  # env rows the policy drives: the ego and vehicles with goals
+        self._forecast_objects = None  # (idx, x, y, z, heading, vx, vy) of the static-slot objects that move
+        self._last_yellow_remaining_s = None  # per traffic element, 0 unless yellow
+        self._ego_stopped_s = 0.0  # seconds the plant's speed has been below the stopped threshold
 
     # --- AbstractPlanner interface -------------------------------------------
     def initialize(self, initialization: PlannerInitialization) -> None:
@@ -453,16 +490,27 @@ class PufferDrivePlanner(AbstractPlanner):
 
         if self._scenario is None:
             raise RuntimeError("PufferDrivePlanner needs the scenario injected (requires_scenario)")
+        policy_agent_count = 1
+        step_seconds = float(self._scenario.database_interval)
+        scenario_steps = int(self._scenario.get_number_of_iterations()) + SCENARIO_LENGTH_MARGIN_STEPS
+        rollout_overrides = {}
+        if self._ego_dynamics == EGO_DYNAMICS_NUPLAN_TRACKER:
+            # the rollout also drives the nearest vehicles, at its own step, for the whole horizon every iteration
+            policy_agent_count += self._rollout_policy_vehicles
+            step_seconds = self._rollout_step_seconds
+            scenario_steps *= rollout_step_count(self._horizon_seconds, step_seconds)
+            rollout_overrides = {"max_agents_per_env": policy_agent_count}
         return shadow_env_kwargs(
             cfg,
             defaults=DEFAULT_ARCH,
             overrides={
                 **self._env_overrides,
+                **rollout_overrides,
                 "map_dir": str(bin_path),
                 "num_maps": 1,
                 # One policy agent (the ego); every other slot is a static partner streamed from nuPlan.
-                "num_agents": 1,
-                "min_agents_per_env": 1,
+                "num_agents": policy_agent_count,
+                "min_agents_per_env": policy_agent_count,
                 "cosim_partner_slots": self._num_agents - 1,
                 "goal_source": "external",
                 # Training semantics: a window's final goal clears only below goal_speed (3 m/s)
@@ -470,8 +518,8 @@ class PufferDrivePlanner(AbstractPlanner):
                 # C_acc conditioning: cap the jerk model's positive accel at accel_cap_mps2 instead of 2.5
                 "conditioning_accel_scale": self._accel_cap_mps2 / binding.ACCEL_LONG_MAX,
                 # lockstep with nuPlan's planning iterations, not the training dt (mimolette: 0.3)
-                "dt": float(self._scenario.database_interval),
-                "scenario_length": int(self._scenario.get_number_of_iterations()) + SCENARIO_LENGTH_MARGIN_STEPS,
+                "dt": step_seconds,
+                "scenario_length": scenario_steps,
                 "resample_frequency": 0,
                 # External sim owns the episode: a training-config
                 # termination_mode=1 would c_reset() the pool (ego included)
@@ -511,6 +559,13 @@ class PufferDrivePlanner(AbstractPlanner):
         self._arch = self._resolve_arch(cfg, bin_path)
         self._env = Drive(**self._arch)
         self._env.reset()
+        self._planning_step_s = float(self._scenario.database_interval)
+        if self._ego_dynamics == EGO_DYNAMICS_NUPLAN_TRACKER:
+            import pufferlib.spaces
+
+            if not isinstance(self._env.single_action_space, pufferlib.spaces.Box):
+                raise RuntimeError(f"ego_dynamics={EGO_DYNAMICS_NUPLAN_TRACKER} needs a continuous (jerk) action space")
+            self._rollout_steps = rollout_step_count(self._horizon_seconds, self._rollout_step_seconds)
         # nuPlan reports light status only: a yellow counts down from the shortest trained yellow
         self._yellow_countdown = YellowCountdown(self._env.traffic_light_yellow_min_s, self._env.dt)
         torch.set_num_threads(1)  # one scenario per worker process; BLAS threads only fight the other workers
@@ -563,6 +618,8 @@ class PufferDrivePlanner(AbstractPlanner):
                 "Gigaflow spawning likely failed on this bin -- check for '[GIGAFLOW WARNING]'/'[ERROR]' in the "
                 "worker stdout; a map-only city bin without lane connectivity (exit_lanes) is the known cause."
             )
+        if self._ego_dynamics == EGO_DYNAMICS_NUPLAN_TRACKER:
+            self._check_rollout_policy_slots(probe_x, probe_y)
 
         if self._dummy:
             self._policy = None
@@ -639,10 +696,25 @@ class PufferDrivePlanner(AbstractPlanner):
             f"{self._num_traffic} goals={len(goals)} goal_source={self._goal_source}"
         )
 
+    def _check_rollout_policy_slots(self, probe_x: float, probe_y: float) -> None:
+        """nuplan_tracker: observation row k must be env agent k for every policy slot. A failed gigaflow spawn
+        drops its agent from the active list and shifts every later row onto another vehicle."""
+        slots = np.arange(1 + self._rollout_policy_vehicles, dtype=np.int32)
+        slot_x = (probe_x + ROLLOUT_SLOT_PROBE_SPACING_M * slots).astype(np.float32)
+        slot_y = np.full(len(slots), probe_y, np.float32)
+        zeros = np.zeros(len(slots), np.float32)
+        self._env.set_agent_states(slots, slot_x, slot_y, zeros, zeros, zeros, zeros, zeros, zeros)
+        readback = self._env.get_global_agent_state()
+        if not np.allclose(readback["x"], slot_x, atol=0.5):
+            raise RuntimeError(
+                f"shadow env policy slots are not agents 0..{len(slots) - 1} (set x {slot_x.tolist()}, read "
+                f"{readback['x'].tolist()}): a gigaflow spawn failed, see '[GIGAFLOW WARNING]' in the worker stdout"
+            )
+
     # --- world sync -----------------------------------------------------------
     def _advance_partner_stopped_s(self, tracked_objects) -> None:
         """One observation step of the stopped time per nuPlan track; a track missing from the step starts over."""
-        step_s = float(self._arch["dt"])
+        step_s = self._planning_step_s
         stopped_s = {}
         for obj in tracked_objects:
             velocity = getattr(obj, "velocity", None)
@@ -662,10 +734,26 @@ class PufferDrivePlanner(AbstractPlanner):
         # accel after every stop and drives the ego into reverse). nuplan_bicycle dynamics: nuPlan's bicycle model
         # is the plant: pose, speed and yaw rate are restamped every step, accel/steering stay the jerk integrator's
         # own state (the lagged plant never lands exactly on zero, which would make the zero-crossing snaps stick).
+        # nuplan_tracker dynamics: every rollout starts from the plant's full state, accel and steering included.
         h = float(ego_state.center.heading)
         dcs = ego_state.dynamic_car_state
         ex, ey = tf.loc_to_bin(ego_state.center.x, ego_state.center.y)
-        if self._ego_dynamics == EGO_DYNAMICS_NUPLAN_BICYCLE:
+        if self._ego_dynamics == EGO_DYNAMICS_NUPLAN_TRACKER:
+            speed = float(dcs.rear_axle_velocity_2d.x)
+            is_stopped = abs(speed) < binding.AGENT_STOPPED_SPEED_THRESHOLD
+            self._ego_stopped_s = self._ego_stopped_s + self._planning_step_s if is_stopped else 0.0
+            self._stamp_ego(
+                ex,
+                ey,
+                h,
+                speed * math.cos(h),
+                speed * math.sin(h),
+                float(dcs.angular_velocity),
+                float(dcs.rear_axle_acceleration_2d.x),
+                float(ego_state.tire_steering_angle),
+                self._ego_stopped_s,
+            )
+        elif self._ego_dynamics == EGO_DYNAMICS_NUPLAN_BICYCLE:
             self._check_bicycle_response(ego_state)
             speed = float(dcs.rear_axle_velocity_2d.x)
             last = self._last_bicycle_step
@@ -700,16 +788,24 @@ class PufferDrivePlanner(AbstractPlanner):
         objs = nb.partner_tracked_objects(
             detections.tracked_objects, self._initialization.map_api, self._static_on_lane
         )
+        rollout = self._ego_dynamics == EGO_DYNAMICS_NUPLAN_TRACKER
         partner_count = 0
+        idx = np.zeros(0, np.int32)
+        if rollout:
+            self._rollout_policy_rows = np.zeros(1, np.int64)
+            self._forecast_objects = None
         if objs:
             _, x, y, z, hh, vx, vy, tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
             stopped_s = np.array([self._partner_stopped_s[obj.track_token] for obj in objs], np.float32)
+            # only whole vehicles can be driven by the policy in a rollout: the bridge types static clutter as vehicle
+            policy_eligible = np.array([obj.tracked_object_type.name == "VEHICLE" for obj in objs], bool)
             if self._vru_size_pad_m > 0:
                 ln, wd = nb.pad_vru_partner_sizes(tp, ln, wd, self._vru_size_pad_m)
             if self._partner_split_max_length_m > 0:
                 max_length_m = self._partner_split_max_length_m
                 piece_counts = np.maximum(1, np.ceil(ln.astype(np.float64) / max_length_m)).astype(np.int64)
                 stopped_s = np.repeat(stopped_s, piece_counts)
+                policy_eligible = np.repeat(policy_eligible & (piece_counts == 1), piece_counts)
                 x, y, z, hh, vx, vy, tp, ln, wd = nb.split_long_partners(x, y, z, hh, vx, vy, tp, ln, wd, max_length_m)
                 assert len(stopped_s) == len(x)
             # nearest first only when the slots run out: devkit ordering is by type/token, so blind truncation
@@ -717,12 +813,19 @@ class PufferDrivePlanner(AbstractPlanner):
             keep = nb.nearest_partner_slots(x, y, ex, ey, self._num_agents - 1)
             partner_count = len(keep)
             idx = np.arange(1, 1 + partner_count, dtype=np.int32)
+            if rollout:
+                idx = self._rollout_partner_slots(x[keep], y[keep], policy_eligible[keep], ex, ey)
             zeros = np.zeros(partner_count, np.float32)
             env.set_agent_states(
                 idx, x[keep], y[keep], z[keep], hh[keep], vx[keep], vy[keep], zeros, zeros, stopped_s[keep]
             )
             env.set_agent_sizes(idx, ln[keep], wd[keep])
+            if rollout:
+                self._arm_rollout_partners(idx, x[keep], y[keep], z[keep], hh[keep], vx[keep], vy[keep])
         surplus = np.arange(1 + partner_count, self._num_agents, dtype=np.int32)
+        if rollout:
+            partner_slots = np.arange(1, self._rollout_policy_vehicles + self._num_agents, dtype=np.int32)
+            surplus = np.setdiff1d(partner_slots, idx)
         if len(surplus):
             far = np.full(len(surplus), FAR_AWAY, np.float32)
             zero = np.zeros_like(far)
@@ -734,15 +837,87 @@ class PufferDrivePlanner(AbstractPlanner):
                 traffic_light_data, self._connector_map, self._num_traffic, self._route_connector_ids
             )
             yellow_remaining_s = None
-            if env.obs_traffic_light_yellow_remaining:
+            if env.obs_traffic_light_yellow_remaining or rollout:
                 yellow_elements = [int(j) for j in np.flatnonzero(self._last_light_states == nb.LIGHT_STATE_YELLOW)]
                 countdown_s = self._yellow_countdown.tick(yellow_elements, ego_state.time_point.time_s)
                 yellow_remaining_s = np.zeros(self._num_traffic, np.float32)
                 for j, remaining_s in countdown_s.items():
                     yellow_remaining_s[j] = remaining_s
-            env.set_traffic_light_states(self._last_light_states, yellow_remaining_s)
+            self._last_yellow_remaining_s = yellow_remaining_s
+            env.set_traffic_light_states(
+                self._last_light_states, yellow_remaining_s if env.obs_traffic_light_yellow_remaining else None
+            )
 
         self._goal_window.sync(ex, ey, h)
+
+    def _rollout_partner_slots(self, x, y, policy_eligible, ego_x: float, ego_y: float) -> np.ndarray:
+        """nuplan_tracker: env slot per partner. The nearest whole vehicles take the policy slots 1..K, every
+        other partner a static slot after them."""
+        distance_sq = (x.astype(np.float64) - ego_x) ** 2 + (y.astype(np.float64) - ego_y) ** 2
+        policy_rows, static_rows = split_rollout_slots(distance_sq, policy_eligible, self._rollout_policy_vehicles)
+        idx = np.empty(len(x), np.int32)
+        idx[policy_rows] = 1 + np.arange(len(policy_rows))
+        idx[static_rows] = 1 + self._rollout_policy_vehicles + np.arange(len(static_rows))
+        return idx
+
+    def _arm_rollout_partners(self, idx, x, y, z, heading, vx, vy) -> None:
+        """nuplan_tracker: vehicles in policy slots get goals along their lane and are driven by the policy in the
+        rollout; one without a lane to follow keeps coasting. The moving partners in static slots are remembered
+        so the rollout can carry them on at their observed velocity."""
+        in_policy_slot = idx <= self._rollout_policy_vehicles
+        policy_idx = idx[in_policy_slot]
+        goal_counts = self._env.set_agent_lane_goals(policy_idx, self._goal_spacing)
+        self._rollout_policy_rows = np.concatenate([[0], policy_idx[goal_counts > 0]]).astype(np.int64)
+        moving = ~in_policy_slot & (np.hypot(vx, vy) > 0.0)
+        if moving.any():
+            self._forecast_objects = (
+                idx[moving],
+                x[moving],
+                y[moving],
+                z[moving],
+                heading[moving],
+                vx[moving],
+                vy[moving],
+            )
+
+    def _hold_reversing_agents(self, policy_rows, obs, poses_before, poses_after) -> bool:
+        """nuplan_tracker without reversing: a policy-driven agent whose step ended at a negative speed is put back
+        where it stood, at rest (Drive stops exactly at zero before it reverses, so the pose before the step is
+        the standstill). poses_after is patched in place; returns True when an agent was held."""
+        held = policy_rows[obs[policy_rows, 0] < 0.0]
+        if len(held) == 0:
+            return False
+        for key in ("x", "y", "z", "heading"):
+            poses_after[key][held] = poses_before[key][held]
+        zeros = np.zeros(len(held), np.float32)
+        self._env.set_agent_states(
+            held.astype(np.int32),
+            poses_after["x"][held],
+            poses_after["y"][held],
+            poses_after["z"][held],
+            poses_after["heading"][held],
+            zeros,
+            zeros,
+            zeros,
+            zeros,
+            steering=obs[held, EGO_OBS_STEERING_IDX] * binding.STEERING_LIMIT,
+        )
+        return True
+
+    def _stamp_forecast(self, elapsed_s: float) -> None:
+        """nuplan_tracker: the scene elapsed_s after the last sync, as far as the policy does not drive it: static-slot
+        objects at their observed velocity, lights holding their state (a yellow runs out into red)."""
+        if self._forecast_objects is not None:
+            idx, x, y, z, heading, vx, vy = self._forecast_objects
+            zeros = np.zeros(len(idx), np.float32)
+            self._env.set_agent_states(idx, x + vx * elapsed_s, y + vy * elapsed_s, z, heading, vx, vy, zeros, zeros)
+        if self._num_traffic:
+            states, yellow_remaining_s = forecast_light_states(
+                self._last_light_states, self._last_yellow_remaining_s, elapsed_s
+            )
+            self._env.set_traffic_light_states(
+                states, yellow_remaining_s if self._env.obs_traffic_light_yellow_remaining else None
+            )
 
     def _stamp_ego(
         self,
@@ -754,6 +929,7 @@ class PufferDrivePlanner(AbstractPlanner):
         yaw_rate: float,
         accel_long: float,
         steering: Optional[float],
+        seconds_stopped: Optional[float] = None,
     ) -> None:
         self._env.set_agent_states(
             np.array([0], np.int32),
@@ -765,6 +941,7 @@ class PufferDrivePlanner(AbstractPlanner):
             np.array([vy], np.float32),
             np.array([yaw_rate], np.float32),
             np.array([accel_long], np.float32),
+            seconds_stopped=None if seconds_stopped is None else np.array([seconds_stopped], np.float32),
             steering=None if steering is None else np.array([steering], np.float32),
         )
 
@@ -801,11 +978,55 @@ class PufferDrivePlanner(AbstractPlanner):
             )
 
     # --- planning -------------------------------------------------------------
-    def compute_planner_trajectory(self, current_input: PlannerInput) -> AbstractTrajectory:
+    def _policy_forward(self, obs: np.ndarray):
+        """One policy call on observation rows -> (env actions [row, action dim], obs tensor, logits, value,
+        entropy, discrete action classes)."""
         import torch
 
         import pufferlib.pytorch
+        import pufferlib.spaces
 
+        # A discrete policy head on a continuous env needs the bin->continuous
+        # mapping (pufferl.py feeds cont_action to the env, never the bin indices).
+        env_continuous = isinstance(self._env.single_action_space, pufferlib.spaces.Box)
+        if self._deterministic:
+            action_selection = (
+                pufferlib.pytorch.ACTION_SELECT_MEAN
+                if env_continuous and not self._policy.is_continuous
+                else pufferlib.pytorch.ACTION_SELECT_MODE
+            )
+        else:
+            action_selection = pufferlib.pytorch.ACTION_SELECT_SAMPLE
+        obs_tensor = torch.as_tensor(obs).to(self._device)
+        with torch.no_grad():
+            logits, value = self._policy.forward_eval(obs_tensor)
+            action, _, entropy, cont_action = pufferlib.pytorch.sample_logits(
+                logits,
+                action_selection=action_selection,
+                env_continuous=env_continuous,
+                policy=self._policy,
+            )
+        env_action = cont_action if env_continuous and cont_action is not None else action
+        act = env_action.cpu().numpy().reshape(len(obs), -1)
+        if not env_continuous:
+            act = act.astype(np.int32)
+        return act, obs_tensor, logits, value, entropy, action
+
+    def _capture_obs_replay(self, obs, act, obs_tensor, logits, value, entropy, action) -> None:
+        # sample_logits' discrete `action` is the class taken (mode/sample) or the argmax under mean selection
+        action_index = action.cpu().numpy().reshape(-1) if not self._policy.is_continuous else None
+        self._obs_replay.capture(
+            obs, act, self._obs_replay.policy_outputs(obs_tensor, logits, value, entropy), action_index
+        )
+
+    def _write_obs_replay_at_scenario_end(self, iteration_index: int) -> None:
+        if self._obs_replay is None or iteration_index < self._scenario.get_number_of_iterations() - 2:
+            return
+        out = self._obs_replay.write(render_html=self._obs_html_render)
+        print(f"[pufferdrive_planner] wrote obs replay ({len(self._obs_replay)} steps) -> {out}")
+        self._obs_replay = None
+
+    def compute_planner_trajectory(self, current_input: PlannerInput) -> AbstractTrajectory:
         ego_state, detections = current_input.history.current_state
         if self._env is None:
             self._build(ego_state)
@@ -814,60 +1035,31 @@ class PufferDrivePlanner(AbstractPlanner):
                 self._advance_partner_stopped_s(past_observation.tracked_objects)
 
         self._sync(ego_state, detections, current_input.traffic_light_data)
-        if self._env.tick >= self._arch["scenario_length"] - 1:
+        rollout = self._ego_dynamics == EGO_DYNAMICS_NUPLAN_TRACKER
+        steps_this_call = self._rollout_steps if rollout else 1
+        if self._env.tick + steps_this_call > self._arch["scenario_length"] - 1:
             raise RuntimeError(
                 f"shadow env tick {self._env.tick} reached scenario_length {self._arch['scenario_length']}; "
                 "nuPlan planned more iterations than the scenario declared"
             )
+        if rollout:
+            trajectory = self._rollout_trajectory(ego_state, current_input.iteration.index)
+            self._write_obs_replay_at_scenario_end(current_input.iteration.index)
+            return trajectory
         obs = np.asarray(self._env.recompute_observations())
 
         if self._policy is None:  # dummy wiring test: constant forward jerk
             act = np.full((self._env.num_agents, 1), 3 * 3 + 1, dtype=np.int32)
         else:
-            import pufferlib.spaces
-
-            # A discrete policy head on a continuous env needs the bin->continuous
-            # mapping (pufferl.py feeds cont_action to the env, never the bin indices).
-            env_continuous = isinstance(self._env.single_action_space, pufferlib.spaces.Box)
-            if self._deterministic:
-                action_selection = (
-                    pufferlib.pytorch.ACTION_SELECT_MEAN
-                    if env_continuous and not self._policy.is_continuous
-                    else pufferlib.pytorch.ACTION_SELECT_MODE
-                )
-            else:
-                action_selection = pufferlib.pytorch.ACTION_SELECT_SAMPLE
-            obs_tensor = torch.as_tensor(obs).to(self._device)
-            with torch.no_grad():
-                logits, value = self._policy.forward_eval(obs_tensor)
-                action, _, entropy, cont_action = pufferlib.pytorch.sample_logits(
-                    logits,
-                    action_selection=action_selection,
-                    env_continuous=env_continuous,
-                    policy=self._policy,
-                )
-            env_action = cont_action if env_continuous and cont_action is not None else action
-            act = env_action.cpu().numpy().reshape(self._env.num_agents, -1)
-            if not env_continuous:
-                act = act.astype(np.int32)
+            act, obs_tensor, logits, value, entropy, action = self._policy_forward(obs)
             if self._startup_action_bounds is not None and self._env.tick < self._startup_jerk_cap_steps:
                 np.clip(act[:, 0], *self._startup_action_bounds, out=act[:, 0])
             if self._obs_replay is not None:
-                # sample_logits' discrete `action` is the class taken (mode/sample) or the argmax under mean selection
-                action_index = action.cpu().numpy().reshape(-1) if not self._policy.is_continuous else None
-                self._obs_replay.capture(
-                    obs, act, self._obs_replay.policy_outputs(obs_tensor, logits, value, entropy), action_index
-                )
+                self._capture_obs_replay(obs, act, obs_tensor, logits, value, entropy, action)
 
         self._env.step(act)  # integrates the ego one dt; background is re-synced next call
 
-        if (
-            self._obs_replay is not None
-            and current_input.iteration.index >= self._scenario.get_number_of_iterations() - 2
-        ):
-            out = self._obs_replay.write(render_html=self._obs_html_render)
-            print(f"[pufferdrive_planner] wrote obs replay ({len(self._obs_replay)} steps) -> {out}")
-            self._obs_replay = None
+        self._write_obs_replay_at_scenario_end(current_input.iteration.index)
 
         if self._ego_dynamics == EGO_DYNAMICS_NUPLAN_BICYCLE:
             return self._bicycle_action_trajectory(ego_state, act[0])
@@ -915,6 +1107,77 @@ class PufferDrivePlanner(AbstractPlanner):
         if pose_indices[-1] != n_poses:
             pose_indices.append(n_poses)
         return InterpolatedTrajectory([_state_at(i) for i in pose_indices])
+
+    def _rollout_trajectory(self, ego_state: EgoState, iteration_index: int) -> InterpolatedTrajectory:
+        """nuplan_tracker: roll the synced scene out for the horizon; the ego's states are the trajectory. The policy
+        drives the rows of _rollout_policy_rows, every other policy slot coasts on a zero jerk action. A goal the
+        ego consumes in the first step stays consumed (the other modes consume on their one step too); what the
+        later steps consume is undone."""
+        env = self._env
+        step_s = self._rollout_step_seconds
+        policy_rows = self._rollout_policy_rows
+        scenario_elapsed_s = iteration_index * self._planning_step_s
+        actions = np.zeros((env.num_agents, env.single_action_space.shape[0]), np.float32)
+        obs = np.asarray(env.recompute_observations())
+        vehicle = ego_state.car_footprint.vehicle_parameters
+        start_time_us = ego_state.time_point.time_us
+        previous_heading = float(ego_state.center.heading)
+        trajectory = [ego_state]
+        goal_snapshot = None
+        poses = env.get_global_agent_state()
+        for step_idx in range(self._rollout_steps):
+            actions[:] = 0.0
+            if self._policy is None:
+                actions[0] = DUMMY_ROLLOUT_EGO_ACTION
+            else:
+                act, obs_tensor, logits, value, entropy, action = self._policy_forward(obs[policy_rows])
+                actions[policy_rows] = act
+            in_startup_window = scenario_elapsed_s + step_idx * step_s < self._startup_jerk_cap_seconds
+            if self._startup_action_bounds is not None and in_startup_window:
+                actions[0, 0] = np.clip(actions[0, 0], *self._startup_action_bounds)
+            if step_idx == 0 and self._obs_replay is not None:
+                # the ego is row 0 of the batch; sample_logits squeezes entropy to 0-dim for a one-row batch
+                row_count = len(policy_rows)
+                ego_logits = logits[:1] if hasattr(logits, "shape") else type(logits)(head[:1] for head in logits)
+                self._capture_obs_replay(
+                    obs[:1],
+                    actions[:1].copy(),
+                    obs_tensor[:1],
+                    ego_logits,
+                    value.reshape(row_count, -1)[:1],
+                    entropy.reshape(row_count)[:1],
+                    action.reshape(row_count, -1)[:1],
+                )
+            self._stamp_forecast((step_idx + 1) * step_s)
+            env.step(actions)
+            obs = np.asarray(env.observations)
+            poses_before, poses = poses, env.get_global_agent_state()
+            observations_stale = False
+            if not self._rollout_allow_reverse:
+                observations_stale = self._hold_reversing_agents(policy_rows, obs, poses_before, poses)
+            bin_x, bin_y, heading = float(poses["x"][0]), float(poses["y"][0]), float(poses["heading"][0])
+            if self._goal_window.sync(bin_x, bin_y, heading) or observations_stale:
+                env.recompute_observations()
+            if step_idx == 0:
+                goal_snapshot = self._goal_window.snapshot()
+            ego_obs = obs[0]
+            x, y = self._transform.bin_to_loc(bin_x, bin_y)
+            trajectory.append(
+                EgoState.build_from_center(
+                    center=StateSE2(x, y, heading),
+                    center_velocity_2d=StateVector2D(float(ego_obs[0]) * env.obs_norm_speed_mps, 0.0),
+                    center_acceleration_2d=StateVector2D(
+                        float(ego_obs[EGO_OBS_ACCEL_LONG_IDX]) * binding.ACCEL_LONG_NORM, 0.0
+                    ),
+                    tire_steering_angle=float(ego_obs[EGO_OBS_STEERING_IDX]) * binding.STEERING_LIMIT,
+                    time_point=TimePoint(start_time_us + int(round((step_idx + 1) * step_s * 1e6))),
+                    vehicle_parameters=vehicle,
+                    angular_vel=_angle_diff(heading, previous_heading) / step_s,
+                )
+            )
+            previous_heading = heading
+        self._goal_window.restore(goal_snapshot)
+        return InterpolatedTrajectory(trajectory)
 
     def _bicycle_action_trajectory(self, ego_state: EgoState, action: np.ndarray) -> ActionTrajectory:
         """Shadow-env post-step accel/steering targets -> commands for nuPlan's bicycle model over the next dt."""

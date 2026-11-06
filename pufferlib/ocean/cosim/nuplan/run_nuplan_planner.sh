@@ -43,7 +43,7 @@
 #   SYMMETRIC_LANE_WIDTHS=true|false  the shadow env loads a cached copy of the city bin whose lane widths are
 #             twice the centerline's distance to the nearer GPKG boundary (the converter writes left + right,
 #             which overstates nuPlan's parking-strip lanes). Unset = planner yaml, false.
-#   EGO_DYNAMICS=pufferdrive|nuplan_bicycle  ego plant (unset = planner yaml, pufferdrive). nuplan_bicycle drives
+#   EGO_DYNAMICS=pufferdrive|nuplan_bicycle|nuplan_tracker  ego plant (unset = planner yaml, pufferdrive). nuplan_bicycle drives
 #             nuPlan's KinematicBicycleModel through CaRL's one_stage_controller (the ego_controller override is
 #             added here). BICYCLE_MIN_SPEED_MPS [m/s, <= 0: 0 = no reverse driving, -2 = Drive's floor] and
 #             BICYCLE_UNDO_LOW_PASS=true|false (pre-compensate the model's command lag) tune it; unset = planner yaml.
@@ -53,6 +53,14 @@
 #             [rad/s^3, bound on the per-step change of yaw accel via the steering command; 0 = off] tune comfort.
 #             BICYCLE_FLOOR_ACCEL_CLAMP=true|false: clamp the policy's integrated accel to 0 while the plant sits on
 #             the speed floor (unset = planner yaml, true; false reproduces run 426's standstill windup).
+#             EGO_DYNAMICS=nuplan_tracker is GIGAFLOW's nuPlan evaluation: every step the planner rolls the scene out
+#             for the trajectory horizon (the policy drives the ego and the nearest vehicles) and nuPlan's
+#             two_stage_controller tracks the ego's rolled-out trajectory. EGO_TRACKER=lqr|ilqr picks the tracker
+#             (default lqr = nuPlan's default; ilqr = nuPlan's iLQR without its wall-clock solve cap, so the result
+#             does not depend on the node's load). ROLLOUT_STEP_SECONDS [s, rollout step, 0.3 = the training step],
+#             ROLLOUT_POLICY_VEHICLES [vehicles the policy drives in the rollout, nearest first] and
+#             ROLLOUT_ALLOW_REVERSE=true|false [false: an agent the policy would back up stays at rest] tune it;
+#             unset = planner yaml.
 #   EGO_ACCEL_CAP_MPS2  [m/s^2] ego accel cap, any ego dynamics (unset = planner yaml, 0.96 x 2.40).
 #   PARTNER_SPLIT_MAX_LENGTH_M  [m] partners longer than this are shown as equal boxes along their heading
 #             (training spawns at most 7 m, nuPlan buses reach 12.7 m); unset/0 = off.
@@ -113,9 +121,19 @@ EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
 [ -n "${SYMMETRIC_LANE_WIDTHS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.symmetric_lane_widths=$SYMMETRIC_LANE_WIDTHS")
 if [ "${EGO_DYNAMICS:-}" = "nuplan_bicycle" ]; then
     EXTRA_ARGS+=("ego_controller=one_stage_controller" "planner.pufferdrive_planner.ego_dynamics=nuplan_bicycle")
+elif [ "${EGO_DYNAMICS:-}" = "nuplan_tracker" ]; then
+    case "${EGO_TRACKER:-lqr}" in
+        lqr) TRACKER_CONTROLLER=two_stage_controller ;;
+        ilqr) TRACKER_CONTROLLER=two_stage_ilqr_controller ;;
+        *) echo "EGO_TRACKER must be lqr or ilqr, got '${EGO_TRACKER}'"; exit 1 ;;
+    esac
+    EXTRA_ARGS+=("ego_controller=$TRACKER_CONTROLLER" "planner.pufferdrive_planner.ego_dynamics=nuplan_tracker")
 elif [ -n "${EGO_DYNAMICS:-}" ]; then
     EXTRA_ARGS+=("planner.pufferdrive_planner.ego_dynamics=$EGO_DYNAMICS")
 fi
+[ -n "${ROLLOUT_STEP_SECONDS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.rollout_step_seconds=$ROLLOUT_STEP_SECONDS")
+[ -n "${ROLLOUT_POLICY_VEHICLES:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.rollout_policy_vehicles=$ROLLOUT_POLICY_VEHICLES")
+[ -n "${ROLLOUT_ALLOW_REVERSE:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.rollout_allow_reverse=$ROLLOUT_ALLOW_REVERSE")
 [ -n "${BICYCLE_MIN_SPEED_MPS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_min_speed_mps=$BICYCLE_MIN_SPEED_MPS")
 [ -n "${BICYCLE_UNDO_LOW_PASS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_undo_low_pass=$BICYCLE_UNDO_LOW_PASS")
 [ -n "${BICYCLE_CENTER_ACCEL_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_center_accel_cap=$BICYCLE_CENTER_ACCEL_CAP")

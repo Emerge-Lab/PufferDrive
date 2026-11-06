@@ -22,7 +22,8 @@ init_route(route) once the ego exists, route = {
   lights: carla_bridge.light_geometry_from_carla dicts, stop_signs: carla_bridge.stop_sign_geometry_from_carla dicts,
   infraction_flags: bool, also compute the shadow env's own infraction flags when no telemetry is written }
 step(snapshot) every simulator tick, snapshot = {
-  ego: ACTOR_STATE, partners: PARTNER_ROW list (nearest first, at most partner_slots, |dz| <= PARTNER_MAX_ABS_DZ_M),
+  ego: ACTOR_STATE, ego_gear: the gear CARLA reports for the ego (1.. forward, 0 while the gearbox shifts),
+  partners: PARTNER_ROW list (nearest first, at most partner_slots, |dz| <= PARTNER_MAX_ABS_DZ_M),
   light_states: [[light_id, carla.TrafficLightState name], ...], ego_light_id: id reported for the ego or -1,
   light_timers: [[light_id, get_elapsed_time(), get_yellow_time()], ...] (the light's own phase timer; required when
   the checkpoint observes the remaining yellow, obs_traffic_light_yellow_remaining) }
@@ -38,7 +39,8 @@ Environment variables:
                                physics moves the ego (subject to dynamics-mismatch tracking lag).
                                "carla_pedals": CARLA's physics moves the ego, driven only by the (steer, throttle,
                                brake) the leaderboard applies. controller.PedalMap maps the jerk integrator's
-                               acceleration and steering to them; pose, speed and yaw rate are re-read every tick.
+                               acceleration and steering to them with the gains of the gear the automatic gearbox
+                               is in; pose, speed, yaw rate and gear are re-read every tick.
   COSIM_MAX_SPEED_MPS=20       ego speed cap; sets the shadow env's C_vel = cap / base_max_speed_mps.
                                Default: the checkpoint's base_max_speed_mps (C_vel = 1). Must lie in the
                                trained range base * [1/conditioning_speed_scale, scale]
@@ -264,7 +266,9 @@ class ShadowEgo:
         self._intent_accel_mps2 = 0.0  # carla_pedals: the jerk integrator's own state, never re-read from CARLA
         self._intent_steering_rad = 0.0
         self._plant_speed_mps = 0.0
+        self._plant_gear = 0
         self._standstill = False
+        self._yellow_margin_s = 0.0  # carla_pedals: the policy sees this much less yellow than CARLA has left
         self.obs_html_max_steps = int(os.environ.get("COSIM_OBS_HTML_MAX_STEPS", "12000"))
         self.obs_html_render = env_flag("COSIM_OBS_HTML_RENDER", "1")
         self._obs_html = None
@@ -445,6 +449,8 @@ class ShadowEgo:
 
         if self.dynamics_source == "carla_pedals":
             self.controller = PedalMap(pedal_gains_for(ego.get("blueprint")))
+            # a sprint through a yellow can lose one gear shift without drive, which the policy does not know about
+            self._yellow_margin_s = self.controller.gains.gear_shift_seconds
         else:
             wheelbase, max_steer = vehicle_geometry_from_wheels(ego["wheels"])
             self.controller = TrackingController(wheelbase_m=wheelbase, max_steer_rad=max_steer, horizon_s=self.dt)
@@ -560,7 +566,7 @@ class ShadowEgo:
             for j in self.light_bin_indices_by_id[light_id]:
                 if 0 <= j < self.num_traffic:
                     states[j] = state_by_id[light_id]
-                    yellow_remaining_s[j] = remaining_by_id.get(light_id, 0.0)
+                    yellow_remaining_s[j] = max(remaining_by_id.get(light_id, 0.0) - self._yellow_margin_s, 0.0)
         return states, yellow_remaining_s
 
     def _yellow_remaining_by_id(self, snapshot, state_by_id):
@@ -633,6 +639,7 @@ class ShadowEgo:
         if self.dynamics_source == "carla":
             self._sync_ego(ego_state)
         if self.dynamics_source == "carla_pedals":
+            self._plant_gear = int(snapshot["ego_gear"])
             self._sync_ego(ego_state, keep_integrator_state=True)
         ego = self.env.get_global_agent_state()
         ebx, eby = float(ego["x"][0]), float(ego["y"][0])
@@ -740,7 +747,11 @@ class ShadowEgo:
             curvature_per_m = -math.tan(self._intent_steering_rad) / wheelbase_m
             self.target = (speed_after, target_yaw_deg)
             control = self.controller.step(
-                accel_after, curvature_per_m, self._plant_speed_mps, self._standstill and accel_after <= 0.0
+                accel_after,
+                curvature_per_m,
+                self._plant_speed_mps,
+                self._plant_gear,
+                self._standstill and accel_after <= 0.0,
             )
             return StepResult(actions, self.target, control=control)
 

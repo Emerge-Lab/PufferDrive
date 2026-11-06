@@ -1029,10 +1029,25 @@ class Drive(pufferlib.PufferEnv):
             np.ascontiguousarray(gdir_y, dtype=np.float32),
         )
 
+    def set_agent_lane_goals(self, idx, spacing_m):
+        """Co-sim forecast: the agents at global indices `idx` have no known route, so their goals follow
+        the lane they are on and its straightest exits, one every `spacing_m` meters; c_step places new
+        ones whenever one is reached. Returns the number of goals placed per agent (0: no lane under the
+        agent, or the lane graph ends within spacing_m)."""
+        idx = np.ascontiguousarray(idx, dtype=np.int32)
+        placed_goal_counts = np.zeros(len(idx), dtype=np.int32)
+        binding.vec_set_agent_lane_goals(self.c_envs, idx, float(spacing_m), placed_goal_counts)
+        return placed_goal_counts
+
     def get_agent_goal_progress(self, agent_idx):
         """Co-sim: (current_goal_idx, goal_count) of one agent. current_goal_idx == goal_count
         means every goal of the current window has been consumed."""
         return binding.vec_get_agent_goal_progress(self.c_envs, int(agent_idx))
+
+    def set_agent_goal_progress(self, agent_idx, current_goal_idx):
+        """Co-sim: set how many goals of one agent's current window count as consumed (0..goal_count),
+        e.g. to undo the goals a forecast rollout consumed."""
+        binding.vec_set_agent_goal_progress(self.c_envs, int(agent_idx), int(current_goal_idx))
 
     # ───────────────────────────────────────
 

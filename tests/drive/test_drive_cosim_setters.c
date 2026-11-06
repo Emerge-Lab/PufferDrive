@@ -379,6 +379,261 @@ static int test_set_agent_goals_rejects_out_of_range_agent_idx(void) {
     return 0;
 }
 
+static int test_set_agent_goal_progress_moves_the_current_goal_and_rejects_bad_input(void) {
+    // Undoing a forecast rollout puts the consumed-goal count back: the current-goal alias follows it, a
+    // fully consumed window (idx == goal_count) is a legal state, and anything outside 0..goal_count or an
+    // unknown agent fails without touching the window.
+    Drive env = {0};
+    Agent agent = {0};
+    env.agents = &agent;
+    env.num_total_agents = 1;
+    float gx[3] = {10.0f, 30.0f, 50.0f};
+    float gy[3] = {1.0f, 2.0f, 3.0f};
+    float gz[3] = {0.0f, 0.0f, 0.0f};
+    float gdir[3] = {0.0f, 0.0f, 0.0f};
+    EXPECT_EQ_INT(c_set_agent_goals(&env, 0, 3, gx, gy, gz, gdir, gdir), 0);
+
+    EXPECT_EQ_INT(c_set_agent_goal_progress(&env, 0, 2), 0);
+    EXPECT_EQ_INT(agent.current_goal_idx, 2);
+    EXPECT_NEAR(agent.current_goal_x, 50.0f, 1e-6f);
+    EXPECT_NEAR(agent.current_goal_y, 3.0f, 1e-6f);
+    EXPECT_EQ_INT(c_set_agent_goal_progress(&env, 0, 3), 0);
+    EXPECT_EQ_INT(agent.current_goal_idx, 3);
+    EXPECT_EQ_INT(c_set_agent_goal_progress(&env, 0, 4), -1);
+    EXPECT_EQ_INT(c_set_agent_goal_progress(&env, 0, -1), -1);
+    EXPECT_EQ_INT(c_set_agent_goal_progress(&env, 1, 0), -1);
+    EXPECT_EQ_INT(agent.current_goal_idx, 3);
+    EXPECT_EQ_INT(c_set_agent_goal_progress(&env, 0, 0), 0);
+    EXPECT_NEAR(agent.current_goal_x, 10.0f, 1e-6f);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// c_set_agent_lane_goals
+// ---------------------------------------------------------------------------
+
+#define LANE_GOAL_TEST_MAX_POINTS 12
+
+typedef struct {
+    float x[LANE_GOAL_TEST_MAX_POINTS];
+    float y[LANE_GOAL_TEST_MAX_POINTS];
+    float z[LANE_GOAL_TEST_MAX_POINTS];
+    float headings[LANE_GOAL_TEST_MAX_POINTS];
+    float cum_lengths[LANE_GOAL_TEST_MAX_POINTS];
+    int exit_lanes[2];
+} LaneGoalTestStorage;
+
+static RoadMapElement make_test_lane(LaneGoalTestStorage *storage, int point_count, int num_exits) {
+    RoadMapElement lane = {0};
+    lane.type = LANE_SURFACE_STREET;
+    lane.segment_size = point_count;
+    lane.x = storage->x;
+    lane.y = storage->y;
+    lane.z = storage->z;
+    lane.headings = storage->headings;
+    lane.cum_lengths = storage->cum_lengths;
+    lane.exit_lanes = storage->exit_lanes;
+    lane.num_exits = num_exits;
+    storage->cum_lengths[0] = 0.0f;
+    for (int point_idx = 0; point_idx + 1 < point_count; point_idx++) {
+        float dx = storage->x[point_idx + 1] - storage->x[point_idx];
+        float dy = storage->y[point_idx + 1] - storage->y[point_idx];
+        storage->headings[point_idx] = atan2f(dy, dx);
+        storage->cum_lengths[point_idx + 1] = storage->cum_lengths[point_idx] + sqrtf(dx * dx + dy * dy);
+    }
+    storage->headings[point_count - 1] = storage->headings[point_count - 2];
+    lane.length = storage->cum_lengths[point_count - 1];
+    return lane;
+}
+
+// Lane 0 runs 30 m along +x and forks into lane 1 (left turn, listed first) and lane 2 (100 m straight on).
+static void make_fork_map(RoadMapElement *lanes, LaneGoalTestStorage *storage) {
+    for (int point_idx = 0; point_idx < 4; point_idx++) {
+        storage[0].x[point_idx] = 10.0f * (float) point_idx;
+    }
+    storage[0].exit_lanes[0] = 1;
+    storage[0].exit_lanes[1] = 2;
+    lanes[0] = make_test_lane(&storage[0], 4, 2);
+
+    const float turn_x[4] = {30.0f, 36.0f, 39.0f, 40.0f};
+    const float turn_y[4] = {0.0f, 1.0f, 4.0f, 10.0f};
+    for (int point_idx = 0; point_idx < 4; point_idx++) {
+        storage[1].x[point_idx] = turn_x[point_idx];
+        storage[1].y[point_idx] = turn_y[point_idx];
+    }
+    lanes[1] = make_test_lane(&storage[1], 4, 0);
+
+    for (int point_idx = 0; point_idx < 11; point_idx++) {
+        storage[2].x[point_idx] = 30.0f + 10.0f * (float) point_idx;
+    }
+    lanes[2] = make_test_lane(&storage[2], 11, 0);
+}
+
+static int test_set_agent_lane_goals_follows_the_straightest_exit(void) {
+    // A forecast agent has no route: its goals run along its own lane and, at a fork, the exit that turns
+    // least -- not the first exit listed, and without drawing from the env RNG (the forecast must not
+    // change the random stream of anything else).
+    RoadMapElement lanes[3];
+    LaneGoalTestStorage storage[3] = {0};
+    make_fork_map(lanes, storage);
+    Drive env = {0};
+    env.road_elements = lanes;
+    env.num_road_elements = 3;
+    env.num_goals = 3;
+    Agent agent = drive_test_agent(5.0f, 0.0f, 0.0f);
+    agent.current_lane_idx = 0;
+    agent.goal_count = 99;
+    env.agents = &agent;
+    env.num_total_agents = 1;
+    Rng rng_before = env.rng_state;
+
+    int idx[1] = {0};
+    int placed[1] = {-1};
+    EXPECT_EQ_INT(c_set_agent_lane_goals(&env, 1, idx, 20.0f, placed), 0);
+
+    EXPECT_EQ_INT(placed[0], 3);
+    EXPECT_EQ_INT(agent.goal_count, 3);
+    EXPECT_EQ_INT(agent.current_goal_idx, 0);
+    EXPECT_NEAR(agent.lane_goal_spacing_m, 20.0f, 1e-6f);
+    const float expected_x[3] = {25.0f, 45.0f, 65.0f};
+    const int expected_lane[3] = {0, 2, 2};
+    for (int goal_idx = 0; goal_idx < 3; goal_idx++) {
+        EXPECT_NEAR(agent.list_goal_x[goal_idx], expected_x[goal_idx], 1e-4f);
+        EXPECT_NEAR(agent.list_goal_y[goal_idx], 0.0f, 1e-4f);
+        EXPECT_EQ_INT(agent.list_goal_lane[goal_idx], expected_lane[goal_idx]);
+    }
+    EXPECT_NEAR(agent.current_goal_x, 25.0f, 1e-4f);
+    EXPECT_TRUE(memcmp(&rng_before, &env.rng_state, sizeof(Rng)) == 0);
+    return 0;
+}
+
+static int test_set_agent_lane_goals_stops_where_the_lane_graph_ends(void) {
+    // Goals are never invented past a dead end: the call reports how many it placed, 0 for an agent with no
+    // lane under it or with less than one spacing of lane left, and a stale window is cleared either way.
+    RoadMapElement lanes[3];
+    LaneGoalTestStorage storage[3] = {0};
+    make_fork_map(lanes, storage);
+    Drive env = {0};
+    env.road_elements = lanes;
+    env.num_road_elements = 3;
+    env.num_goals = 3;
+    Agent agents[3];
+    agents[0] = drive_test_agent(85.0f, 0.0f, 0.0f);
+    agents[0].current_lane_idx = 2;
+    agents[1] = drive_test_agent(120.0f, 0.0f, 0.0f);
+    agents[1].current_lane_idx = 2;
+    agents[1].goal_count = 3;
+    agents[2] = drive_test_agent(500.0f, 500.0f, 0.0f);
+    agents[2].current_lane_idx = -1;
+    agents[2].goal_count = 3;
+    env.agents = agents;
+    env.num_total_agents = 3;
+
+    int idx[3] = {0, 1, 2};
+    int placed[3] = {-1, -1, -1};
+    EXPECT_EQ_INT(c_set_agent_lane_goals(&env, 3, idx, 20.0f, placed), 0);
+
+    EXPECT_EQ_INT(placed[0], 2);
+    EXPECT_EQ_INT(agents[0].goal_count, 2);
+    EXPECT_NEAR(agents[0].list_goal_x[0], 105.0f, 1e-4f);
+    EXPECT_NEAR(agents[0].list_goal_x[1], 125.0f, 1e-4f);
+    EXPECT_EQ_INT(agents[0].list_goal_lane[2], -1);
+    EXPECT_EQ_INT(placed[1], 0);
+    EXPECT_EQ_INT(agents[1].goal_count, 0);
+    EXPECT_EQ_INT(placed[2], 0);
+    EXPECT_EQ_INT(agents[2].goal_count, 0);
+    return 0;
+}
+
+static int test_set_agent_lane_goals_rejects_bad_input_untouched(void) {
+    // External input: an index out of range, an agent without a pose or a spacing that is not a positive
+    // finite number fails the whole call before any agent is touched.
+    RoadMapElement lanes[3];
+    LaneGoalTestStorage storage[3] = {0};
+    make_fork_map(lanes, storage);
+    Drive env = {0};
+    env.road_elements = lanes;
+    env.num_road_elements = 3;
+    env.num_goals = 3;
+    Agent agents[2];
+    agents[0] = drive_test_agent(5.0f, 0.0f, 0.0f);
+    agents[0].current_lane_idx = 0;
+    agents[0].goal_count = 7;
+    agents[1] = drive_test_agent(5.0f, 0.0f, 0.0f);
+    agents[1].sim_valid = 0;
+    env.agents = agents;
+    env.num_total_agents = 2;
+
+    int placed[2] = {-1, -1};
+    int out_of_range[2] = {0, 2};
+    EXPECT_EQ_INT(c_set_agent_lane_goals(&env, 2, out_of_range, 20.0f, placed), -1);
+    int without_pose[2] = {0, 1};
+    EXPECT_EQ_INT(c_set_agent_lane_goals(&env, 2, without_pose, 20.0f, placed), -1);
+    int idx[1] = {0};
+    EXPECT_EQ_INT(c_set_agent_lane_goals(&env, 1, idx, 0.0f, placed), -1);
+    EXPECT_EQ_INT(c_set_agent_lane_goals(&env, 1, idx, -5.0f, placed), -1);
+    EXPECT_EQ_INT(c_set_agent_lane_goals(&env, 1, idx, NAN, placed), -1);
+    EXPECT_EQ_INT(c_set_agent_lane_goals(&env, 1, idx, INFINITY, placed), -1);
+    EXPECT_EQ_INT(agents[0].goal_count, 7);
+    EXPECT_NEAR(agents[0].lane_goal_spacing_m, 0.0f, 1e-6f);
+    EXPECT_EQ_INT(placed[0], -1);
+    return 0;
+}
+
+static int test_set_agent_goals_ends_lane_following(void) {
+    // An externally pushed route window takes the agent out of lane-following, so c_step stops renewing it.
+    Drive env = {0};
+    Agent agent = {0};
+    agent.lane_goal_spacing_m = 20.0f;
+    env.agents = &agent;
+    env.num_total_agents = 1;
+
+    float gx[1] = {1.0f}, gy[1] = {1.0f}, gz[1] = {0.0f}, gdir[1] = {0.0f};
+    EXPECT_EQ_INT(c_set_agent_goals(&env, 0, 1, gx, gy, gz, gdir, gdir), 0);
+    EXPECT_NEAR(agent.lane_goal_spacing_m, 0.0f, 1e-6f);
+    return 0;
+}
+
+static int test_step_renews_lane_goals_when_one_is_reached(void) {
+    // With external goals c_step never regenerates a window itself, except for lane-following agents: when
+    // one reaches a goal, a full window ahead of its new pose replaces the old one, and the observation
+    // returned by that step already shows it.
+    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
+    env.goal_source = GOAL_SOURCE_EXTERNAL;
+    allocate(&env);
+    c_reset(&env);
+    Agent *agent = &env.agents[env.active_agent_indices[0]];
+    EXPECT_EQ_INT(agent->goal_count, 0);
+
+    int idx[1] = {env.active_agent_indices[0]};
+    int placed[1] = {0};
+    EXPECT_EQ_INT(c_set_agent_lane_goals(&env, 1, idx, 20.0f, placed), 0);
+    EXPECT_EQ_INT(placed[0], env.num_goals);
+    float first_goal_x = agent->list_goal_x[0];
+    float first_goal_y = agent->list_goal_y[0];
+    float first_goal_m = sqrtf(powf(first_goal_x - agent->sim_x, 2.0f) + powf(first_goal_y - agent->sim_y, 2.0f));
+    EXPECT_TRUE(first_goal_m > 15.0f && first_goal_m < 20.5f);
+
+    agent->current_goal_x = agent->list_goal_x[0] = agent->sim_x;
+    agent->current_goal_y = agent->list_goal_y[0] = agent->sim_y;
+    drive_set_neutral_actions(&env);
+    c_step(&env);
+
+    EXPECT_EQ_INT(agent->current_goal_idx, 0);
+    EXPECT_EQ_INT(agent->goal_count, env.num_goals);
+    EXPECT_NEAR(agent->list_goal_x[0], first_goal_x, 1e-3f);
+    EXPECT_NEAR(agent->list_goal_y[0], first_goal_y, 1e-3f);
+    float goal_dx = agent->current_goal_x - agent->sim_x;
+    float goal_dy = agent->current_goal_y - agent->sim_y;
+    float goal_norm = fmaxf(env.obs_norm_goal_offset_m, sqrtf(goal_dx * goal_dx + goal_dy * goal_dy));
+    EXPECT_NEAR(
+        env.observations[EGO_FEATURES],
+        (goal_dx * agent->cos_heading + goal_dy * agent->sin_heading) / goal_norm,
+        1e-6f);
+    free_allocated(&env);
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // c_set_stop_signs
 // ---------------------------------------------------------------------------
@@ -508,5 +763,11 @@ int main(void) {
     RUN_TEST(test_set_agent_goals_sets_positions_lane_and_count);
     RUN_TEST(test_set_agent_goals_rejects_more_than_max_goals);
     RUN_TEST(test_set_agent_goals_rejects_out_of_range_agent_idx);
+    RUN_TEST(test_set_agent_goal_progress_moves_the_current_goal_and_rejects_bad_input);
+    RUN_TEST(test_set_agent_lane_goals_follows_the_straightest_exit);
+    RUN_TEST(test_set_agent_lane_goals_stops_where_the_lane_graph_ends);
+    RUN_TEST(test_set_agent_lane_goals_rejects_bad_input_untouched);
+    RUN_TEST(test_set_agent_goals_ends_lane_following);
+    RUN_TEST(test_step_renews_lane_goals_when_one_is_reached);
     return test_summary(failures);
 }

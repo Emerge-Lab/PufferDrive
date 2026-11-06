@@ -236,6 +236,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         ego_light = self.vehicle.get_traffic_light()
         return {
             "ego": actor_state_row(self.vehicle),
+            "ego_gear": self.vehicle.get_control().gear,
             "partners": [partner_row(a) for a in self._nearby_actors()],
             "light_states": [[lt.id, lt.get_state().name] for lt in self.lights],
             "light_timers": [[lt.id, lt.get_elapsed_time(), lt.get_yellow_time()] for lt in self.lights],

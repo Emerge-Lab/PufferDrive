@@ -79,10 +79,11 @@ class RouteGoalWindow:
         """Push the next window when the current one is exhausted (sliding: when any goal was
         consumed), or when the ego has driven past its current goal along the route (e.g. in the
         adjacent lane) without consuming it. An ego far off the route keeps its window: skipping
-        goals there cascades through the whole route."""
+        goals there cascades through the whole route. Returns True when a window was pushed (the
+        env's observations are stale until recomputed)."""
         if not self.pushed:
             self._push(0)
-            return
+            return True
         current_goal_idx, goal_count = self.env.get_agent_goal_progress(self.agent_idx)
         if current_goal_idx >= goal_count:
             next_start = self.window_start + goal_count
@@ -98,8 +99,23 @@ class RouteGoalWindow:
             if self.sliding and not passed:
                 next_start = self.current_index
         if next_start == self.window_start or next_start >= len(self.goals):
-            return  # window still live, or route exhausted: the last window stays saturated
+            return False  # window still live, or route exhausted: the last window stays saturated
         self._push(next_start)
+        return True
+
+    def snapshot(self):
+        """State to hand back to restore(): the window and how many of its goals the env has consumed."""
+        if not self.pushed:
+            raise RuntimeError("RouteGoalWindow.snapshot needs a pushed window")
+        current_goal_idx, _ = self.env.get_agent_goal_progress(self.agent_idx)
+        return self.window_start, self.current_index, current_goal_idx
+
+    def restore(self, snapshot):
+        """Undo everything since snapshot(), e.g. the goals a forecast rollout consumed."""
+        window_start, current_index, current_goal_idx = snapshot
+        self._push(window_start)
+        self.current_index = current_index
+        self.env.set_agent_goal_progress(self.agent_idx, current_goal_idx)
 
     def _push(self, start):
         sel = self.goals[start : start + self.num_goals]

@@ -60,6 +60,34 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   and left to training: Drive's jerk model keeps its kinematic reference at the box center while nuPlan's
   bicycle rotates about the rear axle 1.46 m behind it, so the same steering cuts the nuPlan center to the
   inside of a turn (four inside-rear corner collisions in run 426); no eval-side conversion.
+- Ego plant `ego_dynamics: nuplan_tracker` (env `EGO_DYNAMICS=nuplan_tracker`, script 9 tag
+  `_tracker_<lqr|ilqr>_step<s>_veh<n>[_reverse]`): GIGAFLOW's nuPlan evaluation ("we roll out an entire scenario
+  using GIGAFLOW policies for all agents ... and use the subsequent observed trajectory from the driver as its
+  trajectory"). The planner returns a real trajectory and nuPlan's own `two_stage_controller` drives the
+  `KinematicBicycleModel` along it, the setup every trajectory planner on the benchmark is scored with.
+  - Rollout: every planning step the shadow env takes the whole scene from nuPlan and is rolled out for
+    `horizon_seconds` (8 s) in `rollout_step_seconds` steps (`ROLLOUT_STEP_SECONDS`, 0.3 s = the training step, 27
+    steps). The ego starts from the plant's full state (pose, speed, yaw rate, acceleration, steering angle) and is
+    driven by the policy; its rolled-out states, one every 0.3 s, are the trajectory. The rollout is thrown away
+    afterwards: a goal the ego consumes in its first step stays consumed (the other modes consume on their one
+    step too), later ones are undone (`RouteGoalWindow.snapshot` / `restore`).
+  - Other agents: the nearest `rollout_policy_vehicles` (`ROLLOUT_POLICY_VEHICLES`, 32) vehicles are driven by the
+    policy too. nuPlan gives no route for them, so their goals are invented: one every `goal_spacing` along the
+    lane they are on and, at a fork, the exit that turns least (`Drive.set_agent_lane_goals`, renewed by `c_step`
+    whenever one is reached). They start with zero acceleration and steering, which nuPlan's tracks do not carry.
+    Vehicles beyond that count, vehicles with no lane under them (they coast), pedestrians, bicycles and static
+    objects move at their observed velocity; lights hold their state, a yellow runs out into red.
+  - No reversing (`rollout_allow_reverse: false`, `ROLLOUT_ALLOW_REVERSE`): an agent the policy would back up stays
+    where it stood, at rest, like `bicycle_min_speed_mps: 0`. Without it 3 of 40 sampled Val14 scenarios backed up
+    by up to 4.5 m and one left the drivable area.
+  - Tracker: `ego_controller=two_stage_controller` is nuPlan's default LQR tracker, `two_stage_ilqr_controller`
+    (this package) its iLQR tracker (`EGO_TRACKER=lqr|ilqr`). The iLQR preset drops nuPlan's `max_solve_time: 0.05`:
+    the full 20 iterations take ~45 ms on an idle workstation, so on a loaded node the wall-clock cap cuts them
+    short and the command depends on the hardware (CaRL's `LogActionPlanner` keeps the cap). The LQR tracker reads
+    the trajectory's speed 1.0 s ahead and iLQR tracks its poses for the whole horizon, which is why the rollout
+    covers the horizon instead of one step: a trajectory that ends after 0.3 s makes the LQR tracker accelerate
+    and brake at a fifth of what the policy asked for and makes the iLQR warm start raise.
+  - Cost: ~1.5 min per scenario on one core (27 batched policy calls per planning step instead of 1).
 - Route goals (`goal_source: external`): PDM-style lane-graph route ->
   goals every `goal_spacing` m. Planner `goal_source: roadblock` (env
   `GOAL_SOURCE=roadblock`) uses the centroids of the CaRL-corrected route
@@ -101,7 +129,9 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
 - `config/` — the Hydra configs that plug the planner in without touching
   nuplan-devkit or `carl_nuplan`: `planner/pufferdrive_planner.yaml` and two
   challenge presets, `closed_loop_{nonreactive,reactive}_agents_pufferdrive`
-  (differing only in the `observation` override: log-replay vs IDM agents).
+  (differing only in the `observation` override: log-replay vs IDM agents),
+  plus `ego_controller/two_stage_ilqr_controller.yaml` and its tracker
+  `ego_controller/tracker/ilqr_tracker_deterministic.yaml` for `nuplan_tracker`.
   Found via `hydra.searchpath=[pkg://pufferlib.ocean.cosim.nuplan.config, ...]`.
   Use city bins
 
