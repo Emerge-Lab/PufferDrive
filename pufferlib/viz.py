@@ -1247,6 +1247,8 @@ __PAYLOAD_CHUNKS__
         const PARTNER_BLINDNESS_OUTLINE_COLOR = "#6d28d9";
         const PHANTOM_BRAKING_OUTLINE_COLOR = "#b45309";
         const INFRACTION_METRIC_COUNT = 4;
+        // [agent idx, first frame, end frame, name]: infractions the embedding page reports besides the env's own metrics
+        const AGENT_MARKS = window.REPLAY_AGENT_MARKS || [];
         const DEFAULT_GOAL_RADIUS_METERS = 2;
         const SVG_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>';
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
@@ -1419,7 +1421,7 @@ self.onmessage = async event => {
             for (let metricIdx=0;metricIdx<INFRACTION_METRIC_COUNT;metricIdx++) {
                 if (C.metrics_f32[metricsBase+metricIdx] > 0) return true;
             }
-            return false;
+            return AGENT_MARKS.some(mark => mark[0] === idx && frame >= mark[1] && frame < mark[2]);
         }
         function rr(x, y, w, h, r) { ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h); }
         function drawAgentBody(a, outline) {
@@ -1833,10 +1835,13 @@ self.onmessage = async event => {
             }
             updatePolicy(f, agent);
             const warnings = [];
+            const sinceOnset = (name, onset) => onset < f ? `${name} since <a href="#" style="color:inherit" onclick="step=${onset};play=false;updateBtn();draw(true);return false">step ${onset}</a>` : name;
             ["COLLISION", "OFFROAD", "RED LIGHT", "STOP SIGN"].forEach((name, metricIdx) => {
                 const onset = infractionOnset(f, agent.idx, metricIdx);
-                if (onset < 0) return;
-                warnings.push(onset < f ? `${name} since <a href="#" style="color:inherit" onclick="step=${onset};play=false;updateBtn();draw(true);return false">step ${onset}</a>` : name);
+                if (onset >= 0) warnings.push(sinceOnset(name, onset));
+            });
+            AGENT_MARKS.forEach(mark => {
+                if (mark[0] === agent.idx && f >= mark[1] && f < mark[2]) warnings.push(sinceOnset(mark[3], mark[1]));
             });
             const warnKey = warnings.join('|'), warnRow = document.getElementById('warn-row');
             if (warnKey !== lastWarnKey) { lastWarnKey = warnKey; warnRow.style.display = warnings.length ? 'flex' : 'none'; warnRow.innerHTML = warnings.map(w=>`<span class="warn-chip">${w}</span>`).join(''); }
@@ -2044,6 +2049,13 @@ def replay_step_link(step, seconds=None):
         f'<a href="#" style="color:inherit;text-decoration:underline dotted" '
         f'onclick="step={int(step)};play=false;updateBtn();draw(true);return false">{label}</a>'
     )
+
+
+def replay_agent_marks(marks):
+    """<script> for a panel injected ahead of the viewer: marks = [(agent idx, first frame, frame count, name)] draws
+    the agent as infringing on those frames, with `name` as its warning chip, whatever the env's own metrics say."""
+    rows = [[int(agent_idx), int(first), int(first) + int(count), str(name)] for agent_idx, first, count, name in marks]
+    return f"<script>window.REPLAY_AGENT_MARKS={json.dumps(rows, separators=(',', ':'))};</script>"
 
 
 def _inflate_through(decompressor, raw, needed_bytes):

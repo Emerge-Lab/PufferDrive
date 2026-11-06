@@ -88,24 +88,42 @@ def test_read_replay_zlib_chunk_subset_matches_full_read(tmp_path):
     assert chunks_full["agent_f32"].nbytes > viz.REPLAY_HEADER_PROBE_BYTES
 
 
-def test_carla_infraction_steps_link_nearest_ego_frame(tmp_path):
+def test_carla_infractions_are_placed_at_the_nearest_ego_frame(tmp_path):
     path = tmp_path / "route.replay.zlib"
     viz.save_interactive_replay_zlib({}, _replay(_straight_ego_xy()), str(path))
     record = _carla_record()
     log_meta = {"offset": list(OFFSET), "tick_dt": TICK_DT}
 
-    steps = carla_render.infraction_steps(record, str(path), "Town01", log_meta)
+    frames, frame_count = carla_render.infraction_frames(record, str(path), "Town01", log_meta)
     collision, deviation, outside = (
         record["infractions"][key][0] for key in ("collisions_vehicle", "route_dev", "outside_route_lanes")
     )
+    assert frame_count == FRAMES
+    assert frames == {collision: COLLISION_FRAME, deviation: FRAMES}
+    assert carla_render.infraction_frames(record, str(path), "", {}) == ({}, FRAMES)
+
+    steps = carla_render.step_links(frames, frame_count, TICK_DT)
     assert steps[collision] == viz.replay_step_link(COLLISION_FRAME, COLLISION_FRAME * TICK_DT)
     assert steps[deviation] == "beyond the replay"
     assert outside not in steps
-    assert carla_render.infraction_steps(record, str(path), "", {}) == {}
-
     panel = carla_render.score_panel(record, "Town01", steps)
     assert f'onclick="step={COLLISION_FRAME};' in panel
     assert "beyond the replay" in panel
+
+
+def test_carla_ego_is_marked_from_every_infraction_placed_in_the_replay(tmp_path):
+    path = tmp_path / "route.replay.zlib"
+    viz.save_interactive_replay_zlib({}, _replay(_straight_ego_xy()), str(path))
+    record = _carla_record()
+    frames, frame_count = carla_render.infraction_frames(record, str(path), "Town01", {"offset": list(OFFSET)})
+
+    marks = carla_render.ego_marks(record, frames, frame_count)
+    assert marks == [(carla_render.EGO_AGENT_IDX, COLLISION_FRAME, carla_render.MARK_FRAMES, "LEADERBOARD COLLISION")]
+    script = viz.replay_agent_marks(marks)
+    mark_end_frame = COLLISION_FRAME + carla_render.MARK_FRAMES
+    assert script == (
+        f'<script>window.REPLAY_AGENT_MARKS=[[0,{COLLISION_FRAME},{mark_end_frame},"LEADERBOARD COLLISION"]];</script>'
+    )
 
 
 def test_carla_infraction_steps_fall_back_to_town_offset(tmp_path):
@@ -114,8 +132,9 @@ def test_carla_infraction_steps_fall_back_to_town_offset(tmp_path):
     tx, ty = carla_render.TOWN_OFFSETS["Town01"]
     message = f"Agent got blocked at (x={300.0 - tx:.3f}, y={-(100.0 - ty):.3f}, z=0.0)"
     record = {"infractions": {"vehicle_blocked": [message]}}
-    steps = carla_render.infraction_steps(record, str(path), "Town01", {})
-    assert steps[message] == viz.replay_step_link(COLLISION_FRAME)
+    frames, frame_count = carla_render.infraction_frames(record, str(path), "Town01", {})
+    assert frames == {message: COLLISION_FRAME}
+    assert carla_render.step_links(frames, frame_count, None)[message] == viz.replay_step_link(COLLISION_FRAME)
 
 
 def _write_telemetry(path, row_count, red_light_rows):
@@ -127,7 +146,7 @@ def _write_telemetry(path, row_count, red_light_rows):
             telemetry_file.write(",".join(str(values.get(column, 0)) for column in columns) + "\n")
 
 
-def test_carla_red_lights_link_the_step_the_telemetry_flagged(tmp_path):
+def test_carla_red_lights_are_placed_at_the_step_the_telemetry_flagged(tmp_path):
     path = tmp_path / "route.replay.zlib"
     viz.save_interactive_replay_zlib({}, _replay(_straight_ego_xy()), str(path))
     telemetry = tmp_path / "route.csv"
@@ -136,21 +155,26 @@ def test_carla_red_lights_link_the_step_the_telemetry_flagged(tmp_path):
     record = {"infractions": {"red_light": [RED_LIGHT_MESSAGE, after_the_replay]}}
     log_meta = {"offset": list(OFFSET), "tick_dt": TICK_DT}
 
-    steps = carla_render.infraction_steps(record, str(path), "Town01", log_meta, str(telemetry))
+    frames, frame_count = carla_render.infraction_frames(record, str(path), "Town01", log_meta, str(telemetry))
+    assert frames == {RED_LIGHT_MESSAGE: RED_LIGHT_FRAME, after_the_replay: FRAMES + 50}
+    steps = carla_render.step_links(frames, frame_count, TICK_DT)
     assert steps[RED_LIGHT_MESSAGE] == viz.replay_step_link(RED_LIGHT_FRAME, RED_LIGHT_FRAME * TICK_DT)
     assert steps[after_the_replay] == "beyond the replay"
+    assert carla_render.ego_marks(record, frames, frame_count) == [
+        (carla_render.EGO_AGENT_IDX, RED_LIGHT_FRAME, carla_render.MARK_FRAMES, "LEADERBOARD RED LIGHT")
+    ]
 
 
-def test_carla_red_lights_get_no_step_without_one_telemetry_flag_each(tmp_path):
+def test_carla_red_lights_are_not_placed_without_one_telemetry_flag_each(tmp_path):
     path = tmp_path / "route.replay.zlib"
     viz.save_interactive_replay_zlib({}, _replay(_straight_ego_xy()), str(path))
     record = {"infractions": {"red_light": [RED_LIGHT_MESSAGE]}}
     log_meta = {"offset": list(OFFSET), "tick_dt": TICK_DT}
-    assert carla_render.infraction_steps(record, str(path), "Town01", log_meta) == {}
+    assert carla_render.infraction_frames(record, str(path), "Town01", log_meta) == ({}, FRAMES)
 
     telemetry = tmp_path / "route.csv"
     _write_telemetry(telemetry, FRAMES, {RED_LIGHT_FRAME, RED_LIGHT_FRAME + 200})
-    assert carla_render.infraction_steps(record, str(path), "Town01", log_meta, str(telemetry)) == {}
+    assert carla_render.infraction_frames(record, str(path), "Town01", log_meta, str(telemetry)) == ({}, FRAMES)
 
 
 def _write_series(metrics_dir, name, values, extra=None):

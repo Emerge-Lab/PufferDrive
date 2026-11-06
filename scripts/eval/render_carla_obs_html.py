@@ -8,7 +8,8 @@ Pages are named ds<driving score>_<flags>_<town>_route<id>.html so the gallery l
 (flags: COL collision, RED red light, STOP stop sign, OFF outside route lanes, DEV route deviation,
 BLOCK blocked, TIMEOUT route/scenario timeout); each page carries the route's leaderboard scores and
 infractions as a panel, every positioned infraction linking to the replay step where the ego was nearest
-(red lights: to the step the route's telemetry flagged, their message carries the light's position).
+(red lights: to the step the route's telemetry flagged, their message carries the light's position); from
+that step on the viewer draws the ego as infringing for MARK_FRAMES, under a LEADERBOARD warning chip.
 --routes (the evaluated xml) names the town of every route, else the world log does.
 Retried routes leave the files of crashed attempts behind: the newest files pair with the records.
 """
@@ -62,6 +63,17 @@ MESSAGE_MAX_CHARS = 120
 POSITION_PATTERN = re.compile(r"x=([-\d.]+), y=([-\d.]+)")
 NEAREST_STEP_MAX_M = 5.0
 RED_LIGHT_FLAG_COLUMN = "carla_infr_red"  # telemetry: 1 on the step the simulator-side red light test fired
+EGO_AGENT_IDX = 0
+MARK_FRAMES = 40  # 2 s at the leaderboards' 20 ticks per second
+MARK_NAMES = {
+    "collisions_pedestrian": "LEADERBOARD COLLISION",
+    "collisions_vehicle": "LEADERBOARD COLLISION",
+    "collisions_layout": "LEADERBOARD COLLISION",
+    "red_light": "LEADERBOARD RED LIGHT",
+    "stop_infraction": "LEADERBOARD STOP SIGN",
+    "route_dev": "LEADERBOARD ROUTE DEVIATION",
+    "vehicle_blocked": "LEADERBOARD BLOCKED",
+}
 REPLAY_SUFFIX = ".replay.zlib"
 ROUTE_ID_PATTERN = re.compile(r"RouteScenario_(\d+)(?:_rep(\d+))?")
 SEED_DIR_PATTERN = re.compile(r"_s(\d+)$")  # route_08_s1: seed 1 of route 8 (the eval scripts drive one pass per seed)
@@ -137,18 +149,18 @@ def red_light_steps(telemetry_path):
         return [step for step, row in enumerate(rows) if float(row[RED_LIGHT_FLAG_COLUMN]) > 0.0]
 
 
-def infraction_steps(record, replay_path, town, log_meta, telemetry_path=None):
-    """message -> seek link of every infraction the replay can place: red lights at the step the telemetry flagged,
-    the other positioned ones where the ego was nearest (CARLA -> bin offset: the world log's, else the town's)."""
-    tick_dt = log_meta.get("tick_dt")
+def infraction_frames(record, replay_path, town, log_meta, telemetry_path=None):
+    """-> (message -> replay frame of every infraction that can be placed, the replay's frame count): red lights at
+    the frame the telemetry flagged, the other positioned ones where the ego was nearest (CARLA -> bin offset: the
+    world log's, else the town's). A frame at or past the count: the infraction happened after the replay ended."""
     _, chunks = viz.read_replay_zlib(replay_path, chunk_names=("agent_f32",))
     ego_xy = chunks["agent_f32"][:, 0, :2]
     frame_count = len(ego_xy)
-    steps = {}
+    frames = {}
     red_messages = infraction_messages(record, "red_light")
     flagged_steps = red_light_steps(telemetry_path) if telemetry_path and red_messages else []
     if len(flagged_steps) == len(red_messages):
-        steps.update(zip(red_messages, flagged_steps))
+        frames.update(zip(red_messages, flagged_steps))
     offset = log_meta.get("offset") or TOWN_OFFSETS.get(town)
     nearest_keys = [key for key, _ in PANEL_INFRACTIONS if key != "red_light" and offset is not None]
     for message in [message for key in nearest_keys for message in infraction_messages(record, key)]:
@@ -157,14 +169,29 @@ def infraction_steps(record, replay_path, town, log_meta, telemetry_path=None):
             continue
         bin_x, bin_y = float(match.group(1)) + offset[0], -float(match.group(2)) + offset[1]
         distance_m = np.hypot(ego_xy[:, 0] - bin_x, ego_xy[:, 1] - bin_y)
-        nearest_step = int(np.argmin(distance_m))
+        nearest_frame = int(np.argmin(distance_m))
         # a place the replay's ego never came near was reached after its last frame
-        steps[message] = nearest_step if distance_m[nearest_step] <= NEAREST_STEP_MAX_M else frame_count
+        frames[message] = nearest_frame if distance_m[nearest_frame] <= NEAREST_STEP_MAX_M else frame_count
+    return frames, frame_count
+
+
+def step_links(frames, frame_count, tick_dt):
+    """message -> the panel's seek link to the infraction's frame, or the note that the replay ended before it."""
     links = {}
-    for message, step in steps.items():
-        seconds = None if tick_dt is None else step * tick_dt
-        links[message] = viz.replay_step_link(step, seconds) if step < frame_count else "beyond the replay"
+    for message, frame in frames.items():
+        seconds = None if tick_dt is None else frame * tick_dt
+        links[message] = viz.replay_step_link(frame, seconds) if frame < frame_count else "beyond the replay"
     return links
+
+
+def ego_marks(record, frames, frame_count):
+    """-> viz.replay_agent_marks rows: the ego counts as infringing for MARK_FRAMES from each placed infraction on."""
+    keyed_messages = [(key, message) for key in MARK_NAMES for message in infraction_messages(record, key)]
+    return [
+        (EGO_AGENT_IDX, frames[message], MARK_FRAMES, MARK_NAMES[key])
+        for key, message in keyed_messages
+        if frames.get(message, frame_count) < frame_count
+    ]
 
 
 def render_page(zlib_path, html_path, panel):
@@ -247,8 +274,9 @@ def main():
 
     def render(page):
         html_path, record, replay, town, log_meta, seed, telemetry = page
-        steps = infraction_steps(record, replay, town, log_meta, telemetry)
-        render_page(replay, html_path, score_panel(record, town, steps, seed))
+        frames, frame_count = infraction_frames(record, replay, town, log_meta, telemetry)
+        panel = score_panel(record, town, step_links(frames, frame_count, log_meta.get("tick_dt")), seed)
+        render_page(replay, html_path, panel + viz.replay_agent_marks(ego_marks(record, frames, frame_count)))
 
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
         list(pool.map(render, pages))
