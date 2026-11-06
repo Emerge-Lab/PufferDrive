@@ -71,12 +71,15 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
     driven by the policy; its rolled-out states, one every 0.3 s, are the trajectory. The rollout is thrown away
     afterwards: a goal the ego consumes in its first step stays consumed (the other modes consume on their one
     step too), later ones are undone (`RouteGoalWindow.snapshot` / `restore`).
-  - Other agents: the nearest `rollout_policy_vehicles` (`ROLLOUT_POLICY_VEHICLES`, 32) vehicles are driven by the
-    policy too. nuPlan gives no route for them, so their goals are invented: one every `goal_spacing` along the
-    lane they are on and, at a fork, the exit that turns least (`Drive.set_agent_lane_goals`, renewed by `c_step`
-    whenever one is reached). They start with zero acceleration and steering, which nuPlan's tracks do not carry.
-    Vehicles beyond that count, vehicles with no lane under them (they coast), pedestrians, bicycles and static
-    objects move at their observed velocity; lights hold their state, a yellow runs out into red.
+  - Other agents: the nearest `rollout_policy_vehicles` (`ROLLOUT_POLICY_VEHICLES`, 32) vehicles and bicycles are
+    driven by the policy too. nuPlan gives no route for them, so their goals are invented: one every `goal_spacing`
+    along the lane they are on and, at a fork, the exit that turns least (`Drive.set_agent_lane_goals`, renewed by
+    `c_step` whenever one is reached). They start with zero acceleration and steering, which nuPlan's tracks do not
+    carry. Those beyond that count, those with no lane under them and all pedestrians keep the velocity observed at
+    this step (a forecast, nothing is read from the log ahead): nuPlan replays pedestrians, so they do not yield to
+    the ego, which a policy-driven one would. Static objects stay where they are; lights hold their state, a yellow
+    runs out into red. The reactive challenge simulates no bicycles at all (IDM vehicles, replayed pedestrians and
+    static objects), so the policy only gets to drive them in the non-reactive one.
   - No reversing (`rollout_allow_reverse: false`, `ROLLOUT_ALLOW_REVERSE`): an agent the policy would back up stays
     where it stood, at rest, like `bicycle_min_speed_mps: 0`. Without it 3 of 40 sampled Val14 scenarios backed up
     by up to 4.5 m and one left the drivable area.

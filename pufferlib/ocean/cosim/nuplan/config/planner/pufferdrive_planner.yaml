@@ -53,10 +53,10 @@ pufferdrive_planner:
   # ego_dynamics: nuplan_tracker, GIGAFLOW's nuPlan evaluation (run with ego_controller=two_stage_controller for the
   # LQR tracker or two_stage_ilqr_controller for the iLQR tracker). Every step the shadow env takes the whole scene from
   # nuPlan and is rolled out for horizon_seconds in rollout_step_seconds steps (0.3 = the training step); the policy
-  # drives the ego (from the plant's accel and steering) and the nearest rollout_policy_vehicles vehicles, which follow
-  # their lane, everything else moves at its observed velocity. The ego's rolled-out states are the trajectory nuPlan's
-  # tracker follows. rollout_allow_reverse: false = an agent the policy would back up stays at rest (as
-  # bicycle_min_speed_mps 0).
+  # drives the ego (from the plant's accel and steering) and the nearest rollout_policy_vehicles vehicles and bicycles,
+  # which follow their lane; pedestrians and the rest keep their observed velocity. The ego's rolled-out states are
+  # the trajectory nuPlan's tracker follows. rollout_allow_reverse: false = an agent the policy would back up stays at
+  # rest (as bicycle_min_speed_mps 0).
   rollout_step_seconds: 0.3
   rollout_policy_vehicles: 32
   rollout_allow_reverse: false

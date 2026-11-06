@@ -45,6 +45,7 @@ EGO_DYNAMICS_NUPLAN_BICYCLE = "nuplan_bicycle"  # nuPlan's KinematicBicycleModel
 EGO_DYNAMICS_NUPLAN_TRACKER = "nuplan_tracker"  # nuPlan's two_stage_controller tracks the ego of a forecast rollout
 EGO_DYNAMICS_MODES = (EGO_DYNAMICS_PUFFERDRIVE, EGO_DYNAMICS_NUPLAN_BICYCLE, EGO_DYNAMICS_NUPLAN_TRACKER)
 DUMMY_ROLLOUT_EGO_ACTION = (1.0, 0.0)  # no-checkpoint wiring test: full accelerating jerk, no steering
+ROLLOUT_POLICY_TYPES = ("VEHICLE", "BICYCLE")  # nuPlan types the policy drives in a rollout; pedestrians never yield
 BICYCLE_RESPONSE_TOL = 1e-4  # m/s^2 and m/s: nuPlan's ego state must be the bicycle model's response to our command
 EGO_TRACKING_TOL_M = 0.05  # perfect_tracking_controller hands back our integrated pose up to log-timestamp jitter
 EGO_TRACKING_TOL_RAD = 0.005
@@ -197,10 +198,10 @@ class PufferDrivePlanner(AbstractPlanner):
             rollout_step_seconds steps, the policy driving the ego and the nearest rollout_policy_vehicles
             vehicles; the ego's rolled-out states are the trajectory.
         :param rollout_step_seconds: nuplan_tracker: step of the forecast rollout [s] (0.3 = the training step).
-        :param rollout_policy_vehicles: nuplan_tracker: at most this many vehicles, nearest first, are driven by
-            the policy in the rollout. nuPlan gives no route for them, so their goals follow their lane and its
-            straightest exits. Farther vehicles, vehicles off the lane graph, pedestrians, bicycles and static
-            objects move at their observed velocity.
+        :param rollout_policy_vehicles: nuplan_tracker: at most this many vehicles and bicycles, nearest first, are
+            driven by the policy in the rollout. nuPlan gives no route for them, so their goals follow their lane and
+            its straightest exits. Farther ones, those off the lane graph and pedestrians keep the velocity observed
+            at this step (nuPlan replays pedestrians, they do not yield); static objects stay where they are.
         :param rollout_allow_reverse: nuplan_tracker: false = an agent the policy would back up stays where it
             stood, at rest (what bicycle_min_speed_mps 0 does for nuplan_bicycle; nuPlan's IDM vehicles never
             reverse). true = Drive's own floor (MAX_BACKWARD_SPEED).
@@ -797,8 +798,8 @@ class PufferDrivePlanner(AbstractPlanner):
         if objs:
             _, x, y, z, hh, vx, vy, tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
             stopped_s = np.array([self._partner_stopped_s[obj.track_token] for obj in objs], np.float32)
-            # only whole vehicles can be driven by the policy in a rollout: the bridge types static clutter as vehicle
-            policy_eligible = np.array([obj.tracked_object_type.name == "VEHICLE" for obj in objs], bool)
+            # the nuPlan type decides who the policy can drive in a rollout: the bridge types static clutter as vehicle
+            policy_eligible = np.array([obj.tracked_object_type.name in ROLLOUT_POLICY_TYPES for obj in objs], bool)
             if self._vru_size_pad_m > 0:
                 ln, wd = nb.pad_vru_partner_sizes(tp, ln, wd, self._vru_size_pad_m)
             if self._partner_split_max_length_m > 0:
@@ -851,8 +852,8 @@ class PufferDrivePlanner(AbstractPlanner):
         self._goal_window.sync(ex, ey, h)
 
     def _rollout_partner_slots(self, x, y, policy_eligible, ego_x: float, ego_y: float) -> np.ndarray:
-        """nuplan_tracker: env slot per partner. The nearest whole vehicles take the policy slots 1..K, every
-        other partner a static slot after them."""
+        """nuplan_tracker: env slot per partner. The nearest whole vehicles and bicycles take the policy slots 1..K,
+        every other partner a static slot after them."""
         distance_sq = (x.astype(np.float64) - ego_x) ** 2 + (y.astype(np.float64) - ego_y) ** 2
         policy_rows, static_rows = split_rollout_slots(distance_sq, policy_eligible, self._rollout_policy_vehicles)
         idx = np.empty(len(x), np.int32)

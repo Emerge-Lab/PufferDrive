@@ -54,11 +54,11 @@
 #             BICYCLE_FLOOR_ACCEL_CLAMP=true|false: clamp the policy's integrated accel to 0 while the plant sits on
 #             the speed floor (unset = planner yaml, true; false reproduces run 426's standstill windup).
 #             EGO_DYNAMICS=nuplan_tracker is GIGAFLOW's nuPlan evaluation: every step the planner rolls the scene out
-#             for the trajectory horizon (the policy drives the ego and the nearest vehicles) and nuPlan's
+#             for the trajectory horizon (the policy drives the ego and the nearest vehicles and bicycles) and nuPlan's
 #             two_stage_controller tracks the ego's rolled-out trajectory. EGO_TRACKER=lqr|ilqr picks the tracker
 #             (default lqr = nuPlan's default; ilqr = nuPlan's iLQR without its wall-clock solve cap, so the result
 #             does not depend on the node's load). ROLLOUT_STEP_SECONDS [s, rollout step, 0.3 = the training step],
-#             ROLLOUT_POLICY_VEHICLES [vehicles the policy drives in the rollout, nearest first] and
+#             ROLLOUT_POLICY_VEHICLES [vehicles and bicycles the policy drives in the rollout, nearest first] and
 #             ROLLOUT_ALLOW_REVERSE=true|false [false: an agent the policy would back up stays at rest] tune it;
 #             unset = planner yaml.
 #   EGO_ACCEL_CAP_MPS2  [m/s^2] ego accel cap, any ego dynamics (unset = planner yaml, 0.96 x 2.40).

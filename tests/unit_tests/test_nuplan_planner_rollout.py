@@ -20,6 +20,7 @@ from nuplan.common.actor_state.vehicle_parameters import get_pacifica_parameters
 
 from pufferlib.ocean.cosim.nuplan.planner import (
     DUMMY_ROLLOUT_EGO_ACTION,
+    EGO_DYNAMICS_NUPLAN_TRACKER,
     EGO_OBS_ACCEL_LONG_IDX,
     EGO_OBS_STEERING_IDX,
     PufferDrivePlanner,
@@ -61,6 +62,9 @@ class _FakeEnv:
         call = {name: np.array(values) for name, values in call.items()}
         call["steering"] = None if steering is None else np.array(steering)
         self.state_calls.append(call)
+
+    def set_agent_sizes(self, idx, length, width):
+        pass
 
     def set_agent_lane_goals(self, idx, spacing_m):
         return np.array([self.lane_goal_counts.get(int(agent_idx), 3) for agent_idx in idx], np.int32)
@@ -141,6 +145,38 @@ def _ego_state(time_us=5_000_000):
         time_point=TimePoint(time_us),
         vehicle_parameters=get_pacifica_parameters(),
     )
+
+
+def _track(type_name, x, speed_mps):
+    return SimpleNamespace(
+        tracked_object_type=SimpleNamespace(name=type_name),
+        track_token=type_name,
+        center=SimpleNamespace(x=x, y=2000.0, heading=0.0),
+        velocity=SimpleNamespace(x=speed_mps, y=0.0),
+        box=SimpleNamespace(length=2.0, width=1.0),
+    )
+
+
+def test_sync_lets_the_policy_drive_vehicles_and_bicycles_but_not_pedestrians():
+    env = _FakeEnv()
+    planner = _planner(
+        env,
+        _ego_dynamics=EGO_DYNAMICS_NUPLAN_TRACKER,
+        _ego_stopped_s=0.0,
+        _partner_stopped_s={},
+        _initialization=SimpleNamespace(map_api=None),
+        _static_on_lane={},
+        _vru_size_pad_m=0.0,
+        _partner_split_max_length_m=0.0,
+        _transform=SimpleNamespace(loc_to_bin=lambda x, y: (x - 1000.0, y - 2000.0)),
+    )
+    tracks = [_track("PEDESTRIAN", 1003.0, 1.5), _track("BICYCLE", 1010.0, 4.0), _track("VEHICLE", 1020.0, 8.0)]
+    planner._sync(_ego_state(), SimpleNamespace(tracked_objects=tracks), None)
+    partners = env.state_calls[1]
+    slot_at_x = dict(zip(partners["x"].tolist(), partners["idx"].tolist()))
+    assert slot_at_x == {3.0: 3, 10.0: 1, 20.0: 2}  # the pedestrian is nearest, yet it takes the first static slot
+    assert planner._rollout_policy_rows.tolist() == [0, 1, 2]
+    assert planner._forecast_objects[0].tolist() == [3]  # the pedestrian walks on at its observed velocity
 
 
 def test_nearest_vehicles_get_the_policy_slots_and_the_rest_static_slots():

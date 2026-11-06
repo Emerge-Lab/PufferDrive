@@ -89,7 +89,7 @@ export LANE_WIDTH_CLIP_MAX_M=${LANE_WIDTH_CLIP_MAX_M:-4.4}
 export EGO_DYNAMICS=${EGO_DYNAMICS:-nuplan_bicycle}
 # EGO_DYNAMICS=nuplan_tracker = GIGAFLOW's nuPlan evaluation: every step the planner rolls the scene out for the 8 s
 # trajectory horizon in ROLLOUT_STEP_SECONDS steps (the policy drives the ego and the nearest ROLLOUT_POLICY_VEHICLES
-# vehicles, the rest moves at its observed velocity) and nuPlan's two_stage_controller tracks the ego's rolled-out
+# vehicles and bicycles, the rest keeps its velocity) and nuPlan's two_stage_controller tracks the ego's rolled-out
 # trajectory. EGO_TRACKER: lqr = nuPlan's default tracker, ilqr = its iLQR tracker without the wall-clock solve cap.
 # ROLLOUT_ALLOW_REVERSE=false holds an agent the policy would back up at rest (as BICYCLE_MIN_SPEED_MPS=0).
 # Set WANDB_REPORT=0 for a tracker run unless its CLS should replace the standard eval's number in wandb.
