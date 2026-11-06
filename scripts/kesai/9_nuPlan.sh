@@ -92,10 +92,12 @@ export EGO_DYNAMICS=${EGO_DYNAMICS:-nuplan_bicycle}
 # vehicles and bicycles, the rest keeps its velocity) and nuPlan's two_stage_controller tracks the ego's rolled-out
 # trajectory. EGO_TRACKER: lqr = nuPlan's default tracker, ilqr = its iLQR tracker without the wall-clock solve cap.
 # ROLLOUT_ALLOW_REVERSE=false holds an agent the policy would back up at rest (as BICYCLE_MIN_SPEED_MPS=0).
+# ROLLOUT_POLICY_VEHICLES=0: everyone else keeps its observed velocity. 32 (runs 2566/2567, LQR 0.897 / iLQR 0.870 vs
+# 0.923 for the bicycle plant) forecast queue leaders pulling up to the stop line and the ego drove into the gap.
 # Set WANDB_REPORT=0 for a tracker run unless its CLS should replace the standard eval's number in wandb.
 export EGO_TRACKER=${EGO_TRACKER:-lqr}
 export ROLLOUT_STEP_SECONDS=${ROLLOUT_STEP_SECONDS:-0.3}
-export ROLLOUT_POLICY_VEHICLES=${ROLLOUT_POLICY_VEHICLES:-32}
+export ROLLOUT_POLICY_VEHICLES=${ROLLOUT_POLICY_VEHICLES:-0}
 export ROLLOUT_ALLOW_REVERSE=${ROLLOUT_ALLOW_REVERSE:-false}
 export BICYCLE_MIN_SPEED_MPS=${BICYCLE_MIN_SPEED_MPS:-0}
 export BICYCLE_UNDO_LOW_PASS=${BICYCLE_UNDO_LOW_PASS:-false}

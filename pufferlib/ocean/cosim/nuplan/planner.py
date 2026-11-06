@@ -144,7 +144,7 @@ class PufferDrivePlanner(AbstractPlanner):
         accel_cap_mps2: Optional[float] = None,
         partner_split_max_length_m: float = 0.0,
         rollout_step_seconds: float = 0.3,
-        rollout_policy_vehicles: int = 32,
+        rollout_policy_vehicles: int = 0,
         rollout_allow_reverse: bool = False,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
@@ -195,13 +195,15 @@ class PufferDrivePlanner(AbstractPlanner):
             two_stage_controller (LQR or iLQR tracker + KinematicBicycleModel) drives the ego along it, as in
             GIGAFLOW's nuPlan evaluation. Every step the shadow env takes the whole scene from nuPlan (the ego
             with the plant's acceleration and steering angle) and is rolled out for horizon_seconds in
-            rollout_step_seconds steps, the policy driving the ego and the nearest rollout_policy_vehicles
-            vehicles; the ego's rolled-out states are the trajectory.
+            rollout_step_seconds steps, the policy driving the ego (and, if asked for, the nearest
+            rollout_policy_vehicles vehicles); the ego's rolled-out states are the trajectory.
         :param rollout_step_seconds: nuplan_tracker: step of the forecast rollout [s] (0.3 = the training step).
         :param rollout_policy_vehicles: nuplan_tracker: at most this many vehicles and bicycles, nearest first, are
             driven by the policy in the rollout. nuPlan gives no route for them, so their goals follow their lane and
             its straightest exits. Farther ones, those off the lane graph and pedestrians keep the velocity observed
             at this step (nuPlan replays pedestrians, they do not yield); static objects stay where they are.
+            0 (default) = everyone keeps their observed velocity: policy-driven vehicles pull up to the bin's stop
+            line, nuPlan's stay where they stopped, and both trackers drive the ego into that forecast gap.
         :param rollout_allow_reverse: nuplan_tracker: false = an agent the policy would back up stays where it
             stood, at rest (what bicycle_min_speed_mps 0 does for nuplan_bicycle; nuPlan's IDM vehicles never
             reverse). true = Drive's own floor (MAX_BACKWARD_SPEED).

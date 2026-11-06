@@ -628,7 +628,11 @@ class ShadowEgo:
         if self._standstill:
             # the held car reads exactly stopped, as in training; a negative intent would wind up against the brake
             vx, vy, self._intent_accel_mps2 = 0.0, 0.0, 0.0
-        return (x, y, z, heading, vx, vy, yaw_rate, self._intent_accel_mps2)
+        # the jerk model moves the box centre along its heading; CARLA's centre swings about the rear axle instead
+        wheelbase_m = DRIVE_WHEELBASE_PER_LENGTH * 2.0 * self.ego_extent[0]
+        curvature_per_m = math.tan(self._intent_steering_rad) / wheelbase_m
+        travel_heading = heading + math.atan(self.controller.gains.rear_axle_to_center_m * curvature_per_m)
+        return (x, y, z, travel_heading, vx, vy, yaw_rate, self._intent_accel_mps2)
 
     def _sync(self, snapshot):
         """Overwrite the shadow env's background agents/lights (+ ego, only in

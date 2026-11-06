@@ -56,9 +56,10 @@ pufferdrive_planner:
   # drives the ego (from the plant's accel and steering) and the nearest rollout_policy_vehicles vehicles and bicycles,
   # which follow their lane; pedestrians and the rest keep their observed velocity. The ego's rolled-out states are
   # the trajectory nuPlan's tracker follows. rollout_allow_reverse: false = an agent the policy would back up stays at
-  # rest (as bicycle_min_speed_mps 0).
+  # rest (as bicycle_min_speed_mps 0). rollout_policy_vehicles 0 = every other agent keeps its observed velocity: a
+  # policy-driven vehicle pulls up to the stop line where nuPlan's stays put, and the trackers drive the ego after it.
   rollout_step_seconds: 0.3
-  rollout_policy_vehicles: 32
+  rollout_policy_vehicles: 0
   rollout_allow_reverse: false
   env_overrides:
     obs_slots_partners_n: 40 # GIGAFLOW eval value (Table A4); slots are max-pooled, so any checkpoint transfers

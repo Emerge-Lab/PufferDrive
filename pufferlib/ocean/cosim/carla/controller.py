@@ -153,6 +153,7 @@ class PedalGains(NamedTuple):
     brake_per_mps2: float
     curvature_per_steer_at_rest: float
     curvature_per_steer_per_mps: float
+    rear_axle_to_center_m: float  # the car turns about its rear axle, so its centre travels at an angle to its heading
 
 
 # measured open loop on a straight road with each gear held (pedal steps from rest and from speed, steer steps):
@@ -172,6 +173,7 @@ PEDAL_GAINS_BY_BLUEPRINT = {
         brake_per_mps2=0.22,
         curvature_per_steer_at_rest=0.376,
         curvature_per_steer_per_mps=-0.0023,
+        rear_axle_to_center_m=1.25,
     ),
     "vehicle.lincoln.mkz2017": PedalGains(
         gears=(
@@ -186,6 +188,7 @@ PEDAL_GAINS_BY_BLUEPRINT = {
         brake_per_mps2=0.16,
         curvature_per_steer_at_rest=0.387,
         curvature_per_steer_per_mps=-0.0031,
+        rear_axle_to_center_m=1.3,
     ),
 }
 

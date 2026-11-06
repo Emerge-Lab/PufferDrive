@@ -71,15 +71,27 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
     driven by the policy; its rolled-out states, one every 0.3 s, are the trajectory. The rollout is thrown away
     afterwards: a goal the ego consumes in its first step stays consumed (the other modes consume on their one
     step too), later ones are undone (`RouteGoalWindow.snapshot` / `restore`).
-  - Other agents: the nearest `rollout_policy_vehicles` (`ROLLOUT_POLICY_VEHICLES`, 32) vehicles and bicycles are
-    driven by the policy too. nuPlan gives no route for them, so their goals are invented: one every `goal_spacing`
-    along the lane they are on and, at a fork, the exit that turns least (`Drive.set_agent_lane_goals`, renewed by
-    `c_step` whenever one is reached). They start with zero acceleration and steering, which nuPlan's tracks do not
-    carry. Those beyond that count, those with no lane under them and all pedestrians keep the velocity observed at
-    this step (a forecast, nothing is read from the log ahead): nuPlan replays pedestrians, so they do not yield to
-    the ego, which a policy-driven one would. Static objects stay where they are; lights hold their state, a yellow
-    runs out into red. The reactive challenge simulates no bicycles at all (IDM vehicles, replayed pedestrians and
-    static objects), so the policy only gets to drive them in the non-reactive one.
+  - Other agents (`rollout_policy_vehicles`, `ROLLOUT_POLICY_VEHICLES`, default 0): every other agent keeps the
+    velocity observed at this step (a forecast, nothing is read from the log ahead); static objects stay where they
+    are; lights hold their state, a yellow runs out into red. With a count above 0 the nearest that many vehicles
+    and bicycles are driven by the policy instead. nuPlan gives no route for them, so their goals are invented: one
+    every `goal_spacing` along the lane they are on and, at a fork, the exit that turns least
+    (`Drive.set_agent_lane_goals`, renewed by `c_step` whenever one is reached); they start with zero acceleration
+    and steering, which nuPlan's tracks do not carry. Pedestrians always keep their velocity: nuPlan replays them,
+    so they do not yield to the ego, which a policy-driven one would. The reactive challenge simulates no bicycles
+    at all (IDM vehicles, replayed pedestrians and static objects). Why 0: with 32 (Val14 runs 2566 / 2567,
+    k_scaled_0072) a policy-driven queue leader pulls up ~6 m to the bin's stop line while nuPlan's vehicle stays
+    where it stopped, the ego's plan follows it a second later and both trackers act on that plan: LQR creeps into
+    the standing lead at 0.05 m/s, iLQR drives into it at 0.5 m/s (about 10 of the 31 and 10 of the 22 at-fault
+    collisions those runs added over the bicycle plant; 5 of 10 and 5 of 5 rerun locally with 0 are gone).
+  - What the trackers cost (k_scaled_0072, Val14 reactive, policy-driven forecast): LQR 0.897, iLQR 0.870, bicycle
+    plant 0.923. nuPlan's LQR picks one acceleration and one steering rate that reach the trajectory's state 1.0 s
+    ahead (accel = 0.91 x (speed in 1 s - speed now)). Once the plan stops within that second it brakes at 0.91 x
+    speed per second (0.9 m/s^2 at 1 m/s) and below 0.2 m/s with a 2 s time constant: a stop the policy plans
+    within 0.6 s takes seconds, never reaches rest and ends in the pedestrian or lead it was for (nuPlan counts a
+    moving ego as at fault). It also turns in before the plan does and drops a sub-second swerve. iLQR follows the
+    poses, but reaches 2.7 m/s^2 for a planned 2.3 on a straight launch (251 scenarios above nuPlan's 2.40 comfort
+    bound; `accel_cap_mps2: 2.0` still gives 2.45).
   - No reversing (`rollout_allow_reverse: false`, `ROLLOUT_ALLOW_REVERSE`): an agent the policy would back up stays
     where it stood, at rest, like `bicycle_min_speed_mps: 0`. Without it 3 of 40 sampled Val14 scenarios backed up
     by up to 4.5 m and one left the drivable area.
@@ -90,7 +102,8 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
     the trajectory's speed 1.0 s ahead and iLQR tracks its poses for the whole horizon, which is why the rollout
     covers the horizon instead of one step: a trajectory that ends after 0.3 s makes the LQR tracker accelerate
     and brake at a fifth of what the policy asked for and makes the iLQR warm start raise.
-  - Cost: ~1.5 min per scenario on one core (27 batched policy calls per planning step instead of 1).
+  - Cost: 27 policy calls per planning step instead of 1 (batched over the policy-driven vehicles, if any); 20 s to
+    1.5 min per scenario on one core.
 - Route goals (`goal_source: external`): PDM-style lane-graph route ->
   goals every `goal_spacing` m. Planner `goal_source: roadblock` (env
   `GOAL_SOURCE=roadblock`) uses the centroids of the CaRL-corrected route
