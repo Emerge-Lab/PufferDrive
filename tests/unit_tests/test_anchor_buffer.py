@@ -109,8 +109,8 @@ def test_collected_obs_are_what_the_learner_reads(learner, anchor):
     env = Drive(**{**ENV_KWARGS, **LOGREPLAY_ENV_SETUP})
     observations, _ = env.reset(seed=0)
     sdc_obs = observations[env.learner_masks]
+    conditioning_columns = np.arange(binding.EGO_FEATURES, binding.EGO_FEATURES + env.num_reward_coefs)
     env.close()
-    conditioning_columns = np.arange(binding.EGO_FEATURES, binding.EGO_FEATURES + binding.NUM_REWARD_COEFS)
     learner_obs = np.delete(sdc_obs, conditioning_columns, axis=1)
 
     obs = anchor["obs"]

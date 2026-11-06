@@ -2320,6 +2320,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->non_vehicle_controller = (int) unpack(kwargs, "non_vehicle_controller");
     env->simulation_mode = (int) unpack(kwargs, "simulation_mode");
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
+    env->reward_conditioning_displacement = (bool) unpack(kwargs, "reward_conditioning_displacement");
+    if (env->reward_conditioning_displacement && !env->reward_conditioning) {
+        PyErr_SetString(PyExc_ValueError, "reward_conditioning_displacement requires reward_conditioning");
+        return -1;
+    }
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
     env->reward_log_sampling = (bool) unpack(kwargs, "reward_log_sampling");
     PyObject *overrides_obj = PyDict_GetItemString(kwargs, "reward_coef_overrides");

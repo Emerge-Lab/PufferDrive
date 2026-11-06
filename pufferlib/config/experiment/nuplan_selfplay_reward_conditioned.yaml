@@ -1,0 +1,17 @@
+# @package _global_
+# nuPlan self-play: the policy drives every vehicle that has a logged goal (pedestrians and cyclists replay their logs).
+# Each agent draws its reward weights, the displacement penalty included, at every reset and sees them in its obs.
+# Infractions never stop a car, as in nuplan_sdc_only_displacement_ignore.
+# Usage: puffer train puffer_drive +experiment=nuplan_selfplay_reward_conditioned
+defaults:
+  - nuplan_sdc_only_bootstrap_off_2026_09_08
+  - _self_
+env:
+  control_mode: control_vehicles
+  non_vehicle_controller: replay
+  reward_conditioning: true
+  reward_conditioning_displacement: true
+  reward_randomization: true
+  collision_behavior: ignore
+  offroad_behavior: ignore
+  traffic_light_behavior: ignore

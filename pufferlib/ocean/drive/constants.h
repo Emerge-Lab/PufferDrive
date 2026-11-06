@@ -267,7 +267,10 @@ static const int ROAD_OFFSETS[25][2]
 #define REWARD_COEF_THROTTLE 14
 #define REWARD_COEF_STEER 15
 #define REWARD_COEF_ACC 16
-#define NUM_REWARD_COEFS 17
+#define REWARD_COEF_DISPLACEMENT 17
+#define NUM_REWARD_COEFS 18
+// Conditioning obs width without reward_conditioning_displacement; displacement is last so 17-coef policies still fit
+#define NUM_REWARD_COEFS_WITHOUT_DISPLACEMENT 17
 
 // Reward-coef override targets: an agent index (>= 0) or every agent except EGO_IDX
 #define REWARD_COEF_TARGET_OTHERS -1

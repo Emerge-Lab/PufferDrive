@@ -50,6 +50,7 @@ static int test_reward_coef_normalization_round_trip(void) {
     }
     EXPECT_EQ_INT(strcmp(REWARD_COEF_NAMES[REWARD_COEF_COLLISION], "collision"), 0);
     EXPECT_EQ_INT(strcmp(REWARD_COEF_NAMES[REWARD_COEF_ACC], "acc"), 0);
+    EXPECT_EQ_INT(strcmp(REWARD_COEF_NAMES[REWARD_COEF_DISPLACEMENT], "displacement"), 0);
     return 0;
 }
 
@@ -208,6 +209,76 @@ static int test_learner_rows_follow_mode(void) {
     return 0;
 }
 
+#define DISPLACEMENT_TEST_RESETS 3
+
+// Randomized displacement coef: drawn within its bounds, shown last in the conditioning obs, pinned by overrides.
+static int test_displacement_conditioning_randomized(void) {
+    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 16, 0);
+    env.control_mode = CONTROL_MODE_VEHICLES;
+    env.goal_source = GOAL_SOURCE_GT;
+    env.reward_conditioning = 1;
+    env.reward_randomization = 1;
+    env.reward_conditioning_displacement = 1;
+    env.reward_displacement = 0.05f;
+    allocate(&env);
+    EXPECT_TRUE(env.active_agent_count >= 3);
+    const RewardBound *bound = &REWARD_BOUNDS[REWARD_COEF_DISPLACEMENT];
+
+    float first_coef = -1.0f;
+    int distinct_coef_count = 0;
+    for (int reset_idx = 0; reset_idx < DISPLACEMENT_TEST_RESETS; reset_idx++) {
+        env.timestep = -1;
+        c_reset(&env);
+        for (int row = 0; row < env.active_agent_count; row++) {
+            float coef = env.agents[env.active_agent_indices[row]].reward_coefs[REWARD_COEF_DISPLACEMENT];
+            EXPECT_TRUE(coef >= bound->min_val && coef <= bound->max_val);
+            EXPECT_NEAR(
+                conditioning_obs(&env, row, REWARD_COEF_DISPLACEMENT),
+                expected_linear_obs(REWARD_COEF_DISPLACEMENT, coef),
+                OVERRIDE_TEST_TOLERANCE);
+            if (first_coef < 0.0f) {
+                first_coef = coef;
+            }
+            distinct_coef_count += coef != first_coef;
+        }
+    }
+    EXPECT_TRUE(distinct_coef_count > 0);
+
+    set_override(&env, 0, REWARD_COEF_TARGET_OTHERS, REWARD_COEF_DISPLACEMENT, 0.1f);
+    env.reward_coef_override_count = 1;
+    env.timestep = -1;
+    c_reset(&env);
+    for (int row = 1; row < env.active_agent_count; row++) {
+        float coef = env.agents[env.active_agent_indices[row]].reward_coefs[REWARD_COEF_DISPLACEMENT];
+        EXPECT_NEAR(coef, 0.1f, 0.0f);
+        EXPECT_NEAR(
+            conditioning_obs(&env, row, REWARD_COEF_DISPLACEMENT),
+            expected_linear_obs(REWARD_COEF_DISPLACEMENT, 0.1f),
+            OVERRIDE_TEST_TOLERANCE);
+    }
+    free_allocated(&env);
+    return 0;
+}
+
+// Without the flag the coef is env.reward_displacement and the conditioning obs keeps its 17-coef width
+static int test_displacement_unconditioned_uses_env_coef(void) {
+    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 16, 0);
+    env.control_mode = CONTROL_MODE_VEHICLES;
+    env.goal_source = GOAL_SOURCE_GT;
+    env.reward_conditioning = 1;
+    env.reward_randomization = 1;
+    env.reward_displacement = 0.05f;
+    allocate(&env);
+    env.timestep = -1;
+    c_reset(&env);
+    for (int row = 0; row < env.active_agent_count; row++) {
+        EXPECT_NEAR(env.agents[env.active_agent_indices[row]].reward_coefs[REWARD_COEF_DISPLACEMENT], 0.05f, 0.0f);
+    }
+    EXPECT_EQ_INT(conditioning_coef_count(&env), NUM_REWARD_COEFS_WITHOUT_DISPLACEMENT);
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_reward_coef_normalization_round_trip);
@@ -215,5 +286,7 @@ int main(void) {
     RUN_TEST(test_reward_coef_overrides_survive_gigaflow_respawn);
     RUN_TEST(test_reward_coef_override_changes_collision_reward);
     RUN_TEST(test_learner_rows_follow_mode);
+    RUN_TEST(test_displacement_conditioning_randomized);
+    RUN_TEST(test_displacement_unconditioned_uses_env_coef);
     return test_summary(failures);
 }

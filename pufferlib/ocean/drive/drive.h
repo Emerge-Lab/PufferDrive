@@ -289,6 +289,7 @@ struct Drive {
     int log_sdc_only;                  // add_log: only count the SDC (EGO_IDX), not other policy-controlled agents
     int learner_agents;                // LEARNER_AGENTS_*
     int reward_conditioning;
+    int reward_conditioning_displacement; // conditioning obs and reward_randomization include REWARD_COEF_DISPLACEMENT
     int reward_randomization;
     int reward_log_sampling;
     RewardCoefOverride reward_coef_overrides[MAX_REWARD_COEF_OVERRIDES]; // re-applied after every coef sample
@@ -400,6 +401,7 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
+    {0.0f, 0.2f, 0},       // REWARD_COEF_DISPLACEMENT    α_displacement ~ U(0, 0.2)
 };
 
 // Meaning of the values: [min_range, max_range, use_log_scale]
@@ -421,6 +423,7 @@ static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
+    {0.0f, 0.2f, 0},       // REWARD_COEF_DISPLACEMENT    α_displacement ~ U(0, 0.2)
 };
 
 static const char *const REWARD_COEF_NAMES[NUM_REWARD_COEFS] = {
@@ -441,6 +444,7 @@ static const char *const REWARD_COEF_NAMES[NUM_REWARD_COEFS] = {
     [REWARD_COEF_THROTTLE] = "throttle",
     [REWARD_COEF_STEER] = "steer",
     [REWARD_COEF_ACC] = "acc",
+    [REWARD_COEF_DISPLACEMENT] = "displacement",
 };
 
 // Conditioning obs value in [-1, 1]; always REWARD_BOUNDS, whichever table sampled the coef.
@@ -2619,6 +2623,13 @@ static void generate_reward_coefs(Drive *env, int agent_idx) {
         agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
         agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
     }
+    // Drawn after the others so runs without reward_conditioning_displacement keep their RNG stream
+    agent->reward_coefs[REWARD_COEF_DISPLACEMENT] = env->reward_displacement;
+    if (env->reward_randomization && env->reward_conditioning_displacement) {
+        const RewardBound *displacement_bound = &REWARD_BOUNDS[REWARD_COEF_DISPLACEMENT];
+        agent->reward_coefs[REWARD_COEF_DISPLACEMENT]
+            = sample_uniform(&env->rng_state, displacement_bound->min_val, displacement_bound->max_val);
+    }
     if (env->disable_comfort_penalty) {
         agent->reward_coefs[REWARD_COEF_COMFORT] = 0.0f;
     }
@@ -3480,11 +3491,18 @@ int allocate_failure_snapshots(Drive *env, int history_depth, int branch_count) 
     return 0;
 }
 
+static int conditioning_coef_count(const Drive *env) {
+    if (!env->reward_conditioning) {
+        return 0;
+    }
+    return env->reward_conditioning_displacement ? NUM_REWARD_COEFS : NUM_REWARD_COEFS_WITHOUT_DISPLACEMENT;
+}
+
 static int compute_observation_size(Drive *env) {
     return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n + LANE_FEATURES * env->obs_slots_lane_kept
         + BOUNDARY_FEATURES * env->obs_slots_boundary_kept
         + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
-        + env->reward_conditioning * NUM_REWARD_COEFS + env->num_goals * GOAL_FEATURES;
+        + conditioning_coef_count(env) + env->num_goals * GOAL_FEATURES;
 }
 
 static void assign_learner_rows(Drive *env) {
@@ -4201,7 +4219,7 @@ static void compute_rewards(Drive *env, int i) {
 
     float displacement_m = agent->metrics_array[DISPLACEMENT_ERROR_IDX];
     if (displacement_m != DISPLACEMENT_UNAVAILABLE) {
-        float displacement_penalty = -env->reward_displacement * env->dt * displacement_m;
+        float displacement_penalty = -agent->reward_coefs[REWARD_COEF_DISPLACEMENT] * env->dt * displacement_m;
         env->rewards[i] += displacement_penalty;
         agent_log->reward_displacement += displacement_penalty;
         agent_log->displacement_error += displacement_m;
@@ -4278,10 +4296,9 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
 }
 
 static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
-    if (env->reward_conditioning) {
-        for (int coef_idx = 0; coef_idx < NUM_REWARD_COEFS; coef_idx++) {
-            obs[obs_idx++] = normalize_reward_coef(coef_idx, ego->reward_coefs[coef_idx]);
-        }
+    int coef_count = conditioning_coef_count(env);
+    for (int coef_idx = 0; coef_idx < coef_count; coef_idx++) {
+        obs[obs_idx++] = normalize_reward_coef(coef_idx, ego->reward_coefs[coef_idx]);
     }
 
     for (int goal_idx = 0; goal_idx < env->num_goals; goal_idx++) {

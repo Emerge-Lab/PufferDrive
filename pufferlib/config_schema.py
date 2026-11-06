@@ -135,6 +135,7 @@ class DriveEnvConfig:
     min_goal_spacing: float = MISSING
     max_goal_spacing: float = MISSING
     reward_conditioning: bool = MISSING
+    reward_conditioning_displacement: bool = MISSING
     reward_randomization: bool = MISSING
     reward_log_sampling: bool = MISSING
     reward_coef_overrides: Optional[Dict[Any, Dict[str, float]]] = MISSING

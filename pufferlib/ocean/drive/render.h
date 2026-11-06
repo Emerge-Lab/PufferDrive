@@ -734,7 +734,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
 
     int ego_dim = EGO_FEATURES;
-    int num_reward_coefs = env->reward_conditioning ? NUM_REWARD_COEFS : 0;
+    int num_reward_coefs = conditioning_coef_count(env);
     int target_count = env->num_goals;
     int goal_dim = target_count * GOAL_FEATURES;
     int max_obs = compute_observation_size(env);

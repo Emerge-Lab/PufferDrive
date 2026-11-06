@@ -14,9 +14,12 @@ static int test_observation_size_formula(void) {
     EXPECT_EQ_INT(compute_observation_size(&env), expected);
 
     env.reward_conditioning = 1;
-    expected = EGO_FEATURES + NUM_REWARD_COEFS + 3 * GOAL_FEATURES + 2 * PARTNER_FEATURES + 5 * LANE_FEATURES
-        + 7 * BOUNDARY_FEATURES + 4 * TRAFFIC_CONTROL_FEATURES + OBS_VALID_COUNT_FEATURES;
+    expected = EGO_FEATURES + NUM_REWARD_COEFS_WITHOUT_DISPLACEMENT + 3 * GOAL_FEATURES + 2 * PARTNER_FEATURES
+        + 5 * LANE_FEATURES + 7 * BOUNDARY_FEATURES + 4 * TRAFFIC_CONTROL_FEATURES + OBS_VALID_COUNT_FEATURES;
     EXPECT_EQ_INT(compute_observation_size(&env), expected);
+
+    env.reward_conditioning_displacement = 1;
+    EXPECT_EQ_INT(compute_observation_size(&env), expected + 1);
     return 0;
 }
 
@@ -172,7 +175,7 @@ static int test_reward_displacement_per_step(void) {
     float reward[1] = {0};
 
     init_reward_env(&env, &agent, &log, active, reward);
-    env.reward_displacement = 2.0f;
+    agent.reward_coefs[REWARD_COEF_DISPLACEMENT] = 2.0f;
     agent.metrics_array[DISPLACEMENT_ERROR_IDX] = 3.0f;
     compute_rewards(&env, 0);
     EXPECT_NEAR(log.reward_displacement, -2.0f * 0.1f * 3.0f, 1e-6f);

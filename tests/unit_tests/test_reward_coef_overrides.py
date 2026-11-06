@@ -45,7 +45,27 @@ def rows_by_agent_idx(env):
 def test_coef_names_follow_c_order():
     assert len(REWARD_COEF_NAMES) == binding.NUM_REWARD_COEFS
     assert REWARD_COEF_NAMES[:4] == ("goal_radius", "goal_speed", "collision", "offroad")
-    assert REWARD_COEF_NAMES[-3:] == ("throttle", "steer", "acc")
+    assert REWARD_COEF_NAMES[-4:] == ("throttle", "steer", "acc", "displacement")
+
+
+def test_displacement_conditioning_appends_one_obs_column():
+    env = Drive(**REPLAY_KWARGS)
+    displacement_env = Drive(**REPLAY_KWARGS, reward_conditioning_displacement=True)
+    env.reset(seed=0)
+    displacement_env.reset(seed=0)
+    assert env.num_reward_coefs == binding.NUM_REWARD_COEFS_WITHOUT_DISPLACEMENT
+    assert displacement_env.num_reward_coefs == binding.NUM_REWARD_COEFS
+    assert displacement_env.num_obs == env.num_obs + 1
+    rows = displacement_env.agent_offsets[-1]
+    column = displacement_env.observations[:rows, coef_column(displacement_env, "displacement")]
+    assert np.all((column >= -1.0) & (column <= 1.0)) and np.unique(column).size > 1
+    env.close()
+    displacement_env.close()
+    with pytest.raises(ValueError, match="requires reward_conditioning"):
+        Drive(
+            **dict(REPLAY_KWARGS, reward_conditioning=False, reward_randomization=False),
+            reward_conditioning_displacement=True,
+        )
 
 
 @pytest.mark.parametrize("name", REWARD_COEF_NAMES)

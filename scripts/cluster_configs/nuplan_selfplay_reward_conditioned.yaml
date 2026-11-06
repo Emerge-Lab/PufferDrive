@@ -1,0 +1,3 @@
+# submit_cluster.py program_config; the recipe itself is pufferlib/config/experiment/nuplan_selfplay_reward_conditioned.yaml
++experiment: nuplan_selfplay_reward_conditioned
+wandb: true

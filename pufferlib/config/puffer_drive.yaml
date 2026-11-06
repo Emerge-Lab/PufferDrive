@@ -135,6 +135,8 @@ env:
   max_goal_spacing: 200.0
   # --- Rewards ---
   reward_conditioning: false
+  # Add the displacement coef to the conditioning obs and to reward_randomization's draws (U(0, 0.2))
+  reward_conditioning_displacement: false
   reward_randomization: false
   reward_log_sampling: false
   # Per-agent reward coefs, e.g. {sdc: {collision: 4.0}, others: {collision: -1.0}, 3: {offroad: 0.5}}.

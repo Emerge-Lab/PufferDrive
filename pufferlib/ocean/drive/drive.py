@@ -108,6 +108,15 @@ def resolve_reward_coef_overrides(overrides, normalized=False):
     return entries
 
 
+def conditioning_coef_count(reward_conditioning, reward_conditioning_displacement):
+    """Reward coefs in the conditioning obs: displacement is the last coef, so 17-coef policies keep their layout."""
+    if not reward_conditioning:
+        return 0
+    if reward_conditioning_displacement:
+        return binding.NUM_REWARD_COEFS
+    return binding.NUM_REWARD_COEFS_WITHOUT_DISPLACEMENT
+
+
 def drive_io_layout(env):
     """Obs block sizes and action decoding a policy built from `env` expects."""
     return {
@@ -136,7 +145,7 @@ class RewardConditioningView:
             raise ValueError("The env has no reward-conditioning slice to give a reward-conditioned policy")
         self._env = env
         self.reward_conditioning = bool(reward_conditioning)
-        self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
+        self.num_reward_coefs = env.num_reward_coefs if reward_conditioning else 0
         self.num_obs = env.num_obs - env.num_reward_coefs + self.num_reward_coefs
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
@@ -232,6 +241,7 @@ class Drive(pufferlib.PufferEnv):
         goal_source="route",
         obs_goal_lane_distance=False,
         reward_conditioning=False,
+        reward_conditioning_displacement=False,
         reward_randomization=False,
         reward_log_sampling=False,
         reward_coef_overrides=None,
@@ -276,7 +286,10 @@ class Drive(pufferlib.PufferEnv):
         self.default_speed_limit = float(default_speed_limit)
         if reward_randomization and not reward_conditioning:
             raise ValueError("reward_randomization requires reward_conditioning")
+        if reward_conditioning_displacement and not reward_conditioning:
+            raise ValueError("reward_conditioning_displacement requires reward_conditioning")
         self.reward_conditioning = reward_conditioning
+        self.reward_conditioning_displacement = bool(reward_conditioning_displacement)
         self.reward_randomization = reward_randomization
         self.reward_log_sampling = reward_log_sampling
         self.reward_coef_override_entries = resolve_reward_coef_overrides(
@@ -441,7 +454,7 @@ class Drive(pufferlib.PufferEnv):
         self.boundary_features = binding.BOUNDARY_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
         self.obs_valid_count_features = binding.OBS_VALID_COUNT_FEATURES
-        self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
+        self.num_reward_coefs = conditioning_coef_count(reward_conditioning, self.reward_conditioning_displacement)
 
         # One uniform target representation (ego-frame x, y, z) regardless of goal_regen_mode.
         self.goal_features = binding.GOAL_FEATURES
@@ -786,6 +799,7 @@ class Drive(pufferlib.PufferEnv):
             "non_vehicle_controller": self.non_vehicle_controller,
             "simulation_mode": self.simulation_mode,
             "reward_conditioning": self.reward_conditioning,
+            "reward_conditioning_displacement": self.reward_conditioning_displacement,
             "reward_randomization": self.reward_randomization,
             "reward_log_sampling": self.reward_log_sampling,
             "reward_coef_overrides": self.reward_coef_override_entries,

@@ -13,7 +13,7 @@ import base64
 import struct
 
 from pufferlib.ocean.drive import binding
-from pufferlib.ocean.drive.drive import compute_effective_road_obs_count
+from pufferlib.ocean.drive.drive import compute_effective_road_obs_count, conditioning_coef_count
 
 
 COLORS = {
@@ -469,6 +469,7 @@ def _img_from_fig(fig: matplotlib.figure.Figure) -> np.ndarray:
 def unpack_obs(
     obs_flat,
     reward_conditioning: bool = False,
+    reward_conditioning_displacement: bool = False,
     num_goals: int = 5,
     obs_slots_partners_n: int = 16,
     obs_slots_lane_n: int = 16,
@@ -508,9 +509,7 @@ def unpack_obs(
     # Extract ego state
     ego_state = obs_flat[:, :ego_dim]
 
-    target_start = ego_dim
-    if reward_conditioning:
-        target_start += binding.NUM_REWARD_COEFS
+    target_start = ego_dim + conditioning_coef_count(reward_conditioning, reward_conditioning_displacement)
 
     target_end = target_start + goal_dim
     target_obs = obs_flat[:, target_start:target_end]
@@ -558,6 +557,7 @@ def unpack_obs(
 def plot_observation(
     obs,
     reward_conditioning=False,
+    reward_conditioning_displacement=False,
     num_goals=10,
     obs_slots_partners_n=16,
     obs_slots_lane_n=32,
@@ -585,6 +585,7 @@ def plot_observation(
     ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs = unpack_obs(
         obs,
         reward_conditioning=reward_conditioning,
+        reward_conditioning_displacement=reward_conditioning_displacement,
         num_goals=num_goals,
         obs_slots_partners_n=obs_slots_partners_n,
         obs_slots_lane_n=obs_slots_lane_n,
@@ -941,7 +942,9 @@ def encode_interactive_replay(scenario, replay):
         "reward_conditioning": bool(env_cfg["reward_conditioning"]),
         "obs_slots_partners_n": int(env_cfg["obs_slots_partners_n"]),
         "ego_dim": int(binding.EGO_FEATURES),
-        "reward_coef_count": int(binding.NUM_REWARD_COEFS),
+        "reward_coef_count": conditioning_coef_count(
+            bool(env_cfg["reward_conditioning"]), bool(env_cfg.get("reward_conditioning_displacement", False))
+        ),
         "partner_features": int(binding.PARTNER_FEATURES),
         "lane_features": int(binding.LANE_FEATURES),
         "boundary_features": int(binding.BOUNDARY_FEATURES),

@@ -156,6 +156,7 @@ CHECKPOINT_OBS_ENV_KEYS = frozenset(
         "max_goal_spacing",
         "obs_goal_lane_distance",
         "reward_conditioning",
+        "reward_conditioning_displacement",
         "reward_randomization",
         "trajectory_prediction_length",
         "num_trajectory_scaling_factors",
