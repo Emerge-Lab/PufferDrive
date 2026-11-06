@@ -54,7 +54,7 @@
 # the scenario-free variant and a walker speed floor run).
 # COSIM_DYNAMICS_SOURCE (pufferdrive, default: the ego is teleported along PufferDrive's own dynamics; carla_pedals: CARLA's
 # physics moves it, driven only by the VehicleControl the agent returns; tags the folder _carla_pedals).
-# Ablations of carla_pedals: COSIM_PEDAL_REVERSE (1, default; 0 = the car never backs up, tags the folder _noreverse) and
+# Ablations of carla_pedals: COSIM_PEDAL_REVERSE (0, default: the car never backs up; 1 = it reverses, tags the folder _reverse) and
 # COSIM_PEDAL_YELLOW_MARGIN (1, default; 0 = the policy sees CARLA's remaining yellow, tags the folder _noyellowmargin).
 #
 # Completing a partial run (routes lost to CARLA crashes or the job time limit): COMPLETE_RUN=<existing $OUT folder>
@@ -132,7 +132,7 @@ export COSIM_WALKER_SPEED_FLOOR_MPS=${COSIM_WALKER_SPEED_FLOOR_MPS:-0}   # diagn
 [[ "$COSIM_WALKER_SPEED_FLOOR_MPS" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "COSIM_WALKER_SPEED_FLOOR_MPS=\"$COSIM_WALKER_SPEED_FLOOR_MPS\" must be a non-negative number"; exit 1; }
 export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-pufferdrive}   # carla_pedals: CARLA's physics moves the ego, see shadow_ego.py
 [[ "$COSIM_DYNAMICS_SOURCE" =~ ^(pufferdrive|carla_pedals)$ ]] || { echo "COSIM_DYNAMICS_SOURCE=\"$COSIM_DYNAMICS_SOURCE\" must be pufferdrive or carla_pedals"; exit 1; }
-export COSIM_PEDAL_REVERSE=${COSIM_PEDAL_REVERSE:-1} COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}   # carla_pedals ablations, see shadow_ego.py
+export COSIM_PEDAL_REVERSE=${COSIM_PEDAL_REVERSE:-0} COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}   # carla_pedals ablations, see shadow_ego.py
 [[ "$COSIM_PEDAL_REVERSE" =~ ^[01]$ && "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_REVERSE=\"$COSIM_PEDAL_REVERSE\" and COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }
 EVALUATOR=$GARAGE_WORK_DIR/leaderboard/leaderboard/leaderboard_evaluator_local.py
 CARLA_EGG=$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
@@ -177,7 +177,7 @@ TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_
 TAG=$TAG$([ "$COSIM_WALKER_SPEED_FLOOR_MPS" = "0" ] || echo "_walkerfloor$COSIM_WALKER_SPEED_FLOOR_MPS")
 TAG=$TAG$([ "$COSIM_DYNAMICS_SOURCE" = "pufferdrive" ] || echo "_$COSIM_DYNAMICS_SOURCE")
 if [ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ]; then
-    TAG=$TAG$([ "$COSIM_PEDAL_REVERSE" = "1" ] || echo "_noreverse")$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
+    TAG=$TAG$([ "$COSIM_PEDAL_REVERSE" = "0" ] || echo "_reverse")$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
 fi
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 OUT=${COMPLETE_RUN:-$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}}

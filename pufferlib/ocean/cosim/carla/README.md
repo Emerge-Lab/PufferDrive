@@ -105,16 +105,17 @@ the whole deceleration while the gearbox shifts (gear 0: the engine is disconnec
 curvature divided by the curvature one unit of steer gives, which falls with speed. A car that
 has braked to below `STANDSTILL_SPEED_MPS` is held on the full brake, reads exactly stopped and,
 like the jerk model, starts its acceleration again from zero. From there a positive acceleration
-launches it forward and a negative one backward: `VehicleControl.reverse` with the throttle from
-the reverse gains, and the brake for a positive acceleration while it rolls backward
-(`COSIM_PEDAL_REVERSE=0`: it stays on the brake instead and never backs up). The route
+launches it forward; on a negative one it stays on the brake and never backs up
+(`COSIM_PEDAL_REVERSE=1`: it launches backward with `VehicleControl.reverse`, the throttle from
+the reverse gains, and the brake for a positive acceleration while it rolls backward; on longest6
+v1 that scored 88.9 against 91.3 driving score). The route
 summary line prints how far the gains are off (`accel_bias_*`, per gear
 `accel_bias_by_gear_mps2` = (ticks, bias) with reverse as gear -1, `yaw_rate_gain`). An automatic
 shift leaves the car without drive for `gear_shift_seconds` (0.5 s on the v1 car), which no pedal
 value can make up for and the policy has never seen: it would sprint through a yellow and arrive
 late. So in this mode the policy sees that much less remaining yellow than CARLA reports and stops
 at those lights instead (`COSIM_PEDAL_YELLOW_MARGIN=0`: it sees CARLA's value and sprints). Scripts
-11 and 14 pass both switches through and tag the result folder `_noreverse` / `_noyellowmargin`.
+11 and 14 pass both switches through and tag the result folder `_reverse` / `_noyellowmargin`.
 Not handled: road grade (gravity is not compensated).
 
 ### Bin frame calibration

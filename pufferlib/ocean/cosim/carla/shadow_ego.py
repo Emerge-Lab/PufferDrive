@@ -41,8 +41,8 @@ Environment variables:
                                brake, reverse) the leaderboard applies. controller.PedalMap maps the jerk integrator's
                                acceleration and steering to them with the gains of the gear the automatic gearbox
                                is in; pose, speed, yaw rate and gear are re-read every tick.
-  COSIM_PEDAL_REVERSE=1        carla_pedals: 1 (default) = a standing car that is asked to go backwards reverses;
-                               0 = it stays on the brake, as before reverse existed.
+  COSIM_PEDAL_REVERSE=0        carla_pedals: 0 (default) = a standing car that is asked to go backwards stays on
+                               the brake; 1 = it reverses (scored lower on longest6 v1).
   COSIM_PEDAL_YELLOW_MARGIN=1  carla_pedals: 1 (default) = the policy sees the remaining yellow shortened by the
                                car's gear shift time, so it stops where a shift would make it late; 0 = it sees
                                CARLA's remaining yellow.
@@ -244,7 +244,7 @@ class ShadowEgo:
         self.max_speed_mps = cosim_max_speed_mps(env_cfg)
         self.obs_slots_partners_n = cosim_obs_slots_partners_n()
         self.zero_partner_stopped_time = env_flag("COSIM_ZERO_PARTNER_STOPPED_TIME")
-        self.pedal_reverse = env_flag("COSIM_PEDAL_REVERSE", "1")
+        self.pedal_reverse = env_flag("COSIM_PEDAL_REVERSE", "0")
         self.pedal_yellow_margin = env_flag("COSIM_PEDAL_YELLOW_MARGIN", "1")
         self.vru_size_pad_m = float(os.environ.get("COSIM_VRU_SIZE_PAD_M", "0.0"))
         if not (self.vru_size_pad_m >= 0.0):
