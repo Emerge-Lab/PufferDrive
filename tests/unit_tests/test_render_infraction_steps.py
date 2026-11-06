@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from pufferlib import viz
+from pufferlib.ocean.cosim.carla.shadow_ego import TELEMETRY_HEADER
 
 
 sys.path.insert(
@@ -21,6 +22,9 @@ FRAMES, AGENT_CAP = 3000, 3
 TICK_DT = 0.05
 OFFSET = (10.0, 20.0)
 COLLISION_FRAME = 600
+RED_LIGHT_FRAME = 450
+# the light itself, 18 m off the ego's path
+RED_LIGHT_MESSAGE = "Agent ran a red light 365 at (x=310.0, y=-62.0, z=0.3)"
 
 
 def _replay(ego_xy, collision_frames=()):
@@ -108,10 +112,45 @@ def test_carla_infraction_steps_fall_back_to_town_offset(tmp_path):
     path = tmp_path / "route.replay.zlib"
     viz.save_interactive_replay_zlib({}, _replay(_straight_ego_xy()), str(path))
     tx, ty = carla_render.TOWN_OFFSETS["Town01"]
-    message = f"Agent ran a red light 12 at (x={300.0 - tx:.3f}, y={-(100.0 - ty):.3f}, z=0.0)"
-    record = {"infractions": {"red_light": [message]}}
+    message = f"Agent got blocked at (x={300.0 - tx:.3f}, y={-(100.0 - ty):.3f}, z=0.0)"
+    record = {"infractions": {"vehicle_blocked": [message]}}
     steps = carla_render.infraction_steps(record, str(path), "Town01", {})
     assert steps[message] == viz.replay_step_link(COLLISION_FRAME)
+
+
+def _write_telemetry(path, row_count, red_light_rows):
+    columns = TELEMETRY_HEADER.strip().split(",")
+    with open(path, "w") as telemetry_file:
+        telemetry_file.write(TELEMETRY_HEADER)
+        for row in range(row_count):
+            values = {"step": row + 1, carla_render.RED_LIGHT_FLAG_COLUMN: int(row in red_light_rows)}
+            telemetry_file.write(",".join(str(values.get(column, 0)) for column in columns) + "\n")
+
+
+def test_carla_red_lights_link_the_step_the_telemetry_flagged(tmp_path):
+    path = tmp_path / "route.replay.zlib"
+    viz.save_interactive_replay_zlib({}, _replay(_straight_ego_xy()), str(path))
+    telemetry = tmp_path / "route.csv"
+    _write_telemetry(telemetry, FRAMES + 100, {RED_LIGHT_FRAME, FRAMES + 50})
+    after_the_replay = "Agent ran a red light 366 at (x=1500.0, y=-62.0, z=0.3)"
+    record = {"infractions": {"red_light": [RED_LIGHT_MESSAGE, after_the_replay]}}
+    log_meta = {"offset": list(OFFSET), "tick_dt": TICK_DT}
+
+    steps = carla_render.infraction_steps(record, str(path), "Town01", log_meta, str(telemetry))
+    assert steps[RED_LIGHT_MESSAGE] == viz.replay_step_link(RED_LIGHT_FRAME, RED_LIGHT_FRAME * TICK_DT)
+    assert steps[after_the_replay] == "beyond the replay"
+
+
+def test_carla_red_lights_get_no_step_without_one_telemetry_flag_each(tmp_path):
+    path = tmp_path / "route.replay.zlib"
+    viz.save_interactive_replay_zlib({}, _replay(_straight_ego_xy()), str(path))
+    record = {"infractions": {"red_light": [RED_LIGHT_MESSAGE]}}
+    log_meta = {"offset": list(OFFSET), "tick_dt": TICK_DT}
+    assert carla_render.infraction_steps(record, str(path), "Town01", log_meta) == {}
+
+    telemetry = tmp_path / "route.csv"
+    _write_telemetry(telemetry, FRAMES, {RED_LIGHT_FRAME, RED_LIGHT_FRAME + 200})
+    assert carla_render.infraction_steps(record, str(path), "Town01", log_meta, str(telemetry)) == {}
 
 
 def _write_series(metrics_dir, name, values, extra=None):

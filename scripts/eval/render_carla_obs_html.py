@@ -7,12 +7,14 @@ usage: python scripts/eval/render_carla_obs_html.py <run_dir> [--routes <longest
 Pages are named ds<driving score>_<flags>_<town>_route<id>.html so the gallery lists the worst first
 (flags: COL collision, RED red light, STOP stop sign, OFF outside route lanes, DEV route deviation,
 BLOCK blocked, TIMEOUT route/scenario timeout); each page carries the route's leaderboard scores and
-infractions as a panel, every positioned infraction linking to the replay step where the ego was nearest.
+infractions as a panel, every positioned infraction linking to the replay step where the ego was nearest
+(red lights: to the step the route's telemetry flagged, their message carries the light's position).
 --routes (the evaluated xml) names the town of every route, else the world log does.
 Retried routes leave the files of crashed attempts behind: the newest files pair with the records.
 """
 
 import argparse
+import csv
 import glob
 import html
 import json
@@ -59,6 +61,8 @@ PANEL_INFRACTIONS = (
 MESSAGE_MAX_CHARS = 120
 POSITION_PATTERN = re.compile(r"x=([-\d.]+), y=([-\d.]+)")
 NEAREST_STEP_MAX_M = 5.0
+RED_LIGHT_FLAG_COLUMN = "carla_infr_red"  # telemetry: 1 on the step the simulator-side red light test fired
+REPLAY_SUFFIX = ".replay.zlib"
 ROUTE_ID_PATTERN = re.compile(r"RouteScenario_(\d+)(?:_rep(\d+))?")
 SEED_DIR_PATTERN = re.compile(r"_s(\d+)$")  # route_08_s1: seed 1 of route 8 (the eval scripts drive one pass per seed)
 
@@ -126,29 +130,41 @@ def score_panel(record, town, steps, seed=None):
     )
 
 
-def infraction_steps(record, replay_path, town, log_meta):
-    """message -> seek link of every positioned infraction: the replay step where the ego was nearest to it.
-    CARLA -> bin offset from the route's world log (calibrated), else the town default."""
-    offset = log_meta.get("offset") or TOWN_OFFSETS.get(town)
-    if offset is None:
-        return {}
+def red_light_steps(telemetry_path):
+    """Steps on which the route's telemetry flagged a run red light (row k of the CSV = replay frame k)."""
+    with open(telemetry_path, newline="") as telemetry_file:
+        rows = csv.DictReader(telemetry_file)
+        return [step for step, row in enumerate(rows) if float(row[RED_LIGHT_FLAG_COLUMN]) > 0.0]
+
+
+def infraction_steps(record, replay_path, town, log_meta, telemetry_path=None):
+    """message -> seek link of every infraction the replay can place: red lights at the step the telemetry flagged,
+    the other positioned ones where the ego was nearest (CARLA -> bin offset: the world log's, else the town's)."""
     tick_dt = log_meta.get("tick_dt")
     _, chunks = viz.read_replay_zlib(replay_path, chunk_names=("agent_f32",))
     ego_xy = chunks["agent_f32"][:, 0, :2]
-    messages = [message for key, _ in PANEL_INFRACTIONS for message in infraction_messages(record, key)]
+    frame_count = len(ego_xy)
     steps = {}
-    for message in messages:
+    red_messages = infraction_messages(record, "red_light")
+    flagged_steps = red_light_steps(telemetry_path) if telemetry_path and red_messages else []
+    if len(flagged_steps) == len(red_messages):
+        steps.update(zip(red_messages, flagged_steps))
+    offset = log_meta.get("offset") or TOWN_OFFSETS.get(town)
+    nearest_keys = [key for key, _ in PANEL_INFRACTIONS if key != "red_light" and offset is not None]
+    for message in [message for key in nearest_keys for message in infraction_messages(record, key)]:
         match = POSITION_PATTERN.search(message)
         if match is None:
             continue
         bin_x, bin_y = float(match.group(1)) + offset[0], -float(match.group(2)) + offset[1]
         distance_m = np.hypot(ego_xy[:, 0] - bin_x, ego_xy[:, 1] - bin_y)
-        step = int(np.argmin(distance_m))
-        if distance_m[step] > NEAREST_STEP_MAX_M:
-            steps[message] = "beyond the replay"
-            continue
-        steps[message] = viz.replay_step_link(step, None if tick_dt is None else step * tick_dt)
-    return steps
+        nearest_step = int(np.argmin(distance_m))
+        # a place the replay's ego never came near was reached after its last frame
+        steps[message] = nearest_step if distance_m[nearest_step] <= NEAREST_STEP_MAX_M else frame_count
+    links = {}
+    for message, step in steps.items():
+        seconds = None if tick_dt is None else step * tick_dt
+        links[message] = viz.replay_step_link(step, seconds) if step < frame_count else "beyond the replay"
+    return links
 
 
 def render_page(zlib_path, html_path, panel):
@@ -184,7 +200,8 @@ def newest_files(route_dir, subdir, suffix, count):
 
 
 def collect_jobs(run_dir, towns):
-    """-> [(record, replay zlib path, town, world log meta, seed or None)] over routes/route_*, the newest replay per record."""
+    """-> [(record, replay zlib path, town, world log meta, seed or None, telemetry csv path or None)] over
+    routes/route_*, the newest replay per record."""
     jobs = []
     for route_dir in sorted(Path(run_dir, "routes").glob("route_*")):
         seed_match = SEED_DIR_PATTERN.search(route_dir.name)
@@ -195,7 +212,7 @@ def collect_jobs(run_dir, towns):
             continue
         with open(result_path) as result_file:
             records = json.load(result_file)["_checkpoint"]["records"]
-        replays = newest_files(route_dir, "obs_html", ".replay.zlib", len(records))
+        replays = newest_files(route_dir, "obs_html", REPLAY_SUFFIX, len(records))
         if len(replays) != len(records):
             print(f"[{route_dir.name}] {len(records)} route records but {len(replays)} replays; pairing the newest")
         if not replays:
@@ -205,7 +222,8 @@ def collect_jobs(run_dir, towns):
         for k, (record, replay) in enumerate(zip(records, replays)):
             log_meta = world_log_meta(world_logs[k]) if k < len(world_logs) else {}
             town = towns.get(route_index_rep(record)[0]) or log_meta.get("town", "")
-            jobs.append((record, replay, town, log_meta, seed))
+            telemetry = route_dir / "telemetry" / (Path(replay).name[: -len(REPLAY_SUFFIX)] + ".csv")
+            jobs.append((record, replay, town, log_meta, seed, telemetry if telemetry.is_file() else None))
     return jobs
 
 
@@ -223,15 +241,14 @@ def main():
     obs_dir = run_dir / "obs_html"
     obs_dir.mkdir(exist_ok=True)
     pages = [
-        (obs_dir / page_name(record, town, seed), record, replay, town, log_meta, seed)
-        for record, replay, town, log_meta, seed in jobs
+        (obs_dir / page_name(record, town, seed), record, replay, town, log_meta, seed, telemetry)
+        for record, replay, town, log_meta, seed, telemetry in jobs
     ]
 
     def render(page):
-        html_path, record, replay, town, log_meta, seed = page
-        render_page(
-            replay, html_path, score_panel(record, town, infraction_steps(record, replay, town, log_meta), seed)
-        )
+        html_path, record, replay, town, log_meta, seed, telemetry = page
+        steps = infraction_steps(record, replay, town, log_meta, telemetry)
+        render_page(replay, html_path, score_panel(record, town, steps, seed))
 
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
         list(pool.map(render, pages))
