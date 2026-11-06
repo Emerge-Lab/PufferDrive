@@ -9,7 +9,7 @@
 #SBATCH --output experiments/logs/train_3seeds_%a_%A.out
 #SBATCH --error experiments/logs/train_3seeds_%a_%A.err
 #SBATCH --partition dev
-#SBATCH --array=0-2
+#SBATCH --array=0-1
 
 source scripts/kesai/cluster_env.sh || exit 1
 
@@ -23,10 +23,19 @@ echo "Master node: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "Total nodes: ${WORLD_SIZE}"
 start=$(date +%s)
 
-export SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
-echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
+SEEDS=(1000 2000 1000 2000)
+MINIBATCH_SIZES=(262144 262144 393216 393216)
+RUN_PREFIXES=(k_scaled_0073 k_scaled_0073 k_scaled_0074 k_scaled_0074)
 
-export RUN_NAME=k_scaled_0073_${SEED}
+export SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
+MINIBATCH_SIZE=${MINIBATCH_SIZES[$SLURM_ARRAY_TASK_ID]}
+if [ -z "${SEED}" ]; then
+    echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} has no run configured; aborting."
+    exit 1
+fi
+echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} minibatch=${MINIBATCH_SIZE}"
+
+export RUN_NAME=${RUN_PREFIXES[$SLURM_ARRAY_TASK_ID]}_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -53,7 +62,7 @@ echo "slot encoder backend: ${SLOT_ENCODER_BACKEND}"
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
-# 0073 = the 0072 config (3_train_64GPU_multinode_slurm.sh) on one node per training, minibatch 262144, seeds 1000/2000/3000: sbatch scripts/kesai/18_train_8GPU_3seeds_slurm.sh
+# 0073 / 0074 = the 0072 config (3_train_64GPU_multinode_slurm.sh) on one node per training, minibatch 262144 / 393216, seeds 1000 and 2000. Default 0073; 0074: sbatch --array=2-3 scripts/kesai/18_train_8GPU_3seeds_slurm.sh
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -77,8 +86,8 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     train.total_timesteps=1000000000000 \
     vec.num_envs=128 \
     train.rollout_dtype=float16 \
-    train.max_minibatch_size=262144 \
-    train.minibatch_size=262144 \
+    train.max_minibatch_size=${MINIBATCH_SIZE} \
+    train.minibatch_size=${MINIBATCH_SIZE} \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
