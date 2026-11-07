@@ -814,6 +814,7 @@ class PuffeRL:
         self.last_stats = defaultdict(list)
         self.losses = {}
         self.best_score = -float("inf")
+        self.latest_score = -float("inf")
         self.ema_max = 0.0
 
         # Dashboard
@@ -1341,6 +1342,8 @@ class PuffeRL:
             loss = loss + config["anchor_coef"] * anchor_kl
             stats["anchor_kl_mean"] = anchor_kl.item()
 
+        if not np.isfinite(list(stats.values())).all():
+            raise FloatingPointError(f"Non-finite PPO loss before backward, weights left untouched: {stats}")
         return loss, newvalue, ratio, stats
 
     def _anchor_kl(self):
@@ -1520,6 +1523,9 @@ class PuffeRL:
         # advantage filter, which permanently freezes a plateaued policy.
         # full_minibatch_transitions = (keep_idx.numel() // self.minibatch_size) * self.minibatch_size
         full_minibatch_transitions = keep_idx.numel()
+        # A one-transition minibatch has a NaN advantage std
+        if full_minibatch_transitions % self.minibatch_size == 1:
+            full_minibatch_transitions -= 1
 
         for _ in range(config["update_epochs"]):
             permutation = keep_idx[torch.randperm(keep_idx.numel(), device=keep_idx.device)]
@@ -1580,6 +1586,10 @@ class PuffeRL:
     def mean_and_log(self):
         config = self.config
         self.stats = pufferlib.utils.reduce_environment_metrics(self.stats)
+        # Kept across log intervals: synchronized fixed-length episodes can skip every checkpoint epoch
+        episode_score = self.stats.get("puffer_score", self.stats.get("score"))
+        if episode_score is not None:
+            self.latest_score = episode_score
 
         device = config["device"]
         agent_steps = int(dist_sum(self.global_step, device))
@@ -1636,7 +1646,7 @@ class PuffeRL:
             if old_model_path != model_path:
                 os.remove(old_model_path)
 
-        current_score = self.last_stats.get("puffer_score", self.last_stats.get("score", -float("inf")))
+        current_score = self.latest_score
         new_best = current_score > self.best_score
         if new_best:
             self.best_score = current_score
