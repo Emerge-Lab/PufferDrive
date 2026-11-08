@@ -52,8 +52,8 @@
 # run's final_eval/longest6_v1_DS in wandb, replacing an earlier report; 0 for ablations, so the run keeps the number of
 # its standard eval; never reported: a run with missing route records (a completion reports once every route has one),
 # the scenario-free variant and a walker speed floor run).
-# COSIM_DYNAMICS_SOURCE (pufferdrive, default: the ego is teleported along PufferDrive's own dynamics; carla_pedals: CARLA's
-# physics moves it, driven only by the VehicleControl the agent returns; tags the folder _carla_pedals).
+# COSIM_DYNAMICS_SOURCE (carla_pedals, default: CARLA's physics moves the ego, driven only by the VehicleControl the agent
+# returns; tags the folder _carla_pedals; pufferdrive: the ego is teleported along PufferDrive's own dynamics).
 # Ablations of carla_pedals: COSIM_PEDAL_REVERSE (0, default: the car never backs up; 1 = it reverses, tags the folder _reverse) and
 # COSIM_PEDAL_YELLOW_MARGIN (1, default; 0 = the policy sees CARLA's remaining yellow, tags the folder _noyellowmargin).
 #
@@ -98,7 +98,8 @@ if [ -n "$COMPLETE_RUN" ]; then
     COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-$(run_info_value vru_size_pad_m)}
     COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-$(run_info_value obs_slots_partners_n)}   # a run from before the knob: empty = the checkpoint's value
     COSIM_WALKER_SPEED_FLOOR_MPS=${COSIM_WALKER_SPEED_FLOOR_MPS:-$(run_info_value walker_speed_floor_mps)}
-    COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-$(run_info_value dynamics_source)}   # a run from before the knob: empty = pufferdrive
+    COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-$(run_info_value dynamics_source)}
+    COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-pufferdrive}   # a run from before the knob was driven with pufferdrive
     COSIM_PEDAL_REVERSE=${COSIM_PEDAL_REVERSE:-$(run_info_value pedal_reverse)}   # a pedal run from before these two knobs has no such lines: set both by hand
     COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-$(run_info_value pedal_yellow_margin)}
 fi
@@ -130,7 +131,7 @@ export COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-40}   # GIGAFLOW'
 [[ -z "$COSIM_OBS_SLOTS_PARTNERS_N" || "$COSIM_OBS_SLOTS_PARTNERS_N" =~ ^[1-9][0-9]*$ ]] || { echo "COSIM_OBS_SLOTS_PARTNERS_N=\"$COSIM_OBS_SLOTS_PARTNERS_N\" must be a positive integer or empty"; exit 1; }
 export COSIM_WALKER_SPEED_FLOOR_MPS=${COSIM_WALKER_SPEED_FLOOR_MPS:-0}   # diagnostic only, see shadow_ego.py
 [[ "$COSIM_WALKER_SPEED_FLOOR_MPS" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "COSIM_WALKER_SPEED_FLOOR_MPS=\"$COSIM_WALKER_SPEED_FLOOR_MPS\" must be a non-negative number"; exit 1; }
-export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-pufferdrive}   # carla_pedals: CARLA's physics moves the ego, see shadow_ego.py
+export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-carla_pedals}   # carla_pedals: CARLA's physics moves the ego, see shadow_ego.py
 [[ "$COSIM_DYNAMICS_SOURCE" =~ ^(pufferdrive|carla_pedals)$ ]] || { echo "COSIM_DYNAMICS_SOURCE=\"$COSIM_DYNAMICS_SOURCE\" must be pufferdrive or carla_pedals"; exit 1; }
 export COSIM_PEDAL_REVERSE=${COSIM_PEDAL_REVERSE:-0} COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}   # carla_pedals ablations, see shadow_ego.py
 [[ "$COSIM_PEDAL_REVERSE" =~ ^[01]$ && "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_REVERSE=\"$COSIM_PEDAL_REVERSE\" and COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }

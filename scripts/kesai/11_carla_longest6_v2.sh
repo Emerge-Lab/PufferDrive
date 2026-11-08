@@ -42,8 +42,8 @@
 # DS of results.csv becomes the training run's final_eval/longest6_v2_DS in wandb, replacing an earlier report; 0 for
 # ablations, so the run keeps the number of its standard eval; never reported: a run with missing route records, the
 # scenario-free variant and a walker speed floor run).
-# COSIM_DYNAMICS_SOURCE (pufferdrive, default: the ego is teleported along PufferDrive's own dynamics; carla_pedals: CARLA's
-# physics moves it, driven only by the VehicleControl the agent returns; tags the folder _carla_pedals).
+# COSIM_DYNAMICS_SOURCE (carla_pedals, default: CARLA's physics moves the ego, driven only by the VehicleControl the agent
+# returns; tags the folder _carla_pedals; pufferdrive: the ego is teleported along PufferDrive's own dynamics).
 # Ablations of carla_pedals: COSIM_PEDAL_REVERSE (0, default: the car never backs up; 1 = it reverses, tags the folder _reverse) and
 # COSIM_PEDAL_YELLOW_MARGIN (1, default; 0 = the policy sees CARLA's remaining yellow, tags the folder _noyellowmargin).
 set -u
@@ -119,7 +119,7 @@ cd "$PD" || exit 1
 OMP_THREADS=${OMP_NUM_THREADS:-$([ "$WORKERS" -ge 16 ] && echo 2 || echo 4)}
 export OMP_NUM_THREADS=$OMP_THREADS MKL_NUM_THREADS=$OMP_THREADS OPENBLAS_NUM_THREADS=$OMP_THREADS NUMEXPR_NUM_THREADS=$OMP_THREADS
 export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
-export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-pufferdrive}   # carla_pedals: CARLA's physics moves the ego, see shadow_ego.py
+export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-carla_pedals}   # carla_pedals: CARLA's physics moves the ego, see shadow_ego.py
 [[ "$COSIM_DYNAMICS_SOURCE" =~ ^(pufferdrive|carla_pedals)$ ]] || { echo "COSIM_DYNAMICS_SOURCE=\"$COSIM_DYNAMICS_SOURCE\" must be pufferdrive or carla_pedals"; exit 1; }
 export COSIM_PEDAL_REVERSE=${COSIM_PEDAL_REVERSE:-0} COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}   # carla_pedals ablations, see shadow_ego.py
 [[ "$COSIM_PEDAL_REVERSE" =~ ^[01]$ && "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_REVERSE=\"$COSIM_PEDAL_REVERSE\" and COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }
