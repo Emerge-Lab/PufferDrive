@@ -14,9 +14,10 @@ import json
 import os
 
 import pandas as pd
+import yaml
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SWEEP_COEFS = {"min": 0.0, "p25": 0.05, "mid": 0.1, "p75": 0.15, "max": 0.2}
+SWEEP_LABELS = ("min", "p25", "mid", "p75", "max")
 METRIC_COLUMNS = [
     "score",
     "puffer_score",
@@ -54,12 +55,14 @@ def main():
     args = parser.parse_args()
 
     rows = []
-    for label, displacement_coef in SWEEP_COEFS.items():
+    for label in SWEEP_LABELS:
         benchmark = f"{args.benchmark_prefix}_{label}"
         pattern = os.path.join(args.eval_dir, "eval", benchmark, "*", "evaluation_summary.json")
         summary_paths = sorted(glob.glob(pattern))
         if not summary_paths:
             raise FileNotFoundError(f"no eval output matches {pattern}")
+        with open(os.path.join(os.path.dirname(summary_paths[-1]), "resolved_benchmark.yaml")) as resolved_file:
+            displacement_coef = yaml.safe_load(resolved_file)["args"]["env"]["reward_displacement"]
         rows.append(summary_row(summary_paths[-1], args.policy, displacement_coef))
     baseline_pattern = os.path.join(
         REPO_ROOT, "nuplan_policies", "*", "eval", "val_standard", "*", "evaluation_summary.json"
