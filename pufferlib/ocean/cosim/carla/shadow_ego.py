@@ -360,7 +360,9 @@ class ShadowEgo:
         self.policy = policy_cls(env_for_policy, **self.cfg["policy"]).to(self.device)
         self.policy.load_state_dict(policy_state_dict)
         self.policy.eval()
-        print(f"[puffer_agent] loaded policy from {self.checkpoint} (obs partner slots {self.env.obs_slots_partners_n})")
+        print(
+            f"[puffer_agent] loaded policy from {self.checkpoint} (obs partner slots {self.env.obs_slots_partners_n})"
+        )
 
     def init_route(self, route):
         """Build the shadow env for this route's town and seed it from the simulator's ground truth (see
