@@ -74,8 +74,9 @@ class EnsemblePolicy(nn.Module):
         class_count = probs.shape[-1]
         if member_probs[0].shape != (probs.numel() // class_count, class_count):
             raise RuntimeError("discrete_probs_to_continuous_mean needs the member probabilities of the same batch")
-        member_means = [member.discrete_probs_to_continuous_mean(p) for member, p in zip(self.members, member_probs)]
-        return torch.stack(member_means).mean(dim=0).reshape(*probs.shape[:-1], -1)
+        # averaged in physical units: the env's long scaling is piecewise, so normalised member means do not average
+        mean_member_probs = torch.stack(member_probs).mean(dim=0)
+        return self.members[0].discrete_probs_to_continuous_mean(mean_member_probs).reshape(*probs.shape[:-1], -1)
 
 
 def _average_discrete_logits(member_logits):

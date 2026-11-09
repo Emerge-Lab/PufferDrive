@@ -8,7 +8,7 @@ PYTHON := .venv/bin/python
 # sources, so `make test` rebuilds it only when a .c/.h file actually changed.
 EXT_SUFFIX := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))" 2>/dev/null)
 BINDING := pufferlib/ocean/drive/binding$(EXT_SUFFIX)
-DRIVE_SOURCES := $(wildcard pufferlib/ocean/drive/*.c) $(wildcard pufferlib/ocean/drive/*.h) setup.py
+DRIVE_SOURCES := $(wildcard pufferlib/ocean/drive/*.c) $(wildcard pufferlib/ocean/drive/*.h) pufferlib/ocean/env_binding.h setup.py
 
 .PHONY: help test rebuild ensure-test-deps test-unit test-eval test-c test-notebooks test-docker-smoke
 

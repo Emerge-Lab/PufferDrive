@@ -90,7 +90,7 @@ def test_discrete_average_is_the_mean_of_member_probabilities_not_a_vote():
     assert mode.tolist() == [0] * BATCH_SIZE
 
 
-def test_mean_action_selection_averages_the_member_mean_actions_not_the_mixture_expectation():
+def test_mean_action_selection_averages_the_member_mean_actions_in_physical_units():
     braking = _TinyPolicy(logits=(9.0, 0.0, 0.0))
     accelerating = _TinyPolicy(logits=(0.0, 0.0, 9.0))
     policy = ensemble.EnsemblePolicy([braking, accelerating])
@@ -101,9 +101,9 @@ def test_mean_action_selection_averages_the_member_mean_actions_not_the_mixture_
     )
     mixture_expectation = braking.discrete_probs_to_continuous_mean(torch.softmax(logits, -1))
 
-    # members execute long -1 and +1: their mean is 0; the mixture expectation sits at -1 / LONG_NEG_SCALE
-    assert torch.allclose(mean_action, torch.zeros(BATCH_SIZE, 2), atol=1e-3)
-    assert torch.allclose(mixture_expectation[:, 0], torch.full((BATCH_SIZE,), -0.25), atol=1e-3)
+    # members execute normalised long -1 and +1; the brake scale is the larger one, so their physical mean brakes
+    assert torch.allclose(mean_action[:, 0], torch.full((BATCH_SIZE,), -0.25), atol=1e-3)
+    assert torch.allclose(mean_action, mixture_expectation, atol=1e-6)
 
 
 def test_mean_action_needs_the_member_probabilities_of_the_same_batch():

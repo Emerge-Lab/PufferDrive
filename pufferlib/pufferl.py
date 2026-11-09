@@ -777,6 +777,11 @@ class PuffeRL:
             losses["filtered_fraction"] = 1.0 - kept_fraction
         else:
             keep_idx = valid_idx
+            if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
+                # Ranks mask different row counts: trim to the global minimum so minibatch counts stay in sync
+                kept_tensor = torch.tensor([keep_idx.numel()], device=device)
+                torch.distributed.all_reduce(kept_tensor, op=torch.distributed.ReduceOp.MIN)
+                keep_idx = keep_idx[torch.randperm(keep_idx.numel(), device=device)[: kept_tensor.item()]]
 
         if config["min_batch_size"] is not None:
             num_missing = config["min_batch_size"] - keep_idx.numel()
@@ -1408,6 +1413,25 @@ class TensorBoardLogger:
         self.local_writer.close()
 
 
+class TensorBoardMirror:
+    """A remote run logger that also writes local TensorBoard event files."""
+
+    def __init__(self, remote_logger, tensorboard_logger):
+        self.remote_logger = remote_logger
+        self.tensorboard_logger = tensorboard_logger
+
+    def __getattr__(self, name):
+        return getattr(self.remote_logger, name)
+
+    def log(self, logs, step):
+        self.remote_logger.log(logs, step)
+        self.tensorboard_logger.log(logs, step)
+
+    def close(self, model_path, early_stop):
+        self.tensorboard_logger.close(model_path, early_stop)
+        self.remote_logger.close(model_path, early_stop)
+
+
 def _get_git_metadata():
     git_metadata = {
         "commit_hash": os.environ.get("GITHUB_SHA") or os.environ.get("COMMIT_SHA"),
@@ -1625,11 +1649,13 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             logger = NeptuneLogger(args)
         elif args["wandb"]:
             logger = WandbLogger(args)
-        elif args["tb"]:
-            logger = TensorBoardLogger(
+        if args["tb"]:
+            tensorboard_logger = TensorBoardLogger(
                 run_id=args["run_name"],
                 experiment_dir=args["train"]["data_dir"],
             )
+            has_remote_logger = args["neptune"] or args["wandb"]
+            logger = TensorBoardMirror(logger, tensorboard_logger) if has_remote_logger else tensorboard_logger
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
     if torch.distributed.is_initialized():

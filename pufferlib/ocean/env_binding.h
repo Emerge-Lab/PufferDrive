@@ -1359,8 +1359,8 @@ static PyObject *vec_set_agent_lane_goals(PyObject *self, PyObject *args) {
 }
 
 static PyObject *get_ground_truth_trajectories(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 7) {
-        PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 7 arguments");
+    if (PyTuple_Size(args) != 8) {
+        PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 8 arguments");
         return NULL;
     }
 
@@ -1394,8 +1394,13 @@ static PyObject *get_ground_truth_trajectories(PyObject *self, PyObject *args) {
     int *id_data = (int *) PyArray_DATA((PyArrayObject *) id_arr);
     int *scenario_id_data = (int *) PyArray_DATA((PyArrayObject *) scenario_id_arr);
 
+    if (PyArray_NDIM((PyArrayObject *) x_arr) != 2) {
+        PyErr_SetString(PyExc_ValueError, "trajectory arrays must be 2D [num_agents, num_timesteps]");
+        return NULL;
+    }
     c_get_global_ground_truth_trajectories(
         drive,
+        (int) PyArray_DIM((PyArrayObject *) x_arr, 1),
         x_data,
         y_data,
         z_data,
@@ -1450,9 +1455,20 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
     int *id_base = (int *) PyArray_DATA(id_array);
     int *scenario_id_base = (int *) PyArray_DATA(scenario_id_array);
 
-    // Get number of timesteps from array shape
-    npy_intp *x_shape = PyArray_DIMS(x_array);
-    int num_timesteps = x_shape[1]; // Second dimension for 2D arrays
+    PyArrayObject *trajectory_arrays[5] = {x_array, y_array, z_array, heading_array, valid_array};
+    npy_intp total_agent_count = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        total_agent_count += ((Drive *) vec->envs[i])->active_agent_count;
+    }
+    for (int k = 0; k < 5; k++) {
+        PyArrayObject *array = trajectory_arrays[k];
+        if (PyArray_NDIM(array) != 2 || PyArray_NDIM(x_array) != 2 || PyArray_DIM(array, 0) < total_agent_count
+            || PyArray_DIM(array, 1) != PyArray_DIM(x_array, 1)) {
+            PyErr_SetString(PyExc_ValueError, "trajectory arrays must share one 2D shape [num_agents, num_timesteps]");
+            return NULL;
+        }
+    }
+    int num_timesteps = (int) PyArray_DIM(x_array, 1);
 
     // Iterate through environments and write to correct offsets
     int agent_offset = 0; // Offset for 1D arrays (id, scenario_id)
@@ -1463,6 +1479,7 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
 
         c_get_global_ground_truth_trajectories(
             drive,
+            num_timesteps,
             &x_base[traj_offset],
             &y_base[traj_offset],
             &z_base[traj_offset],

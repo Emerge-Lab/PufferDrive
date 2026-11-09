@@ -182,3 +182,19 @@ def test_dead_worker_raises_instead_of_hanging(monkeypatch):
             vecenv.recv()
     finally:
         vecenv.close()
+
+
+class SeedRecordingEnv(MinimalEnv):
+    def __init__(self, buf=None, seed=0):
+        self.constructor_seed = seed
+        super().__init__(buf=buf, seed=seed)
+
+
+def test_make_forwards_seed_to_backend():
+    constructor_seeds = {}
+    for vec_seed in (1, 2):
+        vecenv = pufferlib.vector.make(SeedRecordingEnv, backend="Serial", num_envs=2, seed=vec_seed)
+        constructor_seeds[vec_seed] = [env.constructor_seed for env in vecenv.envs]
+        vecenv.close()
+    assert constructor_seeds[1] != constructor_seeds[2]
+    assert len(set(constructor_seeds[1])) == 2

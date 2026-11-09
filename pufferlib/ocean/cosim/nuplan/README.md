@@ -214,7 +214,7 @@ parking strip have their baseline 1.7 m from one boundary and 4.3 m from the oth
 believed it had 3 m of room towards the oncoming lane. Eval hack `symmetric_lane_widths` (env
 `SYMMETRIC_LANE_WIDTHS`, script 9 sets it): the planner rewrites every lane width as twice the
 centerline's distance to the nearer GPKG boundary (`nuplan_bridge.symmetric_lane_widths`) and the
-shadow env loads that copy from `bin_cache_dir` (`<city>.symw.bin`, one rewrite per city). No bin
+shadow env loads that copy from `bin_cache_dir` (`<city>.<size-mtime>.symw.bin`, one rewrite per city). No bin
 regeneration needed; 123Drive's `compute_lane_widths` writes the same definition since 2026-10-29.
 
 Do NOT use `nuplan_bridge.write_drive_bin` for city bins — it writes an empty

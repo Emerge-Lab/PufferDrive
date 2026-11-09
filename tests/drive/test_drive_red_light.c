@@ -74,7 +74,6 @@ static int test_stationary_straddle_flags(void) {
     Agent agent = drive_test_driving_agent(1.5f, 1.5f, 0.0f);
     env.agents = &agent;
     EXPECT_TRUE(check_red_light_violation(&env, 0));
-    EXPECT_TRUE(check_agent_on_stop_line(&env, &agent, false));
     return 0;
 }
 

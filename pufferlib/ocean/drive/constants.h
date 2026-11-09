@@ -277,6 +277,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 64
 #define ROAD_QUERY_CELL_COUNT 25 // 5x5 cell neighborhood
+#define ROAD_QUERY_HALF_CELLS 2  // cells on each side of the window's centre cell
 #define ROAD_QUERY_ENTITY_COUNT (MAX_ENTITIES_PER_CELL * ROAD_QUERY_CELL_COUNT)
 #define OBS_ENTITY_NONE 0 // grid entity not sampled for road observations
 #define OBS_ENTITY_LANE 1

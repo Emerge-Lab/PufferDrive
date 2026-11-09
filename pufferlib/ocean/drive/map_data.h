@@ -123,6 +123,59 @@ static int append_cell_lane_query_entries(const Drive *env, int cell_idx, LaneQu
     return count;
 }
 
+// Counts (and, with reach_entries, writes) one road-edge segment into every cell whose window it reaches from outside.
+static void file_reaching_edge_segment(
+    Drive *env,
+    int entity_idx,
+    int seg_idx,
+    int *cell_cursor,
+    LaneQueryEntry *reach_entries) {
+    const GridMap *grid = env->grid_map;
+    const RoadMapElement *element = &env->road_elements[entity_idx];
+    float x0 = element->x[seg_idx], y0 = element->y[seg_idx];
+    float x1 = element->x[seg_idx + 1], y1 = element->y[seg_idx + 1];
+    // the grid files a segment under its midpoint cell only, the window of every cell around that one lists it
+    int filed_cell_idx = get_grid_index(env, (x0 + x1) / 2, (y0 + y1) / 2);
+    int filed_x = filed_cell_idx % grid->grid_cols;
+    int filed_y = filed_cell_idx / grid->grid_cols;
+    int first_x = (int) ((fminf(x0, x1) - grid->top_left_x) / GRID_CELL_SIZE) - ROAD_QUERY_HALF_CELLS;
+    int last_x = (int) ((fmaxf(x0, x1) - grid->top_left_x) / GRID_CELL_SIZE) + ROAD_QUERY_HALF_CELLS;
+    int first_y = (int) ((fminf(y0, y1) - grid->bottom_right_y) / GRID_CELL_SIZE) - ROAD_QUERY_HALF_CELLS;
+    int last_y = (int) ((fmaxf(y0, y1) - grid->bottom_right_y) / GRID_CELL_SIZE) + ROAD_QUERY_HALF_CELLS;
+    first_x = first_x < 0 ? 0 : first_x;
+    first_y = first_y < 0 ? 0 : first_y;
+    last_x = last_x >= grid->grid_cols ? grid->grid_cols - 1 : last_x;
+    last_y = last_y >= grid->grid_rows ? grid->grid_rows - 1 : last_y;
+    int span_x = last_x - first_x + 1;
+    int span_y = last_y - first_y + 1;
+    if (span_x <= 0 || span_y <= 0) {
+        return;
+    }
+    for (int o = 0; o < span_x * span_y; o++) {
+        int cell_x = first_x + o % span_x;
+        int cell_y = first_y + o / span_x;
+        if (abs(cell_x - filed_x) <= ROAD_QUERY_HALF_CELLS && abs(cell_y - filed_y) <= ROAD_QUERY_HALF_CELLS) {
+            continue;
+        }
+        int cell_idx = cell_y * grid->grid_cols + cell_x;
+        if (reach_entries != NULL) {
+            reach_entries[cell_cursor[cell_idx]] = (LaneQueryEntry) {entity_idx, seg_idx, seg_idx};
+        }
+        cell_cursor[cell_idx]++;
+    }
+}
+
+static void file_reaching_edge_segments(Drive *env, int *cell_cursor, LaneQueryEntry *reach_entries) {
+    for (int i = 0; i < env->num_road_elements; i++) {
+        if (!is_road_edge(env->road_elements[i].type)) {
+            continue;
+        }
+        for (int j = 0; j < env->road_elements[i].segment_size - 1; j++) {
+            file_reaching_edge_segment(env, i, j, cell_cursor, reach_entries);
+        }
+    }
+}
+
 // Per cell, the road-query candidates of its 5x5 window in grid order, built once per map.
 static void cache_lane_query_lists(Drive *env) {
     GridMap *grid = env->grid_map;
@@ -134,20 +187,43 @@ static void cache_lane_query_lists(Drive *env) {
     if (entries == NULL || grid->lane_query_offset == NULL || grid->window_entity_count == NULL) {
         raise_error_with_message(ERROR_MEMORY_ALLOCATION, "Failed to allocate the road query cache");
     }
+    // Long road edges reach windows that do not list them: per cell, [reach_offset[c], reach_offset[c + 1]) adds those
+    int *reach_offset = (int *) calloc(cell_count + 1, sizeof(int));
+    int *reach_cursor = (int *) calloc(cell_count, sizeof(int));
+    if (reach_offset == NULL || reach_cursor == NULL) {
+        raise_error_with_message(ERROR_MEMORY_ALLOCATION, "Failed to allocate the road edge reach index");
+    }
+    file_reaching_edge_segments(env, reach_cursor, NULL);
+    for (int cell_idx = 0; cell_idx < cell_count; cell_idx++) {
+        reach_offset[cell_idx + 1] = reach_offset[cell_idx] + reach_cursor[cell_idx];
+        reach_cursor[cell_idx] = reach_offset[cell_idx];
+    }
+    LaneQueryEntry *reach_entries = (LaneQueryEntry *) malloc((reach_offset[cell_count] + 1) * sizeof(LaneQueryEntry));
+    if (reach_entries == NULL) {
+        raise_error_with_message(ERROR_MEMORY_ALLOCATION, "Failed to allocate the road edge reach entries");
+    }
+    file_reaching_edge_segments(env, reach_cursor, reach_entries);
+
     int count = 0;
     for (int cell_idx = 0; cell_idx < cell_count; cell_idx++) {
         grid->lane_query_offset[cell_idx] = count;
         int window_count = road_query_window_entity_count(grid, cell_idx);
         grid->window_entity_count[cell_idx] = window_count;
-        if (count + window_count > capacity) {
-            capacity = 2 * (count + window_count);
+        int reach_count = reach_offset[cell_idx + 1] - reach_offset[cell_idx];
+        if (count + window_count + reach_count > capacity) {
+            capacity = 2 * (count + window_count + reach_count);
             entries = (LaneQueryEntry *) realloc(entries, capacity * sizeof(LaneQueryEntry));
             if (entries == NULL) {
                 raise_error_with_message(ERROR_MEMORY_ALLOCATION, "Failed to grow the road query cache");
             }
         }
         count = append_cell_lane_query_entries(env, cell_idx, entries, count);
+        memcpy(&entries[count], &reach_entries[reach_offset[cell_idx]], reach_count * sizeof(LaneQueryEntry));
+        count += reach_count;
     }
+    free(reach_offset);
+    free(reach_cursor);
+    free(reach_entries);
     grid->lane_query_offset[cell_count] = count;
     grid->lane_query_pool = entries;
 }

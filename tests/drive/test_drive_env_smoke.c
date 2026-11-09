@@ -38,6 +38,59 @@ static int test_carla_gigaflow_load_step_log(void) {
     return run_case("carla-gigaflow", drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32);
 }
 
+static int test_failed_init_spawn_keeps_policy_slot(void) {
+    // more agents than Town01 has room for: failed spawns stay addressable, removed and masked
+    int requested_agent_count = 3000;
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, requested_agent_count, 0);
+    EXPECT_EQ_INT(env.active_agent_count, requested_agent_count);
+    int removed_agent_count = 0;
+    for (int i = 0; i < env.active_agent_count; i++) {
+        Agent *agent = &env.agents[env.active_agent_indices[i]];
+        removed_agent_count += agent->removed;
+        EXPECT_EQ_INT(agent->sim_valid, !agent->removed);
+        EXPECT_EQ_INT(env.masks[i], !agent->removed);
+    }
+    EXPECT_TRUE(removed_agent_count > 0);
+    free_allocated(&env);
+    return 0;
+}
+
+static int test_ground_truth_trajectories_fit_the_buffer_width(void) {
+    Drive env = drive_test_make_env(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1, 0);
+    int agent_count = env.active_agent_count;
+    Agent *agent = &env.agents[env.active_agent_indices[0]];
+    int buffer_widths[2] = {agent->trajectory_size / 2, agent->trajectory_size + 7};
+    for (int w = 0; w < 2; w++) {
+        int num_timesteps = buffer_widths[w];
+        int cell_count = agent_count * num_timesteps;
+        float *xyz_heading = (float *) calloc(4 * cell_count, sizeof(float));
+        int *valid = (int *) malloc(cell_count * sizeof(int));
+        int *ids = (int *) calloc(2 * agent_count, sizeof(int));
+        for (int k = 0; k < cell_count; k++) {
+            valid[k] = -1;
+        }
+        c_get_global_ground_truth_trajectories(
+            &env,
+            num_timesteps,
+            xyz_heading,
+            xyz_heading + cell_count,
+            xyz_heading + 2 * cell_count,
+            xyz_heading + 3 * cell_count,
+            valid,
+            ids,
+            ids + agent_count);
+        for (int t = 0; t < num_timesteps; t++) {
+            int expected_valid = t < agent->trajectory_size ? agent->log_valid[t] : 0;
+            EXPECT_EQ_INT(valid[t], expected_valid);
+        }
+        free(xyz_heading);
+        free(valid);
+        free(ids);
+    }
+    free_allocated(&env);
+    return 0;
+}
+
 static int test_nuplan_gigaflow_load_step_log(void) {
     return run_case("nuplan-gigaflow", drive_nuplan_map(), SIMULATION_MODE_GIGAFLOW, 32);
 }
@@ -256,5 +309,7 @@ int main(void) {
     RUN_TEST(test_short_early_reset_flags_and_logs);
     RUN_TEST(test_stagger_first_episode);
     RUN_TEST(test_eval_spawn_keeps_edge_clearance);
+    RUN_TEST(test_failed_init_spawn_keeps_policy_slot);
+    RUN_TEST(test_ground_truth_trajectories_fit_the_buffer_width);
     return test_summary(failures);
 }

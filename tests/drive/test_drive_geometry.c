@@ -182,92 +182,6 @@ static int test_swept_line_box_stationary_collinear_segment(void) {
     return 0;
 }
 
-static int test_stop_line_red_light_gating(void) {
-    Drive env = {0};
-    TrafficControlElement tc = {0};
-    int red_state[1] = {TRAFFIC_CONTROL_STATE_RED};
-    int state[1] = {TRAFFIC_CONTROL_STATE_RED};
-    int controlled_lane[1] = {1};
-    Agent agent = drive_test_agent(1.0f, 0.0f, 0.0f);
-
-    agent.prev_x = -3.0f;
-    tc.type = TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT;
-    tc.state_size = 1;
-    tc.states = state;
-    tc.stop_line[0] = 0.0f;
-    tc.stop_line[1] = -1.0f;
-    tc.stop_line[3] = 0.0f;
-    tc.stop_line[4] = 1.0f;
-    tc.heading = 0.0f;
-    tc.num_controlled_lanes = 1;
-    tc.controlled_lanes = controlled_lane;
-    env.num_traffic_elements = 1;
-    env.traffic_elements = &tc;
-    env.timestep = 0;
-
-    EXPECT_TRUE(check_agent_on_stop_line(&env, &agent, false));
-
-    state[0] = TRAFFIC_CONTROL_STATE_GREEN;
-    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
-    state[0] = TRAFFIC_CONTROL_STATE_YELLOW;
-    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
-    EXPECT_TRUE(check_agent_on_stop_line(&env, &agent, true)); // yellow counts when spawn-mode flag is set
-    state[0] = TRAFFIC_CONTROL_STATE_OFF;
-    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
-    state[0] = TRAFFIC_CONTROL_STATE_RED;
-
-    env.timestep = 1;
-    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
-    env.timestep = 0;
-
-    controlled_lane[0] = 2;
-    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
-    controlled_lane[0] = 1;
-
-    agent = drive_test_agent(1.0f, 0.0f, (float) M_PI);
-    agent.prev_x = -3.0f;
-    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
-
-    agent = drive_test_agent(11.0f, 0.0f, 0.0f);
-    agent.prev_x = -1.0f;
-    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
-
-    agent = drive_test_agent(1.0f, 1.4f, 0.0f);
-    agent.prev_x = -3.0f;
-    agent.prev_y = 1.4f;
-    agent.sim_width = 0.4f;
-    update_agent_radius(&agent);
-    tc.states = red_state;
-    EXPECT_TRUE(check_agent_on_stop_line(&env, &agent, false));
-
-    return 0;
-}
-
-static int test_stop_line_stationary_on_red(void) {
-    Drive env = {0};
-    TrafficControlElement tc = {0};
-    int state[1] = {TRAFFIC_CONTROL_STATE_RED};
-    int controlled_lane[1] = {1};
-    Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
-
-    tc.type = TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT;
-    tc.state_size = 1;
-    tc.states = state;
-    tc.stop_line[0] = 0.0f;
-    tc.stop_line[1] = -1.0f;
-    tc.stop_line[3] = 0.0f;
-    tc.stop_line[4] = 1.0f;
-    tc.heading = 0.0f;
-    tc.num_controlled_lanes = 1;
-    tc.controlled_lanes = controlled_lane;
-    env.num_traffic_elements = 1;
-    env.traffic_elements = &tc;
-    env.timestep = 0;
-
-    EXPECT_TRUE(check_agent_on_stop_line(&env, &agent, false));
-    return 0;
-}
-
 int main(void) {
     int failures = 0;
     RUN_TEST(test_heading_normalization);
@@ -280,7 +194,5 @@ int main(void) {
     RUN_TEST(test_segment_aabb_cases);
     RUN_TEST(test_swept_line_box_cases);
     RUN_TEST(test_swept_line_box_stationary_collinear_segment);
-    RUN_TEST(test_stop_line_red_light_gating);
-    RUN_TEST(test_stop_line_stationary_on_red);
     return test_summary(failures);
 }

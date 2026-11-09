@@ -24,7 +24,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=${RUN_NAME:-k_scaled_0072_${SEED}}
+export RUN_NAME=${RUN_NAME:-k_scaled_0075_${SEED}}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -54,7 +54,7 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # Blocking env workers: kesai nodes give 60 threads per rank (--exclusive); vec.num_envs=60 is one worker per thread (0053/0059,
 # ~25 M SPS vs ~21.5 M with 32). 0063 ran 256 workers per rank (4.3x oversubscribed, 75 GB per GPU): +18% SPS from the worker count
 # but ~55% sample efficiency on goals/speed at 1e12 steps, so 60 stays the default. GPU memory ~21 GB fixed + 0.22 GB per 1024-agent worker (fp16).
-# A second instance needs its own RUN_NAME (plain VAR=... sbatch did not propagate on kesai): sbatch --export=ALL,RUN_NAME=k_scaled_0072_1000 scripts/kesai/3_train_64GPU_multinode_slurm.sh
+# A second instance needs its own RUN_NAME (plain VAR=... sbatch did not propagate on kesai): sbatch --export=ALL,RUN_NAME=k_scaled_0075_1000 scripts/kesai/3_train_64GPU_multinode_slurm.sh
 # 0067 = 0066 (the 0059 config, puffer_drive.yaml defaults, float16 rollout buffer, static footprint red light test) with the
 # training light cycle green U(3,10) / yellow U(2,3) s instead of GIGAFLOW's U(1,10) / U(1.5,2.25) and no training rear margin:
 # 0066's training red-light rate sat at 3.7% because committed slow crossings could not clear CARLA's tail band within a
@@ -71,6 +71,9 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # crossers from either kerb, 20% standers, 15% kerb walkers, 10% kerb steppers. 0071 waited for every standing or passing
 # pedestrian (longest6 v1 timeouts at stuck walkers, nuPlan CLS -0.02 / -0.035). Ratio 0.1 -> 0.3 keeps the pop-in crossings
 # per car where 0071 had them (1.8 per episode); the walker slots are visible 48% of the time.
+# 0075 = 0072 with 0074's per-rank minibatch (393216, fills the GPU; 0072 ran 131072) on the 2026-11-09 audit fixes: map
+# layouts differ per rank and seed, failed init spawns keep their slot, light phases round up to whole steps (yellow
+# 2.1-3.0 s at dt 0.3), offroad is detected up to 40 m/s, spawns use the red-light detector, reset no longer consumes goals.
 # Other overrides are run identity, logging, maps and hardware.
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
@@ -95,8 +98,8 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     train.total_timesteps=1000000000000 \
     vec.num_envs=128 \
     train.rollout_dtype=float16 \
-    train.max_minibatch_size=131072 \
-    train.minibatch_size=131072 \
+    train.max_minibatch_size=393216 \
+    train.minibatch_size=393216 \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True

@@ -378,9 +378,15 @@ class PufferDrivePlanner(AbstractPlanner):
         except AttributeError:
             return map_api._maps_db.load_vector_layer(map_api.map_name, layer_name)
 
+    @staticmethod
+    def _bin_fingerprint(bin_path: Path) -> str:
+        """Size and mtime of a bin; files derived from it carry this, so a regenerated bin never reuses them."""
+        stat = bin_path.stat()
+        return f"{stat.st_size:x}-{stat.st_mtime_ns:x}"
+
     def _symmetric_width_bin(self, city_bin: Path, tf: nb.NuPlanTransform) -> Path:
         """Cached copy of the city bin with every lane width rewritten from the GPKG boundaries."""
-        cached = self._bin_cache_dir / f"{city_bin.stem}.symw.bin"
+        cached = self._bin_cache_dir / f"{city_bin.stem}.{self._bin_fingerprint(city_bin)}.symw.bin"
         if cached.exists():
             return cached
         from nuplan.common.actor_state.state_representation import Point2D
@@ -405,10 +411,12 @@ class PufferDrivePlanner(AbstractPlanner):
         the bin's lane centerlines onto the GPKG baseline paths. Cached in a
         sidecar json — one registration per city, ever."""
         sidecar = bin_path.with_suffix(".origin.json")
+        fingerprint = self._bin_fingerprint(bin_path)
         cache = sidecar if sidecar.exists() else self._bin_cache_dir / sidecar.name
-        if cache.exists():
-            origin = json.loads(cache.read_text())["origin"]
-            return nb.NuPlanTransform(origin[0], origin[1])
+        cached = json.loads(cache.read_text()) if cache.exists() else None
+        # sidecars written before the fingerprint existed carry no "source" and stay trusted
+        if cached is not None and cached.get("source", fingerprint) == fingerprint:
+            return nb.NuPlanTransform(cached["origin"][0], cached["origin"][1])
 
         if not len(stop_line_centers):
             raise RuntimeError(f"{bin_path}: no traffic elements to register the origin with")
@@ -423,7 +431,7 @@ class PufferDrivePlanner(AbstractPlanner):
                 f"{bin_path}: lane-geometry registration residual {resid:.2f} m — "
                 "bin does not match this city's GPKG map, refusing to guess the origin."
             )
-        payload = json.dumps({"origin": [float(t[0]), float(t[1])], "residual_m": resid})
+        payload = json.dumps({"origin": [float(t[0]), float(t[1])], "residual_m": resid, "source": fingerprint})
         for target in (sidecar, self._bin_cache_dir / sidecar.name):
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)

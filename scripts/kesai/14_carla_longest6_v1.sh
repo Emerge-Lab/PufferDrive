@@ -367,7 +367,8 @@ except Exception:
         sleep 5
     done
     if [ $up -ne 0 ]; then
-        pkill -9 -P "$server_pid" 2>/dev/null; kill -9 "$server_pid" 2>/dev/null
+        # reaped here: a dead unreaped server makes the next attempt's wait -n return at once and kill its evaluator
+        pkill -9 -P "$server_pid" 2>/dev/null; kill -9 "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null
         echo "[w$w gpu$gpu route$route_id${seed:+ s$seed}] last lines of $server_log:"; tail -n 20 "$server_log"
         return 1
     fi
