@@ -1,8 +1,8 @@
 #!/bin/bash
 # Run pufferlib/ocean/cosim/nuplan/planner.py under nuPlan's unmodified
 # closed-loop run_simulation.py: BOTH agent-reactivity challenges (nonreactive
-# log-replay + reactive IDM), with both debug videos enabled. See README.md
-# "How to run" and planner.py's module docstring.
+# log-replay + reactive IDM). See README.md "How to run" and planner.py's
+# module docstring.
 #
 # Usage (from a compute-node allocation's job id -- squeue -u $USER to find it):
 #   CKPT=/path/to/model_puffer_drive_xxxxxx.pt \
@@ -29,6 +29,10 @@
 #             session -- only worker=sequential has been exercised end-to-end
 #             (one scenario). If ray_distributed misbehaves here, retry with
 #             WORKER=sequential (much slower, but proven) while investigating.
+#   CALLBACKS  nuPlan simulation callbacks (default "[simulation_log_callback]": one
+#             msgpack.xz log per scenario). Add carl_visualization_callback for nuPlan's
+#             ground-truth .avi of every scenario; the tidy keeps the selected ones as
+#             details/videos/<token>.mp4.
 #   LIMIT_TOTAL_SCENARIOS  caps scenario_filter.limit_total_scenarios (unset =
 #             no cap, SPLIT's own scenario count applies). Handy for a quick
 #             sanity check before committing to the full SPLIT.
@@ -77,11 +81,11 @@
 #             COSIM_OBS_HTML_MAX_SCORE (default 0.9). infractions: only scenarios with an
 #             at-fault collision, drivable-area or driving-direction violation, or no
 #             progress. Every .replay.zlib is deleted after rendering (the pages embed them). 0: off.
-#   TIDY=1    scripts/eval/tidy_nuplan_run.py then flattens $GROUP to overview.csv, scenarios.csv, obs_html/
-#             and details/ (metrics, the aggregator table, config, nuPlan's log) and keeps the simulation
-#             logs and ground-truth videos (carl_visualization_callback's .avi, re-encoded to .mp4) of the
-#             scenarios COSIM_OBS_HTML selects (infractions when it is 0). TIDY=0 leaves nuPlan's
-#             simulation/<challenge>/<run_ts> tree with every log and video (45 GB per Val14 run).
+#   TIDY=1    scripts/eval/tidy_nuplan_run.py then flattens $GROUP to overview.csv, scenarios.csv, obs_html/,
+#             simulation_log/ (the logs of the scenarios COSIM_OBS_HTML selects, infractions when it is 0) and
+#             details/ (metrics, the aggregator table, hydra config, runner report; the selected scenarios'
+#             videos as .mp4 when carl_visualization_callback ran). TIDY=0 leaves nuPlan's
+#             simulation/<challenge>/<run_ts> tree with every log (2300 files in 2000 folders per Val14 run).
 if [ -z "$INSIDE_PUFFER_CONTAINER" ] && [ -f /share/apps/images/slurm-ib-bind-apptainer.sh ]; then
     source /share/apps/images/slurm-ib-bind-apptainer.sh
     export APPTAINERENV_PREPEND_PATH=/share/apps/apptainer/bin:$APPTAINERENV_PREPEND_PATH
@@ -171,7 +175,7 @@ for CHALLENGE in $CHALLENGES; do
         scenario_filter=$SPLIT \
         planner=pufferdrive_planner \
         planner.pufferdrive_planner.checkpoint_path="$CKPT" \
-        callback="${CALLBACKS:-[simulation_log_callback, carl_visualization_callback]}" \
+        callback="${CALLBACKS:-[simulation_log_callback]}" \
         main_callback="[time_callback, metric_file_callback, metric_aggregator_callback, csv_main_callback]" \
         hydra.searchpath="[pkg://pufferlib.ocean.cosim.nuplan.config, pkg://carl_nuplan.planning.script.config.common, pkg://carl_nuplan.planning.script.config.simulation, pkg://nuplan.planning.script.config.common, pkg://nuplan.planning.script.experiments]" \
         group="$GROUP" \

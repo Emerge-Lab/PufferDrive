@@ -43,12 +43,11 @@ INHERITED_PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puf
 export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${INHERITED_PYTHONPATH:+:$INHERITED_PYTHONPATH}
 cd "$PD" || exit 1
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
-# carl_visualization_callback renders with OpenCV, whose parallel_for pool defaults to the CPU count: 480 threads per
-# ray worker, 256 workers oversubscribing the node (80% CPU, load 1400, clock throttled) once videos start.
-export OPENCV_FOR_THREADS_NUM=1
 export COSIM_OBS_HTML=infractions  # obs replays (what the policy saw) only for collision/offroad/wrong-way/no-progress scenarios; all|failures|infractions|0
-# carl_visualization_callback: nuPlan ground-truth video per scenario; tidy keeps the selected ones in details/videos/
-export CALLBACKS="[simulation_log_callback, carl_visualization_callback]"
+# one simulation log per scenario; the tidy keeps those of the COSIM_OBS_HTML scenarios in simulation_log/. Adding
+# carl_visualization_callback renders nuPlan's ground-truth video of every scenario (1118 .avi, 14 GB, a matplotlib
+# frame per step; set OPENCV_FOR_THREADS_NUM=1 against its thread pool) for the few the tidy keeps as details/videos/.
+export CALLBACKS="[simulation_log_callback]"
 export WORKER=ray_distributed
 # Per-worker memory is small now (1 policy agent + partner slots, light buffers sized to the scenario), so this is CPU-bound.
 # 128 fits the 144-CPU scaleway nodes. A kesai RTX node gives the job 480 CPUs on 256 physical cores and a worker plateaus
@@ -147,7 +146,7 @@ fi
 [ -n "$EGO_ACCEL_CAP_MPS2" ] && ABLATION_TAG="${ABLATION_TAG}_acap${EGO_ACCEL_CAP_MPS2}"
 [ -n "$PARTNER_SPLIT_MAX_LENGTH_M" ] && ABLATION_TAG="${ABLATION_TAG}_split${PARTNER_SPLIT_MAX_LENGTH_M}"
 [ -n "$STANDSTILL_JERK_DEADBAND" ] && ABLATION_TAG="${ABLATION_TAG}_deadband${STANDSTILL_JERK_DEADBAND}"
-# results: the model's own eval folder, next to the PufferDrive benchmark evals (overview.csv, obs_html/, details/)
+# results: the model's own eval folder, next to the PufferDrive benchmark evals (overview.csv, scenarios.csv, obs_html/, simulation_log/, details/)
 export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}_${GOAL_SOURCE}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
 # NO_TRAIN skips the training-only CUDA extension (_C, never imported by the planner): the cp39 nuPlan env builds only

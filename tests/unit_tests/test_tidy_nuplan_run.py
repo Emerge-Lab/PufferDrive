@@ -1,5 +1,6 @@
-"""tidy_nuplan_run.py flattens a nuPlan run to overview.csv, scenarios.csv, obs_html/ and details/ and keeps the logs
-and videos of the selected scenarios only; nuplan_run_layout resolves the fresh and the tidied layout."""
+"""tidy_nuplan_run.py flattens a nuPlan run to overview.csv, scenarios.csv, obs_html/, simulation_log/ and details/
+and keeps the logs (and videos, when rendered) of the selected scenarios only; nuplan_run_layout resolves the fresh
+and the tidied layout."""
 
 import os
 import sys
@@ -42,7 +43,8 @@ def _aggregator_table():
     return pd.DataFrame(rows)
 
 
-def _write_run(group):
+def _write_run(group, videos=False):
+    """nuPlan's tree after a run with simulation_log_callback; videos=True adds carl_visualization_callback's .avi."""
     sim = group / "simulation" / f"{CHALLENGE}_pufferdrive" / TIMESTAMP
     aggregator = sim / "aggregator_metric"
     aggregator.mkdir(parents=True)
@@ -56,12 +58,14 @@ def _write_run(group):
     (sim / "metrics").mkdir()
     comfort = pd.DataFrame({"scenario_name": list(SCENARIOS), "metric_score": [0.0, 1.0, 1.0]})
     comfort.to_parquet(sim / "metrics" / "ego_is_comfortable.parquet")
-    (sim / "visualization").mkdir()
     for token in SCENARIOS:
         log_dir = sim / "simulation_log" / "PufferDrivePlanner" / "turn" / "log" / token
         log_dir.mkdir(parents=True)
         (log_dir / f"{token}.msgpack.xz").write_bytes(b"log " + token.encode())
-        (sim / "visualization" / f"{token}.avi").write_bytes(b"avi " + token.encode())
+    if videos:
+        (sim / "visualization").mkdir()
+        for token in SCENARIOS:
+            (sim / "visualization" / f"{token}.avi").write_bytes(b"avi " + token.encode())
     (sim / "code" / "hydra").mkdir(parents=True)
     for name in ("config.yaml", "overrides.yaml", "hydra.yaml"):
         (sim / "code" / "hydra" / name).write_text(name)
@@ -99,6 +103,7 @@ def test_layout_resolves_the_fresh_run(tmp_path):
     assert nuplan_run_layout.metrics_dir(tmp_path) == sim / "metrics"
     assert nuplan_run_layout.aggregated_metrics_csv(tmp_path).parent == sim / "aggregator_metric"
     assert nuplan_run_layout.scenarios_csv(tmp_path) == sim / "aggregator_metric" / "scenarios.csv"
+    assert nuplan_run_layout.simulation_log_dir(tmp_path) == sim / "simulation_log"
     assert set(nuplan_run_layout.simulation_logs(tmp_path)) == set(SCENARIOS)
 
 
@@ -106,19 +111,21 @@ def test_tidy_keeps_infractions_only(tmp_path, monkeypatch):
     _write_run(tmp_path)
     _run(tmp_path, monkeypatch=monkeypatch)
     details = tmp_path / "details"
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["details", "obs_html", "overview.csv", "scenarios.csv"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "details",
+        "obs_html",
+        "overview.csv",
+        "scenarios.csv",
+        "simulation_log",
+    ]
     assert sorted(p.name for p in details.iterdir()) == [
         "aggregated_metrics.csv",
         "config.yaml",
-        "log.txt",
         "metrics",
         "overrides.yaml",
         "runner_report.parquet",
-        "simulation_log",
-        "videos",
     ]
-    assert [p.name for p in (details / "simulation_log").iterdir()] == [f"{COLLIDING}.msgpack.xz"]
-    assert [p.name for p in (details / "videos").iterdir()] == [f"{COLLIDING}.mp4"]
+    assert [p.name for p in (tmp_path / "simulation_log").iterdir()] == [f"{COLLIDING}.msgpack.xz"]
     assert (details / "metrics" / "ego_is_comfortable.parquet").is_file()
     assert (tmp_path / "overview.csv").read_text() == "CLS\n0.5\n"
     # the replay of the rendered page goes, the replay without a page stays
@@ -131,14 +138,24 @@ def test_tidy_keeps_infractions_only(tmp_path, monkeypatch):
     assert nuplan_run_layout.metrics_dir(tmp_path) == details / "metrics"
     assert nuplan_run_layout.aggregated_metrics_csv(tmp_path) == details / "aggregated_metrics.csv"
     assert nuplan_run_layout.scenarios_csv(tmp_path) == tmp_path / "scenarios.csv"
+    assert nuplan_run_layout.simulation_log_dir(tmp_path) == tmp_path / "simulation_log"
     assert list(nuplan_run_layout.simulation_logs(tmp_path)) == [COLLIDING]
 
 
-def test_tidy_failures_mode_keeps_low_scores(tmp_path, monkeypatch):
-    _write_run(tmp_path)
+def test_tidy_failures_mode_keeps_low_scores_and_their_videos(tmp_path, monkeypatch):
+    _write_run(tmp_path, videos=True)
     _run(tmp_path, "--keep", "failures", monkeypatch=monkeypatch)
     assert set(nuplan_run_layout.simulation_logs(tmp_path)) == {COLLIDING, SLOW}
     assert sorted(p.stem for p in (tmp_path / "details" / "videos").iterdir()) == sorted([COLLIDING, SLOW])
+    assert not (tmp_path / "simulation").exists()
+
+
+def test_layout_resolves_a_run_tidied_into_details_before_2026_11(tmp_path):
+    old_log_dir = tmp_path / "details" / "simulation_log"
+    old_log_dir.mkdir(parents=True)
+    (old_log_dir / f"{COLLIDING}.msgpack.xz").write_bytes(b"log")
+    assert nuplan_run_layout.simulation_log_dir(tmp_path) == old_log_dir
+    assert list(nuplan_run_layout.simulation_logs(tmp_path)) == [COLLIDING]
 
 
 def test_tidy_leaves_unknown_files_and_reports_them(tmp_path, monkeypatch, capsys):

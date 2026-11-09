@@ -164,15 +164,20 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   `s<score>_<flags>_<type>_<token>.html`, worst first). Every `.replay.zlib` is deleted after
   rendering: a page embeds its replay, `scripts/eval/render_obs_html.py` re-renders pages from
   themselves and `pufferlib.viz.read_replay_zlib` reads a page like a `.replay.zlib`.
-- nuPlan ground truth: `carl_visualization_callback` in `CALLBACKS`, one `.avi` per scenario.
+- nuPlan ground-truth videos are opt-in: `CALLBACKS="[simulation_log_callback, carl_visualization_callback]"`
+  renders one `.avi` per scenario (every step of all 1118 scenarios through matplotlib, 14 GB, plus a frame-shape
+  print per step in the job log) for the few the tidy keeps. Off since 2026-11-09: the kept simulation logs
+  render the same view offline (`analyze_nuplan_cosim.py`, CaRL's `render_simulation_log`).
 - After the run `scripts/eval/tidy_nuplan_run.py` (runner env `TIDY`, default on) flattens `$GROUP` to
-  `overview.csv` (CLS, sub-metrics, loss importance), `scenarios.csv` (per scenario, worst first), `obs_html/`
-  and `details/` (`aggregated_metrics.csv`, `metrics/` parquets, `config.yaml`, `overrides.yaml`, `log.txt`,
-  `runner_report.parquet`, the SLURM log, and `simulation_log/<token>.msgpack.xz` + `videos/<token>.mp4` of
-  the scenarios `COSIM_OBS_HTML` selects). A Val14 run shrinks from 45 GB and 2300 files to ~0.1 GB. The
-  planner no longer pickles its policy into the simulation logs (28 MB -> 0.2 MB each); `--strip-planner`
-  rewrites the kept logs of older runs. `scripts/eval/nuplan_run_layout.py` resolves both layouts for
-  `compare_nuplan_evals.py`, `nuplan_comfort_breakdown.py`, `analyze_nuplan_cosim.py` and the renderer.
+  `overview.csv` (CLS, sub-metrics, loss importance), `scenarios.csv` (per scenario, worst first), `obs_html/`,
+  `simulation_log/<token>.msgpack.xz` of the scenarios `COSIM_OBS_HTML` selects, and `details/`
+  (`aggregated_metrics.csv`, `metrics/` parquets, `config.yaml`, `overrides.yaml`, `runner_report.parquet`, the
+  SLURM log, and `videos/<token>.mp4` of the kept scenarios when the video callback ran). A Val14 run shrinks
+  from 2300 files in 2000 folders (45 GB with videos) to ~220 files in 4 folders and ~0.2 GB for ~100 flagged
+  scenarios. The planner no longer pickles its policy into the simulation logs (28 MB -> 0.2 MB each);
+  `--strip-planner` rewrites the kept logs of older runs. `scripts/eval/nuplan_run_layout.py` resolves both
+  layouts (and the `details/simulation_log/` of runs tidied before 2026-11-09) for `compare_nuplan_evals.py`,
+  `nuplan_comfort_breakdown.py`, `analyze_nuplan_cosim.py` and the renderer.
 
 ## How to run
 
