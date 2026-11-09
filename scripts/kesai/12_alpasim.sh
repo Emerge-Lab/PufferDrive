@@ -36,6 +36,9 @@
 #   N_SCENES=2 sbatch --gres gpu:1 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
+# 3_train / 7_eval submit this eval from inside an array job and sbatch hands its SLURM_ARRAY_* down: the wizard then
+# splits the scenes as if this were array task N and skips the aggregation (k_scaled_0074_2000: no official score)
+unset SLURM_ARRAY_TASK_COUNT SLURM_ARRAY_TASK_ID SLURM_ARRAY_TASK_MIN SLURM_ARRAY_TASK_MAX SLURM_ARRAY_JOB_ID
 
 TOPOLOGY=${TOPOLOGY:-}  # empty = from the GPU count below: 8gpu_64rollouts, 2gpu or 1gpu
 N_SCENES=${N_SCENES:-0}  # 0 = the whole SCENE_LIST
@@ -47,7 +50,7 @@ GOAL_RADIUS_M=2      # goal arrival radius Damiano's reference evals use; the te
 VRU_SIZE_PAD_M=0.8   # added to the length and width of every pedestrian and two-wheeler box the teacher sees; 0 = true boxes
 PARTNER_SPLIT_LENGTH_M=7  # actors longer than this (training max 7 m) reach the teacher as ceil(length / this) touching pieces; 0 = one box
 RENDER_VIDEO=0       # one mp4 per scene; 1 also streams the teacher BEV and makes every policy step ~5x slower
-OBS_REPLAY=1         # PufferDrive observation replay html per scene -> $OUT/obs_replays
+OBS_REPLAY=imperfect # replay pages in $OUT/obs_html: imperfect (score < 1) | failed (AlpaSim's failed scenes) | all | 0 (no replays)
 CAM_W=640            # 16:9 render size; the teacher never sees the cameras
 CAM_H=360
 SIM_TIMEOUT_S=3600   # per batch of PARALLEL scenes
@@ -81,6 +84,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 [ -n "$CKPT" ] || { echo "no checkpoint in $RUN_DIR (final_model.pt or models/model_*.pt)"; exit 1; }
 case "$KEEP_ROLLOUT_LOGS" in all|imperfect|failed|none) ;; *) echo "KEEP_ROLLOUT_LOGS must be all, imperfect, failed or none, got $KEEP_ROLLOUT_LOGS"; exit 1 ;; esac
+case "$OBS_REPLAY" in 1) OBS_REPLAY=imperfect ;; 0|imperfect|failed|all) ;; *) echo "OBS_REPLAY must be 0, 1, imperfect, failed or all, got $OBS_REPLAY"; exit 1 ;; esac
 for path in "$CKPT" "$ALPAGYM_PY" "$ALPASIM_ROOT/pyproject.toml" "$BINS/scene_manifest.jsonl" "$USDZ_DIR" ${SCENE_LIST:+"$SCENE_LIST"}; do
     [ -r "$path" ] || { echo "missing or not readable: $path"; exit 1; }
 done
@@ -278,8 +282,8 @@ if [ "$CONTAINER_RUNTIME" != docker ]; then
     fi
 fi
 [ "$RENDER_VIDEO" = "1" ] && RENDER_VIDEO_FLAG=true || RENDER_VIDEO_FLAG=false
-[ "$OBS_REPLAY" = "1" ] && OBS_REPLAY_FLAG=true || OBS_REPLAY_FLAG=false
-echo "${#SCENES[@]} scenes, $TOPOLOGY with $PARALLEL in flight on $CONTAINER_RUNTIME; full log: $OUT/evaluate.log (logs/ once the run is tidied)"
+[ "$OBS_REPLAY" != "0" ] && OBS_REPLAY_FLAG=true || OBS_REPLAY_FLAG=false
+echo "${#SCENES[@]} scenes, $TOPOLOGY with $PARALLEL in flight on $CONTAINER_RUNTIME; full log: $OUT/evaluate.log (details/ once the run is tidied)"
 # the teacher serves 2 x PARALLEL sessions from one process: one BLAS/OpenMP thread each, or torch spins every core of the node
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 cd "$ALPAGYM_ROOT" || exit 1
@@ -357,14 +361,14 @@ if [ $EVAL_STATUS -ne 0 ]; then
 fi
 # the stack is done: take it down while docker-compose.yaml exists, the tidy deletes it
 cleanup
-# results.txt, obs_replays/, logs/, alpasim/ (+ videos/); container INFO lines stay in evaluate.log for debugging and failed runs
+# results.txt, run_info.txt, obs_html/, details/ (+ videos/); container INFO lines stay in the logs for debugging and failed runs
 TIDY_FLAGS=""
 { [ "$ALPASIM_LOG_LEVEL" = "INFO" ] || [ $EVAL_STATUS -ne 0 ]; } && TIDY_FLAGS="--keep_container_info"
 "$ALPAGYM_PY" "$PD/scripts/eval/tidy_alpasim_run.py" "$OUT" --keep_rollout_logs "$KEEP_ROLLOUT_LOGS" $TIDY_FLAGS || echo "tidy failed"
-# score-named pages with the AlpaSim score panel + index.html gallery, as 9_nuPlan.sh and 11_carla_longest6_v2.sh
-if [ -d "$OUT/obs_replays" ] && [ -f "$OUT/alpasim/results-summary.json" ]; then
-    "$ALPAGYM_PY" "$PD/scripts/eval/render_alpasim_obs_html.py" "$OUT" --prune || echo "obs replay gallery failed"
+# score-named pages of the OBS_REPLAY scenes with the AlpaSim score panel + index.html gallery, as 9_nuPlan.sh and 11_carla_longest6_v2.sh
+if [ -d "$OUT/obs_html" ] && [ -f "$OUT/details/results-summary.json" ]; then
+    "$ALPAGYM_PY" "$PD/scripts/eval/render_alpasim_obs_html.py" "$OUT" --select "$OBS_REPLAY" --prune || echo "obs replay gallery failed"
 fi
-echo "results -> $OUT/results.txt; obs replays -> $OUT/obs_replays/index.html; logs -> $OUT/logs; per-scene scores + per-step metrics -> $OUT/alpasim"
+echo "results -> $OUT/results.txt; obs replays -> $OUT/obs_html/index.html; logs, per-scene scores + per-step metrics -> $OUT/details"
 echo "Done -> $OUT"
 exit $EVAL_STATUS
