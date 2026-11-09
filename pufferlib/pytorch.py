@@ -126,6 +126,17 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
+def clean_state_key(key):
+    prefixes = ("module.", "_orig_mod.")
+    while key.startswith(prefixes):
+        key = key.split(".", 1)[1]
+    return key
+
+
+def clean_policy_state_dict(state_dict):
+    return {clean_state_key(k): v for k, v in state_dict.items()}
+
+
 # taken from torch.distributions.Categorical
 def log_prob(logits, value):
     value = value.long().unsqueeze(-1)

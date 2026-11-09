@@ -148,18 +148,6 @@ GOAL_LANE_DEBUG_HEADER = (
 )
 
 
-def clean_policy_state_dict(state_dict):
-    """Strip torch.compile / DDP prefixes (wandb, neptune, the _C kernel, ...)
-    from the leaderboard's evaluation environment."""
-
-    def clean(key):
-        while key.startswith(("module.", "_orig_mod.")):
-            key = key.split(".", 1)[1]
-        return key
-
-    return {clean(k): v for k, v in state_dict.items()}
-
-
 def resolve_checkpoint(path_to_conf_file):
     """(checkpoint_path, config_dict) from a .pt file or an experiment dir."""
     import yaml
@@ -333,11 +321,11 @@ class ShadowEgo:
 
         import torch
 
+        import pufferlib.ensemble
         import pufferlib.ocean.torch as drive_torch
 
-        policy_state_dict = clean_policy_state_dict(
-            torch.load(self.checkpoint, map_location=self.device, weights_only=False)
-        )
+        checkpoint = torch.load(self.checkpoint, map_location=self.device, weights_only=False)
+        policy_state_dict = pufferlib.ensemble.member_state_dicts(checkpoint)[0]
         env_for_policy = self.env
         self._boundary_feat_ckpt = None
         bw = policy_state_dict.get("actor_backbone.boundary_encoder.0.weight")
@@ -357,11 +345,12 @@ class ShadowEgo:
         policy_cls = getattr(drive_torch, self.cfg.get("policy_name", "Drive"))
         # pre-3.0 checkpoints keep action_type only in the env section
         self.cfg["policy"].setdefault("action_type", self.cfg["env"]["action_type"])
-        self.policy = policy_cls(env_for_policy, **self.cfg["policy"]).to(self.device)
-        self.policy.load_state_dict(policy_state_dict)
+        policy = policy_cls(env_for_policy, **self.cfg["policy"]).to(self.device)
+        self.policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint)
         self.policy.eval()
         print(
-            f"[puffer_agent] loaded policy from {self.checkpoint} (obs partner slots {self.env.obs_slots_partners_n})"
+            f"[puffer_agent] loaded {pufferlib.ensemble.describe_policy(self.policy)} from {self.checkpoint} "
+            f"(obs partner slots {self.env.obs_slots_partners_n})"
         )
 
     def init_route(self, route):

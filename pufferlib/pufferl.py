@@ -45,6 +45,8 @@ import pufferlib.sweep
 import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
+import pufferlib.ensemble
+from pufferlib.pytorch import clean_policy_state_dict
 from pufferlib.config_schema import (
     MAX_C_SEED,
     normalize_puffer_drive_config,
@@ -118,17 +120,6 @@ def is_cuda_device(device):
 
 def base_policy(policy):
     return policy.module if hasattr(policy, "module") else policy
-
-
-def clean_state_key(key):
-    prefixes = ("module.", "_orig_mod.")
-    while key.startswith(prefixes):
-        key = key.split(".", 1)[1]
-    return key
-
-
-def clean_policy_state_dict(state_dict):
-    return {clean_state_key(k): v for k, v in state_dict.items()}
 
 
 def logits_to_float(logits):
@@ -1607,6 +1598,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     torch.manual_seed(torch_seed)
     vecenv = vecenv or load_env(env_name, args, seed=env_seed)
     policy = policy or load_policy(args, vecenv, env_name)
+    if isinstance(policy, pufferlib.ensemble.EnsemblePolicy):
+        raise pufferlib.APIUsageError("load_model_path is an ensemble checkpoint; ensembles are evaluation-only")
 
     if "LOCAL_RANK" in os.environ:
         args["train"]["device"] = "cuda"
@@ -2792,16 +2785,18 @@ def load_policy(args, vecenv, env_name=""):
         elif args["wandb"]:
             path = WandbLogger(args, load_id).download()
 
-        state_dict = torch.load(path, map_location=device)
-        policy.load_state_dict(clean_policy_state_dict(state_dict))
+        checkpoint = torch.load(path, map_location=device)
+        policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint)
 
     load_path = args["load_model_path"]
     if load_path == "latest":
         load_path = max(glob.glob(f"experiments/{env_name}*.pt"), key=os.path.getctime)
 
     if load_path is not None:
-        state_dict = torch.load(load_path, map_location=device)
-        policy.load_state_dict(clean_policy_state_dict(state_dict))
+        checkpoint = torch.load(load_path, map_location=device)
+        policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint)
+        if isinstance(policy, pufferlib.ensemble.EnsemblePolicy):
+            print(f"Loaded an ensemble of {policy.member_count} policies from {load_path}")
         # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
         # optim_state = torch.load(state_path)['optimizer_state_dict']
         # pufferl.optimizer.load_state_dict(optim_state)

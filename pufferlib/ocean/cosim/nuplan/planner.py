@@ -66,21 +66,8 @@ def startup_jerk_action_bounds(accel_cap_mps3: float, brake_cap_mps3: float):
     return lo, hi
 
 
-def clean_policy_state_dict(state_dict):
-    """Strip torch.compile / DDP prefixes. Inlined from pufferlib.pufferl to
-    avoid importing the training stack (wandb, neptune, the _C kernel, ...)
-    inside the evaluation environment."""
-
-    def clean(key):
-        while key.startswith(("module.", "_orig_mod.")):
-            key = key.split(".", 1)[1]
-        return key
-
-    return {clean(k): v for k, v in state_dict.items()}
-
-
 # per-process caches: one planner per scenario, same checkpoint/bins each time
-_state_dict_cache: Dict[str, dict] = {}
+_checkpoint_cache: Dict[str, dict] = {}
 _bin_geometry_cache: Dict[str, dict] = {}
 
 
@@ -548,6 +535,7 @@ class PufferDrivePlanner(AbstractPlanner):
         import torch
         import yaml
 
+        import pufferlib.ensemble
         import pufferlib.ocean.torch as drive_torch
 
         init = self._initialization
@@ -633,14 +621,11 @@ class PufferDrivePlanner(AbstractPlanner):
             if torch.device(self._device).type == "cpu":
                 policy_kwargs["fused_slot_encoder"] = False  # CUDA-only triton kernel; CPU uses the reference path
             policy = getattr(drive_torch, cfg.get("policy_name", "Drive"))(self._env, **policy_kwargs)
-            sd = _state_dict_cache.get(str(self._checkpoint_path))
-            if sd is None:
-                sd = clean_policy_state_dict(
-                    torch.load(self._checkpoint_path, map_location=self._device, weights_only=False)
-                )
-                _state_dict_cache[str(self._checkpoint_path)] = sd
-            policy.load_state_dict(sd)
-            self._policy = policy.to(self._device).eval()
+            checkpoint = _checkpoint_cache.get(str(self._checkpoint_path))
+            if checkpoint is None:
+                checkpoint = torch.load(self._checkpoint_path, map_location=self._device, weights_only=False)
+                _checkpoint_cache[str(self._checkpoint_path)] = checkpoint
+            self._policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint).to(self._device).eval()
 
         # The lane-graph route through the CaRL-corrected route roadblocks always decides the shared
         # stop-line elements and seeds the route goals.

@@ -53,19 +53,6 @@ DEFAULT_VEHICLE_WIDTH_M = 2.0
 EGO_BLUEPRINT = "vehicle.lincoln.mkz_2017"  # the longest6/CARLA-leaderboard hero vehicle
 
 
-def clean_policy_state_dict(state_dict):
-    """Strip torch.compile / DDP prefixes. Inlined from pufferlib.pufferl to
-    avoid importing the training stack (wandb, neptune, the _C kernel, ...) in
-    the co-sim environment — same as cosim/carla/leaderboard_agent.py."""
-
-    def clean(key):
-        while key.startswith(("module.", "_orig_mod.")):
-            key = key.split(".", 1)[1]
-        return key
-
-    return {clean(k): v for k, v in state_dict.items()}
-
-
 def load_checkpoint_config(checkpoint):
     """The checkpoint's sibling config.yaml — the single source of truth for the
     obs/action layout the policy expects (and the policy arch). None if no ckpt."""
@@ -397,15 +384,16 @@ def main():
     policy = None
     if cfg is not None:
         import torch
+        import pufferlib.ensemble
         import pufferlib.ocean.torch as drive_torch
 
         # pre-3.0 checkpoints keep action_type only in the env section
         cfg["policy"].setdefault("action_type", cfg["env"]["action_type"])
         policy = getattr(drive_torch, cfg.get("policy_name", "Drive"))(env, **cfg["policy"]).to(args.device)
-        sd = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
-        policy.load_state_dict(clean_policy_state_dict(sd))
+        checkpoint = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
+        policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint)
         policy.eval()
-        print(f"[cosim] loaded policy from {args.checkpoint}")
+        print(f"[cosim] loaded {pufferlib.ensemble.describe_policy(policy)} from {args.checkpoint}")
     # jerk action: idx = j_long_idx*3 + j_lat_idx; (3,1) = +long jerk, straight (accelerate)
     dummy_action = np.full((1, 1), 3 * 3 + 1, dtype=np.int32)
 
