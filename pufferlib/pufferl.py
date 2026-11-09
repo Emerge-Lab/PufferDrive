@@ -324,19 +324,20 @@ def apply_coplayer_env_setup(env_config, coplayer_policy_path):
 
 
 def logreplay_mix_env_kwargs(make_env, env_config, vec_config, logreplay_fraction, logreplay_map_dir):
-    """Per-env kwargs that turn the last co-player envs of a vecenv into log-replay envs, sized so that about
-    logreplay_fraction of the learner rows drive in log replay."""
+    """Per-env kwargs that turn the last envs of a co-player or self-play vecenv into log-replay envs, sized so that
+    about logreplay_fraction of the learner rows drive in log replay."""
     num_envs = vec_config["num_envs"]
     backend = vec_config.get("backend")
     if not isinstance(logreplay_fraction, (int, float)) or not 0.0 < logreplay_fraction < 1.0:
         raise pufferlib.APIUsageError(f"vec.logreplay_fraction must be in [0, 1); got {logreplay_fraction}")
+    selfplay = env_config.get("learner_agents") == "all"
     wrong_setup = {
         key: env_config.get(key) for key, value in COPLAYER_ENV_SETUP.items() if env_config.get(key) != value
     }
-    if wrong_setup:
+    if wrong_setup and not selfplay:
         raise pufferlib.APIUsageError(
-            f"vec.logreplay_fraction mixes log-replay scenes into co-player training, whose env needs "
-            f"{COPLAYER_ENV_SETUP}; got {wrong_setup}"
+            f"vec.logreplay_fraction mixes log-replay scenes into self-play (env.learner_agents='all') or co-player "
+            f"training, whose env needs {COPLAYER_ENV_SETUP}; got {wrong_setup}"
         )
     if env_config.get("eval_mode"):
         raise pufferlib.APIUsageError("vec.logreplay_fraction runs only in training (env.eval_mode=0)")
@@ -351,12 +352,6 @@ def logreplay_mix_env_kwargs(make_env, env_config, vec_config, logreplay_fractio
             "Serial builds only vec.batch_size envs; set it to vec.num_envs for a log-replay mix"
         )
 
-    coplayer_probe = make_env(**env_config)
-    coplayer_learner_rows = coplayer_probe.learner_row_count()
-    rows_per_env = coplayer_probe.num_agents
-    coplayer_probe.close()
-    if coplayer_learner_rows == 0:
-        raise pufferlib.APIUsageError("The co-player env has no learner rows; check that each SDC is policy-controlled")
     logreplay_config = {**env_config, **LOGREPLAY_ENV_SETUP}
     if logreplay_map_dir is not None:
         map_count = 1
@@ -365,6 +360,28 @@ def logreplay_mix_env_kwargs(make_env, env_config, vec_config, logreplay_fractio
         logreplay_config.update(map_dir=logreplay_map_dir, num_maps=map_count)
     # Built here so a bad log-replay config fails now, not inside a worker process.
     make_env(**logreplay_config, logreplay_scene_count=1).close()
+
+    if selfplay:
+        # Every self-play row learns, so whole envs switch over, each filled with one-row SDC scenes.
+        logreplay_env_count = round(logreplay_fraction * num_envs)
+        if not 1 <= logreplay_env_count < num_envs:
+            raise pufferlib.APIUsageError(
+                f"vec.logreplay_fraction {logreplay_fraction} of vec.num_envs={num_envs} rounds to "
+                f"{logreplay_env_count} log-replay envs; self-play needs between 1 and num_envs - 1"
+            )
+        logreplay_config["logreplay_scene_count"] = env_config["num_agents"]
+        print(
+            f"Log-replay mix: the last {logreplay_env_count} of {num_envs} self-play envs drive "
+            f"{env_config['num_agents']} log-replay SDC scenes each (vec.logreplay_fraction={logreplay_fraction})"
+        )
+        return [env_config] * (num_envs - logreplay_env_count) + [logreplay_config] * logreplay_env_count
+
+    coplayer_probe = make_env(**env_config)
+    coplayer_learner_rows = coplayer_probe.learner_row_count()
+    rows_per_env = coplayer_probe.num_agents
+    coplayer_probe.close()
+    if coplayer_learner_rows == 0:
+        raise pufferlib.APIUsageError("The co-player env has no learner rows; check that each SDC is policy-controlled")
 
     learner_ratio = logreplay_fraction / (1.0 - logreplay_fraction)
     # Fewest log-replay envs whose rows hold the share, so the most envs keep their co-player scenes.

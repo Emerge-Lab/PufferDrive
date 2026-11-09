@@ -41,6 +41,9 @@ COPLAYER_KWARGS = dict(
     seed=0,
     **COPLAYER_ENV_SETUP,
 )
+SELFPLAY_KWARGS = dict(
+    COPLAYER_KWARGS, non_sdc_controller="policy", log_sdc_only=False, learner_agents="all", reward_randomization=True
+)
 MULTIPROCESSING_VEC = dict(backend="Multiprocessing", num_envs=16, num_workers=8, batch_size=8)
 LOGREPLAY_SCENES = 5
 
@@ -153,3 +156,28 @@ def test_mix_plan_rejects(env_overrides, vec_overrides, logreplay_fraction, erro
 def test_mix_plan_rejects_a_missing_log_replay_map_dir(tmp_path):
     with pytest.raises(FileNotFoundError):
         logreplay_mix_env_kwargs(Drive, COPLAYER_KWARGS, MULTIPROCESSING_VEC, 0.5, str(tmp_path / "missing"))
+
+
+@pytest.mark.parametrize("logreplay_fraction", [0.25, 0.5])
+def test_selfplay_mix_turns_whole_envs_into_full_log_replay_envs(logreplay_fraction):
+    env_kwargs = logreplay_mix_env_kwargs(Drive, SELFPLAY_KWARGS, MULTIPROCESSING_VEC, logreplay_fraction, None)
+    num_envs = MULTIPROCESSING_VEC["num_envs"]
+    logreplay_env_count = round(logreplay_fraction * num_envs)
+    assert len(env_kwargs) == num_envs
+    assert env_kwargs[: num_envs - logreplay_env_count] == [SELFPLAY_KWARGS] * (num_envs - logreplay_env_count)
+    for kwargs in env_kwargs[num_envs - logreplay_env_count :]:
+        assert kwargs["logreplay_scene_count"] == ROWS_PER_ENV
+        assert all(kwargs[key] == value for key, value in LOGREPLAY_ENV_SETUP.items())
+
+    env = Drive(**env_kwargs[-1])
+    try:
+        assert (env.row_kinds() == ROW_KIND_LOGREPLAY).all(), "a full log-replay env leaves no row idle"
+        assert env.learner_masks.all()
+        assert env.num_obs == Drive(**SELFPLAY_KWARGS).num_obs
+    finally:
+        env.close()
+
+
+def test_selfplay_mix_rejects_a_share_below_one_env():
+    with pytest.raises(pufferlib.APIUsageError, match="rounds to 0"):
+        logreplay_mix_env_kwargs(Drive, SELFPLAY_KWARGS, MULTIPROCESSING_VEC, 0.01, None)

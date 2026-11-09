@@ -385,10 +385,10 @@ typedef struct {
 
 static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {2.0f, 12.0f, 0},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
-    {15.0f, 30.0f, 0},     // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(15, 30)
-    {-3.0f, 6.0f, 0},      // REWARD_COEF_COLLISION       α_collision ~ U(-3, 6); negative seeks collisions
-    {-1.5f, 3.0f, 0},      // REWARD_COEF_OFFROAD         α_boundary ~ U(-1.5, 3); negative seeks offroad
-    {0.0f, 0.0f, 0},       // REWARD_COEF_COMFORT         fixed at 0 (matches reward_comfort=0 off-baseline)
+    {0.05f, 30.0f, 0},     // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(15, 30)
+    {-0.05f, 6.0f, 0},     // REWARD_COEF_COLLISION       α_collision ~ U(-3, 6); negative seeks collisions
+    {-0.05f, 3.0f, 0},     // REWARD_COEF_OFFROAD         α_boundary ~ U(-1.5, 3); negative seeks offroad
+    {0.0f, 0.1f, 0},       // REWARD_COEF_COMFORT         α_comfort ~ U(0, 0.1)
     {2.5e-4f, 2.5e-2f, 0}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ U(2.5e-4, 2.5e-2)
     {0.0f, 1.0f, 0},       // REWARD_COEF_VEL_ALIGN       α_vel-align ~ U(0, 1)
     {2.5e-4f, 7.5e-3f, 0}, // REWARD_COEF_LANE_CENTER     α_l-center ~ U(2.5e-4, 7.5e-3)
@@ -397,7 +397,7 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {2.5e-4f, 7.5e-3f, 0}, // REWARD_COEF_REVERSE         α_reverse ~ U(2.5e-4, 7.5e-3)
     {0.0f, 4.0f, 0},       // REWARD_COEF_STOP_LINE       α_stop-line ~ U(0, 4)
     {0.0f, 5e-5f, 0},      // REWARD_COEF_TIMESTEP        α_timestep ~ U(0, 5e-5f)
-    {1e-6f, 1e-4f, 0},     // REWARD_COEF_OVERSPEED       α_overspeed ~ U(1e-6, 1e-4)
+    {0.0f, 1.0f, 0},       // REWARD_COEF_OVERSPEED       α_overspeed ~ U(0, 1)
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
@@ -407,10 +407,10 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
 // Meaning of the values: [min_range, max_range, use_log_scale]
 static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {2.0f, 12.0f, 0},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
-    {15.0f, 30.0f, 0},     // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(15, 30)
-    {-3.0f, 6.0f, 0},      // REWARD_COEF_COLLISION       α_collision ~ U(-3, 6); negative seeks collisions
-    {-1.5f, 3.0f, 0},      // REWARD_COEF_OFFROAD         α_boundary ~ U(-1.5, 3); negative seeks offroad
-    {0.0f, 0.0f, 0},       // REWARD_COEF_COMFORT         fixed at 0 (matches reward_comfort=0 off-baseline)
+    {0.05f, 30.0f, 0},     // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(15, 30)
+    {-0.05f, 6.0f, 0},     // REWARD_COEF_COLLISION       α_collision ~ U(-3, 6); negative seeks collisions
+    {-0.05f, 3.0f, 0},     // REWARD_COEF_OFFROAD         α_boundary ~ U(-1.5, 3); negative seeks offroad
+    {1e-5f, 0.1f, 1},      // REWARD_COEF_COMFORT         α_comfort ~ logU(1e-5, 0.1)
     {2.5e-4f, 2.5e-2f, 1}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ logU(2.5e-4, 2.5e-2)
     {0.0f, 1.0f, 0},       // REWARD_COEF_VEL_ALIGN       α_vel-align ~ U(0, 1)
     {2.5e-4f, 7.5e-3f, 1}, // REWARD_COEF_LANE_CENTER     α_l-center ~ logU(2.5e-4, 7.5e-3)
@@ -419,7 +419,7 @@ static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {2.5e-4f, 7.5e-3f, 1}, // REWARD_COEF_REVERSE         α_reverse ~ logU(2.5e-4, 7.5e-3)
     {0.0f, 4.0f, 0},       // REWARD_COEF_STOP_LINE       α_stop-line ~ U(0, 4)
     {0.0f, 5e-5f, 0},      // REWARD_COEF_TIMESTEP        α_timestep ~ U(0, 5e-5f)
-    {1e-6f, 1e-4f, 1},     // REWARD_COEF_OVERSPEED       α_overspeed ~ logU(1e-6, 1e-4)
+    {0.0f, 1.0f, 0},       // REWARD_COEF_OVERSPEED       α_overspeed ~ U(0, 1)
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
