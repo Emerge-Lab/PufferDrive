@@ -39,6 +39,8 @@ LONGEST6_DRIVING_SCORE_ROW = "Avg. driving score"
 LONGEST6_DRIVING_SCORE_TOLERANCE = 0.01
 NUPLAN_SCORE_COLUMN = "CLS"
 NUPLAN_SCENARIOS_FILE_NAME = "scenarios.csv"
+LONGEST6_ROUTES_DIR_NAME = "routes"
+LONGEST6_RECORD_SUFFIX = ".result.json"
 ALPASIM_SCORE_LINE_PATTERN = re.compile(r"official_score (\S+)\s+scenes (\d+)\s+failed (\d+)")
 
 RUN_CONFIG_FILE_NAME = "config.yaml"
@@ -54,6 +56,14 @@ class EvalReportError(Exception):
     pass
 
 
+def longest6_route_record_paths(results_csv_path):
+    """The route records results.csv summarizes: routes/*.result.json of a run tidy_carla_run.py flattened (results.csv
+    at its top), else every json next to a fresh run's aggregate/results.csv (the parser's copies of the records)."""
+    results_dir = os.path.dirname(results_csv_path)
+    flat_records = glob.glob(os.path.join(results_dir, LONGEST6_ROUTES_DIR_NAME, f"*{LONGEST6_RECORD_SUFFIX}"))
+    return flat_records or glob.glob(os.path.join(results_dir, "**", "*.json"), recursive=True)
+
+
 def read_longest6_driving_score(results_csv_path, expected_route_run_count):
     with open(results_csv_path, newline="") as results_file:
         driving_scores = [
@@ -64,7 +74,7 @@ def read_longest6_driving_score(results_csv_path, expected_route_run_count):
     driving_score = float(driving_scores[0])
 
     route_scores = []
-    for record_path in glob.glob(os.path.join(os.path.dirname(results_csv_path), "**", "*.json"), recursive=True):
+    for record_path in longest6_route_record_paths(results_csv_path):
         with open(record_path) as record_file:
             route_records = json.load(record_file)["_checkpoint"]["records"]
         route_scores.extend(float(record["scores"]["score_composed"]) for record in route_records)
@@ -235,7 +245,7 @@ def parse_arguments():
     parser.add_argument("eval_type", choices=sorted(HEADLINE_METRIC_KEYS))
     parser.add_argument(
         "result_path",
-        help="longest6: aggregate/results.csv; nuPlan: overview.csv; selfplay: evaluation_summary.json; "
+        help="longest6: results.csv (aggregate/results.csv before the tidy); nuPlan: overview.csv; selfplay: evaluation_summary.json; "
         "alpasim: results.txt",
     )
     parser.add_argument("--run-dir", required=True, help="Training run folder holding config.yaml")

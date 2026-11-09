@@ -21,11 +21,12 @@
 # runs, $OUT/routes/route_<id>_s<seed>/) wait in one queue, longest first (route length from the xml), and a worker pulls
 # the next one whenever it is free (a static split left one worker alone for the last hour whenever its routes ran their
 # clock out). Every route run gets its own server (restarted per route), worker launches are staggered, a crashed route
-# run is retried on the next GPU, and the result jsons are aggregated at the end with garage's tools/result_parser.py over
-# $OUT/aggregate/s<seed>/ (results.csv) plus the nuPlan-style HTML report
-# ($OUT/report/index.html) and the obs replay gallery of all routes ($OUT/obs_html/index.html, as in
-# 11_carla_longest6_v2.sh). Speed: wall and game time of every route go to $OUT/timing.csv, the run totals to
-# run_info.txt and stdout.
+# run is retried on the next GPU, and the result jsons are aggregated at the end with garage's tools/result_parser.py
+# (results.csv) plus the obs replay gallery of the failed routes ($OUT/obs_html/index.html, as in
+# 11_carla_longest6_v2.sh). scripts/eval/tidy_carla_run.py then leaves $OUT/results.csv, run_info.txt, obs_html/,
+# routes/ (flat: route_<id>_s<seed>.result.json of every route run, .telemetry.csv + .world_log.npz of the failed
+# ones) and details/ (timing.csv, workers.log, evaluators.log). Speed: wall and game time of every route go to
+# timing.csv, the run totals to run_info.txt and stdout.
 #
 # Overridable env: RUN_DIR, ROUTE_DIR (the split xmls), ROUTES_XML (the combined longest6.xml, for the parser
 # and the gallery), SCENARIOS (1 = eval_scenarios.json, 0 = no_scenarios.json), SEEDS ("0 1 2" by default: traffic-manager
@@ -36,10 +37,13 @@
 # ROUTE_SUBSET ("0 5 17": only these route ids), WORKERS, NUM_GPUS, STAGGER_S (5: seconds between worker launches), PORT_BASE
 # (12000: CARLA rpc port of worker 0; worker w uses PORT_BASE+50w, TM PORT_BASE+6000+50w; a range with a port already
 # listening is skipped for 12000, then 22000, see run_info.txt port_base), OMP_NUM_THREADS (policy server
-# threads; 2 from 16 workers on, else 4), LOGGING (1, default: telemetry, world log and the HTML report per route; 0: scores
-# only), CARLA_VIEW (0, default: no chase-cam; 1: chase-cam mp4 per route, needs LOGGING=1), OBS_HTML (1 = also
-# the interactive obs replay per route, rendered into $OUT/obs_html at the end, large; needs LOGGING=1), REPORT
-# (0 = skip the HTML report), MAX_ATTEMPTS, CARLA_ROOT, GARAGE_WORK_DIR, GARAGE_PY, SERVER_PY, PD,
+# threads; 2 from 16 workers on, else 4), LOGGING (1, default: telemetry, world log and obs replay per route; 0: scores
+# only), CARLA_VIEW (0, default: no chase-cam; 1: chase-cam mp4 per route, needs LOGGING=1), OBS_HTML (1 = failures,
+# default: the interactive obs replay pages of the route runs with a flagged infraction or a failed status, rendered
+# into $OUT/obs_html at the end; all = every route run, ~100 MB per page; 0 = none; needs LOGGING=1), REPORT (0,
+# default; 1 = the nuPlan-style HTML report of scripts/eval/analyze_carla_cosim.py in $OUT/report, needs LOGGING=1),
+# TIDY (1, default: scripts/eval/tidy_carla_run.py flattens $OUT at the end, see above; 0 = keep every per-route file),
+# MAX_ATTEMPTS, CARLA_ROOT, GARAGE_WORK_DIR, GARAGE_PY, SERVER_PY, PD,
 # COSIM_MAX_SPEED_MPS (ego speed cap, default 30), COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: vehicles' stopped-time
 # obs held at 0, walkers keep theirs; 0 = all real),
 # COSIM_VRU_SIZE_PAD_M (default 0.8: added to the length and width of every walker and two-wheeler box, so they read
@@ -115,6 +119,10 @@ for seed in $SEEDS; do [[ "$seed" =~ ^[0-9]+$ ]] || { echo "SEEDS=\"$SEEDS\" mus
 if [ -n "$SEEDS" ]; then read -r -a SEED_LIST <<< "$SEEDS"; else SEED_LIST=(""); fi   # "" = the evaluator's default seed, route_<id> folders
 unit_dir() { printf "route_%02d%s" "$1" "${2:+_s$2}"; }                                      # $1 route id, $2 seed
 unit_json() { printf "%s%s/longest_weathers_%s.json" "$OUT/aggregate" "${2:+/s$2}" "$1"; }   # the parser's copy of the record
+unit_record() {  # the route run's record: in its folder while it drives, flat once tidied
+    local nested=$OUT/routes/$(unit_dir "$1" "$2")/result.json
+    [ -f "$nested" ] && echo "$nested" || echo "$OUT/routes/$(unit_dir "$1" "$2").result.json"
+}
 ROUTE_SUBSET=${ROUTE_SUBSET:-}
 PORT_BASE=${PORT_BASE:-12000}
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
@@ -123,8 +131,10 @@ STAGGER_S=${STAGGER_S:-5}
 LOGGING=${LOGGING:-1}
 CARLA_VIEW=${CARLA_VIEW:-0}
 [ "$CARLA_VIEW" = "1" ] && [ "$LOGGING" != "1" ] && { echo "CARLA_VIEW=1 needs LOGGING=1"; exit 1; }
-OBS_HTML=${OBS_HTML:-1}
-REPORT=${REPORT:-$LOGGING}
+OBS_HTML=${OBS_HTML:-1}   # 1|failures: replay pages of the failed route runs; all: every route run; 0: none
+case "$OBS_HTML" in 1) OBS_HTML=failures ;; 0|failures|all) ;; *) echo "OBS_HTML=\"$OBS_HTML\" must be 0, 1, failures or all"; exit 1 ;; esac
+REPORT=${REPORT:-0}
+TIDY=${TIDY:-1}
 WANDB_REPORT=${WANDB_REPORT:-1}
 export COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-0.8}
 export COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-40}   # GIGAFLOW's eval value; empty = the checkpoint's training value
@@ -272,7 +282,7 @@ TOTAL_UNITS=$((TOTAL_ROUTES * ${#SEED_LIST[@]}))
 if [ -n "$COMPLETE_RUN" ]; then
     PENDING=()
     for unit in "${UNITS[@]}"; do
-        route_done "$OUT/routes/$(unit_dir "${unit%%:*}" "${unit##*:}")/result.json" || PENDING+=("$unit")
+        route_done "$(unit_record "${unit%%:*}" "${unit##*:}")" || PENDING+=("$unit")
     done
     UNITS=(${PENDING[@]+"${PENDING[@]}"})
     COMPLETION_STAMP=$(date +%Y%m%d_%H%M%S)
@@ -286,6 +296,7 @@ if [ -n "$COMPLETE_RUN" ]; then
         for unit in "${UNITS[@]}"; do
             route_name=$(unit_dir "${unit%%:*}" "${unit##*:}")
             [ -d "$OUT/routes/$route_name" ] && mv "$OUT/routes/$route_name" "$PREVIOUS/routes/"
+            for f in "$OUT/routes/$route_name".*; do [ -e "$f" ] && mv "$f" "$PREVIOUS/routes/"; done   # a tidied run's flat files
             rm -f "$(unit_json "${unit%%:*}" "${unit##*:}")"
         done
         for f in "$OUT"/worker_w*.log; do [ -e "$f" ] && mv "$f" "$PREVIOUS/"; done
@@ -364,7 +375,7 @@ except Exception:
     if [ "$LOGGING" = "1" ]; then
         log_env+=(COSIM_TELEMETRY="$route_dir/telemetry" COSIM_WORLD_LOG="$route_dir/world_log")
         [ "$CARLA_VIEW" = "1" ] && log_env+=(COSIM_DEBUG_CARLA_VIEW="$route_dir/carla_view")
-        [ "$OBS_HTML" = "1" ] && log_env+=(COSIM_OBS_HTML="$route_dir/obs_html")
+        [ "$OBS_HTML" != "0" ] && log_env+=(COSIM_OBS_HTML="$route_dir/obs_html")
     fi
     $pin env CUDA_VISIBLE_DEVICES="$gpu" "${log_env[@]}" \
         "$GARAGE_PY" -u "$EVALUATOR" --routes "$routes_xml" --scenarios "$SCENARIO_FILE" --repetitions "$REPETITIONS" \
@@ -442,8 +453,9 @@ EOF
 # aggregate: garage's parser over the per-route jsons, one subfolder per seed (the parser walks $OUT/aggregate and
 # reports mean/std over the seeds per route and town) -> $OUT/aggregate/results.csv, plus a per-route table; a crash
 # record has no global_record and would abort the parser
-for f in "$OUT"/routes/route_*/result.json; do
-    name=$(basename "$(dirname "$f")")
+for f in "$OUT"/routes/route_*/result.json "$OUT"/routes/route_*.result.json; do   # route folders, or the flat records of a tidied run
+    [ -e "$f" ] || continue
+    name=$(basename "$f" .result.json); [ "$name" = "result.json" ] && name=$(basename "$(dirname "$f")")
     case $name in *_s*) seed=${name##*_s}; name=${name%_s*} ;; *) seed= ;; esac
     route_id=$(echo "$name" | sed 's/route_0*//; s/^$/0/')
     dest=$(unit_json "$route_id" "$seed"); mkdir -p "$(dirname "$dest")"
@@ -493,16 +505,22 @@ if [ "$WANDB_REPORT" = "1" ] && [ "$SCENARIOS" = "1" ] && [ "$COSIM_WALKER_SPEED
 fi
 
 REPORT_ARGS=()
-[ "$OBS_HTML" = "1" ] && REPORT_ARGS+=(--obs-html-dir "$OUT/obs_html")
+[ "$OBS_HTML" != "0" ] && REPORT_ARGS+=(--obs-html-dir "$OUT/obs_html")
 if [ "$REPORT" = "1" ] && [ "$LOGGING" = "1" ]; then
     env -u PYTHONPATH "$SERVER_PY" "$PD/scripts/eval/analyze_carla_cosim.py" "$OUT"/routes/route_* "$OUT/report" "${REPORT_ARGS[@]}" \
         || echo "HTML report failed (results above are unaffected)"
 fi
 # after the report: the gallery links to it when it exists
-if [ "$OBS_HTML" = "1" ] && [ "$LOGGING" = "1" ]; then
-    env -u PYTHONPATH "$SERVER_PY" "$PD/scripts/eval/render_carla_obs_html.py" "$OUT" --routes "$ROUTES_XML" \
+if [ "$OBS_HTML" != "0" ] && [ "$LOGGING" = "1" ]; then
+    env -u PYTHONPATH "$SERVER_PY" "$PD/scripts/eval/render_carla_obs_html.py" "$OUT" --routes "$ROUTES_XML" --select "$OBS_HTML" \
         || echo "obs replay gallery failed (results above are unaffected)"
+fi
+# the pages are rendered: flatten the route folders, keep the logs of the failed (OBS_HTML=all: every) route runs
+if [ "$TIDY" = "1" ]; then
+    env -u PYTHONPATH "$SERVER_PY" "$PD/scripts/eval/tidy_carla_run.py" "$OUT" --keep "$([ "$OBS_HTML" = "all" ] && echo all || echo failures)" \
+        || echo "tidy failed (results above are unaffected)"
 fi
 [ -f "$OUT/report/index.html" ] && echo "report -> $OUT/report/index.html"
 [ -f "$OUT/obs_html/index.html" ] && echo "obs replays -> $OUT/obs_html/index.html"
+for results in "$OUT/results.csv" "$OUT/aggregate/results.csv"; do [ -f "$results" ] && { echo "results -> $results"; break; }; done
 echo "Done -> $OUT"

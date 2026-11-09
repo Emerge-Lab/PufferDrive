@@ -419,3 +419,23 @@ def test_summarize_benchmark_metrics_skips_benchmarks_without_a_summary():
 
     assert set(metrics) == {"eval_carla/num_scenarios", "eval_carla/num_episodes", "eval_carla/collision_rate"}
     assert drive_benchmark.summarize_benchmark_metrics({}, "eval_") == {}
+
+
+def test_tidied_longest6_run_reads_its_flat_route_records(tmp_path):
+    """After tidy_carla_run.py results.csv sits at the run's top and the records are routes/*.result.json; other
+    json files under the run are not records."""
+    run = tmp_path / "carla_longest6_v2_seeds0-1_20261109_120000_7"
+    (run / "routes").mkdir(parents=True)
+    (run / "details").mkdir()
+    (run / "details" / "not_a_record.json").write_text("{}")
+    scores = [100.0, 60.0, 80.0]
+    for idx, score in enumerate(scores):
+        record = {"route_id": f"RouteScenario_{idx}", "status": "Completed", "scores": {"score_composed": score}}
+        record_path = run / "routes" / f"route_{idx:02d}_s0.result.json"
+        record_path.write_text(json.dumps({"_checkpoint": {"records": [record]}}))
+    with open(run / "results.csv", "w", newline="") as results_file:
+        csv.writer(results_file).writerows([["sep=,"], ["Avg. driving score", 80.0]])
+
+    assert eval_wandb_report.read_longest6_driving_score(str(run / "results.csv"), len(scores)) == 80.0
+    with pytest.raises(eval_wandb_report.EvalReportError, match="incomplete"):
+        eval_wandb_report.read_longest6_driving_score(str(run / "results.csv"), len(scores) + 1)

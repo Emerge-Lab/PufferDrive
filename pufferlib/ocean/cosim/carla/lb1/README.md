@@ -98,3 +98,7 @@ As for the Leaderboard 2.0 agent: `result.json` (the leaderboard's), `telemetry/
 `world_log/<route>.npz`, `obs_html/<route>.replay.zlib` (rendered by
 `scripts/eval/render_carla_obs_html.py`), `carla_view/<route>.mp4`. `scripts/eval/analyze_carla_cosim.py`
 builds the HTML report from a run folder holding `result.json`, `world_log/`, `telemetry/`, `carla_view/`.
+The cluster scripts (`scripts/kesai/11_carla_longest6_v2.sh`, `14_carla_longest6_v1.sh`) render the pages of the
+failed route runs only and then flatten every route folder with `scripts/eval/tidy_carla_run.py`: `results.csv`
+at the top, `routes/route_<id>_s<seed>.result.json` for every route run plus `.telemetry.csv` and
+`.world_log.npz` of the failed ones, `details/` for the timing and logs; `TIDY=0` keeps the route folders.
