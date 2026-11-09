@@ -401,7 +401,7 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
-    {0.0f, 0.2f, 0},       // REWARD_COEF_DISPLACEMENT    α_displacement ~ U(0, 0.2)
+    {0.0f, 0.05f, 0},      // REWARD_COEF_DISPLACEMENT    α_displacement ~ U(0, 0.2)
 };
 
 // Meaning of the values: [min_range, max_range, use_log_scale]
@@ -423,7 +423,7 @@ static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
-    {0.0f, 0.2f, 0},       // REWARD_COEF_DISPLACEMENT    α_displacement ~ U(0, 0.2)
+    {0.0f, 0.05f, 0},      // REWARD_COEF_DISPLACEMENT    α_displacement ~ U(0, 0.2)
 };
 
 static const char *const REWARD_COEF_NAMES[NUM_REWARD_COEFS] = {
