@@ -14,15 +14,16 @@ source scripts/kesai/cluster_env.sh || exit 1
 
 # Evaluates an ensemble of trained runs with the evals of 3_train / 18_train. scripts/eval/build_ensemble_checkpoint.py
 # packs the members' final_model.pt into $PD/experiments/$ENSEMBLE_NAME/final_model.pt next to the first member's
-# config.yaml, so every eval takes the folder like a training run: at every policy step the members' action probabilities
-# and values are averaged and the action is selected from the averaged distribution (one forward pass per member).
+# config.yaml, so every eval takes the folder like a training run: at every policy step the ensemble executes the mean of
+# the members' mean actions (one forward pass per member; mode / sampled actions and the logged probabilities come from
+# the members' averaged distribution).
 # The ensemble has no wandb run: the chained evals get WANDB_REPORT=0 (12_alpasim.sh has no such switch; its report step
 # fails harmlessly) and the self-play eval runs with wandb=False; results live in experiments/$ENSEMBLE_NAME/eval/.
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-ENSEMBLE_NAME=k_scaled_0073_ensemble
-MEMBER_RUNS=(k_scaled_0073_1000 k_scaled_0073_2000)   # run folders under $PD/experiments, each with a final_model.pt
+ENSEMBLE_NAME=k_scaled_0073_0074_ensemble
+MEMBER_RUNS=(k_scaled_0073_1000 k_scaled_0073_2000 k_scaled_0074_1000 k_scaled_0074_2000)   # run folders under $PD/experiments, each with a final_model.pt
 echo "ensemble ${ENSEMBLE_NAME} of ${MEMBER_RUNS[*]}"
 
 DATA_DIR=$PD/experiments/${ENSEMBLE_NAME}

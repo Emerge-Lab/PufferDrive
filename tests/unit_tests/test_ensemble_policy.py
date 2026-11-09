@@ -13,6 +13,9 @@ from pufferlib import ensemble
 
 
 ACTION_TABLE = torch.tensor([[-1.0, -1.0], [0.0, 0.0], [1.0, 1.0]])
+ACTION_TABLE_PHYSICAL = torch.tensor([[-4.0, -1.0], [0.0, 0.0], [2.0, 1.0]])
+LONG_NEG_SCALE = 4.0
+LONG_POS_SCALE = 2.0
 BATCH_SIZE = 4
 OBS_DIM = 2
 RUN_CONFIG = {
@@ -28,7 +31,7 @@ RUN_CONFIG = {
 
 
 class _TinyPolicy(nn.Module):
-    """Discrete head on a continuous env, like Drive, with constant outputs so the averages are checkable by hand."""
+    """Discrete head on a continuous env with Drive's piecewise longitudinal scale; constant outputs, checkable by hand."""
 
     is_continuous = False
 
@@ -45,7 +48,10 @@ class _TinyPolicy(nn.Module):
         return ACTION_TABLE[actions.long()]
 
     def discrete_probs_to_continuous_mean(self, probs):
-        return probs @ ACTION_TABLE.to(probs.dtype)
+        mean_physical = probs @ ACTION_TABLE_PHYSICAL.to(probs.dtype)
+        mean_long = mean_physical[..., 0]
+        mean_long_norm = torch.where(mean_long < 0.0, mean_long / LONG_NEG_SCALE, mean_long / LONG_POS_SCALE)
+        return torch.stack([mean_long_norm, mean_physical[..., 1]], dim=-1)
 
 
 def _observations():
@@ -84,18 +90,32 @@ def test_discrete_average_is_the_mean_of_member_probabilities_not_a_vote():
     assert mode.tolist() == [0] * BATCH_SIZE
 
 
-def test_mean_action_selection_takes_the_expectation_under_the_averaged_distribution():
-    members = [_TinyPolicy(logits=(3.0, 0.0, -1.0)), _TinyPolicy(logits=(-1.0, 0.5, 2.0))]
-    policy = ensemble.EnsemblePolicy(members)
+def test_mean_action_selection_averages_the_member_mean_actions_not_the_mixture_expectation():
+    braking = _TinyPolicy(logits=(9.0, 0.0, 0.0))
+    accelerating = _TinyPolicy(logits=(0.0, 0.0, 9.0))
+    policy = ensemble.EnsemblePolicy([braking, accelerating])
 
     logits, _ = policy.forward_eval(_observations())
-    _, _, _, ensemble_mean_action = P.sample_logits(
+    _, _, _, mean_action = P.sample_logits(
         logits, action_selection=P.ACTION_SELECT_MEAN, env_continuous=True, policy=policy
     )
-    member_probs = torch.stack([torch.softmax(member.logit_bias, -1) for member in members])
-    expected = members[0].discrete_probs_to_continuous_mean(member_probs.mean(0)).expand(BATCH_SIZE, -1)
+    mixture_expectation = braking.discrete_probs_to_continuous_mean(torch.softmax(logits, -1))
 
-    assert torch.allclose(ensemble_mean_action, expected, atol=1e-6)
+    # members execute long -1 and +1: their mean is 0; the mixture expectation sits at -1 / LONG_NEG_SCALE
+    assert torch.allclose(mean_action, torch.zeros(BATCH_SIZE, 2), atol=1e-3)
+    assert torch.allclose(mixture_expectation[:, 0], torch.full((BATCH_SIZE,), -0.25), atol=1e-3)
+
+
+def test_mean_action_needs_the_member_probabilities_of_the_same_batch():
+    policy = ensemble.EnsemblePolicy([_TinyPolicy(), _TinyPolicy()])
+    uniform = torch.full((1, BATCH_SIZE, 3), 1.0 / 3.0)
+
+    with pytest.raises(RuntimeError, match="forward_eval"):
+        policy.discrete_probs_to_continuous_mean(uniform)
+    policy.forward_eval(_observations())
+    with pytest.raises(RuntimeError, match="same batch"):
+        policy.discrete_probs_to_continuous_mean(uniform[:, : BATCH_SIZE - 1])
+    assert policy.discrete_probs_to_continuous_mean(uniform).shape == (1, BATCH_SIZE, 2)
 
 
 def test_values_are_averaged():

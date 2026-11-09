@@ -1,14 +1,17 @@
 """Evaluation-time policy ensembles.
 
 An ensemble checkpoint carries the weights of several trained policies of one architecture. load_policy_weights turns a
-freshly built policy plus a loaded checkpoint into either that policy or an EnsemblePolicy, whose action distribution
-and value are the equal-weight averages over the members. write_ensemble_checkpoint packs member checkpoints into a
-run-dir-shaped folder (final_model.pt + config.yaml) that every eval harness takes like a training run.
+freshly built policy plus a loaded checkpoint into either that policy or an EnsemblePolicy: its mean action (what the
+evals execute) is the mean of the members' mean actions, while its action distribution and value, used for mode and
+sampled actions, logged probabilities and distillation labels, are the equal-weight averages over the members.
+write_ensemble_checkpoint packs member checkpoints into a run-dir-shaped folder (final_model.pt + config.yaml) that
+every eval harness takes like a training run.
 """
 
 import copy
 import math
 import os
+import threading
 
 import torch
 import yaml
@@ -39,6 +42,8 @@ class EnsemblePolicy(nn.Module):
         self.members = nn.ModuleList(members)
         self.is_continuous = members[0].is_continuous
         self.fp32_heads = getattr(members[0], "fp32_heads", False)
+        # sample_logits' mean-action hook only sees the averaged probabilities; it runs right after forward_eval
+        self._member_probs_store = threading.local()
 
     @property
     def member_count(self):
@@ -54,13 +59,23 @@ class EnsemblePolicy(nn.Module):
             logits, value = member.forward_eval(observations, state)
             member_logits.append(logits)
             member_values.append(value.float())
+        if isinstance(member_logits[0], torch.Tensor):
+            self._member_probs_store.probs = [logits.float().softmax(dim=-1) for logits in member_logits]
         return average_member_predictions(member_logits), torch.stack(member_values).mean(dim=0)
 
     def discrete_actions_to_continuous(self, actions):
         return self.members[0].discrete_actions_to_continuous(actions)
 
     def discrete_probs_to_continuous_mean(self, probs):
-        return self.members[0].discrete_probs_to_continuous_mean(probs)
+        """Mean of the members' mean actions for the batch of the preceding forward_eval call."""
+        member_probs = getattr(self._member_probs_store, "probs", None)
+        if member_probs is None:
+            raise RuntimeError("forward_eval must run before discrete_probs_to_continuous_mean")
+        class_count = probs.shape[-1]
+        if member_probs[0].shape != (probs.numel() // class_count, class_count):
+            raise RuntimeError("discrete_probs_to_continuous_mean needs the member probabilities of the same batch")
+        member_means = [member.discrete_probs_to_continuous_mean(p) for member, p in zip(self.members, member_probs)]
+        return torch.stack(member_means).mean(dim=0).reshape(*probs.shape[:-1], -1)
 
 
 def _average_discrete_logits(member_logits):
