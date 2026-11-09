@@ -1032,6 +1032,7 @@ def encode_interactive_replay(scenario, replay):
         "active_count": int(replay["raw_action"].shape[1]),
         "obs_dim": int(replay["obs"].shape[2]) if replay.get("obs") is not None else 0,
         "obs_layout": "agent_dim_frame_delta" if replay.get("obs") is not None else None,
+        "obs_agents": replay.get("obs_agents"),  # None: every agent's observations are stored
         "action_type": env_cfg.get("action_type", "continuous"),
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
         "num_goals": int(env_cfg["num_goals"]),

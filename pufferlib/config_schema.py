@@ -507,6 +507,8 @@ class EvaluationConfig:
     max_rendered_failures: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     failure_replay_csv: str | None = MISSING
     capture_observations: bool = MISSING
+    # all | infracting: whose observations the replay pages keep (infracting zeroes the other agents' rows)
+    capture_observations_agents: str = "all"
     observation_replay_wave_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     observation_replay_writer_count: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     action_selection: ActionSelection = MISSING

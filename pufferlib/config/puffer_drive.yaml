@@ -459,6 +459,9 @@ eval:
   # Existing episode metrics CSV to replay without running the benchmark first.
   failure_replay_csv: null
   capture_observations: false
+  # Agents whose observations the replay pages keep: all, or infracting (agents with a collision, offroad, red light
+  # or stop sign infraction in the episode; the others' observation rows are zeroed, a 50-agent page shrinks ~4x).
+  capture_observations_agents: all
   observation_replay_wave_size: 16
   observation_replay_writer_count: 4
   # Options: sample | mode | mean

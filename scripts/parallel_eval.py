@@ -3,7 +3,9 @@
 Each shard runs an independent `puffer eval` process over a disjoint scenario
 window (eval.scenario_offset), then the per-shard episode_metrics.csv files are
 merged into a single report; wandb=True writes its km/infraction into the summary
-of the training wandb run (self-play benchmark only).
+of the training wandb run (self-play benchmark only). scripts/eval/tidy_selfplay_eval.py
+then folds the shard folders into the aggregate dir (evaluation_summary.json,
+obs_html/ with every shard's failure pages, details/); --keep-shards leaves them.
 --num-gpus runs one shard per local GPU; --num-nodes runs the shards as srun steps
 of the surrounding SLURM allocation, --shards-per-node of them per node (default 1),
 each with one GPU and an equal share of the node's CPUs (SLURM_CPUS_PER_TASK).
@@ -37,6 +39,7 @@ def parse_arguments():
     shard_group.add_argument(
         "--num-nodes", type=int, help="Run shards as srun steps over this many SLURM nodes, 1 GPU each"
     )
+    parser.add_argument("--keep-shards", action="store_true", help="Leave the per-shard folders untidied")
     parser.add_argument(
         "--shards-per-node",
         type=int,
@@ -218,6 +221,10 @@ def main():
     episode_summaries = pd.concat(shard_frames, ignore_index=True).to_dict("records")
     summary = evaluation_utils._write_eval_reports(episode_summaries, aggregate_dir, arguments.total_scenarios)
     print(f"Aggregated {summary['num_episodes']} episodes from {len(processes)} shards into {aggregate_dir}")
+    if not arguments.keep_shards:
+        tidy_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval", "tidy_selfplay_eval.py")
+        if subprocess.run([sys.executable, tidy_script, aggregate_dir], check=False).returncode != 0:
+            print("tidy failed (results above are unaffected)")
 
     if report_wandb:
         eval_wandb_report.report_headline_metric(
