@@ -12,18 +12,18 @@
 
 source scripts/kesai/cluster_env.sh || exit 1
 
-# CARLA self-play eval of one run on a single 8-GPU node with the GIGAFLOW long-form settings (paper Table A4) where
-# they differ from 21_selfplay_eval: comfort 0.05, lane center 0.0038 and up to 40 observed partners. Everything else is
-# the post-training eval of 3_train. WANDB_REPORT=0: the run's wandb headline stays the standard eval's.
+# CARLA self-play eval of one run on a single 8-GPU node: the post-training eval of 3_train with one setting changed,
+# the lights of a junction cycle phase by phase. WANDB_REPORT=0: the run's wandb headline stays the standard eval's.
 echo "START TIME: $(date)"
 start=$(date +%s)
 
 RUN_NAME=k_scaled_0076_1000
-EVAL_OUTPUT_DIR_NAME=eval80k_gigaflow
+EVAL_OUTPUT_DIR_NAME=eval80k_junction_phases
 TOTAL_SCENARIOS=80000
 REWARD_COMFORT=0.05          # paper alpha_comfort
 REWARD_LANE_CENTER=0.0038    # paper alpha_l-center
 OBS_SLOTS_PARTNERS_N=40      # paper N_o: up to 40 closest agents; slots are max-pooled, any checkpoint transfers
+TRAFFIC_LIGHT_JUNCTION_PHASES=1   # 3_train evaluates with 0, independent lights
 WANDB_REPORT=0
 SLOT_ENCODER_BACKEND=cuda
 
@@ -57,7 +57,7 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} .venv/bin/python scripts/par
     eval.max_goal_spacing=200 \
     env.disable_red_light_infractions=1 \
     env.disable_stop_sign_infractions=1 \
-    env.traffic_light_junction_phases=0 \
+    env.traffic_light_junction_phases=${TRAFFIC_LIGHT_JUNCTION_PHASES} \
     env.eval_standstill_jerk_deadband_mps3=1.5 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \

@@ -53,8 +53,9 @@ echo "Evaluating ${MODEL_PATH}"
     --shards-per-node 8 \
     env.map_dir=$PD/pufferlib/resources/drive/binaries/carla \
     vec.num_envs=60 \
-    eval.reward_comfort=0.0 \
-    eval.reward_lane_center=0.0075 \
+    eval.reward_comfort=0.05 \
+    eval.reward_lane_center=0.0038 \
+    eval.obs_slots_partners_n=40 \
     env.eval_perceived_size_margin_m=0.2 \
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=200 \
