@@ -218,7 +218,8 @@ def policy_io_layout(policy, label):
 
 
 def reward_conditioning_obs_columns(env, policy_layout, label, device):
-    """Env obs columns the policy reads: None for all of them, else all but the reward-conditioning slice."""
+    """Env obs columns the policy reads: None for all of them, else all but the reward-conditioning slice, or
+    all but the slice's last coef (displacement) for a policy that reads the others."""
     env_layout = drive_io_layout(env)
     mismatched = {
         key: (value, policy_layout.get(key))
@@ -230,12 +231,17 @@ def reward_conditioning_obs_columns(env, policy_layout, label, device):
             f"The {label} policy was built for a different observation layout than the env; "
             f"(env, policy) per key: {mismatched}"
         )
-    if policy_layout["num_reward_coefs"] == env_layout["num_reward_coefs"]:
+    policy_coefs, env_coefs = policy_layout["num_reward_coefs"], env_layout["num_reward_coefs"]
+    if policy_coefs == env_coefs:
         return None
-    if policy_layout["num_reward_coefs"] > env_layout["num_reward_coefs"]:
-        raise pufferlib.APIUsageError(f"The {label} policy is reward-conditioned; set env.reward_conditioning=True")
-    conditioning_end = env_layout["ego_features"] + env_layout["num_reward_coefs"]
-    kept_columns = [*range(env_layout["ego_features"]), *range(conditioning_end, env.num_obs)]
+    if policy_coefs > env_coefs:
+        raise pufferlib.APIUsageError(
+            f"The {label} policy reads {policy_coefs} reward coefs, the env gives {env_coefs}; set "
+            "env.reward_conditioning=True (and env.reward_conditioning_displacement=True if it reads displacement)"
+        )
+    # The policy reads none of the slice, or its first policy_coefs (the coefs before displacement).
+    conditioning_end = env_layout["ego_features"] + env_coefs
+    kept_columns = [*range(env_layout["ego_features"] + policy_coefs), *range(conditioning_end, env.num_obs)]
     return torch.tensor(kept_columns, dtype=torch.long, device=device)
 
 
@@ -3245,17 +3251,20 @@ def load_env(env_name, args, seed=None):
     return pufferlib.vector.make([make_env] * env_count, env_args=[[]] * env_count, env_kwargs=env_kwargs, **vec_kwargs)
 
 
-def load_policy(args, vecenv, env_name="", reward_conditioning=None):
+def load_policy(args, vecenv, env_name="", reward_conditioning=None, reward_conditioning_displacement=None):
     """reward_conditioning, when given, builds the policy with (True) or without (False) the env's
-    reward-conditioning obs slice, e.g. for a learner trained against a frozen co-player."""
+    reward-conditioning obs slice, e.g. for a learner trained against a frozen co-player;
+    reward_conditioning_displacement (default: the env's) with or without its displacement coef."""
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
 
     device = torch_device(args["train"]["device"])
     policy_env = vecenv.driver_env
-    if reward_conditioning is not None and bool(reward_conditioning) != bool(policy_env.reward_conditioning):
-        policy_env = RewardConditioningView(policy_env, reward_conditioning)
+    if reward_conditioning is not None:
+        view = RewardConditioningView(policy_env, reward_conditioning, reward_conditioning_displacement)
+        if view.num_reward_coefs != policy_env.num_reward_coefs:
+            policy_env = view
     policy_cls = getattr(env_module.torch, args["policy_name"])
     policy = policy_cls(policy_env, **args["policy"])
 

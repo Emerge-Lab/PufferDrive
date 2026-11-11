@@ -98,6 +98,28 @@ def test_obs_columns_strip_only_the_conditioning_slice(env):
     assert reward_conditioning_obs_columns(env, build_policy(env).io_layout, "test", "cpu") is None
 
 
+def test_obs_columns_drop_only_displacement_for_a_policy_without_it(env):
+    disp_env = Drive(**{**ENV_KWARGS, "reward_conditioning_displacement": True, "num_agents": 8})
+    disp_env.reset(seed=0)
+    try:
+        policy = build_policy(RewardConditioningView(disp_env, True, False))
+        assert policy.io_layout["num_reward_coefs"] == disp_env.num_reward_coefs - 1
+        columns = reward_conditioning_obs_columns(disp_env, policy.io_layout, "test", "cpu")
+        obs = torch.as_tensor(disp_env.observations)
+        kept = obs.index_select(1, columns)
+        displacement = disp_env.ego_features + disp_env.num_reward_coefs - 1
+        assert kept.shape[1] == disp_env.num_obs - 1
+        torch.testing.assert_close(kept[:, :displacement], obs[:, :displacement])
+        torch.testing.assert_close(kept[:, displacement:], obs[:, displacement + 1 :])
+        # a policy that reads displacement needs an env that carries it
+        with pytest.raises(ValueError, match="displacement"):
+            RewardConditioningView(env, True, True)
+        with pytest.raises(pufferlib.APIUsageError, match="reward_conditioning_displacement=True"):
+            reward_conditioning_obs_columns(env, build_policy(disp_env).io_layout, "co-player", "cpu")
+    finally:
+        disp_env.close()
+
+
 def test_obs_layout_mismatch_lists_keys(env):
     other_env = Drive(**{**ENV_KWARGS, "obs_slots_partners_n": 6, "num_agents": 8})
     other_policy = build_policy(other_env)

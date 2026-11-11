@@ -138,14 +138,21 @@ def drive_io_layout(env):
 
 class RewardConditioningView:
     """Stand-in for `env` with its reward-conditioning obs slice dropped (or kept), to build a policy
-    for observations that differ from the live env's only in that slice."""
+    for observations that differ from the live env's only in that slice. reward_conditioning_displacement
+    (default: the env's) keeps or drops the displacement coef, the slice's last; a policy without it reads
+    the slice's other coefs in an env that carries it."""
 
-    def __init__(self, env, reward_conditioning):
+    def __init__(self, env, reward_conditioning, reward_conditioning_displacement=None):
         if reward_conditioning and not env.reward_conditioning:
             raise ValueError("The env has no reward-conditioning slice to give a reward-conditioned policy")
+        if reward_conditioning_displacement is None:
+            reward_conditioning_displacement = env.reward_conditioning_displacement
+        if reward_conditioning and reward_conditioning_displacement and not env.reward_conditioning_displacement:
+            raise ValueError("The env has no displacement coef to give a policy that reads it")
         self._env = env
         self.reward_conditioning = bool(reward_conditioning)
-        self.num_reward_coefs = env.num_reward_coefs if reward_conditioning else 0
+        self.reward_conditioning_displacement = bool(reward_conditioning and reward_conditioning_displacement)
+        self.num_reward_coefs = conditioning_coef_count(self.reward_conditioning, self.reward_conditioning_displacement)
         self.num_obs = env.num_obs - env.num_reward_coefs + self.num_reward_coefs
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
