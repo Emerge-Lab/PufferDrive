@@ -90,7 +90,6 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     env.speed_limit_random_prob=1.0 \
     env.conditioning_speed_scale=2.0 \
     policy.mask_padded_features=true \
-    train.evaluation_benchmarks=null \
     train.seed=${SEED} \
     ${SPAWN_NOISE_ARGS} \
     tb=True

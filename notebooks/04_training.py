@@ -48,7 +48,7 @@ obs, rew, term, trunc, info = env.step(actions)
 
 obs_tensor = torch.FloatTensor(obs).to(device)
 with torch.no_grad():
-    hidden = policy.encode_observations(obs_tensor)
+    hidden = policy.actor_backbone(obs_tensor, policy.ego_dim)
 
 print(f"Hidden shape: {hidden.shape}")
 print(f"Hidden stats: min={hidden.min():.4f}, max={hidden.max():.4f}, mean={hidden.mean():.4f}")
@@ -68,7 +68,7 @@ plt.show()
 
 # %%
 with torch.no_grad():
-    action_logits, value = policy.decode_actions(hidden)
+    action_logits, value = policy._run_heads(hidden, hidden)
 
 print(f"Action logits: shape={action_logits.shape}")
 probs = F.softmax(action_logits, dim=-1)

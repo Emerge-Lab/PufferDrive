@@ -159,7 +159,7 @@ def load_notebook_config(checkpoint_path=None, env_name="puffer_drive"):
         cfg_yaml = os.path.join(os.path.dirname(os.path.dirname(checkpoint_path)), "config.yaml")
         with open(cfg_yaml) as f:
             ycfg = yaml.safe_load(f)
-        for section in ["env", "train", "policy", "rnn"]:
+        for section in ["env", "train", "policy"]:
             if section in ycfg and isinstance(ycfg[section], dict):
                 config[section].update(ycfg[section])
 

@@ -24,7 +24,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=${RUN_NAME:-k_scaled_0076_${SEED}}
+export RUN_NAME=${RUN_NAME:-k_scaled_0077_${SEED}}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -54,7 +54,7 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # Blocking env workers: kesai nodes give 60 threads per rank (--exclusive); vec.num_envs=60 is one worker per thread (0053/0059,
 # ~25 M SPS vs ~21.5 M with 32). 0063 ran 256 workers per rank (4.3x oversubscribed, 75 GB per GPU): +18% SPS from the worker count
 # but ~55% sample efficiency on goals/speed at 1e12 steps, so 60 stays the default. GPU memory ~21 GB fixed + 0.22 GB per 1024-agent worker (fp16).
-# A second instance needs its own RUN_NAME (plain VAR=... sbatch did not propagate on kesai): sbatch --export=ALL,RUN_NAME=k_scaled_0076_1000 scripts/kesai/3_train_64GPU_multinode_slurm.sh
+# A second instance needs its own RUN_NAME (plain VAR=... sbatch did not propagate on kesai): sbatch --export=ALL,RUN_NAME=k_scaled_0077_1000 scripts/kesai/3_train_64GPU_multinode_slurm.sh
 # 0067 = 0066 (the 0059 config, puffer_drive.yaml defaults, float16 rollout buffer, static footprint red light test) with the
 # training light cycle green U(3,10) / yellow U(2,3) s instead of GIGAFLOW's U(1,10) / U(1.5,2.25) and no training rear margin:
 # 0066's training red-light rate sat at 3.7% because committed slow crossings could not clear CARLA's tail band within a
@@ -75,6 +75,7 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # layouts differ per rank and seed, failed init spawns keep their slot, light phases round up to whole steps (yellow
 # 2.1-3.0 s at dt 0.3), offroad is detected up to 40 m/s, spawns use the red-light detector, reset no longer consumes goals.
 # 0076 = 0075 with the 0072 minibatch (131072): 393216 on 32 ranks is 12.6M rows per optimizer step and gave 0075 62k optimizer steps against 175k in 0072.
+# 0077 = 0076 on the purged code (13_bernhard_purge, 2026-11-11): same configuration and seed; Neptune, sweeps, profile mode, in-training evals, adam/muon + cpu_offload, the LSTM path, ensembles and generic PufferLib leftovers are deleted. It has to reproduce 0076's metrics and SPS.
 # Other overrides are run identity, logging, maps and hardware.
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \

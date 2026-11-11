@@ -129,26 +129,6 @@ puffer train puffer_drive train.device=cpu vec.backend=Serial env.num_agents=64 
 torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train puffer_drive
 ```
 
-## Profile
-
-Profiling requires Linux and `perf`. Select simulation, PPO training, or both
-with `profile.mode=sim`, `training`, or `all`:
-
-```bash
-# Rebuild native extensions with symbols and frame pointers
-PROFILE=1 python setup.py build_ext --inplace --force
-
-puffer profile puffer_drive profile.mode=all \
-    profile.warmup_cycles=1 profile.trace_cycles=1
-```
-
-Warmup cycles run before recording. Set `profile.warmup_cycles=0` to capture
-the first cycle after setup; environment and policy initialization remain
-excluded. Results are written to a timestamped directory under
-`profile.output_dir` (default `profiles/`). `perf.data` and
-`profile.linux-perf.txt` contain native samples; non-sim modes also write
-`torch_ops.txt` and a Perfetto-compatible `torch_trace.json`.
-
 ## Eval
 
 The eval command loads one or more named benchmarks from the benchmark YAML and
@@ -279,8 +259,6 @@ To add a metric to the report: add its key to `TREND_METRICS` /
 | `gae_lambda` | `0.95` | GAE lambda |
 | `vf_coef` | `0.5` | Value loss weight |
 | `ent_coef` | `0.01` | Entropy bonus |
-| `vtrace_rho_clip` / `vtrace_c_clip` | `1` | V-trace IS ratio clipping |
-| `adv_sampling_prio_alpha` / `adv_sampling_prio_beta0` | `0.85` | Priority sampling exponents |
 
 ### `policy` — Network
 
@@ -301,7 +279,7 @@ Stored as jupytext `.py` files in `notebooks/`; open them directly in Jupyter (j
 | `02_rewards.py` | Reward magnitudes, component breakdown, correlation with behavior |
 | `03_metrics.py` | Episode metrics, `vec_log` aggregation, episode boundary handling |
 | `04_training.py` | End-to-end data flow: env → policy → loss; encoding, sampling, advantages, gradients |
-| `05_inference.py` | Config loading, policy forward pass, rollouts (det. vs stochastic), value accuracy, LSTM state |
+| `05_inference.py` | Config loading, policy forward pass, rollouts (det. vs stochastic), value accuracy |
 | `06_architecture.py` | Model summary, per-encoder breakdown, forward pass shape tracing, weight distributions |
 
 

@@ -1,5 +1,4 @@
 import json
-import random
 import struct
 import sys
 import types
@@ -28,11 +27,6 @@ CARLA_WORKER_COUNT = 2
 CARLA_MAP_COUNT = 4
 CARLA_SCENARIO_LENGTH = 32
 BENCHMARK_SCENARIO_LENGTH = 48
-TRAIN_EPOCH_COUNT = 7
-TRAIN_EVAL_INTERVAL = 3
-TRAIN_HORIZON = 16
-TRAIN_ENV_COUNT = 2
-TRAIN_AGENTS_PER_ENV = 8
 WANDB_RUN_NAME = "k_exp_0002_1000"
 WANDB_PROJECT = "nightly-multi-long"
 WANDB_TRAINING_SUMMARY = {"environment/collision_rate": 0.0123}
@@ -51,19 +45,6 @@ class ZeroPolicy(torch.nn.Module):
         logits = torch.zeros((batch_size, self.action_count), device=observations.device)
         values = torch.zeros((batch_size, 1), device=observations.device)
         return (logits,), values
-
-
-class RecordingLogger:
-    def __init__(self, run_id):
-        self.run_id = run_id
-        self.calls = []
-
-    def log(self, metrics, step):
-        self.calls.append((metrics, step))
-
-    def close(self, model_path, early_stop):
-        self.model_path = model_path
-        self.early_stop = early_stop
 
 
 def _load_config():
@@ -132,6 +113,13 @@ def _write_benchmark_config(
     return output_path
 
 
+def _write_checkpoint_run_dir(run_dir, args):
+    run_dir.mkdir()
+    (run_dir / "config.yaml").write_text(yaml.safe_dump(json.loads(json.dumps(args))))
+    (run_dir / "final_model.pt").write_bytes(b"")
+    args["load_model_path"] = str(run_dir / "final_model.pt")
+
+
 def _standalone_eval_args(benchmark_config_path):
     args = _load_config()
     args["train"].update(
@@ -177,7 +165,6 @@ def _standalone_eval_args(benchmark_config_path):
         }
     )
     args["wandb"] = False
-    args["neptune"] = False
     args["tb"] = False
     return args
 
@@ -198,6 +185,7 @@ def carla_evaluation(tmp_path_factory):
         use_neighbor_cache=True,
     )
     args = _standalone_eval_args(benchmark_config_path)
+    _write_checkpoint_run_dir(output_root / "checkpoint", args)
     multiprocessing_calls = []
     original_vector_make = pufferlib.vector.make
 
@@ -214,7 +202,6 @@ def carla_evaluation(tmp_path_factory):
             policy=ZeroPolicy(action_count=63),
             eval_output_dir=str(output_root),
             eval_output_subdir="standard",
-            use_training_config=True,
             benchmark_names="carla_test",
         )
     finally:
@@ -304,7 +291,6 @@ def test_eval_report_reduces_distance_per_infraction_from_raw_totals():
 def _run_standalone_eval_with_wandb(tmp_path, monkeypatch, benchmark_name):
     """Evaluate a checkpoint folder with wandb=True against a stub wandb -> (run dir, stored summary, run paths)."""
     run_dir = tmp_path / WANDB_RUN_NAME
-    run_dir.mkdir()
     benchmark_config_path = _write_benchmark_config(
         tmp_path / "benchmark.yaml",
         name=benchmark_name,
@@ -321,9 +307,7 @@ def _run_standalone_eval_with_wandb(tmp_path, monkeypatch, benchmark_name):
     args["eval"]["benchmarks"] = benchmark_name
     args["run_name"] = WANDB_RUN_NAME
     args["wandb_project"] = WANDB_PROJECT
-    (run_dir / "config.yaml").write_text(yaml.safe_dump(json.loads(json.dumps(args))))
-    (run_dir / "final_model.pt").write_bytes(b"")
-    args["load_model_path"] = str(run_dir / "final_model.pt")
+    _write_checkpoint_run_dir(run_dir, args)
     args["wandb"] = True
 
     stored_summary = dict(WANDB_TRAINING_SUMMARY)
@@ -569,207 +553,6 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
     assert len(sorted(path for path in render_dir.glob("*.html") if path.name != "index.html")) == 2
 
 
-def _write_training_benchmark(tmp_path):
-    return _write_benchmark_config(
-        tmp_path / "training_benchmark.yaml",
-        name="training_eval",
-        map_dir=CARLA_MAP_DIR,
-        simulation_mode="gigaflow",
-        num_maps=2,
-        num_scenarios=2,
-        scenario_length=TRAIN_HORIZON,
-        max_agents_per_env=TRAIN_AGENTS_PER_ENV,
-        control_mode="control_vehicles",
-        use_neighbor_cache=True,
-    )
-
-
-def _training_args(tmp_path, benchmark_config_path, evaluation_enabled):
-    args = _load_config()
-    total_agents = TRAIN_ENV_COUNT * TRAIN_AGENTS_PER_ENV
-    batch_size = total_agents * TRAIN_HORIZON
-    args["vec"].update(
-        {
-            "backend": "Serial",
-            "num_envs": TRAIN_ENV_COUNT,
-            "num_workers": TRAIN_ENV_COUNT,
-            "batch_size": TRAIN_ENV_COUNT,
-            "seed": SEED,
-        }
-    )
-    args["env"].update(
-        {
-            "num_agents": TRAIN_AGENTS_PER_ENV,
-            "min_agents_per_env": TRAIN_AGENTS_PER_ENV,
-            "max_agents_per_env": TRAIN_AGENTS_PER_ENV,
-            "num_maps": 2,
-            "allow_map_subset": True,
-            "map_dir": str(CARLA_MAP_DIR),
-            "use_map_cache": True,
-            "scenario_length": TRAIN_HORIZON,
-            "resample_frequency": TRAIN_HORIZON,
-            "stagger_first_episode": False,  # the default 20-step stagger horizon exceeds TRAIN_HORIZON
-        }
-    )
-    _set_small_observation_config(args)
-    args["policy"].update(
-        {
-            "ego_input_size": 8,
-            "partner_input_size": 8,
-            "lane_input_size": 8,
-            "boundary_input_size": 8,
-            "traffic_control_input_size": 8,
-            "context_input_size": 8,
-            "backbone_hidden_size": 32,
-            "backbone_num_layers": 1,
-            "actor_hidden_size": 16,
-            "actor_num_layers": 0,
-            "critic_hidden_size": 16,
-            "critic_num_layers": 0,
-            "fused_slot_encoder": False,  # tiny CPU encoders fail the fused width check
-        }
-    )
-    args["train"].update(
-        {
-            "seed": SEED,
-            "device": "cpu",
-            "compile": False,
-            "precision": "float32",
-            "torch_deterministic": True,
-            "anneal_lr": False,
-            "update_epochs": 1,
-            "batch_size": batch_size,
-            "bptt_horizon": TRAIN_HORIZON,
-            "adv_filter_enabled": False,
-            "minibatch_size": 64,
-            "max_minibatch_size": 64,
-            "total_timesteps": TRAIN_EPOCH_COUNT * batch_size,
-            "checkpoint_interval": 10_000,
-            "evaluation_interval_epochs": TRAIN_EVAL_INTERVAL if evaluation_enabled else None,
-            "evaluation_benchmarks": "training_eval",
-            "data_dir": str(tmp_path),
-        }
-    )
-    args["eval"].update(
-        {
-            "benchmark_config": str(benchmark_config_path),
-            "benchmarks": "training_eval",
-            "num_agents": TRAIN_AGENTS_PER_ENV,
-            "render_scenarios": False,
-            "render_filter": None,
-            "failure_replay_csv": None,
-            "capture_observations": False,
-        }
-    )
-    args["wandb"] = False
-    args["neptune"] = False
-    args["tb"] = False
-    return args
-
-
-def _seed_training():
-    random.seed(SEED)
-    np.random.seed(SEED)
-    torch.manual_seed(SEED)
-    torch.use_deterministic_algorithms(True, warn_only=True)
-
-
-def _assert_nested_exact(actual, expected):
-    assert type(actual) is type(expected)
-    if isinstance(actual, torch.Tensor):
-        assert torch.equal(actual, expected)
-        return
-    if isinstance(actual, np.ndarray):
-        np.testing.assert_array_equal(actual, expected)
-        return
-    if isinstance(actual, dict):
-        assert actual.keys() == expected.keys()
-        for key in actual:
-            _assert_nested_exact(actual[key], expected[key])
-        return
-    if isinstance(actual, (list, tuple)):
-        assert len(actual) == len(expected)
-        for actual_item, expected_item in zip(actual, expected):
-            _assert_nested_exact(actual_item, expected_item)
-        return
-    assert actual == expected
-
-
-def _run_training(tmp_path, benchmark_config_path, run_id, evaluation_enabled):
-    _seed_training()
-    logger = RecordingLogger(run_id)
-    args = _training_args(tmp_path, benchmark_config_path, evaluation_enabled)
-    # The run directory is train.data_dir, so each run needs its own; sharing one
-    # would make the second run resume the first instead of training from scratch.
-    run_dir = tmp_path / run_id
-    args["train"]["data_dir"] = str(run_dir)
-    args["run_name"] = run_id
-    pufferl.train("puffer_drive", args=args, logger=logger)
-    trainer_state = torch.load(run_dir / "trainer_state.pt", map_location="cpu", weights_only=False)
-    return run_dir, trainer_state, logger
-
-
-def test_mid_training_evaluation_preserves_exact_training_state(tmp_path):
-    benchmark_config_path = _write_training_benchmark(tmp_path)
-    previous_thread_count = torch.get_num_threads()
-    previous_deterministic_setting = torch.are_deterministic_algorithms_enabled()
-    try:
-        torch.set_num_threads(1)
-        baseline_dir, baseline_state, _ = _run_training(
-            tmp_path,
-            benchmark_config_path,
-            run_id="without_eval",
-            evaluation_enabled=False,
-        )
-        evaluated_dir, evaluated_state, evaluated_logger = _run_training(
-            tmp_path,
-            benchmark_config_path,
-            run_id="with_eval",
-            evaluation_enabled=True,
-        )
-    finally:
-        torch.set_num_threads(previous_thread_count)
-        torch.use_deterministic_algorithms(previous_deterministic_setting, warn_only=True)
-
-    assert baseline_dir.is_dir()
-    for state_key in (
-        "policy_state_dict",
-        "optimizer_state_dict",
-        "scheduler_state_dict",
-        "global_step",
-        "agent_step",
-        "epoch",
-        "update",
-        "rng_state",
-    ):
-        _assert_nested_exact(evaluated_state[state_key], baseline_state[state_key])
-    assert evaluated_state["epoch"] == TRAIN_EPOCH_COUNT
-
-    steps_per_epoch = TRAIN_ENV_COUNT * TRAIN_AGENTS_PER_ENV * TRAIN_HORIZON
-    expected_eval_directories = [f"epoch_{epoch:06d}_step_{epoch * steps_per_epoch}" for epoch in (3, 6, 7)]
-    eval_root = evaluated_dir / "eval/training/training_eval"
-    actual_eval_directories = sorted(path.name for path in eval_root.iterdir() if path.is_dir())
-    assert actual_eval_directories == expected_eval_directories
-    for eval_directory_name in expected_eval_directories:
-        eval_directory = eval_root / eval_directory_name
-        assert (eval_directory / "resolved_benchmark.yaml").is_file()
-        metrics = pd.read_csv(eval_directory / "episode_metrics.csv")
-        summary = json.loads((eval_directory / "evaluation_summary.json").read_text())
-        assert len(metrics) == 2
-        assert summary["num_scenarios"] == 2
-        assert summary["num_episodes"] == 2
-
-    eval_log_calls = [
-        (metrics, step) for metrics, step in evaluated_logger.calls if "eval_training_eval/num_episodes" in metrics
-    ]
-    assert [step for _, step in eval_log_calls] == [
-        3 * steps_per_epoch,
-        6 * steps_per_epoch,
-        7 * steps_per_epoch,
-    ]
-    assert all(metrics["eval_training_eval/num_episodes"] == 2 for metrics, _ in eval_log_calls)
-
-
 SDC_SCENARIO_COUNT = 8
 SDC_WORKER_COUNT = 2
 SDC_SCENARIO_LENGTH = 32
@@ -838,7 +621,6 @@ def _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir):
         }
     )
     args["wandb"] = False
-    args["neptune"] = False
     args["tb"] = False
     return args
 
@@ -858,13 +640,13 @@ def _run_sdc_eval(output_root, map_dir, benchmark_name, max_scenarios_per_batch)
         max_scenarios_per_batch=max_scenarios_per_batch,
     )
     args = _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir)
+    _write_checkpoint_run_dir(output_root / f"{benchmark_name}_checkpoint", args)
     pufferl.eval(
         env_name="puffer_drive",
         args=args,
         policy=ZeroPolicy(action_count=63),
         eval_output_dir=str(output_root),
         eval_output_subdir=benchmark_name,
-        use_training_config=True,
         benchmark_names=benchmark_name,
     )
     return pd.read_csv(output_root / benchmark_name / benchmark_name / "episode_metrics.csv")

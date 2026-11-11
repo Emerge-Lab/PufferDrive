@@ -177,20 +177,10 @@ class PolicyName(Enum):
     Drive = 0
 
 
-class RNNName(Enum):
-    Recurrent = 0
-
-
 class Activation(Enum):
     relu = 0
     tanh = 1
     gelu = 2
-
-
-class Optimizer(Enum):
-    adam = 0
-    adamw = 1
-    muon = 2
 
 
 class Precision(Enum):
@@ -207,19 +197,12 @@ class VectorBackend(Enum):
     PufferEnv = 0
     Serial = 1
     Multiprocessing = 2
-    Ray = 3
 
 
 class ActionSelection(Enum):
     sample = 0
     mode = 1
     mean = 2
-
-
-class ProfileMode(Enum):
-    sim = 0
-    training = 1
-    all = 2
 
 
 @dataclass
@@ -230,15 +213,6 @@ class VectorConfig:
     batch_size: int | str | None = MISSING
     zero_copy: bool = MISSING
     seed: int | None = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
-
-
-@dataclass
-class ProfileConfig:
-    mode: ProfileMode = MISSING
-    output_dir: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
-    warmup_cycles: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
-    trace_cycles: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
-    perf_frequency_hz: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
 
 
 @dataclass
@@ -406,24 +380,13 @@ class DrivePolicyConfig:
 
 
 @dataclass
-class RecurrentConfig:
-    input_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
-    hidden_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
-
-
-@dataclass
 class TrainingConfig:
     name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     project: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     seed: int | None = MISSING
     final_model_name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
-    evaluation_interval_epochs: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
-    evaluation_benchmarks: str | None = MISSING
-    cosim_debug_evals: bool = MISSING
     torch_deterministic: bool = MISSING
-    cpu_offload: bool = MISSING
     device: str | int = MISSING
-    optimizer: Optimizer = MISSING
     anneal_lr: bool = MISSING
     precision: Precision = MISSING
     tf32: bool = MISSING
@@ -459,10 +422,6 @@ class TrainingConfig:
     compile: bool = MISSING
     compile_mode: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     compile_fullgraph: bool = MISSING
-    vtrace_rho_clip: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
-    vtrace_c_clip: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
-    adv_sampling_prio_alpha: float = _constrained_field(PROBABILITY_CONSTRAINT)
-    adv_sampling_prio_beta0: float = _constrained_field(PROBABILITY_CONSTRAINT)
     adv_filter_enabled: bool = MISSING
     adv_filter_ewma_beta: float = _constrained_field(PROBABILITY_CONSTRAINT)
     adv_filter_threshold_scale: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
@@ -471,8 +430,6 @@ class TrainingConfig:
     render_interval: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     render_num_maps: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     stop_after_epochs: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
-    # Derived by load_config from rnn_name and intentionally absent from YAML.
-    use_rnn: bool = MISSING
 
 
 @dataclass
@@ -519,14 +476,10 @@ class PufferDriveConfig:
     load_model_path: str | None = MISSING
     load_id: str | None = MISSING
     num_scenarios: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
-    max_runs: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     wandb: bool = MISSING
     wandb_project: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     wandb_group: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     run_name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
-    neptune: bool = MISSING
-    neptune_name: str = MISSING
-    neptune_project: str = MISSING
     tb: bool = MISSING
     local_rank: int = MISSING
     tag: str | None = MISSING
@@ -534,17 +487,11 @@ class PufferDriveConfig:
     package: PackageName = MISSING
     env_name: EnvironmentName = MISSING
     policy_name: PolicyName = MISSING
-    rnn_name: RNNName | None = MISSING
-    max_suggestion_cost: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
-    profile: ProfileConfig = MISSING
     vec: VectorConfig = MISSING
     env: DriveEnvConfig = MISSING
     policy: DrivePolicyConfig = MISSING
-    rnn: RecurrentConfig = MISSING
     train: TrainingConfig = MISSING
-    sweep: dict = MISSING
     eval: EvaluationConfig | None = None
-    controlled_exp: dict = MISSING
 
     # Known runtime metadata/options are optional and are not materialized in
     # the caller's plain dictionary when absent.
@@ -615,8 +562,8 @@ def _validate_string_selection(value, context, path, *, allow_none=True):
 
 def _validate_cross_field_constraints(config, context):
     """Validate relationships and context-dependent rules spanning config fields."""
-    if config["load_id"] is not None and not (config["wandb"] or config["neptune"]):
-        _raise_config_error(context, "load_id", "requires wandb or neptune")
+    if config["load_id"] is not None and not config["wandb"]:
+        _raise_config_error(context, "load_id", "requires wandb")
 
     env = config["env"]
     if env["min_agents_per_env"] > env["max_agents_per_env"]:
@@ -675,27 +622,11 @@ def _validate_cross_field_constraints(config, context):
             "policy.action_type",
             "cannot be continuous when env.action_type is discrete",
         )
-    if config["rnn_name"] is not None:
-        if policy["backbone_num_layers"] == 0:
-            _raise_config_error(
-                context,
-                "policy.backbone_num_layers",
-                "must be positive when rnn_name is enabled",
-            )
-        backbone_size = policy["backbone_hidden_size"]
-        if config["rnn"]["input_size"] != backbone_size or config["rnn"]["hidden_size"] != backbone_size:
-            _raise_config_error(context, "rnn", "input_size and hidden_size must match policy.backbone_hidden_size")
 
     train = config["train"]
-    evaluation_benchmarks = train["evaluation_benchmarks"]
-    evaluation_disabled = train["evaluation_interval_epochs"] is None
-    if not (evaluation_disabled and evaluation_benchmarks is None) and (
-        not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip()
-    ):
-        _raise_config_error(context, "train.evaluation_benchmarks", "must be a non-empty string")
     if train["render_num_maps"] is not None and train["render_num_maps"] > config["env"]["num_maps"]:
         _raise_config_error(context, "train.render_num_maps", "must not exceed env.num_maps")
-    if not context.startswith("evaluation") and context != "simulation profiling":
+    if not context.startswith("evaluation"):
         for field_name in ("batch_size", "bptt_horizon"):
             if train[field_name] != "auto":
                 _validate_value_constraint(train[field_name], POSITIVE_INT_CONSTRAINT, context, f"train.{field_name}")
@@ -762,9 +693,8 @@ def _validate_cross_field_constraints(config, context):
                         f"the effective minibatch size ({effective_minibatch_size}) must be divisible by the auto-computed bptt_horizon ({horizon})",
                     )
     eval_config = config["eval"]
-    evaluation_required = context.startswith("evaluation") or config["train"]["evaluation_interval_epochs"] is not None
     if not eval_config:
-        if evaluation_required:
+        if context.startswith("evaluation"):
             _raise_config_error(context, "eval", "a complete eval section is required")
     else:
         _validate_string_selection(eval_config["benchmarks"], context, "eval.benchmarks")

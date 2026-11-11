@@ -136,12 +136,3 @@ benchmarks:
       disable_red_light_infractions: true
       disable_stop_sign_infractions: true
       goal_reach_requires_speed: false
-
-  # Closed-loop co-sim against the real external simulators (see
-  # pufferlib/ocean/evaluation_utils/cosim_evaluator.py), unlike the
-  # benchmarks above which replay pre-baked .bin maps in-process.
-  - name: carla_cosim
-    simulation_mode: carla_cosim
-    route_ids: [0, 1, 2]
-    base_carla_port: 2000
-    compute_config: scripts/cluster_configs/nyu_greene.yaml

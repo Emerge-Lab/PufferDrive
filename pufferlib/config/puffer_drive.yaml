@@ -1,16 +1,12 @@
 load_model_path: null
 load_id: null
 num_scenarios: 3
-max_runs: 200
 wandb: false
 wandb_project: pufferlib
 wandb_group: debug
 # Unique run identifier. Doubles as the logger run id, so relaunching with the
 # same run_name and train.data_dir resumes that run instead of starting a new one.
 run_name: default_run
-neptune: false
-neptune_name: pufferai
-neptune_project: ablations
 tb: false
 local_rank: 0
 tag: null
@@ -18,16 +14,6 @@ eval_simulation: null
 package: ocean
 env_name: puffer_drive
 policy_name: Drive
-# Options: Recurrent, None (null)
-rnn_name: null
-max_suggestion_cost: 3600
-profile:
-  # Options: sim, training, all
-  mode: all
-  output_dir: profiles
-  warmup_cycles: 1
-  trace_cycles: 1
-  perf_frequency_hz: 99
 vec:
   backend: Multiprocessing
   num_envs: 20
@@ -317,25 +303,14 @@ policy:
   # Dual or shared actor-critic backbone
   shared_network: false
   action_type: discrete
-rnn:
-  input_size: 512
-  hidden_size: 512
 train:
   name: pufferai
   project: ablations
   seed: 42
   # Filename of the final model copy written into train.data_dir when training ends.
   final_model_name: final_model.pt
-  # Null disables evaluation during training.
-  evaluation_interval_epochs: null
-  # Select multiple benchmarks with a comma-separated value. eg: carla_fast,womd_single
-  evaluation_benchmarks: carla_fast
-  # Submit the carla_cosim SLURM debug hook at start/end of training.
-  cosim_debug_evals: False
   torch_deterministic: false
-  cpu_offload: false
   device: cuda
-  optimizer: adamw
   anneal_lr: true
   precision: bfloat16
   # false: pure float32 matmuls/convs (no TensorFloat-32); requires precision float32
@@ -378,10 +353,6 @@ train:
   compile: true
   compile_mode: default
   compile_fullgraph: false
-  vtrace_rho_clip: 1
-  vtrace_c_clip: 1
-  adv_sampling_prio_alpha: 0.8499999999999999
-  adv_sampling_prio_beta0: 0.8499999999999999
   # Drop transitions whose |advantage| is below adv_filter_threshold_scale * EMA of the batch max
   adv_filter_enabled: true
   adv_filter_ewma_beta: 0.25
@@ -395,11 +366,6 @@ train:
   render_num_maps: null
   # Stop after this many epochs in this process (debug/render runs); null runs to total_timesteps
   stop_after_epochs: null
-sweep:
-  method: Protein
-  metric: score
-  goal: maximize
-  downsample: 10
 # Catalog-defined evaluation and replay rendering settings.
 eval:
   num_agents: 256
@@ -466,147 +432,3 @@ eval:
   observation_replay_writer_count: 4
   # Options: sample | mode | mean
   action_selection: mean
-controlled_exp:
-  train:
-    # [sweep.train.learning_rate]
-    # distribution = log_normal
-    # min = 0.0001
-    # mean = 0.001
-    # max = 0.002
-    # scale = auto
-    # [sweep.train.ent_coef]
-    # distribution = log_normal
-    # min = 0.0005
-    # mean = 0.01
-    # max = 0.02
-    # scale = auto
-    # [sweep.train.vf_clip_coef]
-    # distribution = log_normal
-    # min = 0.1
-    # mean = 0.2
-    # max = 3
-    # scale = auto
-    # [sweep.env.inactive_agent_threshold]
-    # distribution = log_normal
-    # min = 0.1
-    # mean = 0.4
-    # max = 1.0
-    # scale = auto
-    # [sweep.train.gamma]
-    # distribution = logit_normal
-    # min = 0.90
-    # mean = 0.99
-    # max = 0.9999
-    # scale = auto
-    # [sweep.train.max_grad_norm]
-    # distribution = uniform
-    # min = 0.2
-    # mean = 0.5
-    # max = 2.0
-    # scale = auto
-    # [sweep.train.update_epochs]
-    # distribution = int_uniform
-    # min = 1
-    # mean = 1
-    # max = 6
-    # scale = auto
-    # [sweep.train.vf_coef]
-    # distribution = uniform
-    # min = 0.2
-    # mean = 0.5
-    # max = 3.0
-    # scale = auto
-    # [sweep.train.vtrace_rho_clip]
-    # distribution = uniform
-    # min = 0.0
-    # max = 5.0
-    # mean = 1.0
-    # scale = auto
-    # [sweep.train.vtrace_c_clip]
-    # distribution = uniform
-    # min = 0.0
-    # max = 5.0
-    # mean = 1.0
-    # scale = auto
-    # [sweep.train.clip_coef]
-    # distribution = uniform
-    # min = 0.01
-    # max = 1.0
-    # mean = 0.2
-    # scale = auto
-    # [sweep.train.gae_lambda]
-    # distribution = logit_normal
-    # min = 0.8
-    # mean = 0.95
-    # max = 0.995
-    # scale = auto
-    # [sweep.policy.actor_num_layers]
-    # distribution = int_uniform
-    # min = 1
-    # mean = 1
-    # max = 2
-    # scale = auto
-    # [sweep.policy.critic_num_layers]
-    # distribution = int_uniform
-    # min = 1
-    # mean = 1
-    # max = 2
-    # scale = auto
-    # [sweep.env.reward_goal]
-    # distribution = uniform
-    # min = 0.0
-    # mean = 0.5
-    # max = 1.0
-    # scale = auto
-    # [sweep.env.reward_comfort]
-    # distribution = uniform
-    # min = 0.0
-    # mean = 0.05
-    # max = 0.2
-    # scale = auto
-    # [sweep.env.reward_lane_align]
-    # distribution = uniform
-    # min = 0.0
-    # mean = 0.025
-    # max = 0.2
-    # scale = auto
-    # [sweep.env.reward_lane_center]
-    # distribution = uniform
-    # min = 0.0
-    # mean = 0.0038
-    # max = 0.2
-    # scale = auto
-    # [sweep.env.reward_velocity]
-    # distribution = uniform
-    # min = 0.0
-    # mean = 0.0025
-    # max = 0.01
-    # scale = auto
-    # [sweep.train.adam_beta1]
-    # distribution = logit_normal
-    # min = 0.7
-    # mean = 0.9
-    # max = 0.999
-    # scale = auto
-    # [sweep.train.adam_beta2]
-    # distribution = logit_normal
-    # min = 0.99
-    # mean = 0.999
-    # max = 0.9999
-    # scale = auto
-    # [sweep.train.adv_sampling_prio_alpha]
-    # distribution = logit_normal
-    # min = 0.7
-    # mean = 0.85
-    # max = 0.99
-    # scale = auto
-    # [sweep.train.adv_sampling_prio_beta0]
-    # distribution = logit_normal
-    # min = 0.7
-    # mean = 0.85
-    # max = 0.99
-    # scale = auto
-    learning_rate:
-      values: [0.001, 0.003, 0.01]
-    ent_coef:
-      values: [0.01, 0.005]

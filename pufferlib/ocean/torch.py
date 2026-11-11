@@ -5,7 +5,6 @@ import torch
 import torch.nn.functional as F
 
 import pufferlib
-import pufferlib.models
 from pufferlib.ocean.drive import binding
 
 try:
@@ -14,11 +13,6 @@ except ModuleNotFoundError as import_error:  # triton ships only with CUDA torch
     if import_error.name != "triton":
         raise
     fused_encode_and_pool = fused_encoder_active = validate_fused_encoder = None
-
-from pufferlib.models import Default as Policy  # noqa: F401
-from pufferlib.models import Convolutional as Conv  # noqa: F401
-
-Recurrent = pufferlib.models.LSTMWrapper
 
 ACTIVATIONS = {"relu": nn.ReLU, "tanh": nn.Tanh, "gelu": nn.GELU}
 
@@ -449,7 +443,7 @@ class Drive(nn.Module):
         self.critic_head = nn.Sequential(*critic_head_layers)
         self.fp32_heads = fp32_heads
 
-    def forward(self, observations, state=None):
+    def forward(self, observations):
         """
         Forward pass handling both Actor and Critic inference.
         """
@@ -481,28 +475,14 @@ class Drive(nn.Module):
             value = self.critic_head(critic_hidden)
         return actions, value
 
-    def forward_train(self, x, state=None):
-        return self.forward(x, state)
+    def forward_train(self, x):
+        return self.forward(x)
 
-    def forward_eval(self, x, state=None):
-        return self.forward(x, state)
+    def forward_eval(self, x):
+        return self.forward(x)
 
-    def pool_slot_counts(self, observations, state=None):
+    def pool_slot_counts(self, observations):
         return self.actor_backbone.pool_slot_counts(observations, self.ego_dim)
-
-    # Required for PufferLib recurrent wrappers
-    def encode_observations(self, observations, state=None):
-        assert self.shared_network, "LSTM wrapper requires shared_network=True"
-        return self.actor_backbone(observations, self.ego_dim)
-
-    def decode_actions(self, hidden):
-        """
-        USE ONLY FOR LSTM WRAPPER.
-        Decodes actions and value from the hidden state.
-        Args:
-            hidden: The hidden state for the actor (policy).
-        """
-        return self._run_heads(hidden, hidden)
 
     def discrete_actions_to_continuous(self, actions):
         return self.action_table[actions.long()]

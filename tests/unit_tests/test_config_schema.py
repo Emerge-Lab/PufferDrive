@@ -28,7 +28,6 @@ from pufferlib.config_schema import (
     validate_puffer_drive_config,
 )
 from pufferlib.ocean.drive import binding
-from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.pufferl import load_config
 
 
@@ -99,27 +98,6 @@ class TestConfigSchema(unittest.TestCase):
         self.assertIs(normalized["env"]["use_neighbor_cache"], False)
         self.assertIs(normalized["env"]["termination_mode"], True)
         self.assertIs(normalized["env"]["terminate_on_goal"], False)
-
-    @patch("sys.argv", ["pufferl.py"])
-    def test_training_evaluation_benchmarks_accepts_comma_separated_string(self):
-        args = load_config("puffer_drive")
-        args["train"]["evaluation_interval_epochs"] = 1
-        args["train"]["evaluation_benchmarks"] = "carla_fast,womd_single"
-
-        normalized = normalize_puffer_drive_config(args, "test")
-        self.assertIsNone(validate_puffer_drive_config(normalized, "test"))
-        self.assertTrue(drive_benchmark.validate_training_evaluation_config(normalized))
-
-    @patch("sys.argv", ["pufferl.py"])
-    def test_training_evaluation_benchmarks_rejects_list(self):
-        args = load_config("puffer_drive")
-        args["train"]["evaluation_interval_epochs"] = 1
-        args["train"]["evaluation_benchmarks"] = ["carla_fast", "womd_single"]
-
-        with self.assertRaisesRegex(pufferlib.APIUsageError, "evaluation_benchmarks"):
-            normalize_puffer_drive_config(args, "test")
-        with self.assertRaisesRegex(pufferlib.APIUsageError, "evaluation_benchmarks"):
-            validate_puffer_drive_config(args, "test")
 
     @patch("sys.argv", ["pufferl.py", "env.collision_behavior=sotp"])
     def test_enum_typo_fails_at_load(self):

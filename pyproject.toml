@@ -216,10 +216,6 @@ vizdoom = [
     'stable_baselines3==2.1.0',
 ]
 
-ray = [
-    'ray==2.23.0',
-]
-
 cleanrl = [
     'stable_baselines3==2.1.0',
     'tensorboard==2.11.2',

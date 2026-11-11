@@ -14,7 +14,6 @@ import yaml
 
 from pufferlib import pufferl
 from pufferlib.ocean.evaluation_utils import eval_wandb_report
-from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 
 
 RUN_IDENTITY = {"run_name": "k_exp_0002_1000", "wandb_project": "nightly-multi-long"}
@@ -406,19 +405,6 @@ def test_training_logger_opens_the_run_with_its_config(monkeypatch):
     assert stub.init_kwargs["group"] == "emerge_"
     assert stub.init_kwargs["resume"] == "allow"
     assert stub.init_kwargs["config"] is args
-
-
-def test_summarize_benchmark_metrics_skips_benchmarks_without_a_summary():
-    summary = {"num_scenarios": 1000, "num_episodes": 998, "metrics_mean": {"collision_rate": 0.11}}
-    results = {
-        "carla": {"episodes": [], "summary": summary},
-        "nuplan_single": {"episodes": [], "summary": None},
-    }
-
-    metrics = drive_benchmark.summarize_benchmark_metrics(results, "eval_")
-
-    assert set(metrics) == {"eval_carla/num_scenarios", "eval_carla/num_episodes", "eval_carla/collision_rate"}
-    assert drive_benchmark.summarize_benchmark_metrics({}, "eval_") == {}
 
 
 def test_tidied_longest6_run_reads_its_flat_route_records(tmp_path):

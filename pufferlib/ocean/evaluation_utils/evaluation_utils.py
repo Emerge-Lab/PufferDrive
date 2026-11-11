@@ -16,6 +16,7 @@ from pufferlib.config_schema import (
     validate_puffer_drive_config,
     validate_puffer_drive_resources,
 )
+from pufferlib.ocean.cosim.arch import drop_retired_settings
 
 
 ALL_INFRACTIONS_RENDER_FILTER = "all_infractions"
@@ -79,30 +80,6 @@ def _resolve_map_indices(map_dir, map_names):
     return indices
 
 
-def validate_training_evaluation_config(args):
-    eval_config = args["eval"]
-    train_config = args["train"]
-    evaluation_interval_epochs = train_config["evaluation_interval_epochs"]
-    if evaluation_interval_epochs is None:
-        return False
-
-    if (
-        isinstance(evaluation_interval_epochs, bool)
-        or not isinstance(evaluation_interval_epochs, int)
-        or evaluation_interval_epochs <= 0
-    ):
-        raise pufferlib.APIUsageError("train.evaluation_interval_epochs must be a positive integer or null")
-
-    evaluation_benchmarks = train_config["evaluation_benchmarks"]
-    if not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip():
-        raise pufferlib.APIUsageError("train.evaluation_benchmarks must select at least one benchmark")
-
-    load_benchmark_config(
-        eval_config["benchmark_config"], evaluation_benchmarks, eval_config["map_dir"], eval_config["num_scenarios"]
-    )
-    return True
-
-
 def load_benchmark_config(config_path, selected_names, map_dir_override=None, num_scenarios_override=None):
     """Load benchmark sources and resolve selection without validating final values."""
     config = _load_yaml_mapping(config_path, "benchmark config")
@@ -137,11 +114,6 @@ def load_benchmark_config(config_path, selected_names, map_dir_override=None, nu
     selected_benchmark_configs = []
     for name in selected_names:
         benchmark = configured_benchmarks[name]
-        if benchmark.get("simulation_mode") == "carla_cosim":
-            from pufferlib.ocean.evaluation_utils.cosim_evaluator import parse_cosim_benchmark
-
-            resolved_benchmarks.append(parse_cosim_benchmark(name, benchmark))
-            continue
         if num_scenarios_override is not None:
             benchmark = {**benchmark, "num_scenarios": num_scenarios_override}
         if map_dir_override is not None:
@@ -163,35 +135,17 @@ def load_checkpoint_architecture(args):
     if not isinstance(model_path, str) or not model_path.endswith(".pt") or not os.path.isfile(model_path):
         raise pufferlib.APIUsageError("Benchmark requires a valid load_model_path checkpoint")
     config_path = os.path.join(resolve_run_dir(model_path), "config.yaml")
-    checkpoint_config = _load_yaml_mapping(config_path, "checkpoint config")
+    checkpoint_config = drop_retired_settings(_load_yaml_mapping(config_path, "checkpoint config"))
 
     merged = copy.deepcopy(args)
-    for section in ("policy", "rnn"):
-        values = _require_mapping(checkpoint_config.get(section), f"checkpoint config {section}")
-        merged[section].update(values)
+    merged["policy"].update(_require_mapping(checkpoint_config.get("policy"), "checkpoint config policy"))
     checkpoint_env = _require_mapping(checkpoint_config.get("env"), "checkpoint config env")
     accepted_env_keys = puffer_drive_constructor_keys()
     merged["env"].update({key: value for key, value in checkpoint_env.items() if key in accepted_env_keys})
-    for key in ("policy_name", "rnn_name"):
-        if key not in checkpoint_config:
-            raise pufferlib.APIUsageError(f"Checkpoint config is missing {key}")
-        merged[key] = checkpoint_config[key]
-    merged["train"]["use_rnn"] = merged["rnn_name"] is not None
+    if "policy_name" not in checkpoint_config:
+        raise pufferlib.APIUsageError("Checkpoint config is missing policy_name")
+    merged["policy_name"] = checkpoint_config["policy_name"]
     return merged, config_path
-
-
-def summarize_benchmark_metrics(benchmark_results, key_prefix):
-    """Flatten benchmark results into one scalar metric dict for the experiment logger."""
-    metrics = {}
-    for benchmark_name, benchmark_result in benchmark_results.items():
-        summary = benchmark_result["summary"]
-        if summary is None:
-            continue
-        prefix = f"{key_prefix}{benchmark_name}"
-        metrics[f"{prefix}/num_scenarios"] = summary["num_scenarios"]
-        metrics[f"{prefix}/num_episodes"] = summary["num_episodes"]
-        metrics.update({f"{prefix}/{key}": value for key, value in summary["metrics_mean"].items()})
-    return metrics
 
 
 def _build_benchmark_args(base_args, benchmark, environment_config):
@@ -346,7 +300,7 @@ def _plan_failure_replay_workers(args, map_seed_pairs, num_workers, scenario_len
 def write_resolved_benchmark_config(args, benchmark, benchmark_config_path, checkpoint_config_path, output_path):
     resolved = {
         "benchmark_config": os.path.abspath(benchmark_config_path),
-        "checkpoint_config": os.path.abspath(checkpoint_config_path) if checkpoint_config_path is not None else None,
+        "checkpoint_config": os.path.abspath(checkpoint_config_path),
         "benchmark": benchmark,
         "args": args,
     }

@@ -323,9 +323,10 @@ class ShadowEgo:
 
         import pufferlib.ensemble
         import pufferlib.ocean.torch as drive_torch
+        from pufferlib.pytorch import clean_policy_state_dict
 
         checkpoint = torch.load(self.checkpoint, map_location=self.device, weights_only=False)
-        policy_state_dict = pufferlib.ensemble.member_state_dicts(checkpoint)[0]
+        policy_state_dict = clean_policy_state_dict(checkpoint)
         env_for_policy = self.env
         self._boundary_feat_ckpt = None
         bw = policy_state_dict.get("actor_backbone.boundary_encoder.0.weight")
@@ -349,8 +350,7 @@ class ShadowEgo:
         self.policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint)
         self.policy.eval()
         print(
-            f"[puffer_agent] loaded {pufferlib.ensemble.describe_policy(self.policy)} from {self.checkpoint} "
-            f"(obs partner slots {self.env.obs_slots_partners_n})"
+            f"[puffer_agent] loaded policy from {self.checkpoint} (obs partner slots {self.env.obs_slots_partners_n})"
         )
 
     def init_route(self, route):

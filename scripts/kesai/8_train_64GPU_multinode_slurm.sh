@@ -76,7 +76,6 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     train.precision=bfloat16 \
     policy.fp32_heads=true \
     train.tf32=false \
-    train.evaluation_benchmarks=carla_fast \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True

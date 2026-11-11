@@ -374,7 +374,7 @@ plt.show()
 policy.eval()
 with torch.no_grad():
     hidden = policy.actor_backbone(obs_tensor, env.ego_features)
-    action_logits, value = policy.decode_actions(hidden)
+    action_logits, value = policy._run_heads(hidden, hidden)
 
 # Collect per-encoder activations
 activations = {}

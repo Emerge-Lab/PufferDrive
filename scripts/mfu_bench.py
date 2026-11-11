@@ -163,7 +163,6 @@ def main():
         f"policy.fused_slot_encoder={str(args.fused).lower()}",
         "wandb=False",
         "tb=False",
-        "neptune=False",
         *args.overrides,
     ]
     import pufferlib.pufferl as P

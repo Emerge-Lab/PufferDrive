@@ -82,7 +82,7 @@ effective values.
 
 For each selected benchmark, the evaluator:
 
-1. Loads the checkpoint's policy, RNN, and accepted 3.0 environment settings.
+1. Loads the checkpoint's policy and accepted 3.0 environment settings.
 2. Applies the benchmark and shared evaluation overrides.
 3. Splits a deterministic scenario window across evaluation workers.
 4. Runs deterministic policy inference and gathers one `evaluation_episode`
@@ -194,24 +194,3 @@ agent batch size, infractions, progress, rewards, and score metrics.
 count, and means for every numeric metric. If the evaluator emits fewer or more
 episodes than requested, it prints a warning and still writes the available
 results; compare `num_scenarios` with `num_episodes` to detect the mismatch.
-
-## Evaluation during training
-
-Training uses the same configured evaluator and the live policy:
-
-```yaml
-env:
-  num_agents: 1024
-eval:
-  num_agents: 128
-train:
-  evaluation_interval_epochs: 100
-  evaluation_benchmarks: carla_fast
-```
-
-The default `evaluation_interval_epochs: null` disables evaluation during
-training. Mid-training evaluation currently shares
-`vec.num_envs` with training. If training ends between scheduled intervals, one
-final evaluation runs at the last epoch. Training evaluation logs benchmark
-metric means to the active logger and writes reports under the training run's
-`eval/training` hierarchy.

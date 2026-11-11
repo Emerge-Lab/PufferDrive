@@ -72,6 +72,32 @@ def checkpoint_config_path(checkpoint):
     raise FileNotFoundError(f"no config.yaml next to or one level above {checkpoint}")
 
 
+# Settings of removed features: a config saved before the removal may carry them, but only with this value.
+RETIRED_SETTINGS = {("rnn_name",): None}
+RETIRED_SECTIONS = ("rnn",)
+
+
+def drop_retired_settings(config):
+    """Strip the settings of removed features from a saved run config, in place. Raises when one of them
+    selects a feature that no longer exists (the checkpoint cannot be run by this code)."""
+    for key_path, remaining_value in RETIRED_SETTINGS.items():
+        section = config
+        for section_name in key_path[:-1]:
+            section = section.get(section_name) or {}
+        setting_name = key_path[-1]
+        if setting_name not in section:
+            continue
+        if section[setting_name] != remaining_value:
+            raise ValueError(
+                f"saved config sets {'.'.join(key_path)}={section[setting_name]!r}; that feature was removed, "
+                f"only {remaining_value!r} is supported"
+            )
+        del section[setting_name]
+    for section_name in RETIRED_SECTIONS:
+        config.pop(section_name, None)
+    return config
+
+
 # Applied to every co-sim shadow env after CLEAN_EVAL_OVERRIDES: the eval-only semantics the native
 # benchmark gets from eval_mode (scripts/kesai/7_eval_8node_slurm.sh passes the 0.2 m margin and the
 # 1.5 m/s^3 standstill deadband), which the co-sim env cannot enter because eval_mode's scenario

@@ -393,7 +393,7 @@ def main():
         checkpoint = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
         policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint)
         policy.eval()
-        print(f"[cosim] loaded {pufferlib.ensemble.describe_policy(policy)} from {args.checkpoint}")
+        print(f"[cosim] loaded policy from {args.checkpoint}")
     # jerk action: idx = j_long_idx*3 + j_lat_idx; (3,1) = +long jerk, straight (accelerate)
     dummy_action = np.full((1, 1), 3 * 3 + 1, dtype=np.int32)
 

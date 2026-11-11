@@ -31,7 +31,6 @@ def test_filtered_ppo_accumulation_matches_optimizer_batches(retained_count, mic
     trainer.policy = ValuePolicy()
     trainer.config = {
         "device": "cpu",
-        "cpu_offload": False,
         "update_epochs": 3,
         "adv_filter_enabled": True,
         "adv_filter_ewma_beta": 0.25,

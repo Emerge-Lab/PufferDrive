@@ -49,7 +49,6 @@ TRAIN_OVERRIDES = [
     "train.max_minibatch_size=8192",
     "wandb=False",
     "tb=False",
-    "neptune=False",
 ]
 
 
@@ -119,7 +118,7 @@ def run_phases(rows, fused):
     def update_step():
         optimizer.zero_grad(set_to_none=True)
         with amp:
-            logits, value = compiled(update_obs, {"action": actions, "lstm_h": None, "lstm_c": None})
+            logits, value = compiled(update_obs)
         logits = logits.float()
         _, logprob, entropy, _ = sample_logits(logits, action=actions)
         loss = -logprob.float().mean() + 0.5 * value.float().square().mean() - 0.01 * entropy.mean()

@@ -164,10 +164,8 @@ def _build_config():
             "fused_slot_encoder": False,  # the CPU-only image has no triton
         },
     )
-    _set_existing(args["rnn"], {"input_size": 256, "hidden_size": 256})
 
     args["wandb"] = False
-    args["neptune"] = False
     args["eval"] = None  # disable all evaluators during the smoke run
 
     return args

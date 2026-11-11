@@ -1,6 +1,3 @@
-import sys
-from typing import Dict, List, Tuple, Union
-
 import numpy as np
 import torch
 from torch.distributions.utils import logits_to_probs
@@ -23,100 +20,6 @@ numpy_to_torch_dtype_dict = {
 ACTION_SELECT_SAMPLE = "sample"
 ACTION_SELECT_MODE = "mode"  # argmax
 ACTION_SELECT_MEAN = "mean"  # probability-weighted continuous mean
-
-LITTLE_BYTE_ORDER = sys.byteorder == "little"
-
-# USER NOTE: You should not get any errors in nativize.
-# This is a complicated piece of code that attempts to convert
-# flat bytes to structured tensors without breaking torch.compile.
-# If you hit any errors, please post on discord.gg/puffer
-# One exception: make sure you didn't change the dtype of your data
-# ie by doing torch.Tensor(data) instead of torch.from_numpy(data)
-
-# dtype of the tensor
-# shape of the tensor
-# starting element of the observation
-# number of elements of the observation to take
-# could be a namedtuple or dataclass
-NativeDTypeValue = Tuple[torch.dtype, List[int], int, int]
-NativeDType = Union[NativeDTypeValue, Dict[str, Union[NativeDTypeValue, "NativeDType"]]]
-
-
-# TODO: handle discrete obs
-# Spend some time trying to break this fn with differnt obs
-def nativize_dtype(emulated) -> NativeDType:
-    # sample dtype - the dtype of what we obtain from the environment (usually bytes)
-    sample_dtype: np.dtype = emulated["observation_dtype"]
-    # structured dtype - the gym.Space converted numpy dtype
-
-    # the observation represents (could be dict, tuple, box, etc.)
-    structured_dtype: np.dtype = emulated["emulated_observation_dtype"]
-    subviews, dtype, shape, offset, delta = _nativize_dtype(sample_dtype, structured_dtype)
-    if subviews is None:
-        return (dtype, shape, offset, delta)
-    else:
-        return subviews
-
-
-def round_to(x, base):
-    return int(base * np.ceil(x / base))
-
-
-def _nativize_dtype(sample_dtype: np.dtype, structured_dtype: np.dtype, offset: int = 0) -> NativeDType:
-    if structured_dtype.fields is None:
-        if structured_dtype.subdtype is not None:
-            dtype, shape = structured_dtype.subdtype
-        else:
-            dtype = structured_dtype
-            shape = (1,)
-
-        delta = int(np.prod(shape))
-        if sample_dtype.base.itemsize == 1:
-            offset = round_to(offset, dtype.alignment)
-            delta *= dtype.itemsize
-        else:
-            assert dtype.itemsize == sample_dtype.base.itemsize
-
-        return None, numpy_to_torch_dtype_dict[dtype], shape, offset, delta
-    else:
-        subviews = {}
-        start_offset = offset
-        all_delta = 0
-        for name, (dtype, _) in structured_dtype.fields.items():
-            views, dtype, shape, offset, delta = _nativize_dtype(sample_dtype, dtype, offset)
-
-            if views is not None:
-                subviews[name] = views
-            else:
-                subviews[name] = (dtype, shape, offset, delta)
-
-            offset += delta
-            all_delta += delta
-
-        return subviews, dtype, shape, start_offset, all_delta
-
-
-def nativize_tensor(observation: torch.Tensor, native_dtype: NativeDType):
-    return _nativize_tensor(observation, native_dtype)
-
-
-def _nativize_tensor(observation: torch.Tensor, native_dtype: NativeDType):
-    if isinstance(native_dtype, tuple):
-        dtype, shape, offset, delta = native_dtype
-        torch._check_is_size(offset)
-        torch._check_is_size(delta)
-        # Important, we are assuming that obervations of shape
-        # [N, D] where N is number of examples and D is number of
-        # bytes per example is being passed in
-        slice = observation.narrow(1, offset, delta)
-        slice = slice.view(dtype)
-        slice = slice.view(observation.shape[0], *shape)
-        return slice
-    else:
-        subviews = {}
-        for name, dtype in native_dtype.items():
-            subviews[name] = _nativize_tensor(observation, dtype)
-        return subviews
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):

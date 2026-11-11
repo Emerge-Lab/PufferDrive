@@ -1,13 +1,6 @@
+import importlib.util
+
 from .environment import *
 
-try:
-    import torch
-except ImportError:
-    pass
-else:
-    from .torch import Policy
-
-    try:
-        from .torch import Recurrent
-    except:
-        Recurrent = None
+if importlib.util.find_spec("torch") is not None:
+    from . import torch  # noqa: F401

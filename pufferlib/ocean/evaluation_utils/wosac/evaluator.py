@@ -93,12 +93,6 @@ class WOSACEvaluator:
         for rollout_idx in range(self.num_rollouts):
             print(f"\rCollecting rollout {rollout_idx + 1}/{self.num_rollouts}...", end="", flush=True)
             obs, info = puffer_env.reset()
-            state = {}
-            if args["train"]["use_rnn"]:
-                state = dict(
-                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-                )
 
             # TODO find out how to test this code path
             for time_idx in range(self.sim_steps):
@@ -113,7 +107,7 @@ class WOSACEvaluator:
                 # Step policy
                 with torch.no_grad():
                     ob_tensor = torch.as_tensor(obs).to(device)
-                    logits, value = policy.forward_eval(ob_tensor, state)
+                    logits, value = policy.forward_eval(ob_tensor)
                     action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(
                         logits, env_continuous=env_continuous, policy=policy
                     )
@@ -647,7 +641,7 @@ class HumanReplayEvaluator:
         every info dict emitted at episode boundaries and averaging numeric fields.
 
         Args:
-            args: Config dict with train settings (device, use_rnn, etc.)
+            args: Config dict with train settings (device, etc.)
             puffer_env: PufferLib environment wrapper
             policy: Trained policy to evaluate
 
@@ -658,7 +652,6 @@ class HumanReplayEvaluator:
         import torch
         import pufferlib
 
-        num_agents = puffer_env.observation_space.shape[0]
         device = args["train"]["device"]
         scenario_length = args["env"]["scenario_length"]
         init_steps = self.config["env"]["init_step"]
@@ -669,18 +662,12 @@ class HumanReplayEvaluator:
 
         obs, info = puffer_env.reset()
         env_continuous = isinstance(puffer_env.single_action_space, pufferlib.spaces.Box)
-        state = {}
-        if args["train"]["use_rnn"]:
-            state = dict(
-                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-            )
 
         all_infos = []
         for time_idx in range(total_steps):
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)
-                logits, value = policy.forward_eval(ob_tensor, state)
+                logits, value = policy.forward_eval(ob_tensor)
                 action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(
                     logits, env_continuous=env_continuous, policy=policy
                 )
