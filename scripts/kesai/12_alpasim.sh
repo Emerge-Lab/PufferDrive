@@ -42,7 +42,7 @@ unset SLURM_ARRAY_TASK_COUNT SLURM_ARRAY_TASK_ID SLURM_ARRAY_TASK_MIN SLURM_ARRA
 
 TOPOLOGY=${TOPOLOGY:-}  # empty = from the GPU count below: 8gpu_64rollouts, 2gpu or 1gpu
 N_SCENES=${N_SCENES:-0}  # 0 = the whole SCENE_LIST
-RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0058_1000}
+RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0076_1000}
 CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || CKPT=$(ls "$RUN_DIR"/models/model_*.pt 2>/dev/null | sort | tail -n 1)
 GOAL_MODE=gt_time:5  # gt_time:<s> | gt | route
