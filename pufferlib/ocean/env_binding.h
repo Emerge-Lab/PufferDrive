@@ -1121,8 +1121,11 @@ static PyObject *vec_recompute_observations(PyObject *self, PyObject *args) {
 }
 
 static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 2) {
-        PyErr_SetString(PyExc_TypeError, "vec_set_traffic_light_states requires 2 arguments");
+    Py_ssize_t arg_count = PyTuple_Size(args);
+    if (arg_count != 2 && arg_count != 3) {
+        PyErr_SetString(
+            PyExc_TypeError,
+            "vec_set_traffic_light_states requires 2 or 3 arguments (vec_env, states[, yellow_remaining_s])");
         return NULL;
     }
     VecEnv *vec = unpack_vecenv(args);
@@ -1144,10 +1147,25 @@ static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {
             (int) PyArray_SIZE((PyArrayObject *) states_arr));
         return NULL;
     }
-    if (c_set_traffic_light_states(drive, states) != 0) {
+    float *yellow_remaining_s = NULL;
+    if (arg_count == 3 && PyTuple_GetItem(args, 2) != Py_None) {
+        PyObject *remaining_arr = PyTuple_GetItem(args, 2);
+        if (!PyArray_Check(remaining_arr) || PyArray_TYPE((PyArrayObject *) remaining_arr) != NPY_FLOAT32
+            || (int) PyArray_SIZE((PyArrayObject *) remaining_arr) != drive->num_traffic_elements) {
+            PyErr_Format(
+                PyExc_ValueError,
+                "vec_set_traffic_light_states: yellow_remaining_s must be a float32 NumPy array of %d entries",
+                drive->num_traffic_elements);
+            return NULL;
+        }
+        yellow_remaining_s = (float *) PyArray_DATA((PyArrayObject *) remaining_arr);
+    }
+    if (c_set_traffic_light_states(drive, states, yellow_remaining_s) != 0) {
         PyErr_SetString(
             PyExc_ValueError,
-            "vec_set_traffic_light_states: timestep outside the light state buffer or invalid state");
+            "vec_set_traffic_light_states: timestep outside the light state buffer, invalid state, or "
+            "yellow_remaining_s missing (obs_traffic_light_yellow_remaining needs it) or outside "
+            "[0, traffic_light_yellow_max_s]");
         return NULL;
     }
     Py_RETURN_NONE;
@@ -1235,6 +1253,31 @@ static PyObject *vec_get_agent_goal_progress(PyObject *self, PyObject *args) {
     return Py_BuildValue("(ii)", current_goal_idx, goal_count);
 }
 
+static PyObject *vec_set_agent_goal_progress(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(
+            PyExc_TypeError,
+            "vec_set_agent_goal_progress requires 3 arguments (vec_env, agent_idx, current_goal_idx)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int agent_idx = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
+    int current_goal_idx = (int) PyLong_AsLong(PyTuple_GetItem(args, 2));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (c_set_agent_goal_progress((Drive *) vec->envs[0], agent_idx, current_goal_idx) != 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "vec_set_agent_goal_progress: agent index out of range or current_goal_idx outside 0..goal_count");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyObject *vec_set_agent_goals(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 7) {
         PyErr_SetString(PyExc_TypeError, "vec_set_agent_goals requires 7 arguments");
@@ -1277,9 +1320,47 @@ static PyObject *vec_set_agent_goals(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_set_agent_lane_goals(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 4) {
+        PyErr_SetString(
+            PyExc_TypeError,
+            "vec_set_agent_lane_goals requires 4 arguments (vec_env, idx, spacing_m, placed_goal_counts)");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    PyObject *idx_arr = PyTuple_GetItem(args, 1);
+    PyObject *counts_arr = PyTuple_GetItem(args, 3);
+    double spacing_m = PyFloat_AsDouble(PyTuple_GetItem(args, 2));
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (!PyArray_Check(idx_arr) || !PyArray_Check(counts_arr) || PyArray_TYPE((PyArrayObject *) idx_arr) != NPY_INT32
+        || PyArray_TYPE((PyArrayObject *) counts_arr) != NPY_INT32) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_agent_lane_goals: idx and placed_goal_counts must be int32 arrays");
+        return NULL;
+    }
+    int count = (int) PyArray_SIZE((PyArrayObject *) idx_arr);
+    if ((int) PyArray_SIZE((PyArrayObject *) counts_arr) != count) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_agent_lane_goals: placed_goal_counts must have the length of idx");
+        return NULL;
+    }
+    const int *idx = (const int *) PyArray_DATA((PyArrayObject *) idx_arr);
+    int *placed_goal_counts = (int *) PyArray_DATA((PyArrayObject *) counts_arr);
+    if (c_set_agent_lane_goals((Drive *) vec->envs[0], count, idx, (float) spacing_m, placed_goal_counts) != 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "vec_set_agent_lane_goals: agent index out of range, agent without a pose, or spacing_m not > 0");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyObject *get_ground_truth_trajectories(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 7) {
-        PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 7 arguments");
+    if (PyTuple_Size(args) != 8) {
+        PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 8 arguments");
         return NULL;
     }
 
@@ -1313,8 +1394,13 @@ static PyObject *get_ground_truth_trajectories(PyObject *self, PyObject *args) {
     int *id_data = (int *) PyArray_DATA((PyArrayObject *) id_arr);
     int *scenario_id_data = (int *) PyArray_DATA((PyArrayObject *) scenario_id_arr);
 
+    if (PyArray_NDIM((PyArrayObject *) x_arr) != 2) {
+        PyErr_SetString(PyExc_ValueError, "trajectory arrays must be 2D [num_agents, num_timesteps]");
+        return NULL;
+    }
     c_get_global_ground_truth_trajectories(
         drive,
+        (int) PyArray_DIM((PyArrayObject *) x_arr, 1),
         x_data,
         y_data,
         z_data,
@@ -1369,9 +1455,20 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
     int *id_base = (int *) PyArray_DATA(id_array);
     int *scenario_id_base = (int *) PyArray_DATA(scenario_id_array);
 
-    // Get number of timesteps from array shape
-    npy_intp *x_shape = PyArray_DIMS(x_array);
-    int num_timesteps = x_shape[1]; // Second dimension for 2D arrays
+    PyArrayObject *trajectory_arrays[5] = {x_array, y_array, z_array, heading_array, valid_array};
+    npy_intp total_agent_count = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        total_agent_count += ((Drive *) vec->envs[i])->active_agent_count;
+    }
+    for (int k = 0; k < 5; k++) {
+        PyArrayObject *array = trajectory_arrays[k];
+        if (PyArray_NDIM(array) != 2 || PyArray_NDIM(x_array) != 2 || PyArray_DIM(array, 0) < total_agent_count
+            || PyArray_DIM(array, 1) != PyArray_DIM(x_array, 1)) {
+            PyErr_SetString(PyExc_ValueError, "trajectory arrays must share one 2D shape [num_agents, num_timesteps]");
+            return NULL;
+        }
+    }
+    int num_timesteps = (int) PyArray_DIM(x_array, 1);
 
     // Iterate through environments and write to correct offsets
     int agent_offset = 0; // Offset for 1D arrays (id, scenario_id)
@@ -1382,6 +1479,7 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
 
         c_get_global_ground_truth_trajectories(
             drive,
+            num_timesteps,
             &x_base[traj_offset],
             &y_base[traj_offset],
             &z_base[traj_offset],
@@ -1567,6 +1665,14 @@ static PyMethodDef methods[]
         METH_VARARGS,
         "Move traffic-light stop lines onto the external sim's own (co-sim)"},
        {"vec_set_agent_goals", vec_set_agent_goals, METH_VARARGS, "Set an agent's goal waypoints (co-sim)"},
+       {"vec_set_agent_lane_goals",
+        vec_set_agent_lane_goals,
+        METH_VARARGS,
+        "Give agents goals along their lane ahead (co-sim forecast)"},
+       {"vec_set_agent_goal_progress",
+        vec_set_agent_goal_progress,
+        METH_VARARGS,
+        "Set the consumed-goal count of one agent's window (co-sim)"},
        {"vec_get_agent_goal_progress",
         vec_get_agent_goal_progress,
         METH_VARARGS,
@@ -1629,6 +1735,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);
     PyModule_AddIntConstant(m, "PARTNER_RELATIVE_VELOCITY_FEATURES", PARTNER_RELATIVE_VELOCITY_FEATURES);
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_FEATURES", TRAFFIC_CONTROL_FEATURES);
+    PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES", TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES);
     PyModule_AddIntConstant(m, "OBS_VALID_COUNT_FEATURES", OBS_VALID_COUNT_FEATURES);
     PyModule_AddIntConstant(m, "NUM_TRAFFIC_CONTROL_TYPES", NUM_TRAFFIC_CONTROL_TYPES);
     PyModule_AddIntConstant(m, "NUM_TRAFFIC_CONTROL_STATES", NUM_TRAFFIC_CONTROL_STATES);
@@ -1674,6 +1781,8 @@ PyMODINIT_FUNC PyInit_binding(void) {
     // norm (obs[0]) is per-env config: env.obs_norm_speed_mps.
     PyModule_AddObject(m, "ACCEL_LONG_NORM", PyFloat_FromDouble(fabsf(ACCEL_LONG_LIMIT[0])));
     PyModule_AddObject(m, "ACCEL_LONG_MAX", PyFloat_FromDouble(ACCEL_LONG_LIMIT[1]));
+    PyModule_AddObject(m, "STEERING_LIMIT", PyFloat_FromDouble(STEERING_LIMIT));
+    PyModule_AddObject(m, "MAX_BACKWARD_SPEED", PyFloat_FromDouble(MAX_BACKWARD_SPEED));
     PyModule_AddObject(m, "AGENT_STOPPED_SPEED_THRESHOLD", PyFloat_FromDouble(AGENT_STOPPED_SPEED_THRESHOLD));
     PyModule_AddObject(m, "CONDITIONING_ACC_MIN", PyFloat_FromDouble(REWARD_BOUNDS[REWARD_COEF_ACC].min_val));
     PyModule_AddObject(m, "CONDITIONING_ACC_MAX", PyFloat_FromDouble(REWARD_BOUNDS[REWARD_COEF_ACC].max_val));

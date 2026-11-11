@@ -2,16 +2,19 @@
 
 Each shard runs an independent `puffer eval` process over a disjoint scenario
 window (eval.scenario_offset), then the per-shard episode_metrics.csv files are
-merged into a single report and optionally attached to the training wandb run.
---num-gpus runs one shard per local GPU; --num-nodes runs one shard per node of
-the surrounding SLURM allocation (each claiming a full node's CPUs and one GPU
-via srun), so every shard gets its own node's cores.
+merged into a single report; wandb=True writes its km/infraction into the summary
+of the training wandb run (self-play benchmark only). scripts/eval/tidy_selfplay_eval.py
+then folds the shard folders into the aggregate dir (evaluation_summary.json,
+obs_html/ with every shard's failure pages, details/); --keep-shards leaves them.
+--num-gpus runs one shard per local GPU; --num-nodes runs the shards as srun steps
+of the surrounding SLURM allocation, --shards-per-node of them per node (default 1),
+each with one GPU and an equal share of the node's CPUs (SLURM_CPUS_PER_TASK).
 
 Usage (from the repo root, venv active):
     python scripts/parallel_eval.py carla \
-        --total-scenarios 40000 --num-gpus 8 \
+        --total-scenarios 80000 --num-nodes 4 --shards-per-node 8 \
         load_model_path=experiments/run/final_model.pt \
-        eval.output_name=run vec.num_envs=16 wandb=True
+        eval.output_name=run vec.num_envs=60 wandb=True
 """
 
 import argparse
@@ -33,8 +36,21 @@ def parse_arguments():
     parser.add_argument("--total-scenarios", type=int, required=True)
     shard_group = parser.add_mutually_exclusive_group(required=True)
     shard_group.add_argument("--num-gpus", type=int, help="Run one shard per local GPU")
-    shard_group.add_argument("--num-nodes", type=int, help="Run one shard per SLURM node via srun, 1 GPU each")
+    shard_group.add_argument(
+        "--num-nodes", type=int, help="Run shards as srun steps over this many SLURM nodes, 1 GPU each"
+    )
+    parser.add_argument("--keep-shards", action="store_true", help="Leave the per-shard folders untidied")
+    parser.add_argument(
+        "--shards-per-node",
+        type=int,
+        default=1,
+        help="With --num-nodes: steps per node, one GPU each, the node's CPUs split evenly between them",
+    )
     arguments, overrides = parser.parse_known_args()
+    if arguments.shards_per_node < 1:
+        parser.error("--shards-per-node must be at least 1")
+    if arguments.shards_per_node > 1 and arguments.num_nodes is None:
+        parser.error("--shards-per-node requires --num-nodes")
     for override in overrides:
         if override.startswith("--"):
             parser.error(f"Unknown flag {override}; Hydra overrides use key=value syntax")
@@ -83,7 +99,7 @@ def print_log_tail(log_path):
 def main():
     arguments, overrides = parse_arguments()
     use_srun = arguments.num_nodes is not None
-    num_shards = arguments.num_nodes if use_srun else arguments.num_gpus
+    num_shards = arguments.num_nodes * arguments.shards_per_node if use_srun else arguments.num_gpus
     if num_shards < 1:
         raise SystemExit("--num-gpus/--num-nodes must be at least 1")
     if arguments.total_scenarios < num_shards:
@@ -91,9 +107,20 @@ def main():
     if use_srun:
         if "SLURM_JOB_ID" not in os.environ:
             raise SystemExit("--num-nodes requires running inside a SLURM allocation")
-        cpus_per_shard = os.environ.get("SLURM_CPUS_PER_TASK")
-        if cpus_per_shard is None:
+        cpus_per_node = os.environ.get("SLURM_CPUS_PER_TASK")
+        if cpus_per_node is None or not cpus_per_node.isdigit():
             raise SystemExit("--num-nodes requires SLURM_CPUS_PER_TASK (set #SBATCH --cpus-per-task)")
+        cpus_per_shard = int(cpus_per_node) // arguments.shards_per_node
+        if cpus_per_shard < 1:
+            raise SystemExit(f"--shards-per-node {arguments.shards_per_node} exceeds the {cpus_per_node} CPUs per node")
+        numa_note = ", in-process NUMA bind off" if arguments.shards_per_node > 1 else ""
+        print(
+            f"{num_shards} shards: {arguments.num_nodes} nodes x {arguments.shards_per_node} per node, "
+            f"{cpus_per_shard} CPUs each{numa_note}"
+        )
+        num_envs_override = override_value(overrides, "vec.num_envs")
+        if num_envs_override is not None and num_envs_override.isdigit() and int(num_envs_override) > cpus_per_shard:
+            print(f"Note: vec.num_envs={num_envs_override} blocking workers exceed a shard's {cpus_per_shard} CPUs")
     for override in overrides:
         if override.partition("=")[0] in RESERVED_OVERRIDE_KEYS:
             raise SystemExit(f"Override '{override}' is managed by parallel_eval.py; remove it")
@@ -105,7 +132,13 @@ def main():
     report_wandb = str(override_value(overrides, "wandb")).lower() in ("true", "1")
     shard_overrides = [o for o in overrides if o.partition("=")[0] != "wandb"] + ["wandb=False"]
 
-    from pufferlib.ocean.evaluation_utils import evaluation_utils
+    from pufferlib.ocean.evaluation_utils import eval_wandb_report, evaluation_utils
+
+    if report_wandb and arguments.benchmark != eval_wandb_report.SELFPLAY_BENCHMARK_NAME:
+        raise SystemExit(
+            f"wandb=True reports only the {eval_wandb_report.SELFPLAY_BENCHMARK_NAME} benchmark's headline metric; "
+            f"remove it for {arguments.benchmark}"
+        )
 
     run_dir = evaluation_utils.resolve_run_dir(model_path)
     output_dir_name = override_value(overrides, "eval.output_dir_name") or "eval"
@@ -134,17 +167,22 @@ def main():
             f"eval.output_subdir={shard_subdir}",
         ]
         if use_srun:
-            # Full-node CPU request forces SLURM to place each shard step on its own node.
+            # --exact keeps the step to its CPU share (default: the whole node); --mem=0 shares the job's memory between steps
             command = [
                 "srun",
                 "--nodes=1",
                 "--ntasks=1",
+                "--exact",
                 f"--cpus-per-task={cpus_per_shard}",
+                "--mem=0",
                 "--gres=gpu:1",
                 *command,
             ]
             shard_env = dict(os.environ)
-            placement = "own node via srun"
+            if arguments.shards_per_node > 1:
+                # the --exact CPU slice is the placement; a socket bind inside it could leave fewer CPUs than workers
+                shard_env.setdefault("PUFFER_NUMA_BIND", "0")
+            placement = f"srun step, 1 GPU, {cpus_per_shard} CPUs"
         else:
             shard_env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu_ids[shard_idx])
             placement = f"GPU {gpu_ids[shard_idx]}"
@@ -183,20 +221,16 @@ def main():
     episode_summaries = pd.concat(shard_frames, ignore_index=True).to_dict("records")
     summary = evaluation_utils._write_eval_reports(episode_summaries, aggregate_dir, arguments.total_scenarios)
     print(f"Aggregated {summary['num_episodes']} episodes from {len(processes)} shards into {aggregate_dir}")
+    if not arguments.keep_shards:
+        tidy_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval", "tidy_selfplay_eval.py")
+        if subprocess.run([sys.executable, tidy_script, aggregate_dir], check=False).returncode != 0:
+            print("tidy failed (results above are unaffected)")
 
     if report_wandb:
-        import pufferlib.pufferl as pufferl
-
-        sys.argv = [sys.argv[0]] + [o for o in overrides if o.partition("=")[0] != "wandb"]
-        config_args = pufferl.load_config(arguments.env_name)
-        config_args["wandb"] = True
-        checkpoint_config_path = os.path.join(run_dir, "config.yaml")
-        wandb_run_identity = evaluation_utils.load_checkpoint_run_identity(checkpoint_config_path)
-        pufferl.report_eval_to_wandb(
-            config_args,
-            {arguments.benchmark: {"summary": summary}},
-            wandb_run_identity,
-            output_dir_name,
+        eval_wandb_report.report_headline_metric(
+            eval_wandb_report.EVAL_TYPE_SELFPLAY,
+            os.path.join(aggregate_dir, eval_wandb_report.SELFPLAY_SUMMARY_FILE_NAME),
+            run_dir,
         )
 
 

@@ -1,21 +1,25 @@
 """Render the interactive observation replays of an AlpaSim run (scripts/kesai/12_alpasim.sh:
-<run_dir>/obs_replays/<clipgt>.replay.zlib) into one page per scene plus an index.html gallery (same
+<run_dir>/obs_html/<clipgt>.replay.zlib) into one page per selected scene plus an index.html gallery (same
 navigator as the nuPlan, CARLA and self-play eval replays).
 
-usage: python scripts/eval/render_alpasim_obs_html.py <run_dir> [--prune] [--workers N]
+usage: python scripts/eval/render_alpasim_obs_html.py <run_dir> [--select imperfect|failed|all] [--prune] [--workers N]
 
-Pages are named s<score>_<flags>_<clipgt>.html so the gallery lists the worst first (flags: COL at-fault
-collision, OFF offroad, CORR left the corridor laterally, PROG progress score < 1); each page carries the
-scene's AlpaSim score criteria and per-metric values as a panel, every violated per-step metric linking to the
-replay step of its first violation. The page the run wrote (<clipgt>.html) is replaced by the renamed one.
---prune deletes each .replay.zlib once its page is written (the page embeds the same bytes).
-Reads the tidy_alpasim_run.py layout (<run_dir>/alpasim/*) and the untidied AlpaSim trees of older runs.
+--select imperfect (default) pages the scenes scoring below 1 (and scenes without a score row), failed only the
+scenes AlpaSim marks as failed (at-fault collision, offroad, corridor exit), all every scene. Pages are named
+s<score>_<flags>_<clipgt>.html so the gallery lists the worst first (flags: COL at-fault collision, OFF offroad,
+CORR left the corridor laterally, PROG progress score < 1); each page carries the scene's AlpaSim score criteria
+and per-metric values as a panel, every violated per-step metric linking to the replay step of its first
+violation. The pages the run wrote (<clipgt>.html) and the pages of unselected scenes are deleted; --prune deletes
+every .replay.zlib once the pages are written (a page embeds the same bytes and is the replay source of a later
+re-render). Reads the tidy_alpasim_run.py layout (<run_dir>/details/*, obs_html/), the 2026-10-12 one (alpasim/*,
+obs_replays/) and the untidied AlpaSim trees of older runs.
 """
 
 import argparse
 import html
 import json
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -24,9 +28,11 @@ import numpy as np
 import pandas as pd
 import yaml
 
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-from pufferlib import viz  # noqa: E402
+from pufferlib import viz
+
 
 FLAG_METRICS = (
     ("COL", "collision_at_fault"),
@@ -34,6 +40,10 @@ FLAG_METRICS = (
     ("CORR", "left_corridor_laterally"),
 )
 PROGRESS_FLAG = "PROG"
+SELECT_MODES = ("imperfect", "failed", "all")
+REPLAY_SUFFIX = ".replay.zlib"
+GALLERY_INDEX = "index.html"
+CLIPGT_PATTERN = re.compile(r"clipgt-[0-9a-f-]{36}$")  # the scene id ends every page and replay name
 SCORED_METRICS = (
     ("collision_at_fault", "at-fault collision"),
     ("offroad", "offroad"),
@@ -62,13 +72,18 @@ ALPASIM_STEP_SECONDS = 0.1
 
 def run_layout(run_dir):
     """-> (obs replay dir, results-summary.json, metrics_unprocessed.parquet, eval-config.yaml) of the tidied
-    layout, else of an AlpaSim wizard tree (2026-10-12 layout, then the older alpagym/ nesting)."""
-    obs_dirs = [base / "obs_replays" for base in (run_dir, run_dir / "alpagym") if (base / "obs_replays").is_dir()]
+    layout (details/, then the 2026-10-12 alpasim/), else of an AlpaSim wizard tree (alpasim/wizard_0, then the
+    older alpagym/ nesting)."""
+    obs_dirs = [
+        path
+        for path in (run_dir / "obs_html", run_dir / "obs_replays", run_dir / "alpagym" / "obs_replays")
+        if path.is_dir()
+    ]
     if not obs_dirs:
-        raise SystemExit(f"no obs_replays/ under {run_dir} or {run_dir / 'alpagym'}")
-    tidied = run_dir / "alpasim"
+        raise SystemExit(f"no obs_html/ or obs_replays/ under {run_dir}")
     candidates = [
-        (tidied / "results-summary.json", tidied / "metrics_unprocessed.parquet", tidied / "eval-config.yaml")
+        (base / "results-summary.json", base / "metrics_unprocessed.parquet", base / "eval-config.yaml")
+        for base in (run_dir / "details", run_dir / "alpasim")
     ]
     for wizard_dir in (run_dir / "alpasim" / "wizard_0", run_dir / "alpagym" / "alpasim" / "wizard_0"):
         aggregate = wizard_dir / "aggregate"
@@ -213,6 +228,33 @@ def score_panel(row, criteria, timeline):
     )
 
 
+def selected(row, select):
+    """A scene without a summary row never finished scoring and counts as failed."""
+    if select == "all" or row is None:
+        return True
+    return row["status"] == "fail" if select == "failed" else float(row["score"]) < 1.0
+
+
+def replay_sources(obs_dir):
+    """clipgt -> its .replay.zlib, else a page of the scene (the run's own or a rendered one, embedding the replay)."""
+    sources = {path.name[: -len(REPLAY_SUFFIX)]: path for path in sorted(obs_dir.glob(f"*{REPLAY_SUFFIX}"))}
+    for page in sorted(obs_dir.glob("*.html")):
+        match = CLIPGT_PATTERN.search(page.stem)
+        if match and match.group(0) not in sources:
+            sources[match.group(0)] = page
+    return sources
+
+
+def scene_pages(obs_dir):
+    """clipgt -> every page of the scene in obs_dir (the run's <clipgt>.html, earlier renders)."""
+    pages = {}
+    for page in sorted(obs_dir.glob("*.html")):
+        match = CLIPGT_PATTERN.search(page.stem)
+        if match:
+            pages.setdefault(match.group(0), []).append(page)
+    return pages
+
+
 def page_name(clipgt, row):
     if row is None:
         return f"{clipgt}.html"
@@ -243,43 +285,60 @@ def render_page(zlib_path, html_path, panel):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("run_dir", help="output dir of 12_alpasim.sh (holds obs_replays/ and alpasim/)")
-    ap.add_argument("--prune", action="store_true", help="delete each .replay.zlib once its page is written")
+    ap.add_argument("run_dir", help="output dir of 12_alpasim.sh (holds obs_html/ and details/)")
+    ap.add_argument("--select", choices=SELECT_MODES, default="imperfect", help="scenes that get a page")
+    ap.add_argument("--prune", action="store_true", help="delete every .replay.zlib once the pages are written")
     ap.add_argument("--workers", type=int, default=min(16, os.cpu_count() or 1))
     args = ap.parse_args()
     obs_dir, summary_path, metrics_path, eval_config_path = run_layout(Path(args.run_dir))
-    replays = {p.name[: -len(".replay.zlib")]: p for p in sorted(obs_dir.glob("*.replay.zlib"))}
-    if not replays:
-        raise SystemExit(f"no {obs_dir}/*.replay.zlib")
+    sources = replay_sources(obs_dir)
+    if not sources:
+        raise SystemExit(f"no {obs_dir}/*{REPLAY_SUFFIX} or rendered pages")
     rows, criteria = scene_rows(summary_path)
     series = scene_series(metrics_path, rows)
     stop_gt_dist_m = max_gt_dist_m(eval_config_path)
-    jobs = [(clipgt, replay, obs_dir / page_name(clipgt, rows.get(clipgt))) for clipgt, replay in replays.items()]
+    old_pages = scene_pages(obs_dir)
+    jobs = [
+        (clipgt, source, obs_dir / page_name(clipgt, rows.get(clipgt)))
+        for clipgt, source in sources.items()
+        if selected(rows.get(clipgt), args.select)
+    ]
 
     def render(job):
-        clipgt, replay, html_path = job
+        clipgt, source, html_path = job
         row = rows.get(clipgt)
         panel = ""
         if row is not None:
-            frames = int(viz.read_replay_zlib(replay, chunk_names=("metrics_f32",))[0]["frames"])
+            frames = int(viz.read_replay_zlib(source, chunk_names=("metrics_f32",))[0]["frames"])
             panel = score_panel(row, criteria, scoring_timeline(series[clipgt], frames, stop_gt_dist_m))
-        render_page(replay, html_path, panel)
-        run_page = obs_dir / f"{clipgt}.html"
-        if run_page != html_path and run_page.exists():
-            run_page.unlink()
+        render_page(source, html_path, panel)
+        for page in old_pages.get(clipgt, []):
+            if page != html_path:
+                page.unlink()  # the run's own page, or a render under a stale name
 
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
         list(pool.map(render, jobs))
+    rendered = {clipgt for clipgt, _, _ in jobs}
+    dropped_count = 0
+    for clipgt, pages in old_pages.items():
+        for page in pages if clipgt not in rendered else []:
+            page.unlink()  # an unselected scene keeps no page
+            dropped_count += 1
     file_metrics = {html_path.name: gallery_metrics(rows.get(clipgt)) for clipgt, _, html_path in jobs}
-    viz.build_gallery_index(str(obs_dir), file_metrics=file_metrics)
+    if jobs:
+        viz.build_gallery_index(str(obs_dir), file_metrics=file_metrics)
+    pruned_count = 0
     if args.prune:
-        for replay in replays.values():
-            replay.unlink()
-    unscored = sum(clipgt not in rows for clipgt in replays)
+        for source in sources.values():
+            if source.name.endswith(REPLAY_SUFFIX):
+                source.unlink()
+                pruned_count += 1
+    unscored = sum(clipgt not in rows for clipgt in rendered)
     print(
-        f"[render_alpasim_obs_html] {len(jobs)} scene pages rendered"
-        f"{f', {unscored} without a score (no panel)' if unscored else ''}{', replays pruned' if args.prune else ''}"
-        f" -> {obs_dir / 'index.html'}"
+        f"[render_alpasim_obs_html] {len(jobs)} of {len(sources)} scenes paged ({args.select})"
+        f"{f', {unscored} without a score (no panel)' if unscored else ''}"
+        f"{f', {dropped_count} unselected pages removed' if dropped_count else ''}"
+        f"{f', {pruned_count} replays pruned' if pruned_count else ''} -> {obs_dir / GALLERY_INDEX}"
     )
 
 

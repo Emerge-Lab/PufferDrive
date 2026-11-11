@@ -6,9 +6,10 @@
 #SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
 #SBATCH --mem=0
 #SBATCH --time 6-00:00
-#SBATCH --output experiments/logs/train_gigaflow_%j.out
-#SBATCH --error experiments/logs/train_gigaflow_%j.err
+#SBATCH --output experiments/logs/train_3seeds_%a_%A.out
+#SBATCH --error experiments/logs/train_3seeds_%a_%A.err
 #SBATCH --partition dev
+#SBATCH --array=0-1
 
 source scripts/kesai/cluster_env.sh || exit 1
 
@@ -22,9 +23,19 @@ echo "Master node: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "Total nodes: ${WORLD_SIZE}"
 start=$(date +%s)
 
-export SEED=1000
+SEEDS=(1000 2000 1000 2000)
+MINIBATCH_SIZES=(262144 262144 393216 393216)
+RUN_PREFIXES=(k_scaled_0073 k_scaled_0073 k_scaled_0074 k_scaled_0074)
 
-export RUN_NAME=${RUN_NAME:-k_scaled_0060_${SEED}}
+export SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
+MINIBATCH_SIZE=${MINIBATCH_SIZES[$SLURM_ARRAY_TASK_ID]}
+if [ -z "${SEED}" ]; then
+    echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} has no run configured; aborting."
+    exit 1
+fi
+echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} minibatch=${MINIBATCH_SIZE}"
+
+export RUN_NAME=${RUN_PREFIXES[$SLURM_ARRAY_TASK_ID]}_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -46,24 +57,12 @@ export OMP_NUM_THREADS=1
 
 # Hand-written CUDA slot-encoder kernels instead of the Triton ones (same math); triton to compare. Passed per command,
 # never exported: sbatch copies this shell's environment into the eval jobs below, whose interpreters lack cuda-bindings.
-SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND:-cuda}
+SLOT_ENCODER_BACKEND=cuda
 echo "slot encoder backend: ${SLOT_ENCODER_BACKEND}"
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
-# GigaFlow (arXiv 2502.03349, Table A3) match on one node: 8 x 32768 = 262k rows per gradient update (paper: 8 x 32000),
-# 3 PPO epochs, 1200-step episodes, cosine LR 5e-4. One node because the gradient all-reduce over the 10 GbE link costs
-# ~35 ms per update whatever the node count (run 0055, 2 nodes: 66 ms per 32k update vs ~32 ms of compute); inside a node it
-# goes over PCIe. vec.num_envs=60 is one blocking worker per kesai thread; env.num_agents=4096 per worker gives 31.5 M
-# transitions per GPU per rollout (paper: ~41.6 M) and a 52 GB float16 obs buffer (60 GB total per GPU).
-# Minibatch ablation 2026-10-27: k_scaled_0057 (MINIBATCH=32768) vs k_scaled_0058 (131072, old kernels throughout); 0058
-# led on every per-step metric, so 131072 is the default. k_scaled_0060 = the 0058 config on the 2026-10-27 fused-kernel
-# and NUMA-bind code, the speed/quality A/B against 0058:
-#   sbatch scripts/kesai/18_train_16GPU_gigaflow_slurm.sh
-# Same job on the scaleway H100 nodes (18 threads per rank, the 60 blocking workers oversubscribe the CPUs 3.3x):
-#   RUN_NAME=k_scaled_0061_1000 sbatch scripts/kesai/18_train_16GPU_gigaflow_slurm.sh   # NUM_ENVS=32 fits the CPUs but shrinks the rollout batch
-MINIBATCH=${MINIBATCH:-131072}
-echo "minibatch per GPU: ${MINIBATCH}"
+# 0073 / 0074 = the 0072 config (3_train_64GPU_multinode_slurm.sh) on one node per training, minibatch 262144 / 393216, seeds 1000 and 2000. Default 0073; 0074: sbatch --array=2-3 scripts/kesai/18_train_8GPU_3seeds_slurm.sh
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -78,25 +77,17 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=$PD/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v19 \
+    env.map_dir=$PD/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v20 \
     env.num_maps=128 \
-    env.obs_stride_merge_segments=true \
-    env.partner_blindness_corridor=false \
-    env.partner_blindness_prob=0.05 \
-    env.partner_blindness_prob_min=0.05 \
-    env.partner_blindness_trigger_prob=1.0 \
+    env.obs_traffic_light_yellow_remaining=true \
+    env.scripted_pedestrian_ratio=0.3 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
-    vec.num_envs=${NUM_ENVS:-60} \
-    env.num_agents=4096 \
-    env.scenario_length=1200 \
+    vec.num_envs=128 \
     train.rollout_dtype=float16 \
-    env.preload_map_cache=True \
-    train.max_minibatch_size=${MINIBATCH} \
-    train.minibatch_size=${MINIBATCH} \
-    train.update_epochs=3 \
-    policy.fused_slot_encoder=true \
+    train.max_minibatch_size=${MINIBATCH_SIZE} \
+    train.minibatch_size=${MINIBATCH_SIZE} \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
@@ -123,14 +114,15 @@ echo "Submitting AlpaSim eval for ${MODEL_PATH}"
 RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
     || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
 
-# parallel_eval places one shard per allocated node via srun, so each shard's 128
-# env workers get a full node's cores instead of sharing the batch host.
+# parallel_eval runs 8 srun shards per node (one GPU and an eighth of the CPUs each, 60 blocking workers like
+# training) so the eval uses every GPU and thread of the allocation; 60 workers x 5 scenarios = 300 scenarios per 9000-step episode.
 echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} .venv/bin/python scripts/parallel_eval.py carla \
-    --total-scenarios 40000 \
+    --total-scenarios 80000 \
     --num-nodes 1 \
+    --shards-per-node 8 \
     env.map_dir=$PD/pufferlib/resources/drive/binaries/carla \
-    vec.num_envs=128 \
+    vec.num_envs=60 \
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
     env.eval_perceived_size_margin_m=0.2 \

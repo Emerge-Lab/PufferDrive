@@ -40,10 +40,13 @@ import pufferlib
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
 from pufferlib.ocean.evaluation_utils import cosim_evaluator as drive_cosim_eval
+from pufferlib.ocean.evaluation_utils import eval_wandb_report as drive_eval_report
 import pufferlib.sweep
 import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
+import pufferlib.ensemble
+from pufferlib.pytorch import clean_policy_state_dict
 from pufferlib.config_schema import (
     MAX_C_SEED,
     normalize_puffer_drive_config,
@@ -117,17 +120,6 @@ def is_cuda_device(device):
 
 def base_policy(policy):
     return policy.module if hasattr(policy, "module") else policy
-
-
-def clean_state_key(key):
-    prefixes = ("module.", "_orig_mod.")
-    while key.startswith(prefixes):
-        key = key.split(".", 1)[1]
-    return key
-
-
-def clean_policy_state_dict(state_dict):
-    return {clean_state_key(k): v for k, v in state_dict.items()}
 
 
 def logits_to_float(logits):
@@ -785,6 +777,11 @@ class PuffeRL:
             losses["filtered_fraction"] = 1.0 - kept_fraction
         else:
             keep_idx = valid_idx
+            if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
+                # Ranks mask different row counts: trim to the global minimum so minibatch counts stay in sync
+                kept_tensor = torch.tensor([keep_idx.numel()], device=device)
+                torch.distributed.all_reduce(kept_tensor, op=torch.distributed.ReduceOp.MIN)
+                keep_idx = keep_idx[torch.randperm(keep_idx.numel(), device=device)[: kept_tensor.item()]]
 
         if config["min_batch_size"] is not None:
             num_missing = config["min_batch_size"] - keep_idx.numel()
@@ -1348,7 +1345,7 @@ class NeptuneLogger:
 
 
 class WandbLogger:
-    def __init__(self, args, load_id=None, resume="allow", upload_config=True, disable_meta=False):
+    def __init__(self, args, load_id=None):
         import wandb
 
         # run_name is the run id: with resume="allow" wandb attaches to the
@@ -1360,10 +1357,10 @@ class WandbLogger:
             group=args["wandb_group"],
             allow_val_change=True,
             save_code=False,
-            resume=resume,
-            config=args if upload_config else None,
+            resume="allow",
+            config=args,
             tags=[args["tag"]] if args["tag"] is not None else [],
-            settings=wandb.Settings(console="off", x_disable_meta=disable_meta),
+            settings=wandb.Settings(console="off"),
         )
         self.wandb = wandb
         self.run_id = wandb.run.id
@@ -1371,10 +1368,6 @@ class WandbLogger:
 
     def log(self, logs, step):
         self.wandb.log(logs, step=step)
-
-    def finish(self):
-        """End the wandb session without the model upload and early_stop that close() adds."""
-        self.wandb.finish()
 
     def upload_model(self, model_path):
         artifact = self.wandb.Artifact(self.run_id, type="model")
@@ -1418,6 +1411,25 @@ class TensorBoardLogger:
 
     def close(self, model_path, early_stop):
         self.local_writer.close()
+
+
+class TensorBoardMirror:
+    """A remote run logger that also writes local TensorBoard event files."""
+
+    def __init__(self, remote_logger, tensorboard_logger):
+        self.remote_logger = remote_logger
+        self.tensorboard_logger = tensorboard_logger
+
+    def __getattr__(self, name):
+        return getattr(self.remote_logger, name)
+
+    def log(self, logs, step):
+        self.remote_logger.log(logs, step)
+        self.tensorboard_logger.log(logs, step)
+
+    def close(self, model_path, early_stop):
+        self.tensorboard_logger.close(model_path, early_stop)
+        self.remote_logger.close(model_path, early_stop)
 
 
 def _get_git_metadata():
@@ -1610,6 +1622,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     torch.manual_seed(torch_seed)
     vecenv = vecenv or load_env(env_name, args, seed=env_seed)
     policy = policy or load_policy(args, vecenv, env_name)
+    if isinstance(policy, pufferlib.ensemble.EnsemblePolicy):
+        raise pufferlib.APIUsageError("load_model_path is an ensemble checkpoint; ensembles are evaluation-only")
 
     if "LOCAL_RANK" in os.environ:
         args["train"]["device"] = "cuda"
@@ -1635,11 +1649,13 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             logger = NeptuneLogger(args)
         elif args["wandb"]:
             logger = WandbLogger(args)
-        elif args["tb"]:
-            logger = TensorBoardLogger(
+        if args["tb"]:
+            tensorboard_logger = TensorBoardLogger(
                 run_id=args["run_name"],
                 experiment_dir=args["train"]["data_dir"],
             )
+            has_remote_logger = args["neptune"] or args["wandb"]
+            logger = TensorBoardMirror(logger, tensorboard_logger) if has_remote_logger else tensorboard_logger
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
     if torch.distributed.is_initialized():
@@ -1858,9 +1874,8 @@ def eval(
         base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
     base_args["env"]["eval_training_render"] = eval_training_render
 
-    wandb_run_identity = (
-        drive_benchmark.load_checkpoint_run_identity(checkpoint_config_path) if report_to_wandb else None
-    )
+    if report_to_wandb:
+        drive_eval_report.load_run_identity(checkpoint_config_path)
     if eval_output_dir is None:
         run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
         eval_output_dir = os.path.join(run_dir, eval_config["output_dir_name"])
@@ -1871,6 +1886,7 @@ def eval(
         failure_replay_csv = os.path.abspath(failure_replay_csv)
         failure_replay_output_dir = os.path.dirname(failure_replay_csv)
     benchmark_results = {}
+    selfplay_summary_path = None
     evaluation_policy_cache = {"policy": policy}
     for benchmark in benchmarks:
         if benchmark.get("simulation_mode") in drive_cosim_eval.COSIM_SIMULATION_MODES:
@@ -1976,6 +1992,8 @@ def eval(
             "episodes": summaries,
             "summary": summary,
         }
+        if benchmark["name"] == drive_eval_report.SELFPLAY_BENCHMARK_NAME and summary is not None:
+            selfplay_summary_path = os.path.join(benchmark_output_dir, drive_eval_report.SELFPLAY_SUMMARY_FILE_NAME)
 
         if render_scenarios:
             max_renderer_count = (
@@ -1997,27 +2015,15 @@ def eval(
                 evaluation_policy_cache=evaluation_policy_cache,
             )
 
-    if wandb_run_identity is not None:
-        report_eval_to_wandb(args, benchmark_results, wandb_run_identity, eval_config["output_dir_name"])
+    if report_to_wandb and selfplay_summary_path is not None:
+        drive_eval_report.report_headline_metric(
+            drive_eval_report.EVAL_TYPE_SELFPLAY, selfplay_summary_path, os.path.dirname(checkpoint_config_path)
+        )
+    elif report_to_wandb:
+        print(
+            f"wandb: nothing reported; only the {drive_eval_report.SELFPLAY_BENCHMARK_NAME} benchmark has a headline metric."
+        )
     return benchmark_results
-
-
-def report_eval_to_wandb(args, benchmark_results, wandb_run_identity, output_dir_name):
-    """Attach standalone eval results to the wandb run that trained the checkpoint."""
-    metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, f"final_{output_dir_name}_")
-    if not metrics:
-        print("No evaluation metrics to report to wandb.")
-        return
-
-    run_args = copy.copy(args)
-    run_args.update(wandb_run_identity)
-
-    logger = WandbLogger(run_args, resume="must", upload_config=False, disable_meta=True)
-    try:
-        logger.log(metrics, step=None)
-    finally:
-        logger.finish()
-    print(f"Reported {len(metrics)} eval metrics to wandb run {wandb_run_identity['run_name']}")
 
 
 def sweep(args=None, env_name=None):
@@ -2805,16 +2811,18 @@ def load_policy(args, vecenv, env_name=""):
         elif args["wandb"]:
             path = WandbLogger(args, load_id).download()
 
-        state_dict = torch.load(path, map_location=device)
-        policy.load_state_dict(clean_policy_state_dict(state_dict))
+        checkpoint = torch.load(path, map_location=device)
+        policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint)
 
     load_path = args["load_model_path"]
     if load_path == "latest":
         load_path = max(glob.glob(f"experiments/{env_name}*.pt"), key=os.path.getctime)
 
     if load_path is not None:
-        state_dict = torch.load(load_path, map_location=device)
-        policy.load_state_dict(clean_policy_state_dict(state_dict))
+        checkpoint = torch.load(load_path, map_location=device)
+        policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint)
+        if isinstance(policy, pufferlib.ensemble.EnsemblePolicy):
+            print(f"Loaded an ensemble of {policy.member_count} policies from {load_path}")
         # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
         # optim_state = torch.load(state_path)['optimizer_state_dict']
         # pufferl.optimizer.load_state_dict(optim_state)

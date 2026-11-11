@@ -87,10 +87,23 @@ env:
   yield_signs_enabled: false
   # Skip red light violation detection (metrics, reward, behavior)
   disable_red_light_infractions: false
+  # Red light violation = the stop line lies between the ego's tail clearance point (rear edge - 1 m, what CARLA's
+  # RunningRedLightTest scores) and its front edge while red, moving or standing: a yellow entry must clear the line
+  # by 1 m. Training-only margins (m): the front one makes the front edge stop that much earlier, the rear one would
+  # extend the tail clearance (0 = CARLA's clearance as is); eval and co-sim use the real edges
+  red_light_train_front_margin_m: 0.3
+  red_light_train_rear_margin_m: 0.0
   # Skip stop sign violation detection (metrics, reward, behavior); the sign obs still turn red/green
   disable_stop_sign_infractions: false
   # Cycle the lights of a junction phase-by-phase (TLPHASE1 bins); false keeps independent lights (legacy)
   traffic_light_junction_phases: false
+  # Training light cycles (s): green ~ U(green_min, 10), yellow ~ U(yellow_min, yellow_max), red ~ U(0.3, 10); eval runs a
+  # fixed 10 / 3 / 2 cycle. GIGAFLOW used U(1, 10) / U(1.5, 2.25) with a centre-crossing test; with CARLA's tail test the
+  # yellow must cover CARLA's 2 s (Leaderboard 1 scenarios 7-9) to 3.1 s (natural) or committed slow crossings become
+  # unavoidable violations, and CARLA has no green below 5 s
+  traffic_light_green_min_s: 3.0
+  traffic_light_yellow_min_s: 2.0
+  traffic_light_yellow_max_s: 3.0
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map
   use_map_cache: true
   # Load all configured maps before fork so workers inherit shared geometry
@@ -201,6 +214,9 @@ env:
   # Append each lane segment's speed limit (/ obs_norm_speed_mps) to its lane row so limit changes ahead are visible
   obs_lane_speed_limit: true
   obs_slots_traffic_controls_n: 4
+  # Append to every traffic-control row the seconds the light stays yellow / traffic_light_yellow_max_s (clipped at 1,
+  # 0 unless yellow); co-sims feed the simulator's own timer, clipped to the same training max
+  obs_traffic_light_yellow_remaining: false
   # Fraction of segment observation slots to drop (reduces obs size)
   obs_dropout_lane: 0.5
   obs_dropout_boundary: 0.4
@@ -223,6 +239,9 @@ env:
   eval_perceived_size_margin_m: 0.1
   # Eval-only: partners longer than this (m) are observed as ceil(length / this) touching pieces (training max 7.0). 0 disables.
   obs_partner_split_length_m: 0.0
+  # Eval-only: observed lane widths (m) are clipped to [min, max]; the CARLA training maps span 2.85-4.4 m. max 0 disables.
+  obs_lane_width_clip_min_m: 0.0
+  obs_lane_width_clip_max_m: 0.0
   # Eval-only: while standing exactly still, |longitudinal jerk| below this (m/s^3) is zeroed
   # so leftover mean-action jerk cannot creep the car. 0 disables.
   eval_standstill_jerk_deadband_mps3: 0.0
@@ -254,6 +273,17 @@ env:
   phantom_braking_duration_seconds: 3.0
   # Zero the steering command while a phantom brake is active (false keeps the policy's steering)
   phantom_braking_freeze_steering: false
+  # Scripted pedestrians: each env gets ceil(ratio * agents) walker slots (1.0-1.5 m boxes = CARLA walker plus the 0.8 m
+  # eval VRU pad). A slot appears beside a random moving car's lane, plays one behaviour and vanishes for 5-20 s:
+  #   40% pop-in crosser (CARLA Leaderboard 1.0 Scenario3): standing at the right kerb 10-17 m ahead, half a lane outside
+  #       the road edge, waits 0-0.6 s, ramps over 0.3-0.7 s to 3.4 m/s + 0.4 m/s per lane (+-1) and crosses;
+  #   15% slow crosser: either kerb, 25-70 m ahead, waits 0-5 s, crosses at 0.8-2 m/s up to 34 deg off the perpendicular;
+  #   20% stander: either kerb, 15-60 m ahead, stands 8-25 s with a stopped time already running (0-60 s);
+  #   15% kerb walker: either kerb, walks 8-25 m along it at 0.7-1.7 m/s, with or against traffic, never on the road;
+  #   10% kerb stepper: pops in like a crosser, steps 0.5-1.5 m toward the road edge or away from it, stands 8-25 s.
+  # Shares and ranges are the PEDESTRIAN_* constants in constants.h. Scripted, never policy-controlled, no observations
+  # of their own; cars see them as partners and collide with them normally. 0 disables.
+  scripted_pedestrian_ratio: 0.0
 policy:
   # Encoder layer (per-encoder embedding width)
   ego_input_size: 128
@@ -411,7 +441,7 @@ eval:
   # Overrides env.disable_stop_sign_infractions of every selected benchmark; null keeps the benchmark's value.
   disable_stop_sign_infractions: null
   output_name: null
-  # Results folder inside the run dir; also names the wandb key prefix final_<output_dir_name>_.
+  # Results folder inside the run dir.
   output_dir_name: eval
   # First global scenario index this process evaluates; used to shard one benchmark across GPUs.
   scenario_offset: 0
@@ -429,6 +459,9 @@ eval:
   # Existing episode metrics CSV to replay without running the benchmark first.
   failure_replay_csv: null
   capture_observations: false
+  # Agents whose observations the replay pages keep: all, or infracting (agents with a collision, offroad, red light
+  # or stop sign infraction in the episode; the others' observation rows are zeroed, a 50-agent page shrinks ~4x).
+  capture_observations_agents: all
   observation_replay_wave_size: 16
   observation_replay_writer_count: 4
   # Options: sample | mode | mean

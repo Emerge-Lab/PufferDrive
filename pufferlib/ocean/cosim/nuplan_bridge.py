@@ -22,7 +22,11 @@ Nothing in this module imports `nuplan` at module scope, so the pure-python bin
 writer stays testable from an env without the nuplan-devkit installed.
 """
 
+import math
+import os
 from pathlib import Path
+
+from typing import Tuple
 
 import numpy as np
 
@@ -40,8 +44,15 @@ _NUPLAN_AGENT_TYPE = {"VEHICLE": 1, "PEDESTRIAN": 2, "BICYCLE": 3}
 
 # nuPlan TrafficLightStatusType -> PufferDrive light enum (datatypes.h: RED=1 YELLOW=2 GREEN=3).
 # Training never produces UNKNOWN (0), so an unknown or unreported light is treated as GREEN.
+LIGHT_STATE_RED = 1
+LIGHT_STATE_YELLOW = 2
 LIGHT_STATE_GREEN = 3
-_NUPLAN_LIGHT_STATE = {"RED": 1, "YELLOW": 2, "GREEN": LIGHT_STATE_GREEN, "UNKNOWN": LIGHT_STATE_GREEN}
+_NUPLAN_LIGHT_STATE = {
+    "RED": LIGHT_STATE_RED,
+    "YELLOW": LIGHT_STATE_YELLOW,
+    "GREEN": LIGHT_STATE_GREEN,
+    "UNKNOWN": LIGHT_STATE_GREEN,
+}
 
 FAR_AWAY = 1.0e6  # park surplus PufferDrive agents out of observation range
 ROUTE_SEARCH_DEPTH_BLOCKS = 30  # PDM's Dijkstra window over route roadblocks
@@ -575,17 +586,30 @@ def match_connectors_to_stop_lines(
 
 MOVING_PARTNER_TYPES = ("VEHICLE", "PEDESTRIAN", "BICYCLE")  # the only types the training bins turn into agents
 STATIC_PARTNER_TYPES = ("TRAFFIC_CONE", "BARRIER", "CZONE_SIGN", "GENERIC_OBJECT")
+# get_proximal_map_objects matches lane connectors by centerline (lanes by polygon): the patch must reach the
+# centerline of every connector whose polygon can overlap the object's box
+STATIC_PARTNER_LANE_QUERY_RADIUS_M = 10.0
+
+
+def lane_polygon_overlaps(lane, box) -> bool:
+    try:
+        polygon = lane.polygon
+    except AssertionError:  # devkit: lane connector without a scaled-width polygon row, nothing to hit
+        return False
+    return bool(polygon.intersects(box))
 
 
 def partner_tracked_objects(tracked_objects, map_api, static_on_lane: dict):
     """Objects the shadow env should see: moving agents always; static clutter (cones, barriers, signs,
-    generic objects) only when it stands inside a lane or lane-connector polygon, where the ego can hit it.
-    The wider drivable area also covers intersection corners and crosswalks, where barrier rows line the
-    curb: those filled the nearest-N partner slots as 0.6 x 3 m stopped vehicles the policy never saw in
-    training. static_on_lane: track_token -> bool, filled here (statics never move)."""
+    generic objects) only when its box overlaps a lane or lane-connector polygon, where the ego can hit it
+    (a center-point test dropped a curbside object protruding 0.7 m into the lane). The wider drivable area
+    also covers intersection corners and crosswalks, where barrier rows line the curb: those filled the
+    nearest-N partner slots as 0.6 x 3 m stopped vehicles the policy never saw in training.
+    static_on_lane: track_token -> bool, filled here (statics never move)."""
     from nuplan.common.actor_state.state_representation import Point2D
     from nuplan.common.maps.maps_datatypes import SemanticMapLayer
 
+    lane_layers = [SemanticMapLayer.LANE, SemanticMapLayer.LANE_CONNECTOR]
     kept = []
     for obj in tracked_objects:
         type_name = obj.tracked_object_type.name
@@ -596,12 +620,11 @@ def partner_tracked_objects(tracked_objects, map_api, static_on_lane: dict):
             continue
         on_lane = static_on_lane.get(obj.track_token)
         if on_lane is None:
-            point = Point2D(obj.center.x, obj.center.y)
-            # is_in_layer(LANE_CONNECTOR) tests the centerline layer; the polygon lookup is get_all_map_objects
-            on_lane = bool(
-                map_api.is_in_layer(point, SemanticMapLayer.LANE)
-                or map_api.get_all_map_objects(point, SemanticMapLayer.LANE_CONNECTOR)
+            box = obj.box.geometry
+            proximal = map_api.get_proximal_map_objects(
+                Point2D(obj.center.x, obj.center.y), STATIC_PARTNER_LANE_QUERY_RADIUS_M, lane_layers
             )
+            on_lane = any(lane_polygon_overlaps(lane, box) for layer in lane_layers for lane in proximal[layer])
             static_on_lane[obj.track_token] = on_lane
         if on_lane:
             kept.append(obj)
@@ -618,6 +641,40 @@ def pad_vru_partner_sizes(types, lengths, widths, pad_m: float):
     lengths = np.where(vru, lengths + pad_m, lengths).astype(np.float32)
     widths = np.where(vru, widths + pad_m, widths).astype(np.float32)
     return lengths, widths
+
+
+def split_long_partners(x, y, z, h, vx, vy, types, lengths, widths, max_length_m: float):
+    """Partners longer than max_length_m become ceil(length / max_length_m) equal boxes along their heading, in
+    place of the original (training spawns nothing longer than 7 m; a 12 m bus is one box the policy never saw)."""
+    out = [[] for _ in range(9)]
+    for j in range(len(x)):
+        pieces = max(1, int(math.ceil(float(lengths[j]) / max_length_m)))
+        piece_length = float(lengths[j]) / pieces
+        for k in range(pieces):
+            along = (k + 0.5) * piece_length - 0.5 * float(lengths[j])
+            values = (
+                x[j] + along * math.cos(h[j]),
+                y[j] + along * math.sin(h[j]),
+                z[j],
+                h[j],
+                vx[j],
+                vy[j],
+                types[j],
+                piece_length,
+                widths[j],
+            )
+            for column, value in zip(out, values):
+                column.append(value)
+    dtypes = (np.float32,) * 6 + (np.int32, np.float32, np.float32)
+    return tuple(np.array(column, dtype) for column, dtype in zip(out, dtypes))
+
+
+def nearest_partner_slots(x, y, ego_x: float, ego_y: float, slots: int):
+    """Row order for at most `slots` partners: the devkit order when they fit, else nearest to the ego first."""
+    if len(x) <= slots:
+        return np.arange(len(x))
+    distance_sq = (np.asarray(x, np.float64) - ego_x) ** 2 + (np.asarray(y, np.float64) - ego_y) ** 2
+    return np.argsort(distance_sq, kind="stable")[:slots]
 
 
 def tracked_objects_to_arrays(tracked_objects, transform: NuPlanTransform, first_slot: int = 1):
@@ -676,3 +733,61 @@ def traffic_light_states(
         elif j not in route_elements and _LIGHT_RESTRICTIVENESS[state] < _LIGHT_RESTRICTIVENESS[int(states[j])]:
             states[j] = state
     return states
+
+
+SYMMETRIC_WIDTH_MIN_M = 1.0  # floor where a baseline touches its polygon edge (lane tips, fan-outs)
+SYMMETRIC_WIDTH_MAX_M = 50.0  # PufferDrive's loader limit
+SYMMETRIC_WIDTH_MATCH_TOL_M = 0.5  # mean vertex distance to the matched baseline; farther lanes keep their widths
+SYMMETRIC_WIDTH_SEARCH_M = 3.0
+
+
+def symmetric_lane_widths(roads, transform: NuPlanTransform, map_objects) -> Tuple[int, int]:
+    """Rewrite every bin lane's per-vertex widths as twice the distance to the nearer boundary of the nuPlan
+    lane / lane connector whose baseline the bin lane lies on: the widest symmetric corridor around the
+    centerline. `map_objects` expose baseline_path / left_boundary / right_boundary with `.linestring`.
+    Returns (lanes patched, lanes left unchanged because no baseline matched)."""
+    import shapely
+    from shapely.strtree import STRtree
+
+    baselines = [obj.baseline_path.linestring for obj in map_objects]
+    tree = STRtree(baselines)
+    patched = unmatched = 0
+    for road in roads:
+        if "widths" not in road or not road["S"]:
+            continue
+        ux, uy = transform.bin_to_loc(np.asarray(road["x"], np.float64), np.asarray(road["y"], np.float64))
+        points = shapely.points(ux, uy)
+        search = shapely.box(ux.min(), uy.min(), ux.max(), uy.max()).buffer(SYMMETRIC_WIDTH_SEARCH_M)
+        candidates = tree.query(search)
+        if not len(candidates):
+            unmatched += 1
+            continue
+        mean_dist = [float(np.mean(shapely.distance(baselines[c], points))) for c in candidates]
+        best = int(candidates[int(np.argmin(mean_dist))])
+        if min(mean_dist) > SYMMETRIC_WIDTH_MATCH_TOL_M:
+            unmatched += 1
+            continue
+        try:
+            left = map_objects[best].left_boundary.linestring
+            right = map_objects[best].right_boundary.linestring
+        except Exception:  # noqa: BLE001 -- a connector without a scaled-width polygon row keeps its widths
+            unmatched += 1
+            continue
+        nearer = np.minimum(shapely.distance(left, points), shapely.distance(right, points))
+        road["widths"] = tuple(np.clip(2.0 * nearer, SYMMETRIC_WIDTH_MIN_M, SYMMETRIC_WIDTH_MAX_M).tolist())
+        patched += 1
+    return patched, unmatched
+
+
+def patch_bin_lane_widths(bin_path: Path, out_path: Path, transform: NuPlanTransform, map_objects) -> Tuple[int, int]:
+    """Copy of `bin_path` with symmetric_lane_widths applied, written atomically to `out_path`."""
+    data = _mbin.read_bin(Path(bin_path))
+    if not data["has_width_section"]:
+        raise ValueError(f"{bin_path}: no LANEWID1 section to rewrite")
+    counts = symmetric_lane_widths(data["roads"], transform, map_objects)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_path.with_name(f"{out_path.name}.{os.getpid()}.tmp")
+    _mbin.write_bin(data, tmp)
+    os.replace(tmp, out_path)
+    return counts

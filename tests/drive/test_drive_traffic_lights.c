@@ -195,6 +195,59 @@ static int test_schedule_covers_terminal_observation(void) {
     return 0;
 }
 
+// The optional yellow-remaining column (before type/state) reads the consecutive yellow steps ahead in
+// seconds over traffic_light_yellow_max_s, saturating at 1; every other state reads 0
+static int test_yellow_remaining_obs_counts_down_and_saturates(void) {
+    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
+    env.eval_mode = 1;
+    int plain_obs_size = compute_observation_size(&env);
+    env.obs_traffic_light_yellow_remaining = 1;
+    int row_features = TRAFFIC_CONTROL_FEATURES + TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES;
+    EXPECT_EQ_INT(compute_observation_size(&env), plain_obs_size + env.obs_slots_traffic_controls_n);
+    allocate(&env);
+    c_reset(&env);
+    TrafficControlElement *probe_light = NULL;
+    for (int i = 0; i < env.num_traffic_elements && probe_light == NULL; i++) {
+        if (env.traffic_elements[i].type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
+            probe_light = &env.traffic_elements[i];
+        }
+    }
+    EXPECT_TRUE(probe_light != NULL);
+    int yellow_start = 10;
+    int yellow_steps = 40; // 4 s at dt 0.1: longer than the 3 s training max
+    for (int t = 0; t < probe_light->state_size; t++) {
+        probe_light->states[t] = TRAFFIC_CONTROL_STATE_RED;
+    }
+    for (int t = yellow_start; t < yellow_start + yellow_steps; t++) {
+        probe_light->states[t] = TRAFFIC_CONTROL_STATE_YELLOW;
+    }
+    Agent *agent = &env.agents[env.active_agent_indices[0]];
+    agent->sim_x = (probe_light->stop_line[0] + probe_light->stop_line[3]) * 0.5f;
+    agent->sim_y = (probe_light->stop_line[1] + probe_light->stop_line[4]) * 0.5f;
+    agent->sim_z = (probe_light->stop_line[2] + probe_light->stop_line[5]) * 0.5f;
+    copy_pose_to_prev(agent);
+    int valid_base = compute_observation_size(&env) - OBS_VALID_COUNT_FEATURES;
+    int traffic_base = valid_base - env.obs_slots_traffic_controls_n * row_features;
+    int yellow_column = traffic_base + row_features - 3;
+    int probe_timesteps[4] = {yellow_start, yellow_start + 20, yellow_start + 39, yellow_start + 40};
+    float expected[4] = {1.0f, 2.0f / 3.0f, 0.1f / 3.0f, 0.0f};
+    int expected_state[4]
+        = {TRAFFIC_CONTROL_STATE_YELLOW,
+           TRAFFIC_CONTROL_STATE_YELLOW,
+           TRAFFIC_CONTROL_STATE_YELLOW,
+           TRAFFIC_CONTROL_STATE_RED};
+    for (int k = 0; k < 4; k++) {
+        env.timestep = probe_timesteps[k];
+        compute_observations(&env);
+        EXPECT_TRUE(env.observations[valid_base + 3] >= 1.0f);
+        EXPECT_TRUE(fabsf(env.observations[yellow_column] - expected[k]) < 1e-5f);
+        EXPECT_EQ_INT((int) env.observations[traffic_base + row_features - 2], TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT);
+        EXPECT_EQ_INT((int) env.observations[traffic_base + row_features - 1], expected_state[k]);
+    }
+    free_allocated(&env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_junction_lights_never_green_together);
@@ -205,5 +258,6 @@ int main(void) {
     RUN_TEST(test_training_group_removal_turns_off_whole_junction);
     RUN_TEST(test_eval_never_removes_lights);
     RUN_TEST(test_schedule_covers_terminal_observation);
+    RUN_TEST(test_yellow_remaining_obs_counts_down_and_saturates);
     return test_summary(failures);
 }

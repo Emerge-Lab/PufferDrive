@@ -2,6 +2,7 @@ import json
 import random
 import struct
 import sys
+import types
 import zlib
 from pathlib import Path
 from unittest.mock import patch
@@ -32,6 +33,9 @@ TRAIN_EVAL_INTERVAL = 3
 TRAIN_HORIZON = 16
 TRAIN_ENV_COUNT = 2
 TRAIN_AGENTS_PER_ENV = 8
+WANDB_RUN_NAME = "k_exp_0002_1000"
+WANDB_PROJECT = "nightly-multi-long"
+WANDB_TRAINING_SUMMARY = {"environment/collision_rate": 0.0123}
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CARLA_MAP_DIR = REPO_ROOT / "pufferlib/resources/drive/binaries/carla"
 REPLAY_MAP_DIR = REPO_ROOT / "pufferlib/resources/drive/binaries/sdc_replay_test"
@@ -295,6 +299,70 @@ def test_eval_report_reduces_distance_per_infraction_from_raw_totals():
     assert summary["metrics_mean"]["total_distance_travelled"] == 200.0
     assert summary["metrics_mean"]["total_infractions"] == 11.0
     assert summary["metrics_mean"]["avg_distance_per_infraction"] == pytest.approx(200.0 / 11.0)
+
+
+def _run_standalone_eval_with_wandb(tmp_path, monkeypatch, benchmark_name):
+    """Evaluate a checkpoint folder with wandb=True against a stub wandb -> (run dir, stored summary, run paths)."""
+    run_dir = tmp_path / WANDB_RUN_NAME
+    run_dir.mkdir()
+    benchmark_config_path = _write_benchmark_config(
+        tmp_path / "benchmark.yaml",
+        name=benchmark_name,
+        map_dir=CARLA_MAP_DIR,
+        simulation_mode="gigaflow",
+        num_maps=CARLA_MAP_COUNT,
+        num_scenarios=CARLA_SCENARIO_COUNT,
+        scenario_length=CARLA_SCENARIO_LENGTH,
+        max_agents_per_env=8,
+        control_mode="control_vehicles",
+        use_neighbor_cache=True,
+    )
+    args = _standalone_eval_args(benchmark_config_path)
+    args["eval"]["benchmarks"] = benchmark_name
+    args["run_name"] = WANDB_RUN_NAME
+    args["wandb_project"] = WANDB_PROJECT
+    (run_dir / "config.yaml").write_text(yaml.safe_dump(json.loads(json.dumps(args))))
+    (run_dir / "final_model.pt").write_bytes(b"")
+    args["load_model_path"] = str(run_dir / "final_model.pt")
+    args["wandb"] = True
+
+    stored_summary = dict(WANDB_TRAINING_SUMMARY)
+    requested_run_paths = []
+
+    def fetch_run(run_path):
+        requested_run_paths.append(run_path)
+        return types.SimpleNamespace(
+            state="finished",
+            summary_metrics=dict(stored_summary),
+            summary=types.SimpleNamespace(update=stored_summary.update),
+        )
+
+    stub_wandb = types.ModuleType("wandb")
+    stub_wandb.Api = lambda: types.SimpleNamespace(run=fetch_run)
+    monkeypatch.setitem(sys.modules, "wandb", stub_wandb)
+
+    pufferl.eval(env_name="puffer_drive", args=args, policy=ZeroPolicy(action_count=63))
+    return run_dir, stored_summary, requested_run_paths
+
+
+def test_standalone_selfplay_eval_reports_its_km_per_infraction_to_wandb(tmp_path, monkeypatch):
+    run_dir, stored_summary, requested_run_paths = _run_standalone_eval_with_wandb(tmp_path, monkeypatch, "carla")
+
+    summary_path = next(run_dir.glob("eval/carla/*/evaluation_summary.json"))
+    distance_per_infraction_meters = json.loads(summary_path.read_text())["metrics_mean"]["avg_distance_per_infraction"]
+    assert set(requested_run_paths) == {f"{WANDB_PROJECT}/{WANDB_RUN_NAME}"}
+    assert stored_summary == {
+        **WANDB_TRAINING_SUMMARY,
+        "final_eval/selfplay_km_per_infraction": distance_per_infraction_meters / 1000.0,
+        "final_eval/selfplay_km_per_infraction_source": str(summary_path.relative_to(run_dir)),
+    }
+
+
+def test_standalone_eval_of_another_benchmark_reports_nothing_to_wandb(tmp_path, monkeypatch):
+    _, stored_summary, requested_run_paths = _run_standalone_eval_with_wandb(tmp_path, monkeypatch, "carla_fast")
+
+    assert requested_run_paths == []
+    assert stored_summary == WANDB_TRAINING_SUMMARY
 
 
 def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):

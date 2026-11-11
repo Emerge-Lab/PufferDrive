@@ -3,14 +3,14 @@
 
 usage: python scripts/eval/analyze_nuplan_cosim.py <group_dir> <report_dir> [--workers N] [--max-inline N] [--no-video]
 
-<group_dir> is the run_simulation.py `group` directory (holds simulation/<challenge>/<timestamp>/...).
+<group_dir> is the run_simulation.py `group` directory, fresh (simulation/<challenge>/<timestamp>/...) or
+tidied by tidy_nuplan_run.py (details/).
 Writes <report_dir>/index.html (score table sorted worst-first, failure-category counts, per-scenario
 diagnosis, the worst --max-inline scenarios inline with a six-frame strip + speed plot + video), plus
 strips/, speed/, videos/ and scenarios.csv. Per-scenario work runs in a multiprocessing pool.
 """
 
 import argparse
-import glob
 import math
 import sys
 from multiprocessing import Pool
@@ -30,6 +30,7 @@ from nuplan.planning.simulation.simulation_log import SimulationLog  # noqa: E40
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nuplan_log_remap  # noqa: E402  logs written on another machine (cluster paths, planner classes)
+import nuplan_run_layout  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
@@ -151,11 +152,11 @@ def trajectory_stats(hist, scenario):
     return ego, expert, stats
 
 
-def comfort_failures(sim_dir, token):
+def comfort_failures(metrics_dir, token):
     """nuPlan's own within-bound flags per comfort sub-metric -> ['ego_lon_jerk range -2.7..5.0', ...]."""
     out = []
     for name in COMFORT_METRICS:
-        f = Path(sim_dir) / "metrics" / f"{name}.parquet"
+        f = Path(metrics_dir) / f"{name}.parquet"
         if not f.exists():
             continue
         df = pd.read_parquet(f)
@@ -218,12 +219,12 @@ def diagnose(row, stats, comfort):
 
 
 def process_scenario(job):
-    sim_dir, token, row, report_dir, make_video = job
+    metrics_dir, token, row, report_dir, make_video = job
     report_dir = Path(report_dir)
     log = nuplan_log_remap.load_log(row["log_path"])
     hist, scenario = log.simulation_history, log.scenario
     ego, expert, stats = trajectory_stats(hist, scenario)
-    categories, reasons = diagnose(row, stats, comfort_failures(sim_dir, token))
+    categories, reasons = diagnose(row, stats, comfort_failures(metrics_dir, token))
     n = len(hist.data)
     picks = [0, n // 5, 2 * n // 5, 3 * n // 5, 4 * n // 5, n - 1]
     if stats["min_agent_dist_iter"] not in picks:
@@ -275,21 +276,18 @@ def process_scenario(job):
 
 
 def collect_jobs(group_dir, report_dir, make_video):
+    agg = pd.read_csv(nuplan_run_layout.aggregated_metrics_csv(group_dir))
+    per_scenario = agg[(agg["scenario_type"] != "final_score") & (agg["scenario"] != agg["scenario_type"])]
+    logs = nuplan_run_layout.simulation_logs(group_dir)
+    metrics_dir = str(nuplan_run_layout.metrics_dir(group_dir))
     jobs = []
-    for sim_dir in sorted(glob.glob(f"{group_dir}/simulation/*/20*")):
-        agg_files = glob.glob(f"{sim_dir}/aggregator_metric/*_weighted_average_metrics_*.csv")
-        if not agg_files:
+    for _, row in per_scenario.iterrows():
+        token = str(row["scenario"])
+        if token not in logs:
             continue
-        agg = pd.read_csv(agg_files[0])
-        per_scenario = agg[(agg["scenario_type"] != "final_score") & (agg["scenario"] != agg["scenario_type"])]
-        logs = {Path(p).parent.name: p for p in glob.glob(f"{sim_dir}/simulation_log/**/*.msgpack.xz", recursive=True)}
-        for _, row in per_scenario.iterrows():
-            token = str(row["scenario"])
-            if token not in logs:
-                continue
-            row = row.to_dict()
-            row["log_path"] = logs[token]
-            jobs.append((sim_dir, token, row, str(report_dir), make_video))
+        row = row.to_dict()
+        row["log_path"] = str(logs[token])
+        jobs.append((metrics_dir, token, row, str(report_dir), make_video))
     return jobs
 
 

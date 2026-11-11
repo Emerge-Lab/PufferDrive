@@ -110,6 +110,7 @@ struct Agent {
     float current_goal_z;          // alias = list_goal_z[current_goal_idx]
     int current_goal_idx;          // index of next goal to reach (0..N-1)
     int goal_count;                // number of active goals (<= num_goals)
+    float lane_goal_spacing_m;     // co-sim forecast agent: goals follow the lane ahead at this spacing; 0 = off
     float gt_goal_x;               // Last valid ground-truth goal position x
     float gt_goal_y;               // Last valid ground-truth goal position y
     float gt_goal_z;               // Last valid ground-truth goal position z
@@ -121,6 +122,7 @@ struct Agent {
     int stop_sign_stop_completed;    // 0/1 -> stood still inside the target's trigger box
     int stop_sign_last_failed_idx;   // element run without stopping, not re-targeted until 20 m away
     int stop_sign_standstill_idx;    // element whose trigger box the agent last stood still in, -1 if none
+    int red_light_latched_idx;       // light whose line the footprint has sat on since the violation, -1 if none
 
     // Jerk dynamics
     float accel_long;
@@ -139,6 +141,36 @@ struct Agent {
     unsigned char is_blind_partner;       // episode-level flag: agent may restrict partner visibility
     unsigned char is_phantom_braker;      // episode-level flag: agent may phantom-brake
 };
+
+struct ScriptedPedestrian {
+    int agent_idx;        // slot in Drive.agents
+    int target_agent_idx; // car it appeared for, -1 while idle
+    int state;            // PEDESTRIAN_STATE_*
+    int mode;             // PEDESTRIAN_MODE_*, drawn when it goes idle
+    float timer_s;        // cooldown left while idle, standstill left before the leg, standing time left after it
+    float dir_x;          // unit walking (and facing) direction
+    float dir_y;
+    float path_m; // length of the leg, 0 for a stander
+    float remaining_m;
+    float speed_mps; // walking speed once the ramp is over
+    float ramp_s;    // seconds from setting off to speed_mps
+    float current_speed_mps;
+    float stand_s;     // standing time after the leg
+    float climb_per_m; // z change per metre walked: legs that run along a sloped road
+};
+
+// Lane point with the road edge distance on both sides
+typedef struct {
+    float x;
+    float y;
+    float z;
+    float right_x; // unit vector to the right of the lane heading
+    float right_y;
+    float right_kerb_m;
+    float left_kerb_m;
+    int lane_idx;
+    float lane_s_m;
+} KerbSite;
 
 typedef struct {
     float mid_x_m;

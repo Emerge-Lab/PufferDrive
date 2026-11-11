@@ -8,22 +8,25 @@
 #SBATCH --exclusive                      # whole node on either cluster, --mem=0 = all of its memory
 #SBATCH --output experiments/logs/carla_longest6_v1_%j.out
 #SBATCH --error experiments/logs/carla_longest6_v1_%j.err
+#SBATCH --open-mode=append               # a requeued job keeps the log of the instance it resumes
 #SBATCH --partition dev
 # CARLA longest6 v1 evaluation of a PufferDrive checkpoint through carla_garage's unmodified Leaderboard 1.0
 # (CARLA 0.9.10.1, pufferlib/ocean/cosim/carla/lb1/leaderboard_agent.py), the Leaderboard 1.0 counterpart of
 # 11_carla_longest6_v2.sh. The garage evaluator runs in the `garage` conda env (Python 3.7, the CARLA 0.9.10 egg);
 # the agent starts pufferlib/ocean/cosim/carla/lb1/policy_server.py in a PufferDrive python ($SERVER_PY) per route.
 #
-# WORKERS parallel workers (default 16), each one CARLA server + one evaluator at a time, spread round-robin over the
+# WORKERS parallel workers (default 32), each one CARLA server + one evaluator at a time, spread round-robin over the
 # GPUs of the allocation (1-8, e.g. `sbatch --gres gpu:2`): a server needs ~2 cores and no GPU once the agent has
 # turned the spectator render off, so several share a GPU. The 36 routes (one split xml each) x SEEDS passes (route
-# runs, $OUT/routes/route_<id>_s<seed>/) go longest-first to the least loaded worker (route length from the xml), every
-# route run gets its own server (restarted per route), worker launches are staggered, a crashed route run is retried on
-# the next GPU, and the result jsons are aggregated at the end with garage's tools/result_parser.py over
-# $OUT/aggregate/s<seed>/ (results.csv) plus the nuPlan-style HTML report
-# ($OUT/report/index.html) and the obs replay gallery of all routes ($OUT/obs_html/index.html, as in
-# 11_carla_longest6_v2.sh). Speed: wall and game time of every route go to $OUT/timing.csv, the run totals to
-# run_info.txt and stdout.
+# runs, $OUT/routes/route_<id>_s<seed>/) wait in one queue, longest first (route length from the xml), and a worker pulls
+# the next one whenever it is free (a static split left one worker alone for the last hour whenever its routes ran their
+# clock out). Every route run gets its own server (restarted per route), worker launches are staggered, a crashed route
+# run is retried on the next GPU, and the result jsons are aggregated at the end with garage's tools/result_parser.py
+# (results.csv) plus the obs replay gallery of the failed routes ($OUT/obs_html/index.html, as in
+# 11_carla_longest6_v2.sh). scripts/eval/tidy_carla_run.py then leaves $OUT/results.csv, run_info.txt, obs_html/,
+# routes/ (flat: route_<id>_s<seed>.result.json of every route run, .telemetry.csv + .world_log.npz of the failed
+# ones) and details/ (timing.csv, workers.log, evaluators.log). Speed: wall and game time of every route go to
+# timing.csv, the run totals to run_info.txt and stdout.
 #
 # Overridable env: RUN_DIR, ROUTE_DIR (the split xmls), ROUTES_XML (the combined longest6.xml, for the parser
 # and the gallery), SCENARIOS (1 = eval_scenarios.json, 0 = no_scenarios.json), SEEDS ("0 1 2" by default: traffic-manager
@@ -31,25 +34,41 @@
 # --num_repetitions 3; results.csv then carries mean and std over the seeds per route and per town, the stdout summary the
 # DS of every seed and mean +- std over the seeds; SEEDS= (empty) = one pass with the evaluator's default seed 100 and the
 # folder layout of the runs before 26 Oct 2026), REPETITIONS (leaderboard-internal repetitions within a pass, 1),
-# ROUTE_SUBSET ("0 5 17": only these route ids), WORKERS, NUM_GPUS, STAGGER_S (15: seconds between worker launches), PORT_BASE
-# (CARLA rpc port of worker 0; worker w uses PORT_BASE+50w, TM PORT_BASE+6000+50w), OMP_NUM_THREADS (policy server
-# threads; 2 from 16 workers on, else 4), LOGGING (1, default: telemetry, world log and the HTML report per route; 0: scores
-# only), CARLA_VIEW (0, default: no chase-cam; 1: chase-cam mp4 per route, needs LOGGING=1), OBS_HTML (1 = also
-# the interactive obs replay per route, rendered into $OUT/obs_html at the end, large; needs LOGGING=1), REPORT
-# (0 = skip the HTML report), MAX_ATTEMPTS, CARLA_ROOT, GARAGE_WORK_DIR, GARAGE_PY, SERVER_PY, PD,
-# COSIM_MAX_SPEED_MPS (ego speed cap, default 30), COSIM_ZERO_PARTNER_STOPPED_TIME (default 1),
+# ROUTE_SUBSET ("0 5 17": only these route ids), WORKERS, NUM_GPUS, STAGGER_S (5: seconds between worker launches), PORT_BASE
+# (12000: CARLA rpc port of worker 0; worker w uses PORT_BASE+50w, TM PORT_BASE+6000+50w; a range with a port already
+# listening is skipped for 12000, then 22000, see run_info.txt port_base), OMP_NUM_THREADS (policy server
+# threads; 2 from 16 workers on, else 4), LOGGING (1, default: telemetry, world log and obs replay per route; 0: scores
+# only), CARLA_VIEW (0, default: no chase-cam; 1: chase-cam mp4 per route, needs LOGGING=1), OBS_HTML (1 = failures,
+# default: the interactive obs replay pages of the route runs with a flagged infraction or a failed status, rendered
+# into $OUT/obs_html at the end; all = every route run, ~100 MB per page; 0 = none; needs LOGGING=1), REPORT (0,
+# default; 1 = the nuPlan-style HTML report of scripts/eval/analyze_carla_cosim.py in $OUT/report, needs LOGGING=1),
+# TIDY (1, default: scripts/eval/tidy_carla_run.py flattens $OUT at the end, see above; 0 = keep every per-route file),
+# MAX_ATTEMPTS, CARLA_ROOT, GARAGE_WORK_DIR, GARAGE_PY, SERVER_PY, PD,
+# COSIM_MAX_SPEED_MPS (ego speed cap, default 30), COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: vehicles' stopped-time
+# obs held at 0, walkers keep theirs; 0 = all real),
 # COSIM_VRU_SIZE_PAD_M (default 0.8: added to the length and width of every walker and two-wheeler box, so they read
-# strictly larger than the smallest training vehicle; 0 = true boxes), LIBTIFF5_COMPAT (1: when `import carla` fails for
+# strictly larger than the smallest training vehicle; 0 = true boxes), COSIM_OBS_SLOTS_PARTNERS_N (default 40: partner slots
+# in the policy's obs, GIGAFLOW's eval value; the slots are max-pooled, so a checkpoint trained with 20 transfers; empty =
+# the checkpoint's training value), COSIM_WALKER_SPEED_FLOOR_MPS (default 0; the diagnostic walker speed floor of
+# shadow_ego.py, tags the folder _walkerfloor<value>), LIBTIFF5_COMPAT (1: when `import carla` fails for
 # the egg's missing libtiff.so.5, try the garage env's lib dir (`conda install -n garage "libtiff<4.5"`), then link the
-# system libtiff.so.6 under that name; 0: never link).
+# system libtiff.so.6 under that name; 0: never link), WANDB_REPORT (1, default: the DS of results.csv becomes the training
+# run's final_eval/longest6_v1_DS in wandb, replacing an earlier report; 0 for ablations, so the run keeps the number of
+# its standard eval; never reported: a run with missing route records (a completion reports once every route has one),
+# the scenario-free variant and a walker speed floor run).
+# COSIM_DYNAMICS_SOURCE (carla_pedals, default: CARLA's physics moves the ego, driven only by the VehicleControl the agent
+# returns; tags the folder _carla_pedals; pufferdrive: the ego is teleported along PufferDrive's own dynamics).
+# Ablations of carla_pedals: COSIM_PEDAL_REVERSE (0, default: the car never backs up; 1 = it reverses, tags the folder _reverse) and
+# COSIM_PEDAL_YELLOW_MARGIN (1, default; 0 = the policy sees CARLA's remaining yellow, tags the folder _noyellowmargin).
 #
 # Completing a partial run (routes lost to CARLA crashes or the job time limit): COMPLETE_RUN=<existing $OUT folder>
 # reruns, in place, only its routes without a valid record (no result.json, or a crash status the leaderboard would
-# resubmit; ROUTE_SUBSET narrows the candidates, deleting a route run's result.json forces it). SCENARIOS, SEEDS, REPETITIONS
-# and COSIM_VRU_SIZE_PAD_M default to the run's own values from run_info.txt (a run from before the seeds layout has no
+# resubmit; ROUTE_SUBSET narrows the candidates, deleting a route run's result.json forces it). SCENARIOS, SEEDS, REPETITIONS,
+# COSIM_VRU_SIZE_PAD_M and COSIM_OBS_SLOTS_PARTNERS_N default to the run's own values from run_info.txt (a run from before the seeds layout has no
 # seeds line and is completed as it was driven: single default seed, route_<id> folders), CKPT must be the run's checkpoint. The replaced
 # route folders and worker logs move to $OUT/pre_completion_<stamp>/, timing.csv grows, run_info.txt gets a completion
-# line, and results.csv, the report and the gallery are rebuilt over all routes.
+# line, and results.csv, the report and the gallery are rebuilt over all routes (also when no route is left to rerun).
+# A requeued job (SLURM_RESTART_COUNT > 0 after a preemption or node failure) completes its own folder this way by itself.
 # scripts/kesai/17_carla_longest6_v1_complete_local.sh does this on a desktop for a run folder synced from the cluster.
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
@@ -58,12 +77,19 @@ export GARAGE_PY=${GARAGE_PY:-$HOME/miniconda3/envs/garage/bin/python}   # cp37:
 export SERVER_PY=${SERVER_PY:-$HOME/miniconda3/envs/carl/bin/python}     # any PufferDrive-capable python
 export CARLA_ROOT=${CARLA_ROOT:-$HOME/CARLA_0.9.10}
 export GARAGE_WORK_DIR=${GARAGE_WORK_DIR:-$HOME/carla_garage_1}
-RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0045_1000}
+RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0071_1000}
 # the agent finds config.yaml next to final_model.pt (or one level above a models/*.pt)
 export CKPT=${CKPT:-$RUN_DIR/final_model.pt}
 ROUTE_DIR=${ROUTE_DIR:-$GARAGE_WORK_DIR/leaderboard/data/longest6_split}
 ROUTES_XML=${ROUTES_XML:-$GARAGE_WORK_DIR/leaderboard/data/longest6.xml}
 COMPLETE_RUN=${COMPLETE_RUN:-}
+# a requeued job (preemption, node failure) resumes its own run folder instead of starting over
+if [ -z "$COMPLETE_RUN" ] && [ "${SLURM_RESTART_COUNT:-0}" -gt 0 ]; then
+    for candidate in "$RUN_DIR"/eval/carla_longest6_v1*_"${SLURM_JOB_ID:-none}"; do   # sorted by start time: the newest wins
+        [ -d "$candidate/routes" ] && [ -f "$candidate/run_info.txt" ] && COMPLETE_RUN=$candidate
+    done
+    [ -n "$COMPLETE_RUN" ] && echo "requeued job $SLURM_JOB_ID (restart $SLURM_RESTART_COUNT): resuming $COMPLETE_RUN"
+fi
 if [ -n "$COMPLETE_RUN" ]; then
     [ -d "$COMPLETE_RUN/routes" ] && [ -f "$COMPLETE_RUN/run_info.txt" ] || { echo "COMPLETE_RUN=$COMPLETE_RUN is not a run folder (needs routes/ and run_info.txt)"; exit 1; }
     run_info_value() { awk -v key="$1" '$1 == key {print $2; exit}' "$COMPLETE_RUN/run_info.txt"; }
@@ -74,6 +100,12 @@ if [ -n "$COMPLETE_RUN" ]; then
     # the rest of the line: several seeds; a run from before the seeds layout has no such line -> SEEDS stays empty
     SEEDS=${SEEDS-$(awk '$1 == "seeds" {$1 = ""; print substr($0, 2); exit}' "$COMPLETE_RUN/run_info.txt")}
     COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-$(run_info_value vru_size_pad_m)}
+    COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-$(run_info_value obs_slots_partners_n)}   # a run from before the knob: empty = the checkpoint's value
+    COSIM_WALKER_SPEED_FLOOR_MPS=${COSIM_WALKER_SPEED_FLOOR_MPS:-$(run_info_value walker_speed_floor_mps)}
+    COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-$(run_info_value dynamics_source)}
+    COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-pufferdrive}   # a run from before the knob was driven with pufferdrive
+    COSIM_PEDAL_REVERSE=${COSIM_PEDAL_REVERSE:-$(run_info_value pedal_reverse)}   # a pedal run from before these two knobs has no such lines: set both by hand
+    COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-$(run_info_value pedal_yellow_margin)}
 fi
 SCENARIOS=${SCENARIOS:-1}
 if [ "$SCENARIOS" = "1" ]; then
@@ -87,17 +119,32 @@ for seed in $SEEDS; do [[ "$seed" =~ ^[0-9]+$ ]] || { echo "SEEDS=\"$SEEDS\" mus
 if [ -n "$SEEDS" ]; then read -r -a SEED_LIST <<< "$SEEDS"; else SEED_LIST=(""); fi   # "" = the evaluator's default seed, route_<id> folders
 unit_dir() { printf "route_%02d%s" "$1" "${2:+_s$2}"; }                                      # $1 route id, $2 seed
 unit_json() { printf "%s%s/longest_weathers_%s.json" "$OUT/aggregate" "${2:+/s$2}" "$1"; }   # the parser's copy of the record
+unit_record() {  # the route run's record: in its folder while it drives, flat once tidied
+    local nested=$OUT/routes/$(unit_dir "$1" "$2")/result.json
+    [ -f "$nested" ] && echo "$nested" || echo "$OUT/routes/$(unit_dir "$1" "$2").result.json"
+}
 ROUTE_SUBSET=${ROUTE_SUBSET:-}
-PORT_BASE=${PORT_BASE:-2000}
+PORT_BASE=${PORT_BASE:-12000}
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
-WORKERS=${WORKERS:-16}
-STAGGER_S=${STAGGER_S:-15}
+WORKERS=${WORKERS:-32}
+STAGGER_S=${STAGGER_S:-5}
 LOGGING=${LOGGING:-1}
 CARLA_VIEW=${CARLA_VIEW:-0}
 [ "$CARLA_VIEW" = "1" ] && [ "$LOGGING" != "1" ] && { echo "CARLA_VIEW=1 needs LOGGING=1"; exit 1; }
-OBS_HTML=${OBS_HTML:-1}
-REPORT=${REPORT:-$LOGGING}
+OBS_HTML=${OBS_HTML:-1}   # 1|failures: replay pages of the failed route runs; all: every route run; 0: none
+case "$OBS_HTML" in 1) OBS_HTML=failures ;; 0|failures|all) ;; *) echo "OBS_HTML=\"$OBS_HTML\" must be 0, 1, failures or all"; exit 1 ;; esac
+REPORT=${REPORT:-0}
+TIDY=${TIDY:-1}
+WANDB_REPORT=${WANDB_REPORT:-1}
 export COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-0.8}
+export COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-40}   # GIGAFLOW's eval value; empty = the checkpoint's training value
+[[ -z "$COSIM_OBS_SLOTS_PARTNERS_N" || "$COSIM_OBS_SLOTS_PARTNERS_N" =~ ^[1-9][0-9]*$ ]] || { echo "COSIM_OBS_SLOTS_PARTNERS_N=\"$COSIM_OBS_SLOTS_PARTNERS_N\" must be a positive integer or empty"; exit 1; }
+export COSIM_WALKER_SPEED_FLOOR_MPS=${COSIM_WALKER_SPEED_FLOOR_MPS:-0}   # diagnostic only, see shadow_ego.py
+[[ "$COSIM_WALKER_SPEED_FLOOR_MPS" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "COSIM_WALKER_SPEED_FLOOR_MPS=\"$COSIM_WALKER_SPEED_FLOOR_MPS\" must be a non-negative number"; exit 1; }
+export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-carla_pedals}   # carla_pedals: CARLA's physics moves the ego, see shadow_ego.py
+[[ "$COSIM_DYNAMICS_SOURCE" =~ ^(pufferdrive|carla_pedals)$ ]] || { echo "COSIM_DYNAMICS_SOURCE=\"$COSIM_DYNAMICS_SOURCE\" must be pufferdrive or carla_pedals"; exit 1; }
+export COSIM_PEDAL_REVERSE=${COSIM_PEDAL_REVERSE:-0} COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}   # carla_pedals ablations, see shadow_ego.py
+[[ "$COSIM_PEDAL_REVERSE" =~ ^[01]$ && "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_REVERSE=\"$COSIM_PEDAL_REVERSE\" and COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }
 EVALUATOR=$GARAGE_WORK_DIR/leaderboard/leaderboard/leaderboard_evaluator_local.py
 CARLA_EGG=$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
 AGENT=$PD/pufferlib/ocean/cosim/carla/lb1/leaderboard_agent.py
@@ -114,9 +161,35 @@ echo "Evaluating checkpoint: $CKPT"
 NUM_GPUS=${NUM_GPUS:-$(nvidia-smi -L 2>/dev/null | grep -c "^GPU")}
 if [ "$NUM_GPUS" -lt 1 ] || [ "$NUM_GPUS" -gt 8 ]; then echo "NUM_GPUS=$NUM_GPUS must be 1..8"; exit 1; fi
 if [ "$WORKERS" -lt 1 ] || [ "$WORKERS" -gt 64 ]; then echo "WORKERS=$WORKERS must be 1..64"; exit 1; fi
+command -v flock >/dev/null 2>&1 || { echo "flock (util-linux) is needed for the route queue"; exit 1; }
+
+# Every port of the worker layout (rpc, streaming = rpc+1, TM) must be free of listeners; the first clear base wins.
+# Bases stay below the ephemeral range (32768+); the old 2000 put node_exporter (9100) and dcgm-exporter (9400) inside it.
+pick_port_base() {
+    local listening base w port busy
+    listening=" $(ss -ltun 2>/dev/null | awk 'NR > 1 {sub(/.*:/, "", $5); print $5}' | sort -u | tr '\n' ' ') "
+    for base in "$@"; do
+        busy=0
+        for ((w = 0; w < WORKERS; w++)); do
+            for port in $((base + 50 * w)) $((base + 50 * w + 1)) $((base + 6000 + 50 * w)); do
+                [[ "$listening" == *" $port "* ]] && { busy=$port; break 2; }
+            done
+        done
+        [ "$busy" = 0 ] && { echo "$base"; return 0; }
+        echo "port base $base: port $busy is in use, trying the next range" >&2
+    done
+    return 1
+}
+PORT_BASE=$(pick_port_base "$PORT_BASE" 12000 22000) || { echo "no free port range for $WORKERS workers (ss -ltun)"; exit 1; }
+echo "port base $PORT_BASE: rpc $PORT_BASE+50w, TM $((PORT_BASE + 6000))+50w"
 
 TAG=longest6_v1$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")${SEEDS:+_seeds$(echo "$SEEDS" | tr ' ' '-')}
-TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
+TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")${COSIM_OBS_SLOTS_PARTNERS_N:+_partners$COSIM_OBS_SLOTS_PARTNERS_N}
+TAG=$TAG$([ "$COSIM_WALKER_SPEED_FLOOR_MPS" = "0" ] || echo "_walkerfloor$COSIM_WALKER_SPEED_FLOOR_MPS")
+TAG=$TAG$([ "$COSIM_DYNAMICS_SOURCE" = "pufferdrive" ] || echo "_$COSIM_DYNAMICS_SOURCE")
+if [ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ]; then
+    TAG=$TAG$([ "$COSIM_PEDAL_REVERSE" = "0" ] || echo "_reverse")$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
+fi
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 OUT=${COMPLETE_RUN:-$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
@@ -126,6 +199,10 @@ if [ -z "$COMPLETE_RUN" ]; then
     {
         echo "checkpoint $CKPT"; echo "routes $ROUTE_DIR ($ROUTES_XML)"; echo "scenarios $SCENARIO_FILE"
         echo "seeds $SEEDS"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"; echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
+        echo "obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N"; echo "walker_speed_floor_mps $COSIM_WALKER_SPEED_FLOOR_MPS"
+        echo "dynamics_source $COSIM_DYNAMICS_SOURCE"
+        echo "pedal_reverse $COSIM_PEDAL_REVERSE"; echo "pedal_yellow_margin $COSIM_PEDAL_YELLOW_MARGIN"
+        echo "port_base $PORT_BASE"
         echo "git $GIT_STATE"
     } > "$OUT/run_info.txt"
 else
@@ -167,7 +244,6 @@ OMP_THREADS=${OMP_NUM_THREADS:-$([ "$WORKERS" -ge 16 ] && echo 2 || echo 4)}
 export OMP_NUM_THREADS=$OMP_THREADS MKL_NUM_THREADS=$OMP_THREADS OPENBLAS_NUM_THREADS=$OMP_THREADS NUMEXPR_NUM_THREADS=$OMP_THREADS
 export COSIM_SERVER_PYTHON=$SERVER_PY
 export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
-export COSIM_DYNAMICS_SOURCE=pufferdrive
 export COSIM_MAX_SPEED_MPS=${COSIM_MAX_SPEED_MPS:-30}
 export COSIM_ZERO_PARTNER_STOPPED_TIME=${COSIM_ZERO_PARTNER_STOPPED_TIME:-1}
 export COSIM_OBS_HTML_MAX_STEPS=${COSIM_OBS_HTML_MAX_STEPS:-20000}
@@ -206,43 +282,45 @@ TOTAL_UNITS=$((TOTAL_ROUTES * ${#SEED_LIST[@]}))
 if [ -n "$COMPLETE_RUN" ]; then
     PENDING=()
     for unit in "${UNITS[@]}"; do
-        route_done "$OUT/routes/$(unit_dir "${unit%%:*}" "${unit##*:}")/result.json" || PENDING+=("$unit")
+        route_done "$(unit_record "${unit%%:*}" "${unit##*:}")" || PENDING+=("$unit")
     done
-    [ "${#PENDING[@]}" -gt 0 ] || { echo "nothing to complete: every route run of $OUT has a valid record"; exit 0; }
-    echo "completing $OUT: ${#PENDING[@]} of $TOTAL_UNITS route runs without a valid record: ${PENDING[*]}"
-    UNITS=("${PENDING[@]}")
-    # what the completion replaces stays readable next to the live results
+    UNITS=(${PENDING[@]+"${PENDING[@]}"})
     COMPLETION_STAMP=$(date +%Y%m%d_%H%M%S)
-    PREVIOUS=$OUT/pre_completion_$COMPLETION_STAMP
-    mkdir -p "$PREVIOUS/routes"
-    for unit in "${UNITS[@]}"; do
-        route_name=$(unit_dir "${unit%%:*}" "${unit##*:}")
-        [ -d "$OUT/routes/$route_name" ] && mv "$OUT/routes/$route_name" "$PREVIOUS/routes/"
-        rm -f "$(unit_json "${unit%%:*}" "${unit##*:}")"
-    done
-    for f in "$OUT"/worker_w*.log; do [ -e "$f" ] && mv "$f" "$PREVIOUS/"; done
-    echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
+    if [ "${#UNITS[@]}" -eq 0 ]; then
+        echo "every route run of $OUT has a valid record: only results.csv, the report and the gallery are rebuilt"
+    else
+        echo "completing $OUT: ${#UNITS[@]} of $TOTAL_UNITS route runs without a valid record: ${UNITS[*]}"
+        # what the completion replaces stays readable next to the live results
+        PREVIOUS=$OUT/pre_completion_$COMPLETION_STAMP
+        mkdir -p "$PREVIOUS/routes"
+        for unit in "${UNITS[@]}"; do
+            route_name=$(unit_dir "${unit%%:*}" "${unit##*:}")
+            [ -d "$OUT/routes/$route_name" ] && mv "$OUT/routes/$route_name" "$PREVIOUS/routes/"
+            for f in "$OUT/routes/$route_name".*; do [ -e "$f" ] && mv "$f" "$PREVIOUS/routes/"; done   # a tidied run's flat files
+            rm -f "$(unit_json "${unit%%:*}" "${unit##*:}")"
+        done
+        for f in "$OUT"/worker_w*.log; do [ -e "$f" ] && mv "$f" "$PREVIOUS/"; done
+    fi
+    echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]:-none}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N; walker_speed_floor_mps $COSIM_WALKER_SPEED_FLOOR_MPS; dynamics_source $COSIM_DYNAMICS_SOURCE; pedal_reverse $COSIM_PEDAL_REVERSE; pedal_yellow_margin $COSIM_PEDAL_YELLOW_MARGIN; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
 fi
 [ "$WORKERS" -gt "${#UNITS[@]}" ] && WORKERS=${#UNITS[@]}
-# longest route first to the least loaded worker; length = the xml's waypoint polyline (an earlier run's duration would
-# read a route that failed early as short)
-mapfile -t ASSIGNMENT < <("$SERVER_PY" - "$ROUTE_DIR" "$WORKERS" "${UNITS[@]}" <<'EOF'
+# one shared queue, longest route first; length = the xml's waypoint polyline (an earlier run's duration would read a
+# route that failed early as short)
+QUEUE=$OUT/queue
+"$SERVER_PY" - "$ROUTE_DIR" "${UNITS[@]}" > "$QUEUE" <<'EOF'
 import math, sys, xml.etree.ElementTree as ET
-route_dir, workers, units = sys.argv[1], int(sys.argv[2]), sys.argv[3:]  # unit = "<route id>:<seed>"
-SETUP_M = 300.0  # server start + world load per route, in route-length-equivalent metres
+route_dir, units = sys.argv[1], sys.argv[2:]  # unit = "<route id>:<seed>"
 def length(rid):
     pts = [(float(w.get("x")), float(w.get("y"))) for w in ET.parse(f"{route_dir}/longest_weathers_{rid}.xml").iter("waypoint")]
     return sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
 lengths = {u.split(":")[0]: length(int(u.split(":")[0])) for u in units}
-loads = [0.0] * workers; assign = [[] for _ in range(workers)]
 for unit in sorted(units, key=lambda u: -lengths[u.split(":")[0]]):
-    w = min(range(workers), key=lambda i: loads[i]); assign[w].append(unit); loads[w] += lengths[unit.split(":")[0]] + SETUP_M
-for w in range(workers):
-    print(w, " ".join(assign[w]), f"# {loads[w] / 1000:.1f} km")
+    print(unit)
 EOF
-)
+[ "$(wc -l < "$QUEUE")" -eq "${#UNITS[@]}" ] || { echo "ERROR: route queue $QUEUE holds $(wc -l < "$QUEUE") of ${#UNITS[@]} route runs"; exit 1; }
+: > "$QUEUE.lock"
 echo "${#ROUTE_IDS[@]} routes x ${#SEED_LIST[@]} seeds = ${#UNITS[@]} route runs over $WORKERS workers on $NUM_GPUS GPUs, policy server threads $OMP_THREADS"
-printf "  worker %s\n" "${ASSIGNMENT[@]}"
+echo "  queue, longest first: $(tr '\n' ' ' < "$QUEUE")"
 [ -f "$OUT/timing.csv" ] || echo "route,worker,gpu,attempt,start,wall_s,game_s,pace,status,driving_score,seed" > "$OUT/timing.csv"
 TIMING_ROWS_BEFORE=$(($(wc -l < "$OUT/timing.csv") - 1))
 
@@ -289,7 +367,8 @@ except Exception:
         sleep 5
     done
     if [ $up -ne 0 ]; then
-        pkill -9 -P "$server_pid" 2>/dev/null; kill -9 "$server_pid" 2>/dev/null
+        # reaped here: a dead unreaped server makes the next attempt's wait -n return at once and kill its evaluator
+        pkill -9 -P "$server_pid" 2>/dev/null; kill -9 "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null
         echo "[w$w gpu$gpu route$route_id${seed:+ s$seed}] last lines of $server_log:"; tail -n 20 "$server_log"
         return 1
     fi
@@ -297,7 +376,7 @@ except Exception:
     if [ "$LOGGING" = "1" ]; then
         log_env+=(COSIM_TELEMETRY="$route_dir/telemetry" COSIM_WORLD_LOG="$route_dir/world_log")
         [ "$CARLA_VIEW" = "1" ] && log_env+=(COSIM_DEBUG_CARLA_VIEW="$route_dir/carla_view")
-        [ "$OBS_HTML" = "1" ] && log_env+=(COSIM_OBS_HTML="$route_dir/obs_html")
+        [ "$OBS_HTML" != "0" ] && log_env+=(COSIM_OBS_HTML="$route_dir/obs_html")
     fi
     $pin env CUDA_VISIBLE_DEVICES="$gpu" "${log_env[@]}" \
         "$GARAGE_PY" -u "$EVALUATOR" --routes "$routes_xml" --scenarios "$SCENARIO_FILE" --repetitions "$REPETITIONS" \
@@ -320,11 +399,19 @@ except Exception:
     return 0
 }
 
-run_worker() {  # $1 worker: its assigned route runs, sequentially, each retried up to MAX_ATTEMPTS on the next GPU
-    local w=$1 units unit route_id seed attempt gpu
-    units=${ASSIGNMENT[w]#* }
-    units=${units%%#*}
-    for unit in $units; do
+next_unit() {  # pops the longest remaining route run off $QUEUE under its lock; status 1 once the queue is empty
+    (
+        flock 9 || exit 1
+        unit=$(head -n 1 "$QUEUE")
+        [ -n "$unit" ] || exit 1
+        tail -n +2 "$QUEUE" > "$QUEUE.next" && mv "$QUEUE.next" "$QUEUE" || exit 1
+        echo "$unit"
+    ) 9>>"$QUEUE.lock"
+}
+
+run_worker() {  # $1 worker: pulls route runs from the queue until it is empty, each retried up to MAX_ATTEMPTS on the next GPU
+    local w=$1 unit route_id seed attempt gpu
+    while unit=$(next_unit); do
         route_id=${unit%%:*}; seed=${unit##*:}
         for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
             gpu=$(( (w + attempt - 1) % NUM_GPUS ))
@@ -333,16 +420,9 @@ run_worker() {  # $1 worker: its assigned route runs, sequentially, each retried
             echo "[w$w] route $route_id${seed:+ seed $seed} attempt $attempt failed"
         done
     done
+    echo "[w$w] queue empty $(date +%H:%M:%S)"
 }
 
-# never attach to a server that is not ours (a peer's test server, a leftover of an earlier job)
-if command -v ss >/dev/null 2>&1; then
-    for ((w = 0; w < WORKERS; w++)); do
-        for port in $((PORT_BASE + w * 50)) $((PORT_BASE + w * 50 + 1)) $((PORT_BASE + 6000 + w * 50)); do
-            [ -z "$(ss -Hltn "sport = :$port")" ] || { echo "port $port is already in use (ss -ltn); pick another PORT_BASE"; exit 1; }
-        done
-    done
-fi
 # only the servers this job started (children first: the UE4 binary outlives its wrapper shell otherwise)
 trap 'for p in $(cat "$OUT/server_pids" 2>/dev/null); do pkill -9 -P "$p" 2>/dev/null; kill -9 "$p" 2>/dev/null; done' EXIT
 WORKER_PIDS=()
@@ -352,9 +432,10 @@ for ((w = 0; w < WORKERS; w++)); do
     run_worker "$w" > "$OUT/worker_w$w.log" 2>&1 &
     WORKER_PIDS+=($!)
 done
-wait "${WORKER_PIDS[@]}"
+wait ${WORKER_PIDS[@]+"${WORKER_PIDS[@]}"}
 ROUTES_WALL_S=$(( $(date +%s) - ROUTES_T0 ))
-cat "$OUT"/worker_w*.log
+rm -f "$QUEUE" "$QUEUE.lock"
+cat "$OUT"/worker_w*.log 2>/dev/null
 "$SERVER_PY" - "$OUT/timing.csv" "$ROUTES_WALL_S" "$WORKERS" "$NUM_GPUS" "${#UNITS[@]}" "$TIMING_ROWS_BEFORE" <<'EOF' | tee -a "$OUT/run_info.txt"
 import csv, sys
 rows = list(csv.DictReader(open(sys.argv[1]))); wall, workers, gpus, n_routes, rows_before = (int(x) for x in sys.argv[2:7])
@@ -373,8 +454,9 @@ EOF
 # aggregate: garage's parser over the per-route jsons, one subfolder per seed (the parser walks $OUT/aggregate and
 # reports mean/std over the seeds per route and town) -> $OUT/aggregate/results.csv, plus a per-route table; a crash
 # record has no global_record and would abort the parser
-for f in "$OUT"/routes/route_*/result.json; do
-    name=$(basename "$(dirname "$f")")
+for f in "$OUT"/routes/route_*/result.json "$OUT"/routes/route_*.result.json; do   # route folders, or the flat records of a tidied run
+    [ -e "$f" ] || continue
+    name=$(basename "$f" .result.json); [ "$name" = "result.json" ] && name=$(basename "$(dirname "$f")")
     case $name in *_s*) seed=${name##*_s}; name=${name%_s*} ;; *) seed= ;; esac
     route_id=$(echo "$name" | sed 's/route_0*//; s/^$/0/')
     dest=$(unit_json "$route_id" "$seed"); mkdir -p "$(dirname "$dest")"
@@ -416,18 +498,30 @@ if rows:
         print(f"over seeds: DS {statistics.mean(ds.values()):.2f} +- {statistics.pstdev(ds.values()):.2f}  "
               f"RC {statistics.mean(rc.values()):.2f} +- {statistics.pstdev(rc.values()):.2f}  (population std over {len(by_seed)} seeds, as in results.csv)")
 EOF
+# the repo .venv holds wandb; the script reads results.csv and the route records and never imports pufferlib
+if [ "$WANDB_REPORT" = "1" ] && [ "$SCENARIOS" = "1" ] && [ "$COSIM_WALKER_SPEED_FLOOR_MPS" = "0" ]; then
+    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/pufferlib/ocean/evaluation_utils/eval_wandb_report.py" \
+        longest6_v1 "$OUT/aggregate/results.csv" --run-dir "$(dirname "$CKPT")" --expected-episode-count $((TOTAL_UNITS * REPETITIONS)) \
+        || echo "wandb report failed (results above are unaffected)"
+fi
 
 REPORT_ARGS=()
-[ "$OBS_HTML" = "1" ] && REPORT_ARGS+=(--obs-html-dir "$OUT/obs_html")
+[ "$OBS_HTML" != "0" ] && REPORT_ARGS+=(--obs-html-dir "$OUT/obs_html")
 if [ "$REPORT" = "1" ] && [ "$LOGGING" = "1" ]; then
     env -u PYTHONPATH "$SERVER_PY" "$PD/scripts/eval/analyze_carla_cosim.py" "$OUT"/routes/route_* "$OUT/report" "${REPORT_ARGS[@]}" \
         || echo "HTML report failed (results above are unaffected)"
 fi
 # after the report: the gallery links to it when it exists
-if [ "$OBS_HTML" = "1" ] && [ "$LOGGING" = "1" ]; then
-    env -u PYTHONPATH "$SERVER_PY" "$PD/scripts/eval/render_carla_obs_html.py" "$OUT" --routes "$ROUTES_XML" \
+if [ "$OBS_HTML" != "0" ] && [ "$LOGGING" = "1" ]; then
+    env -u PYTHONPATH "$SERVER_PY" "$PD/scripts/eval/render_carla_obs_html.py" "$OUT" --routes "$ROUTES_XML" --select "$OBS_HTML" \
         || echo "obs replay gallery failed (results above are unaffected)"
+fi
+# the pages are rendered: flatten the route folders, keep the logs of the failed (OBS_HTML=all: every) route runs
+if [ "$TIDY" = "1" ]; then
+    env -u PYTHONPATH "$SERVER_PY" "$PD/scripts/eval/tidy_carla_run.py" "$OUT" --keep "$([ "$OBS_HTML" = "all" ] && echo all || echo failures)" \
+        || echo "tidy failed (results above are unaffected)"
 fi
 [ -f "$OUT/report/index.html" ] && echo "report -> $OUT/report/index.html"
 [ -f "$OUT/obs_html/index.html" ] && echo "obs replays -> $OUT/obs_html/index.html"
+for results in "$OUT/results.csv" "$OUT/aggregate/results.csv"; do [ -f "$results" ] && { echo "results -> $results"; break; }; done
 echo "Done -> $OUT"

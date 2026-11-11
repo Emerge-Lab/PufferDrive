@@ -40,6 +40,7 @@ from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.cosim import carla_bridge as cb
 from pufferlib.ocean.cosim.arch import checkpoint_config_path, shadow_env_kwargs
 from pufferlib.ocean.cosim.goals import RouteGoalWindow
+from pufferlib.ocean.cosim.light_timing import YellowCountdown
 # carla_scenarios imports carla at module scope (it's pure CARLA-actor
 # manipulation, unlike this module's carla_bridge deps) and is only used
 # inside main() below, so it's imported there too.
@@ -50,19 +51,6 @@ SCENARIO_LENGTH_MARGIN_STEPS = 2  # shadow env must never hit its own truncation
 DEFAULT_VEHICLE_LENGTH_M = 4.5  # fallback size for a parked/dead actor slot (out of obs range anyway)
 DEFAULT_VEHICLE_WIDTH_M = 2.0
 EGO_BLUEPRINT = "vehicle.lincoln.mkz_2017"  # the longest6/CARLA-leaderboard hero vehicle
-
-
-def clean_policy_state_dict(state_dict):
-    """Strip torch.compile / DDP prefixes. Inlined from pufferlib.pufferl to
-    avoid importing the training stack (wandb, neptune, the _C kernel, ...) in
-    the co-sim environment — same as cosim/carla/leaderboard_agent.py."""
-
-    def clean(key):
-        while key.startswith(("module.", "_orig_mod.")):
-            key = key.split(".", 1)[1]
-        return key
-
-    return {clean(k): v for k, v in state_dict.items()}
 
 
 def load_checkpoint_config(checkpoint):
@@ -396,15 +384,16 @@ def main():
     policy = None
     if cfg is not None:
         import torch
+        import pufferlib.ensemble
         import pufferlib.ocean.torch as drive_torch
 
         # pre-3.0 checkpoints keep action_type only in the env section
         cfg["policy"].setdefault("action_type", cfg["env"]["action_type"])
         policy = getattr(drive_torch, cfg.get("policy_name", "Drive"))(env, **cfg["policy"]).to(args.device)
-        sd = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
-        policy.load_state_dict(clean_policy_state_dict(sd))
+        checkpoint = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
+        policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint)
         policy.eval()
-        print(f"[cosim] loaded policy from {args.checkpoint}")
+        print(f"[cosim] loaded {pufferlib.ensemble.describe_policy(policy)} from {args.checkpoint}")
     # jerk action: idx = j_long_idx*3 + j_lat_idx; (3,1) = +long jerk, straight (accelerate)
     dummy_action = np.full((1, 1), 3 * 3 + 1, dtype=np.int32)
 
@@ -421,6 +410,7 @@ def main():
     route_goals = build_route_goals(dense_route, transform, cmap)  # fixed 20-m lane-centered goal sequence
     goal_window = RouteGoalWindow(env, route_goals)
     light_map, num_traffic = cb.map_lights_to_bin(cb.light_geometry_from_carla(lights, cmap), transform, town_bin)
+    yellow_countdown = YellowCountdown(env.traffic_light_yellow_min_s, dt)
     print(
         f"[cosim] carla: ego + {len(bg)} background + {len(lights)} lights; "
         f"offset={transform.tx:.1f},{transform.ty:.1f} z={transform.tz:+.2f}"
@@ -510,12 +500,20 @@ def main():
             zz = np.zeros_like(zf)
             env.set_agent_states(sp, zf, zf, zf, zz, zz, zz, zz, zz)
         states = np.zeros(num_traffic, np.int32)
+        yellow_remaining_s = np.zeros(num_traffic, np.float32)
+        light_states = [cb.carla_light_to_puffer(lt.get_state()) for lt in lights]
+        yellow_lights = [li for li, state in enumerate(light_states) if state == cb.TRAFFIC_LIGHT_STATE_YELLOW]
+        countdown_s = yellow_countdown.tick(yellow_lights, step * dt)
         for li, lt in enumerate(lights):
-            state = cb.carla_light_to_puffer(lt.get_state())
+            remaining_s = 0.0
+            if li in countdown_s:
+                timed_s = cb.carla_yellow_remaining_s(lt.get_elapsed_time(), lt.get_yellow_time())
+                remaining_s = countdown_s[li] if timed_s is None else timed_s
             for j in light_map[li]:
                 if 0 <= j < num_traffic:
-                    states[j] = state
-        env.set_traffic_light_states(states)
+                    states[j] = light_states[li]
+                    yellow_remaining_s[j] = remaining_s
+        env.set_traffic_light_states(states, yellow_remaining_s if env.obs_traffic_light_yellow_remaining else None)
         ebx, eby = float(ego_bin["x"][0]), float(ego_bin["y"][0])
         goal_window.sync(ebx, eby, float(ego_bin["heading"][0]))
         gx, gy = goal_window.window[:, 0], goal_window.window[:, 1]

@@ -184,6 +184,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                     "extent": [body.extent.x, body.extent.y, body.extent.z],
                     "box_z": body.location.z,
                     "wheels": wheels,
+                    "blueprint": self.vehicle.type_id,
                     "state": actor_state_row(self.vehicle),
                 },
                 "sparse_plan": plan_xyz(self._global_plan_world_coord),
@@ -235,8 +236,10 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         ego_light = self.vehicle.get_traffic_light()
         return {
             "ego": actor_state_row(self.vehicle),
+            "ego_gear": self.vehicle.get_control().gear,
             "partners": [partner_row(a) for a in self._nearby_actors()],
             "light_states": [[lt.id, lt.get_state().name] for lt in self.lights],
+            "light_timers": [[lt.id, lt.get_elapsed_time(), lt.get_yellow_time()] for lt in self.lights],
             "ego_light_id": -1 if ego_light is None else ego_light.id,
         }
 
@@ -445,8 +448,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
 
         if result.control is None:
             return carla.VehicleControl()
-        steer, throttle, brake = result.control
-        return carla.VehicleControl(steer=steer, throttle=throttle, brake=brake)
+        steer, throttle, brake, reverse = result.control
+        return carla.VehicleControl(steer=steer, throttle=throttle, brake=brake, reverse=reverse)
 
     def destroy(self, results=None):
         if not self.initialized:

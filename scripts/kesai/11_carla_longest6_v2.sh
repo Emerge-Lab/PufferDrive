@@ -17,9 +17,11 @@
 # several share one. The 36 routes x SEEDS passes (route runs, $OUT/routes/route_<id>_s<seed>/) go longest-first to the
 # least loaded worker (route length from the xml), every route run gets its own server (restarted per route, CaRL's own
 # recipe), worker launches are staggered, a crashed route run is retried on the next GPU, and the result jsons are
-# aggregated at the end with CaRL's tools/result_parser.py over $OUT/aggregate/s<seed>/ (results.csv) plus the nuPlan-style HTML report ($OUT/report/index.html) and the obs replay
-# gallery of all routes ($OUT/obs_html/index.html, as in 9_nuPlan.sh). Speed: wall and game time of every route go
-# to $OUT/timing.csv, the run totals to run_info.txt and stdout.
+# aggregated at the end with CaRL's tools/result_parser.py (results.csv) plus the obs replay gallery of the failed
+# routes ($OUT/obs_html/index.html, as in 9_nuPlan.sh). scripts/eval/tidy_carla_run.py then leaves $OUT/results.csv,
+# run_info.txt, obs_html/, routes/ (flat: route_<id>_s<seed>.result.json of every route run, .telemetry.csv +
+# .world_log.npz of the failed ones) and details/ (timing.csv, workers.log, evaluators.log). Speed: wall and game
+# time of every route go to timing.csv, the run totals to run_info.txt and stdout.
 #
 # Overridable env: RUN_DIR, ROUTES, SCENARIOS (0 = pufferlib's scenario-free longest6), SEEDS ("0 1 2" by default:
 # traffic-manager seeds, one full pass over the routes per seed, the protocol of CaRL's and carla_garage's
@@ -27,23 +29,34 @@
 # per town, the stdout summary the DS of every seed and mean +- std over the seeds; "0" = one pass with the evaluator's
 # default seed), REPETITIONS (leaderboard-internal repetitions within a pass, 1), ROUTE_SUBSET ("0 5 17": only these
 # route ids), WORKERS, NUM_GPUS, STAGGER_S (15: seconds between worker launches),
-# PORT_BASE (CARLA rpc port of worker 0; worker w uses PORT_BASE+50w, TM PORT_BASE+6000+50w), OMP_NUM_THREADS (policy
-# threads; 2 from 16 workers on, else 4), LOGGING (1, default: telemetry, world log and the HTML report per
+# PORT_BASE (12000: CARLA rpc port of worker 0; worker w uses PORT_BASE+50w, TM PORT_BASE+6000+50w; a range with a port
+# already listening is skipped for 12000, then 22000, see run_info.txt port_base), OMP_NUM_THREADS (policy
+# threads; 2 from 16 workers on, else 4), LOGGING (1, default: telemetry, world log and obs replay per
 # route; 0: scores only), CARLA_VIEW (0, default: CARLA runs without rendering (-nullrhi; collision sensors
 # and telemetry work, an RGB camera segfaults the server); 1: chase-cam mp4 per route on a rendering server,
-# needs LOGGING=1), OBS_HTML (1 = also the interactive obs replay per route, rendered into the one gallery
-# folder $OUT/obs_html at the end, large; needs LOGGING=1), REPORT (0 = skip the HTML report),
+# needs LOGGING=1), OBS_HTML (1 = failures, default: the interactive obs replay pages of the route runs with a
+# flagged infraction or a failed status, rendered into $OUT/obs_html at the end; all = every route run; 0 = none;
+# needs LOGGING=1), REPORT (0, default; 1 = the HTML report of scripts/eval/analyze_carla_cosim.py in $OUT/report,
+# needs LOGGING=1), TIDY (1, default: scripts/eval/tidy_carla_run.py flattens $OUT at the end; 0 = keep every file),
 # MAX_ATTEMPTS, CARLA_ROOT, CARL_WORK_DIR, PY, PD, COSIM_MAX_SPEED_MPS (ego speed cap, default 30),
-# COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: partners' stopped-time obs held at 0; 0 = real stopped times),
+# COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: vehicles' stopped-time obs held at 0, walkers keep theirs; 0 = all real),
 # COSIM_VRU_SIZE_PAD_M (default 0.8: added to the length and width of every walker and two-wheeler box, so they
-# read strictly larger than the smallest training vehicle; 0 = true CARLA boxes).
+# read strictly larger than the smallest training vehicle; 0 = true CARLA boxes), COSIM_WALKER_SPEED_FLOOR_MPS (default 0;
+# the diagnostic walker speed floor of shadow_ego.py, tags the folder _walkerfloor<value>), WANDB_REPORT (1, default: the
+# DS of results.csv becomes the training run's final_eval/longest6_v2_DS in wandb, replacing an earlier report; 0 for
+# ablations, so the run keeps the number of its standard eval; never reported: a run with missing route records, the
+# scenario-free variant and a walker speed floor run).
+# COSIM_DYNAMICS_SOURCE (carla_pedals, default: CARLA's physics moves the ego, driven only by the VehicleControl the agent
+# returns; tags the folder _carla_pedals; pufferdrive: the ego is teleported along PufferDrive's own dynamics).
+# Ablations of carla_pedals: COSIM_PEDAL_REVERSE (0, default: the car never backs up; 1 = it reverses, tags the folder _reverse) and
+# COSIM_PEDAL_YELLOW_MARGIN (1, default; 0 = the policy sees CARLA's remaining yellow, tags the folder _noyellowmargin).
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
 
 export PY=${PY:-$HOME/miniconda3/envs/carl/bin/python}   # cp310: CARLA 0.9.15 ships no newer wheel
 export CARLA_ROOT=${CARLA_ROOT:-$HOME/CARLA_0.9.15}
 export CARL_WORK_DIR=${CARL_WORK_DIR:-$HOME/CaRL/CARLA}
-RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0045_1000}
+RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0071_1000}
 # the agent finds config.yaml next to final_model.pt (or one level above a models/*.pt)
 export CKPT=$RUN_DIR/final_model.pt
 SCENARIOS=${SCENARIOS:-1}
@@ -58,15 +71,18 @@ for seed in $SEEDS; do [[ "$seed" =~ ^[0-9]+$ ]] || { echo "SEEDS=\"$SEEDS\" mus
 read -r -a SEED_LIST <<< "$SEEDS"
 [ "${#SEED_LIST[@]}" -gt 0 ] || { echo "SEEDS must name at least one seed"; exit 1; }
 ROUTE_SUBSET=${ROUTE_SUBSET:-}
-PORT_BASE=${PORT_BASE:-2000}
+PORT_BASE=${PORT_BASE:-12000}
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
 WORKERS=${WORKERS:-16}
 STAGGER_S=${STAGGER_S:-15}
 LOGGING=${LOGGING:-1}
 CARLA_VIEW=${CARLA_VIEW:-0}
 [ "$CARLA_VIEW" = "1" ] && [ "$LOGGING" != "1" ] && { echo "CARLA_VIEW=1 needs LOGGING=1"; exit 1; }
-OBS_HTML=${OBS_HTML:-1}
-REPORT=${REPORT:-$LOGGING}
+OBS_HTML=${OBS_HTML:-1}   # 1|failures: replay pages of the failed route runs; all: every route run; 0: none
+case "$OBS_HTML" in 1) OBS_HTML=failures ;; 0|failures|all) ;; *) echo "OBS_HTML=\"$OBS_HTML\" must be 0, 1, failures or all"; exit 1 ;; esac
+REPORT=${REPORT:-0}
+TIDY=${TIDY:-1}
+WANDB_REPORT=${WANDB_REPORT:-1}
 EVALUATOR=$CARL_WORK_DIR/original_leaderboard/leaderboard/leaderboard/leaderboard_evaluator.py
 for path in "$CKPT" "$PY" "$CARLA_ROOT/CarlaUE4.sh" "$EVALUATOR" "$ROUTES" "$CARL_WORK_DIR/tools/result_parser.py"; do
     [ -e "$path" ] || { echo "missing $path"; exit 1; }
@@ -81,6 +97,26 @@ NUM_GPUS=${NUM_GPUS:-$(nvidia-smi -L 2>/dev/null | grep -c "^GPU")}
 if [ "$NUM_GPUS" -lt 1 ] || [ "$NUM_GPUS" -gt 8 ]; then echo "NUM_GPUS=$NUM_GPUS must be 1..8"; exit 1; fi
 if [ "$WORKERS" -lt 1 ] || [ "$WORKERS" -gt 64 ]; then echo "WORKERS=$WORKERS must be 1..64"; exit 1; fi
 
+# Every port of the worker layout (rpc, streaming = rpc+1, TM) must be free of listeners; the first clear base wins.
+# Bases stay below the ephemeral range (32768+); the old 2000 put node_exporter (9100) and dcgm-exporter (9400) inside it.
+pick_port_base() {
+    local listening base w port busy
+    listening=" $(ss -ltun 2>/dev/null | awk 'NR > 1 {sub(/.*:/, "", $5); print $5}' | sort -u | tr '\n' ' ') "
+    for base in "$@"; do
+        busy=0
+        for ((w = 0; w < WORKERS; w++)); do
+            for port in $((base + 50 * w)) $((base + 50 * w + 1)) $((base + 6000 + 50 * w)); do
+                [[ "$listening" == *" $port "* ]] && { busy=$port; break 2; }
+            done
+        done
+        [ "$busy" = 0 ] && { echo "$base"; return 0; }
+        echo "port base $base: port $busy is in use, trying the next range" >&2
+    done
+    return 1
+}
+PORT_BASE=$(pick_port_base "$PORT_BASE" 12000 22000) || { echo "no free port range for $WORKERS workers (ss -ltun)"; exit 1; }
+echo "port base $PORT_BASE: rpc $PORT_BASE+50w, TM $((PORT_BASE + 6000))+50w"
+
 # PD first, and drop inherited entries from other PufferDrive checkouts (see 9_nuPlan.sh)
 INHERITED_PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
 export PYTHONPATH="$PD:$CARL_WORK_DIR/original_leaderboard/leaderboard:$CARL_WORK_DIR/original_leaderboard/scenario_runner:$CARLA_ROOT/PythonAPI/carla${INHERITED_PYTHONPATH:+:$INHERITED_PYTHONPATH}"
@@ -89,22 +125,36 @@ cd "$PD" || exit 1
 OMP_THREADS=${OMP_NUM_THREADS:-$([ "$WORKERS" -ge 16 ] && echo 2 || echo 4)}
 export OMP_NUM_THREADS=$OMP_THREADS MKL_NUM_THREADS=$OMP_THREADS OPENBLAS_NUM_THREADS=$OMP_THREADS NUMEXPR_NUM_THREADS=$OMP_THREADS
 export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
-export COSIM_DYNAMICS_SOURCE=pufferdrive
+export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-carla_pedals}   # carla_pedals: CARLA's physics moves the ego, see shadow_ego.py
+[[ "$COSIM_DYNAMICS_SOURCE" =~ ^(pufferdrive|carla_pedals)$ ]] || { echo "COSIM_DYNAMICS_SOURCE=\"$COSIM_DYNAMICS_SOURCE\" must be pufferdrive or carla_pedals"; exit 1; }
+export COSIM_PEDAL_REVERSE=${COSIM_PEDAL_REVERSE:-0} COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}   # carla_pedals ablations, see shadow_ego.py
+[[ "$COSIM_PEDAL_REVERSE" =~ ^[01]$ && "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_REVERSE=\"$COSIM_PEDAL_REVERSE\" and COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }
 export COSIM_MAX_SPEED_MPS=${COSIM_MAX_SPEED_MPS:-30}
 export COSIM_ZERO_PARTNER_STOPPED_TIME=${COSIM_ZERO_PARTNER_STOPPED_TIME:-1}
 export COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-0.8}
+export COSIM_WALKER_SPEED_FLOOR_MPS=${COSIM_WALKER_SPEED_FLOOR_MPS:-0}   # diagnostic only, see shadow_ego.py
+[[ "$COSIM_WALKER_SPEED_FLOOR_MPS" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "COSIM_WALKER_SPEED_FLOOR_MPS=\"$COSIM_WALKER_SPEED_FLOOR_MPS\" must be a non-negative number"; exit 1; }
 export COSIM_OBS_HTML_MAX_STEPS=${COSIM_OBS_HTML_MAX_STEPS:-20000}
 export COSIM_OBS_HTML_RENDER=0  # routes save the compact replay only; render_carla_obs_html.py renders all pages into $OUT/obs_html
 
 TAG=longest6_v2$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")_seeds$(echo "$SEEDS" | tr ' ' '-')
 TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
+TAG=$TAG$([ "$COSIM_WALKER_SPEED_FLOOR_MPS" = "0" ] || echo "_walkerfloor$COSIM_WALKER_SPEED_FLOOR_MPS")
+TAG=$TAG$([ "$COSIM_DYNAMICS_SOURCE" = "pufferdrive" ] || echo "_$COSIM_DYNAMICS_SOURCE")
+if [ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ]; then
+    TAG=$TAG$([ "$COSIM_PEDAL_REVERSE" = "0" ] || echo "_reverse")$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
+fi
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 OUT=$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
 {
     echo "checkpoint $CKPT"; echo "routes $ROUTES"; echo "seeds $SEEDS"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"
     echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
+    echo "walker_speed_floor_mps $COSIM_WALKER_SPEED_FLOOR_MPS"
+    echo "dynamics_source $COSIM_DYNAMICS_SOURCE"
+    echo "pedal_reverse $COSIM_PEDAL_REVERSE"; echo "pedal_yellow_margin $COSIM_PEDAL_YELLOW_MARGIN"
     echo "git $(git -C "$PD" rev-parse --short HEAD 2>/dev/null) $(git -C "$PD" diff --quiet 2>/dev/null || echo dirty)"
+    echo "port_base $PORT_BASE"
 } > "$OUT/run_info.txt"
 echo "Results -> $OUT"
 
@@ -120,10 +170,12 @@ esac
 mapfile -t ROUTE_IDS < <("$PY" -c "
 import sys, xml.etree.ElementTree as ET
 print('\n'.join(r.attrib['id'] for r in ET.parse(sys.argv[1]).getroot().iter('route')))" "$ROUTES")
+TOTAL_ROUTES=${#ROUTE_IDS[@]}
 [ -n "$ROUTE_SUBSET" ] && read -r -a ROUTE_IDS <<< "$ROUTE_SUBSET"
 # work units = route x seed ("<route id>:<seed>"), each its own server run and result folder
 UNITS=()
 for seed in "${SEED_LIST[@]}"; do for route_id in "${ROUTE_IDS[@]}"; do UNITS+=("$route_id:$seed"); done; done
+TOTAL_UNITS=$((TOTAL_ROUTES * ${#SEED_LIST[@]}))
 [ "$WORKERS" -gt "${#UNITS[@]}" ] && WORKERS=${#UNITS[@]}
 # longest route first to the least loaded worker; length = the xml's waypoint polyline (an earlier run's duration would
 # read a route that failed early as short)
@@ -209,7 +261,7 @@ except Exception:
     if [ "$LOGGING" = "1" ]; then
         log_env=(COSIM_TELEMETRY="$route_dir/telemetry" COSIM_WORLD_LOG="$route_dir/world_log")
         [ "$CARLA_VIEW" = "1" ] && log_env+=(COSIM_DEBUG_CARLA_VIEW="$route_dir/carla_view")
-        [ "$OBS_HTML" = "1" ] && log_env+=(COSIM_OBS_HTML="$route_dir/obs_html")
+        [ "$OBS_HTML" != "0" ] && log_env+=(COSIM_OBS_HTML="$route_dir/obs_html")
     fi
     $pin env CUDA_VISIBLE_DEVICES="$gpu" "${log_env[@]}" \
         "$PY" -u "$EVALUATOR" --routes "$ROUTES" --routes-subset "$route_id" --repetitions "$REPETITIONS" \
@@ -305,16 +357,29 @@ if rows:
         print(f"over seeds: DS {statistics.mean(ds.values()):.2f} +- {statistics.pstdev(ds.values()):.2f}  "
               f"RC {statistics.mean(rc.values()):.2f} +- {statistics.pstdev(rc.values()):.2f}  (population std over {len(by_seed)} seeds, as in results.csv)")
 EOF
+# the repo .venv holds wandb; the script reads results.csv and the route records and never imports pufferlib
+if [ "$WANDB_REPORT" = "1" ] && [ "$SCENARIOS" = "1" ] && [ "$COSIM_WALKER_SPEED_FLOOR_MPS" = "0" ]; then
+    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/pufferlib/ocean/evaluation_utils/eval_wandb_report.py" \
+        longest6_v2 "$OUT/aggregate/results.csv" --run-dir "$RUN_DIR" --expected-episode-count $((TOTAL_UNITS * REPETITIONS)) \
+        || echo "wandb report failed (results above are unaffected)"
+fi
 
 REPORT_ARGS=()
-[ "$OBS_HTML" = "1" ] && REPORT_ARGS+=(--obs-html-dir "$OUT/obs_html")
+[ "$OBS_HTML" != "0" ] && REPORT_ARGS+=(--obs-html-dir "$OUT/obs_html")
 if [ "$REPORT" = "1" ] && [ "$LOGGING" = "1" ]; then
     "$PY" "$PD/scripts/eval/analyze_carla_cosim.py" "$OUT"/routes/route_* "$OUT/report" "${REPORT_ARGS[@]}" || echo "HTML report failed (results above are unaffected)"
 fi
 # after the report: the gallery links to it when it exists
-if [ "$OBS_HTML" = "1" ] && [ "$LOGGING" = "1" ]; then
-    "$PY" "$PD/scripts/eval/render_carla_obs_html.py" "$OUT" --routes "$ROUTES" || echo "obs replay gallery failed (results above are unaffected)"
+if [ "$OBS_HTML" != "0" ] && [ "$LOGGING" = "1" ]; then
+    "$PY" "$PD/scripts/eval/render_carla_obs_html.py" "$OUT" --routes "$ROUTES" --select "$OBS_HTML" \
+        || echo "obs replay gallery failed (results above are unaffected)"
+fi
+# the pages are rendered: flatten the route folders, keep the logs of the failed (OBS_HTML=all: every) route runs
+if [ "$TIDY" = "1" ]; then
+    "$PY" "$PD/scripts/eval/tidy_carla_run.py" "$OUT" --keep "$([ "$OBS_HTML" = "all" ] && echo all || echo failures)" \
+        || echo "tidy failed (results above are unaffected)"
 fi
 [ -f "$OUT/report/index.html" ] && echo "report -> $OUT/report/index.html"
 [ -f "$OUT/obs_html/index.html" ] && echo "obs replays -> $OUT/obs_html/index.html"
+for results in "$OUT/results.csv" "$OUT/aggregate/results.csv"; do [ -f "$results" ] && { echo "results -> $results"; break; }; done
 echo "Done -> $OUT"

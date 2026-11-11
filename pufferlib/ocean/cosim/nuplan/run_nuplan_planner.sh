@@ -1,8 +1,8 @@
 #!/bin/bash
 # Run pufferlib/ocean/cosim/nuplan/planner.py under nuPlan's unmodified
 # closed-loop run_simulation.py: BOTH agent-reactivity challenges (nonreactive
-# log-replay + reactive IDM), with both debug videos enabled. See README.md
-# "How to run" and planner.py's module docstring.
+# log-replay + reactive IDM). See README.md "How to run" and planner.py's
+# module docstring.
 #
 # Usage (from a compute-node allocation's job id -- squeue -u $USER to find it):
 #   CKPT=/path/to/model_puffer_drive_xxxxxx.pt \
@@ -29,6 +29,10 @@
 #             session -- only worker=sequential has been exercised end-to-end
 #             (one scenario). If ray_distributed misbehaves here, retry with
 #             WORKER=sequential (much slower, but proven) while investigating.
+#   CALLBACKS  nuPlan simulation callbacks (default "[simulation_log_callback]": one
+#             msgpack.xz log per scenario). Add carl_visualization_callback for nuPlan's
+#             ground-truth .avi of every scenario; the tidy keeps the selected ones as
+#             details/videos/<token>.mp4.
 #   LIMIT_TOTAL_SCENARIOS  caps scenario_filter.limit_total_scenarios (unset =
 #             no cap, SPLIT's own scenario count applies). Handy for a quick
 #             sanity check before committing to the full SPLIT.
@@ -40,18 +44,48 @@
 #   VRU_SIZE_PAD_M  [m] add this to pedestrian and bicycle partner boxes' length and width in the policy's
 #             observation (training never spawns below 0.8 m; 0.8 = strictly above the smallest training
 #             vehicle); unset/0 = off.
+#   SYMMETRIC_LANE_WIDTHS=true|false  the shadow env loads a cached copy of the city bin whose lane widths are
+#             twice the centerline's distance to the nearer GPKG boundary (the converter writes left + right,
+#             which overstates nuPlan's parking-strip lanes). Unset = planner yaml, false.
+#   EGO_DYNAMICS=pufferdrive|nuplan_bicycle|nuplan_tracker  ego plant (unset = planner yaml, pufferdrive). nuplan_bicycle drives
+#             nuPlan's KinematicBicycleModel through CaRL's one_stage_controller (the ego_controller override is
+#             added here). BICYCLE_MIN_SPEED_MPS [m/s, <= 0: 0 = no reverse driving, -2 = Drive's floor] and
+#             BICYCLE_UNDO_LOW_PASS=true|false (pre-compensate the model's command lag) tune it; unset = planner yaml.
+#             BICYCLE_CENTER_ACCEL_CAP=true|false: reduce the plant's accel while turning so nuPlan's center accel
+#             (rear accel + d*yaw_rate^2 + d*yaw_accel) stays under the accel cap (CaRL clip_angular_adjustment);
+#             BICYCLE_CENTER_ACCEL_CAP_MARGIN (factor on the cap, savgol headroom) and BICYCLE_MAX_YAW_JERK
+#             [rad/s^3, bound on the per-step change of yaw accel via the steering command; 0 = off] tune comfort.
+#             BICYCLE_FLOOR_ACCEL_CLAMP=true|false: clamp the policy's integrated accel to 0 while the plant sits on
+#             the speed floor (unset = planner yaml, true; false reproduces run 426's standstill windup).
+#             EGO_DYNAMICS=nuplan_tracker is GIGAFLOW's nuPlan evaluation: every step the planner rolls the scene out
+#             for the trajectory horizon (the policy drives the ego, everyone else keeps its velocity) and nuPlan's
+#             two_stage_controller tracks the ego's rolled-out trajectory. EGO_TRACKER=lqr|ilqr picks the tracker
+#             (default lqr = nuPlan's default; ilqr = nuPlan's iLQR without its wall-clock solve cap, so the result
+#             does not depend on the node's load). ROLLOUT_STEP_SECONDS [s, rollout step, 0.3 = the training step],
+#             ROLLOUT_POLICY_VEHICLES [vehicles and bicycles the policy also drives in the rollout, nearest first] and
+#             ROLLOUT_ALLOW_REVERSE=true|false [false: an agent the policy would back up stays at rest] tune it;
+#             unset = planner yaml.
+#   EGO_ACCEL_CAP_MPS2  [m/s^2] ego accel cap, any ego dynamics (unset = planner yaml, 0.96 x 2.40).
+#   PARTNER_SPLIT_MAX_LENGTH_M  [m] partners longer than this are shown as equal boxes along their heading
+#             (training spawns at most 7 m, nuPlan buses reach 12.7 m); unset/0 = off.
+#   STANDSTILL_JERK_DEADBAND  [m/s^3] shadow-env standstill jerk deadband (unset = arch.py, 1.5; 0 = off: with the
+#             bicycle plant's speed floor the deadband's anti-reverse-creep job is done by the floor).
 #   OBS_SLOTS_PARTNERS_N  shadow-env partner obs slots (unset = planner yaml, 40).
 #   EVAL_PERCEIVED_SIZE_MARGIN_M  [m per side] ego box inflation in the policy's obs (unset = arch.py, 0.2).
 #   REWARD_OVERSPEED  overspeed conditioning alpha fed to the policy (unset = arch.py, 0.1).
+#   LANE_WIDTH_CLIP_MIN_M / LANE_WIDTH_CLIP_MAX_M  [m] clip the lane widths the policy observes to this
+#             range (training maps span 2.85-4.4 m; nuPlan city bins reach 50 m); unset = off.
 #   COSIM_OBS_HTML=all|failures|infractions|0   interactive observation replay (exact policy
 #             input/outputs per step, pufferlib.viz HTML) -> $GROUP/obs_html. all: every
 #             scenario. failures (default): only scenarios scoring below
 #             COSIM_OBS_HTML_MAX_SCORE (default 0.9). infractions: only scenarios with an
 #             at-fault collision, drivable-area or driving-direction violation, or no
-#             progress. Non-selected replays are deleted after the run. 0: off.
-#   (nuPlan's own ground-truth video is always requested via
-#    carl_visualization_callback in the callback list below -- one .avi per
-#    scenario under $GROUP/simulation/<challenge>/<run_ts>/visualization/)
+#             progress. Every .replay.zlib is deleted after rendering (the pages embed them). 0: off.
+#   TIDY=1    scripts/eval/tidy_nuplan_run.py then flattens $GROUP to overview.csv, scenarios.csv, obs_html/,
+#             simulation_log/ (the logs of the scenarios COSIM_OBS_HTML selects, infractions when it is 0) and
+#             details/ (metrics, the aggregator table, hydra config, runner report; the selected scenarios'
+#             videos as .mp4 when carl_visualization_callback ran). TIDY=0 leaves nuPlan's
+#             simulation/<challenge>/<run_ts> tree with every log (2300 files in 2000 folders per Val14 run).
 if [ -z "$INSIDE_PUFFER_CONTAINER" ] && [ -f /share/apps/images/slurm-ib-bind-apptainer.sh ]; then
     source /share/apps/images/slurm-ib-bind-apptainer.sh
     export APPTAINERENV_PREPEND_PATH=/share/apps/apptainer/bin:$APPTAINERENV_PREPEND_PATH
@@ -88,9 +122,36 @@ EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
 [ -n "${STARTUP_ACCEL_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_accel_jerk_cap_mps3=$STARTUP_ACCEL_JERK_CAP")
 [ -n "${STARTUP_BRAKE_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_brake_jerk_cap_mps3=$STARTUP_BRAKE_JERK_CAP")
 [ -n "${VRU_SIZE_PAD_M:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.vru_size_pad_m=$VRU_SIZE_PAD_M")
+[ -n "${SYMMETRIC_LANE_WIDTHS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.symmetric_lane_widths=$SYMMETRIC_LANE_WIDTHS")
+if [ "${EGO_DYNAMICS:-}" = "nuplan_bicycle" ]; then
+    EXTRA_ARGS+=("ego_controller=one_stage_controller" "planner.pufferdrive_planner.ego_dynamics=nuplan_bicycle")
+elif [ "${EGO_DYNAMICS:-}" = "nuplan_tracker" ]; then
+    case "${EGO_TRACKER:-lqr}" in
+        lqr) TRACKER_CONTROLLER=two_stage_controller ;;
+        ilqr) TRACKER_CONTROLLER=two_stage_ilqr_controller ;;
+        *) echo "EGO_TRACKER must be lqr or ilqr, got '${EGO_TRACKER}'"; exit 1 ;;
+    esac
+    EXTRA_ARGS+=("ego_controller=$TRACKER_CONTROLLER" "planner.pufferdrive_planner.ego_dynamics=nuplan_tracker")
+elif [ -n "${EGO_DYNAMICS:-}" ]; then
+    EXTRA_ARGS+=("planner.pufferdrive_planner.ego_dynamics=$EGO_DYNAMICS")
+fi
+[ -n "${ROLLOUT_STEP_SECONDS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.rollout_step_seconds=$ROLLOUT_STEP_SECONDS")
+[ -n "${ROLLOUT_POLICY_VEHICLES:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.rollout_policy_vehicles=$ROLLOUT_POLICY_VEHICLES")
+[ -n "${ROLLOUT_ALLOW_REVERSE:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.rollout_allow_reverse=$ROLLOUT_ALLOW_REVERSE")
+[ -n "${BICYCLE_MIN_SPEED_MPS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_min_speed_mps=$BICYCLE_MIN_SPEED_MPS")
+[ -n "${BICYCLE_UNDO_LOW_PASS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_undo_low_pass=$BICYCLE_UNDO_LOW_PASS")
+[ -n "${BICYCLE_CENTER_ACCEL_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_center_accel_cap=$BICYCLE_CENTER_ACCEL_CAP")
+[ -n "${BICYCLE_CENTER_ACCEL_CAP_MARGIN:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_center_accel_cap_margin=$BICYCLE_CENTER_ACCEL_CAP_MARGIN")
+[ -n "${BICYCLE_MAX_YAW_JERK:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_max_yaw_jerk_radps3=$BICYCLE_MAX_YAW_JERK")
+[ -n "${EGO_ACCEL_CAP_MPS2:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.accel_cap_mps2=$EGO_ACCEL_CAP_MPS2")
+[ -n "${BICYCLE_FLOOR_ACCEL_CLAMP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_floor_accel_clamp=$BICYCLE_FLOOR_ACCEL_CLAMP")
+[ -n "${PARTNER_SPLIT_MAX_LENGTH_M:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.partner_split_max_length_m=$PARTNER_SPLIT_MAX_LENGTH_M")
+[ -n "${STANDSTILL_JERK_DEADBAND:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_standstill_jerk_deadband_mps3=$STANDSTILL_JERK_DEADBAND")
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_slots_partners_n=$OBS_SLOTS_PARTNERS_N")
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_perceived_size_margin_m=$EVAL_PERCEIVED_SIZE_MARGIN_M")
 [ -n "${REWARD_OVERSPEED:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.reward_overspeed=$REWARD_OVERSPEED")
+[ -n "${LANE_WIDTH_CLIP_MIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_lane_width_clip_min_m=$LANE_WIDTH_CLIP_MIN_M")
+[ -n "${LANE_WIDTH_CLIP_MAX_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_lane_width_clip_max_m=$LANE_WIDTH_CLIP_MAX_M")
 [ -n "${WORKER:-}" ] && EXTRA_ARGS+=("worker=$WORKER")
 [ -n "${THREADS_PER_NODE:-}" ] && EXTRA_ARGS+=("worker.threads_per_node=$THREADS_PER_NODE")
 [ -n "${LIMIT_TOTAL_SCENARIOS:-}" ] && EXTRA_ARGS+=("scenario_filter.limit_total_scenarios=$LIMIT_TOTAL_SCENARIOS")
@@ -114,7 +175,7 @@ for CHALLENGE in $CHALLENGES; do
         scenario_filter=$SPLIT \
         planner=pufferdrive_planner \
         planner.pufferdrive_planner.checkpoint_path="$CKPT" \
-        callback="${CALLBACKS:-[simulation_log_callback, carl_visualization_callback]}" \
+        callback="${CALLBACKS:-[simulation_log_callback]}" \
         main_callback="[time_callback, metric_file_callback, metric_aggregator_callback, csv_main_callback]" \
         hydra.searchpath="[pkg://pufferlib.ocean.cosim.nuplan.config, pkg://carl_nuplan.planning.script.config.common, pkg://carl_nuplan.planning.script.config.simulation, pkg://nuplan.planning.script.config.common, pkg://nuplan.planning.script.experiments]" \
         group="$GROUP" \
@@ -132,6 +193,13 @@ elif [ "$OBS_HTML" = "infractions" ]; then
         --metric no_ego_at_fault_collisions --metric drivable_area_compliance \
         --metric driving_direction_compliance --metric ego_is_making_progress
 fi
+TIDY_KEEP=$OBS_HTML
+[ "$OBS_HTML" = "0" ] && TIDY_KEEP=infractions
+if [ "${TIDY:-1}" = "1" ]; then
+    "$PY" "$PD/scripts/eval/tidy_nuplan_run.py" "$GROUP" \
+        --keep "$TIDY_KEEP" --max-score "${COSIM_OBS_HTML_MAX_SCORE:-0.9}" \
+        || echo "tidy failed (results above are unaffected)"
+fi
 
 echo "=========== SUMMARY ==========="
 rc=0
@@ -141,4 +209,5 @@ for c in "${!STATUS[@]}"; do
 done
 echo "group -> $GROUP"
 [ -f "$GROUP/obs_html/index.html" ] && echo "obs replays -> $GROUP/obs_html/index.html"
+[ -f "$GROUP/overview.csv" ] && echo "overview -> $GROUP/overview.csv"
 exit $rc

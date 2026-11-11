@@ -1,3 +1,4 @@
+import math
 import pickle
 import zlib
 import numpy as np
@@ -47,6 +48,9 @@ class Drive(pufferlib.PufferEnv):
         disable_red_light_infractions=False,
         disable_stop_sign_infractions=False,
         traffic_light_junction_phases=False,
+        traffic_light_green_min_s=3.0,
+        traffic_light_yellow_min_s=2.0,
+        traffic_light_yellow_max_s=3.0,
         stop_sign_behavior="ignore",
         use_map_cache=False,
         preload_map_cache=False,
@@ -79,6 +83,7 @@ class Drive(pufferlib.PufferEnv):
         max_agents_per_env=64,
         cosim_partner_slots=0,
         cosim_eval_semantics=False,
+        scripted_pedestrian_ratio=0.0,
         action_type="discrete",
         dynamics_model="classic",
         reset_accel_on_stop=False,
@@ -124,6 +129,7 @@ class Drive(pufferlib.PufferEnv):
         obs_lane_heading_signed=False,
         obs_lane_speed_limit=False,
         obs_slots_traffic_controls_n=4,
+        obs_traffic_light_yellow_remaining=False,
         traffic_lights_enabled=True,
         stop_signs_enabled=False,
         yield_signs_enabled=False,
@@ -137,7 +143,11 @@ class Drive(pufferlib.PufferEnv):
         obs_norm_road_seg_width_m=5.0,
         obs_norm_z_m=10.0,
         eval_perceived_size_margin_m=0.1,
+        red_light_train_front_margin_m=0.3,
+        red_light_train_rear_margin_m=0.0,
         obs_partner_split_length_m=0.0,
+        obs_lane_width_clip_min_m=0.0,
+        obs_lane_width_clip_max_m=0.0,
         eval_standstill_jerk_deadband_mps3=0.0,
         obs_range_traffic_control_m=100.0,
         obs_range_partner_m=100.0,
@@ -252,6 +262,17 @@ class Drive(pufferlib.PufferEnv):
         self.disable_red_light_infractions = bool(disable_red_light_infractions)
         self.disable_stop_sign_infractions = bool(disable_stop_sign_infractions)
         self.traffic_light_junction_phases = bool(traffic_light_junction_phases)
+        self.traffic_light_green_min_s = float(traffic_light_green_min_s)
+        self.traffic_light_yellow_min_s = float(traffic_light_yellow_min_s)
+        self.traffic_light_yellow_max_s = float(traffic_light_yellow_max_s)
+        if not (0.0 < self.traffic_light_green_min_s <= 10.0) or not (
+            0.0 < self.traffic_light_yellow_min_s <= self.traffic_light_yellow_max_s < float("inf")
+        ):
+            raise ValueError(
+                "traffic light cycle: need 0 < traffic_light_green_min_s <= 10 and "
+                f"0 < yellow_min <= yellow_max. Got: {traffic_light_green_min_s}, {traffic_light_yellow_min_s}, "
+                f"{traffic_light_yellow_max_s}"
+            )
         if replay_expert_agents not in (0, 1):
             raise ValueError(f"replay_expert_agents must be 0 or 1. Got: {replay_expert_agents}")
         self.replay_expert_agents = replay_expert_agents
@@ -299,6 +320,12 @@ class Drive(pufferlib.PufferEnv):
         # Co-sim envs stay out of eval_mode (its scenario batching needs a full agent pool) but still want the
         # eval-only observation/action semantics: perceived-size margin and standstill jerk deadband.
         self.cosim_eval_semantics = int(bool(cosim_eval_semantics))
+        # Scripted crossing walkers per env = ceil(ratio * agents in the env); static partners, never policy-controlled.
+        self.scripted_pedestrian_ratio = float(scripted_pedestrian_ratio)
+        if not np.isfinite(self.scripted_pedestrian_ratio) or self.scripted_pedestrian_ratio < 0.0:
+            raise ValueError(f"scripted_pedestrian_ratio must be finite and >= 0. Got: {scripted_pedestrian_ratio}")
+        if self.scripted_pedestrian_ratio > 0.0 and (simulation_mode != "gigaflow" or self.cosim_partner_slots > 0):
+            raise ValueError("scripted_pedestrian_ratio > 0 needs gigaflow simulation_mode without cosim_partner_slots")
         if goal_source == "external" and simulation_mode != "gigaflow":
             raise ValueError("goal_source 'external' is only supported in gigaflow simulation_mode (co-sim)")
 
@@ -318,6 +345,7 @@ class Drive(pufferlib.PufferEnv):
         self.stop_signs_enabled = stop_signs_enabled
         self.yield_signs_enabled = yield_signs_enabled
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
+        self.obs_traffic_light_yellow_remaining = int(bool(obs_traffic_light_yellow_remaining))
         self.obs_norm_speed_mps = float(obs_norm_speed_mps)
         if not np.isfinite(self.obs_norm_speed_mps) or self.obs_norm_speed_mps <= 0.0:
             raise ValueError(f"obs_norm_speed_mps must be finite and > 0. Got: {obs_norm_speed_mps}")
@@ -329,9 +357,31 @@ class Drive(pufferlib.PufferEnv):
         self.obs_norm_road_seg_width_m = float(obs_norm_road_seg_width_m)
         self.obs_norm_z_m = float(obs_norm_z_m)
         self.eval_perceived_size_margin_m = float(eval_perceived_size_margin_m)
+        self.red_light_train_front_margin_m = float(red_light_train_front_margin_m)
+        if not np.isfinite(self.red_light_train_front_margin_m) or self.red_light_train_front_margin_m < 0.0:
+            raise ValueError(
+                f"red_light_train_front_margin_m must be finite and >= 0. Got: {red_light_train_front_margin_m}"
+            )
+        self.red_light_train_rear_margin_m = float(red_light_train_rear_margin_m)
+        if not np.isfinite(self.red_light_train_rear_margin_m) or self.red_light_train_rear_margin_m < 0.0:
+            raise ValueError(
+                f"red_light_train_rear_margin_m must be finite and >= 0. Got: {red_light_train_rear_margin_m}"
+            )
         self.obs_partner_split_length_m = float(obs_partner_split_length_m)
         if not np.isfinite(self.obs_partner_split_length_m) or self.obs_partner_split_length_m < 0.0:
             raise ValueError(f"obs_partner_split_length_m must be finite and >= 0. Got: {obs_partner_split_length_m}")
+        self.obs_lane_width_clip_min_m = float(obs_lane_width_clip_min_m)
+        self.obs_lane_width_clip_max_m = float(obs_lane_width_clip_max_m)
+        lane_width_clip_enabled = self.obs_lane_width_clip_max_m > 0.0
+        if (
+            not (0.0 <= self.obs_lane_width_clip_min_m < float("inf"))
+            or not (0.0 <= self.obs_lane_width_clip_max_m < float("inf"))
+            or (lane_width_clip_enabled and self.obs_lane_width_clip_min_m > self.obs_lane_width_clip_max_m)
+        ):
+            raise ValueError(
+                "obs_lane_width_clip_min_m/max_m must be finite, >= 0 and min <= max (max 0 disables), "
+                f"got {obs_lane_width_clip_min_m} / {obs_lane_width_clip_max_m}"
+            )
         self.eval_standstill_jerk_deadband_mps3 = float(eval_standstill_jerk_deadband_mps3)
         if self.eval_standstill_jerk_deadband_mps3 < 0:
             raise ValueError(
@@ -369,7 +419,9 @@ class Drive(pufferlib.PufferEnv):
             binding.LANE_SPEED_LIMIT_FEATURES if self.obs_lane_speed_limit else 0
         )
         self.boundary_features = binding.BOUNDARY_FEATURES
-        self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
+        self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES + (
+            binding.TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES if self.obs_traffic_light_yellow_remaining else 0
+        )
         self.obs_valid_count_features = binding.OBS_VALID_COUNT_FEATURES
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
 
@@ -572,6 +624,9 @@ class Drive(pufferlib.PufferEnv):
             "disable_red_light_infractions": self.disable_red_light_infractions,
             "disable_stop_sign_infractions": self.disable_stop_sign_infractions,
             "traffic_light_junction_phases": self.traffic_light_junction_phases,
+            "traffic_light_green_min_s": self.traffic_light_green_min_s,
+            "traffic_light_yellow_min_s": self.traffic_light_yellow_min_s,
+            "traffic_light_yellow_max_s": self.traffic_light_yellow_max_s,
             "stop_sign_behavior": self.stop_sign_behavior,
             "use_map_cache": self.use_map_cache,
             "use_neighbor_cache": self.use_neighbor_cache,
@@ -593,6 +648,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_lane_heading_signed": self.obs_lane_heading_signed,
             "obs_lane_speed_limit": self.obs_lane_speed_limit,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
+            "obs_traffic_light_yellow_remaining": self.obs_traffic_light_yellow_remaining,
             "traffic_lights_enabled": self.traffic_lights_enabled,
             "stop_signs_enabled": self.stop_signs_enabled,
             "yield_signs_enabled": self.yield_signs_enabled,
@@ -622,6 +678,7 @@ class Drive(pufferlib.PufferEnv):
             "max_agents_per_env": self.max_agents_per_env,
             "cosim_partner_slots": self.cosim_partner_slots,
             "cosim_eval_semantics": self.cosim_eval_semantics,
+            "scripted_pedestrian_slots": self._scripted_pedestrian_slots(max_agents),
             "init_step": self._sample_init_step(),
             "init_step_min_horizon": self.init_step_min_horizon,
             "stagger_first_episode": self.stagger_first_episode,
@@ -648,7 +705,11 @@ class Drive(pufferlib.PufferEnv):
             "obs_norm_road_seg_width_m": self.obs_norm_road_seg_width_m,
             "obs_norm_z_m": self.obs_norm_z_m,
             "eval_perceived_size_margin_m": self.eval_perceived_size_margin_m,
+            "red_light_train_front_margin_m": self.red_light_train_front_margin_m,
+            "red_light_train_rear_margin_m": self.red_light_train_rear_margin_m,
             "obs_partner_split_length_m": self.obs_partner_split_length_m,
+            "obs_lane_width_clip_min_m": self.obs_lane_width_clip_min_m,
+            "obs_lane_width_clip_max_m": self.obs_lane_width_clip_max_m,
             "eval_standstill_jerk_deadband_mps3": self.eval_standstill_jerk_deadband_mps3,
             "obs_range_traffic_control_m": self.obs_range_traffic_control_m,
             "obs_range_partner_m": self.obs_range_partner_m,
@@ -668,6 +729,11 @@ class Drive(pufferlib.PufferEnv):
             "phantom_braking_duration_seconds": self.phantom_braking_duration_seconds,
             "phantom_braking_freeze_steering": self.phantom_braking_freeze_steering,
         }
+
+    def _scripted_pedestrian_slots(self, agents_in_env):
+        if self.scripted_pedestrian_ratio <= 0.0:
+            return 0
+        return int(math.ceil(round(self.scripted_pedestrian_ratio * agents_in_env, 6)))
 
     def _sample_init_step(self):
         # randomizer for the initialization of the C environment
@@ -817,14 +883,20 @@ class Drive(pufferlib.PufferEnv):
     def get_global_agent_state(self, include_static=False):
         """Get current global state of all active agents.
 
-        include_static: also return the co-sim partner slots after the active agents
-        (num_active_agents + cosim_partner_slots * num_envs rows).
+        include_static: also return the static slots (co-sim partners, scripted pedestrians) after the
+        active agents, in env order.
 
         Returns:
             dict with keys 'x', 'y', 'z', 'heading', 'id', 'length', 'width' containing numpy arrays
             of shape (num_active_agents,)
         """
-        num_agents = self.num_agents + (self.cosim_partner_slots * self.num_envs if include_static else 0)
+        static_slots = 0
+        if include_static:
+            env_agent_counts = np.diff(np.asarray(self.agent_offsets))
+            static_slots = sum(
+                self.cosim_partner_slots + self._scripted_pedestrian_slots(int(count)) for count in env_agent_counts
+            )
+        num_agents = self.num_agents + static_slots
 
         states = {
             "x": np.zeros(num_agents, dtype=np.float32),
@@ -899,10 +971,22 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_recompute_observations(self.c_envs)
         return self.observations
 
-    def set_traffic_light_states(self, states):
+    def set_traffic_light_states(self, states, yellow_remaining_s=None):
         """override each traffic-light element's state at the current
-        timestep (states length == num_traffic_elements)."""
-        binding.vec_set_traffic_light_states(self.c_envs, np.ascontiguousarray(states, dtype=np.int32))
+        timestep (states length == num_traffic_elements). yellow_remaining_s
+        (same length, seconds each light stays yellow from now, 0 unless
+        yellow) feeds the obs_traffic_light_yellow_remaining column and is
+        required when that flag is set; the co-sim's value is clipped to the
+        training max traffic_light_yellow_max_s."""
+        states = np.ascontiguousarray(states, dtype=np.int32)
+        if yellow_remaining_s is None:
+            binding.vec_set_traffic_light_states(self.c_envs, states)
+            return
+        remaining = np.asarray(yellow_remaining_s, dtype=np.float32).reshape(-1)
+        if not np.all(np.isfinite(remaining)) or np.any(remaining < 0.0):
+            raise ValueError(f"yellow_remaining_s must be finite and >= 0. Got: {yellow_remaining_s}")
+        remaining = np.minimum(remaining, np.float32(self.traffic_light_yellow_max_s))
+        binding.vec_set_traffic_light_states(self.c_envs, states, np.ascontiguousarray(remaining))
 
     def set_stop_signs(self, lines, headings):
         """replace every stop-sign element with the external sim's own (co-sim):
@@ -945,10 +1029,25 @@ class Drive(pufferlib.PufferEnv):
             np.ascontiguousarray(gdir_y, dtype=np.float32),
         )
 
+    def set_agent_lane_goals(self, idx, spacing_m):
+        """Co-sim forecast: the agents at global indices `idx` have no known route, so their goals follow
+        the lane they are on and its straightest exits, one every `spacing_m` meters; c_step places new
+        ones whenever one is reached. Returns the number of goals placed per agent (0: no lane under the
+        agent, or the lane graph ends within spacing_m)."""
+        idx = np.ascontiguousarray(idx, dtype=np.int32)
+        placed_goal_counts = np.zeros(len(idx), dtype=np.int32)
+        binding.vec_set_agent_lane_goals(self.c_envs, idx, float(spacing_m), placed_goal_counts)
+        return placed_goal_counts
+
     def get_agent_goal_progress(self, agent_idx):
         """Co-sim: (current_goal_idx, goal_count) of one agent. current_goal_idx == goal_count
         means every goal of the current window has been consumed."""
         return binding.vec_get_agent_goal_progress(self.c_envs, int(agent_idx))
+
+    def set_agent_goal_progress(self, agent_idx, current_goal_idx):
+        """Co-sim: set how many goals of one agent's current window count as consumed (0..goal_count),
+        e.g. to undo the goals a forecast rollout consumed."""
+        binding.vec_set_agent_goal_progress(self.c_envs, int(agent_idx), int(current_goal_idx))
 
     # ───────────────────────────────────────
 

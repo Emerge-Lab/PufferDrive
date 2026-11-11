@@ -68,8 +68,9 @@ launch config "Cosim: CARLA leaderboard 1.0 agent (garage)" runs `run_evaluator.
 `LD_LIBRARY_PATH` at `experiments/compat_lib` (gitignored), which holds the `libtiff.so.5` link:
 `mkdir -p experiments/compat_lib && ln -s /usr/lib/x86_64-linux-gnu/libtiff.so.6 experiments/compat_lib/libtiff.so.5`.
 
-All 36 longest6 routes on the cluster: `scripts/kesai/14_carla_longest6_v1.sh` (one CARLA 0.9.10 server
-+ evaluator per GPU over the `longest6_split` files, retries, garage's `result_parser.py` aggregation,
+All 36 longest6 routes on the cluster: `scripts/kesai/14_carla_longest6_v1.sh` (WORKERS CARLA 0.9.10 server
++ evaluator pairs sharing the GPUs, each pulling the next `longest6_split` route run from one longest-first
+queue, retries, garage's `result_parser.py` aggregation,
 the nuPlan-style HTML report and the obs replay gallery, like `11_carla_longest6_v2.sh`).
 
 The evaluator reads `BENCHMARK=longest6` (background traffic on every spawn point, stop-sign penalty
@@ -97,3 +98,7 @@ As for the Leaderboard 2.0 agent: `result.json` (the leaderboard's), `telemetry/
 `world_log/<route>.npz`, `obs_html/<route>.replay.zlib` (rendered by
 `scripts/eval/render_carla_obs_html.py`), `carla_view/<route>.mp4`. `scripts/eval/analyze_carla_cosim.py`
 builds the HTML report from a run folder holding `result.json`, `world_log/`, `telemetry/`, `carla_view/`.
+The cluster scripts (`scripts/kesai/11_carla_longest6_v2.sh`, `14_carla_longest6_v1.sh`) render the pages of the
+failed route runs only and then flatten every route folder with `scripts/eval/tidy_carla_run.py`: `results.csv`
+at the top, `routes/route_<id>_s<seed>.result.json` for every route run plus `.telemetry.csv` and
+`.world_log.npz` of the failed ones, `details/` for the timing and logs; `TIDY=0` keeps the route folders.

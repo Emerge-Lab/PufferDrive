@@ -268,8 +268,13 @@ class DriveEnvConfig:
     traffic_light_behavior: InfractionBehavior = MISSING
     stop_sign_behavior: InfractionBehavior = MISSING
     disable_red_light_infractions: bool = MISSING
+    red_light_train_front_margin_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    red_light_train_rear_margin_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     disable_stop_sign_infractions: bool = MISSING
     traffic_light_junction_phases: bool = MISSING
+    traffic_light_green_min_s: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    traffic_light_yellow_min_s: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    traffic_light_yellow_max_s: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     traffic_lights_enabled: bool = MISSING
     stop_signs_enabled: bool = MISSING
     yield_signs_enabled: bool = MISSING
@@ -332,6 +337,7 @@ class DriveEnvConfig:
     obs_lane_heading_signed: bool = MISSING
     obs_lane_speed_limit: bool = MISSING
     obs_slots_traffic_controls_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
+    obs_traffic_light_yellow_remaining: bool = MISSING
     obs_dropout_lane: float = _constrained_field(PROBABILITY_CONSTRAINT)
     obs_dropout_boundary: float = _constrained_field(PROBABILITY_CONSTRAINT)
     obs_lane_stride: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
@@ -347,6 +353,8 @@ class DriveEnvConfig:
     obs_norm_z_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     eval_perceived_size_margin_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     obs_partner_split_length_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    obs_lane_width_clip_min_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    obs_lane_width_clip_max_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     eval_standstill_jerk_deadband_mps3: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     obs_range_road_front_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     obs_range_road_behind_m: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
@@ -363,6 +371,7 @@ class DriveEnvConfig:
     phantom_braking_trigger_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     phantom_braking_duration_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     phantom_braking_freeze_steering: bool = MISSING
+    scripted_pedestrian_ratio: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
 
     # Added by benchmark overlays after the base Hydra config is composed.
     eval_mode: bool | int = 0
@@ -498,6 +507,8 @@ class EvaluationConfig:
     max_rendered_failures: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     failure_replay_csv: str | None = MISSING
     capture_observations: bool = MISSING
+    # all | infracting: whose observations the replay pages keep (infracting zeroes the other agents' rows)
+    capture_observations_agents: str = "all"
     observation_replay_wave_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     observation_replay_writer_count: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     action_selection: ActionSelection = MISSING

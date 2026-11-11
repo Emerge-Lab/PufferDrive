@@ -87,6 +87,23 @@ class TestDriveConfig(unittest.TestCase):
             with_limit.num_obs - plain.num_obs, plain.obs_slots_lane_kept * binding.LANE_SPEED_LIMIT_FEATURES
         )
 
+    @patch("sys.argv", ["pufferl.py", "env.obs_traffic_light_yellow_remaining=true"])
+    def test_yellow_remaining_cli_override(self):
+        args = load_config("puffer_drive")
+        self.assertTrue(args["env"]["obs_traffic_light_yellow_remaining"])
+
+    def test_yellow_remaining_obs_widens_traffic_control_rows(self):
+        plain = Drive(config_only=True)
+        with_yellow = Drive(config_only=True, obs_traffic_light_yellow_remaining=True)
+        self.assertEqual(
+            with_yellow.traffic_control_features,
+            plain.traffic_control_features + binding.TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES,
+        )
+        self.assertEqual(
+            with_yellow.num_obs - plain.num_obs,
+            plain.obs_slots_traffic_controls_n * binding.TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES,
+        )
+
     @patch("sys.argv", ["pufferl.py", "train.learning_rate=0.5"])
     def test_cli_override(self):
         """Test that Hydra CLI overrides win over the config file values."""

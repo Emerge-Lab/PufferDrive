@@ -9,7 +9,8 @@ usage: python scripts/eval/analyze_carla_cosim.py <run_dir> [<run_dir> ...] <rep
 
 <run_dir> holds result.json (leaderboard_evaluator --checkpoint), world_log/*.npz, telemetry/*.csv and
 carla_view/*.mp4; the records of one run pair with the newest per-route files in timestamp order (retried
-routes leave the files of crashed attempts behind). --obs-html-dir: the run's obs replay gallery
+routes leave the files of crashed attempts behind); a run tidy_carla_run.py flattened has no such folders, so the
+cluster scripts build the report (REPORT=1) before the tidy. --obs-html-dir: the run's obs replay gallery
 (scripts/eval/render_carla_obs_html.py), linked per route.
 """
 

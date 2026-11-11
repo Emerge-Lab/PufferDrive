@@ -1830,7 +1830,10 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->num_max_agents = max_agents_per_env;
         env->eval_mode = eval_mode;
         env->goal_radius = goal_radius;
-        load_map_binary(map_file, env);
+        if (load_map_binary(map_file, env) != 0) {
+            PyErr_Format(PyExc_RuntimeError, "Failed to load map binary: %s", map_file);
+            return NULL;
+        }
         if (init_grid_map(env) != 0) {
             PyErr_Format(PyExc_RuntimeError, "Failed to build grid map for map: %s", map_file);
             return NULL;
@@ -2023,6 +2026,18 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->disable_red_light_infractions = (int) unpack(kwargs, "disable_red_light_infractions");
     env->disable_stop_sign_infractions = (int) unpack(kwargs, "disable_stop_sign_infractions");
     env->traffic_light_junction_phases = (int) unpack(kwargs, "traffic_light_junction_phases");
+    env->traffic_light_green_min_s = (float) unpack(kwargs, "traffic_light_green_min_s");
+    env->traffic_light_yellow_min_s = (float) unpack(kwargs, "traffic_light_yellow_min_s");
+    env->traffic_light_yellow_max_s = (float) unpack(kwargs, "traffic_light_yellow_max_s");
+    if (!(env->traffic_light_green_min_s > 0.0f) || env->traffic_light_green_min_s > TL_DEFAULT_GREEN_DURATION
+        || !(env->traffic_light_yellow_min_s > 0.0f)
+        || !(env->traffic_light_yellow_max_s >= env->traffic_light_yellow_min_s)
+        || !isfinite(env->traffic_light_yellow_max_s)) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "traffic light cycle: need 0 < green_min <= 10 and 0 < yellow_min <= yellow_max");
+        return -1;
+    }
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
     env->stop_sign_behavior = (int) unpack(kwargs, "stop_sign_behavior");
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
@@ -2060,6 +2075,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_lane_heading_signed = (int) unpack(kwargs, "obs_lane_heading_signed");
     env->obs_lane_speed_limit = (int) unpack(kwargs, "obs_lane_speed_limit");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
+    env->obs_traffic_light_yellow_remaining = (int) unpack(kwargs, "obs_traffic_light_yellow_remaining");
     env->traffic_lights_enabled = (bool) unpack(kwargs, "traffic_lights_enabled");
     env->stop_signs_enabled = (bool) unpack(kwargs, "stop_signs_enabled");
     env->yield_signs_enabled = (bool) unpack(kwargs, "yield_signs_enabled");
@@ -2114,6 +2130,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->num_max_agents = (int) unpack(kwargs, "max_agents_per_env");
     env->cosim_partner_slots = (int) unpack(kwargs, "cosim_partner_slots");
     env->cosim_eval_semantics = (int) unpack(kwargs, "cosim_eval_semantics");
+    env->scripted_pedestrian_slots = (int) unpack(kwargs, "scripted_pedestrian_slots");
+    if (env->scripted_pedestrian_slots < 0) {
+        PyErr_SetString(PyExc_ValueError, "scripted_pedestrian_slots must be >= 0");
+        return -1;
+    }
     int init_step = (int) unpack(kwargs, "init_step");
     env->init_step = init_step;
     env->timestep = init_step;
@@ -2133,6 +2154,13 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->non_vehicle_controller = (int) unpack(kwargs, "non_vehicle_controller");
     env->replay_expert_agents = (int) unpack(kwargs, "replay_expert_agents");
     env->simulation_mode = (int) unpack(kwargs, "simulation_mode");
+    if (env->scripted_pedestrian_slots > 0
+        && (env->simulation_mode != SIMULATION_MODE_GIGAFLOW || env->cosim_partner_slots > 0)) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "scripted_pedestrian_slots needs gigaflow simulation_mode without cosim_partner_slots");
+        return -1;
+    }
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
     env->reward_log_sampling = (bool) unpack(kwargs, "reward_log_sampling");
@@ -2148,9 +2176,27 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_norm_road_seg_width_m = (float) unpack(kwargs, "obs_norm_road_seg_width_m");
     env->obs_norm_z_m = (float) unpack(kwargs, "obs_norm_z_m");
     env->eval_perceived_size_margin_m = (float) unpack(kwargs, "eval_perceived_size_margin_m");
+    env->red_light_train_front_margin_m = (float) unpack(kwargs, "red_light_train_front_margin_m");
+    if (!(env->red_light_train_front_margin_m >= 0.0f) || !isfinite(env->red_light_train_front_margin_m)) {
+        PyErr_SetString(PyExc_ValueError, "red_light_train_front_margin_m must be finite and >= 0");
+        return -1;
+    }
+    env->red_light_train_rear_margin_m = (float) unpack(kwargs, "red_light_train_rear_margin_m");
+    if (!(env->red_light_train_rear_margin_m >= 0.0f) || !isfinite(env->red_light_train_rear_margin_m)) {
+        PyErr_SetString(PyExc_ValueError, "red_light_train_rear_margin_m must be finite and >= 0");
+        return -1;
+    }
     env->obs_partner_split_length_m = (float) unpack(kwargs, "obs_partner_split_length_m");
     if (!(env->obs_partner_split_length_m >= 0.0f) || !isfinite(env->obs_partner_split_length_m)) {
         PyErr_SetString(PyExc_ValueError, "obs_partner_split_length_m must be finite and >= 0");
+        return -1;
+    }
+    env->obs_lane_width_clip_min_m = (float) unpack(kwargs, "obs_lane_width_clip_min_m");
+    env->obs_lane_width_clip_max_m = (float) unpack(kwargs, "obs_lane_width_clip_max_m");
+    if (!(env->obs_lane_width_clip_min_m >= 0.0f) || !isfinite(env->obs_lane_width_clip_min_m)
+        || !(env->obs_lane_width_clip_max_m >= 0.0f) || !isfinite(env->obs_lane_width_clip_max_m)
+        || (env->obs_lane_width_clip_max_m > 0.0f && env->obs_lane_width_clip_min_m > env->obs_lane_width_clip_max_m)) {
+        PyErr_SetString(PyExc_ValueError, "obs_lane_width_clip_min_m/max_m must be finite, >= 0 and min <= max");
         return -1;
     }
     env->eval_standstill_jerk_deadband_mps3 = (float) unpack(kwargs, "eval_standstill_jerk_deadband_mps3");
@@ -2181,7 +2227,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->phantom_braking_duration = (int) ceilf((float) unpack(kwargs, "phantom_braking_duration_seconds") / env->dt);
     env->phantom_braking_freeze_steering = (int) unpack(kwargs, "phantom_braking_freeze_steering");
 
-    init(env);
+    if (init(env) != 0) {
+        PyErr_Format(PyExc_RuntimeError, "Failed to initialise the env for map %s (reason on stderr)", env->map_name);
+        return -1;
+    }
     // Episodes must always be generated by c_reset's full path so a logged
     // episode_seed replays identically regardless of which reset created it.
     env->timestep = -1;
@@ -2253,6 +2302,9 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "spawn_failed_goal", log->spawn_failed_goal);
     assign_to_dict(dict, "stopped_at_reset", log->stopped_at_reset);
     assign_to_dict(dict, "early_reset_short", log->early_reset_short);
+    assign_to_dict(dict, "pedestrian_collision_rate", log->pedestrian_collision_rate);
+    assign_to_dict(dict, "pedestrian_crossings", log->pedestrian_crossings);
+    assign_to_dict(dict, "pedestrian_bystanders", log->pedestrian_bystanders);
     assign_to_dict(dict, "offroad_rate", log->offroad_rate);
     assign_to_dict(dict, "episode_length", log->episode_length);
     assign_to_dict(dict, "collision_rate", log->collision_rate);

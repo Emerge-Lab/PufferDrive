@@ -38,6 +38,7 @@ static inline Agent drive_test_agent(float x, float y, float heading) {
     agent.sim_valid = 1;
     agent.current_lane_idx = 1;
     agent.previous_lane_idx = 1;
+    agent.red_light_latched_idx = -1;
     agent.wheelbase = 2.7f;
     copy_pose_to_prev(&agent);
     update_agent_radius(&agent);
@@ -91,6 +92,9 @@ static inline Drive drive_test_env_config(
     env.obs_partner_relative_velocity = 0;
     env.obs_slots_traffic_controls_n = 4;
     env.traffic_lights_enabled = 1;
+    env.traffic_light_green_min_s = 3.0f;
+    env.traffic_light_yellow_min_s = 2.0f;
+    env.traffic_light_yellow_max_s = 3.0f;
     env.stop_signs_enabled = 0;
     env.yield_signs_enabled = 0;
     env.dt = 0.1f;
@@ -123,6 +127,8 @@ static inline Drive drive_test_env_config(
     env.obs_norm_veh_width_m = 10.0f;
     env.obs_norm_road_seg_length_m = 5.0f;
     env.obs_norm_road_seg_width_m = 5.0f;
+    env.obs_lane_width_clip_min_m = 0.0f;
+    env.obs_lane_width_clip_max_m = 0.0f;
     env.obs_norm_z_m = 10.0f;
     env.obs_range_traffic_control_m = 100.0f;
     env.obs_range_partner_m = 100.0f;

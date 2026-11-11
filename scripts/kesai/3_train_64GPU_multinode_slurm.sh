@@ -24,7 +24,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=${RUN_NAME:-k_scaled_0059_${SEED}}
+export RUN_NAME=${RUN_NAME:-k_scaled_0076_${SEED}}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -51,11 +51,31 @@ echo "slot encoder backend: ${SLOT_ENCODER_BACKEND}"
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
-# Blocking env workers: kesai nodes give 60 threads per rank (--exclusive), vec.num_envs=60 is one worker per thread (run 0053,
-# ~25 M SPS vs ~21.5 M with 32); scaleway nodes have 18 threads per rank, 32 there. More workers enlarge the rollout batch
-# (= workers x env.num_agents x horizon); forked workers share the preloaded map cache. ROLLOUT_DTYPE=float16 halves the obs buffer on the GPU.
-# A second instance needs its own RUN_NAME: RUN_NAME=k_scaled_0055_1000 sbatch -p high scripts/kesai/3_train_64GPU_multinode_slurm.sh
-# 0059 baseline: its env/train/policy settings are the puffer_drive.yaml defaults; overrides below are run identity, logging, maps and hardware.
+# Blocking env workers: kesai nodes give 60 threads per rank (--exclusive); vec.num_envs=60 is one worker per thread (0053/0059,
+# ~25 M SPS vs ~21.5 M with 32). 0063 ran 256 workers per rank (4.3x oversubscribed, 75 GB per GPU): +18% SPS from the worker count
+# but ~55% sample efficiency on goals/speed at 1e12 steps, so 60 stays the default. GPU memory ~21 GB fixed + 0.22 GB per 1024-agent worker (fp16).
+# A second instance needs its own RUN_NAME (plain VAR=... sbatch did not propagate on kesai): sbatch --export=ALL,RUN_NAME=k_scaled_0076_1000 scripts/kesai/3_train_64GPU_multinode_slurm.sh
+# 0067 = 0066 (the 0059 config, puffer_drive.yaml defaults, float16 rollout buffer, static footprint red light test) with the
+# training light cycle green U(3,10) / yellow U(2,3) s instead of GIGAFLOW's U(1,10) / U(1.5,2.25) and no training rear margin:
+# 0066's training red-light rate sat at 3.7% because committed slow crossings could not clear CARLA's tail band within a
+# 1.5 s yellow (8-map replay sweep: 17 -> 5 onsets). 0068 = 0067 with 128 workers per rank.
+# 0069 = 0068 + env.obs_traffic_light_yellow_remaining: every traffic-control row carries the seconds the light stays
+# yellow / 3 s (the training max; co-sims clip their timers to it). The evals below read the flag from the run's config.yaml.
+# 0070 = 0069 + env.scripted_pedestrian_ratio=0.1: scripted pedestrian crossings (CARLA Scenario3 geometry: ceil(0.1 x agents)
+# walker slots per env pop in at the right kerb 12-20 m ahead of a moving car and cross at 2-4.2 m/s as 1.0-1.5 m boxes).
+# Ablation = the same job with env.scripted_pedestrian_ratio=0. The eval profiles pin the ratio to 0.
+# 0071 = 0070 with the Leaderboard 1.0 walker profile (drive.h, 2026-11-04): walkers appear standing 12 m + 1.5 m per extra
+# lane ahead (+-2 m), half a lane outside the kerb, wait 0-0.6 s and ramp up over 0.3-0.7 s to 3.4 + 0.4 m/s per lane (+-1);
+# 0070's walkers set off at 2-4.2 m/s from their first frame, so its policy never learned to brake for a standing walker.
+# 0072 = 0071 with five pedestrian behaviours (constants.h PEDESTRIAN_*, 2026-11-05): 40% the 0071 pop-in crossers, 15% slow
+# crossers from either kerb, 20% standers, 15% kerb walkers, 10% kerb steppers. 0071 waited for every standing or passing
+# pedestrian (longest6 v1 timeouts at stuck walkers, nuPlan CLS -0.02 / -0.035). Ratio 0.1 -> 0.3 keeps the pop-in crossings
+# per car where 0071 had them (1.8 per episode); the walker slots are visible 48% of the time.
+# 0075 = 0072 with 0074's per-rank minibatch (393216, fills the GPU; 0072 ran 131072) on the 2026-11-09 audit fixes: map
+# layouts differ per rank and seed, failed init spawns keep their slot, light phases round up to whole steps (yellow
+# 2.1-3.0 s at dt 0.3), offroad is detected up to 40 m/s, spawns use the red-light detector, reset no longer consumes goals.
+# 0076 = 0075 with the 0072 minibatch (131072): 393216 on 32 ranks is 12.6M rows per optimizer step and gave 0075 62k optimizer steps against 175k in 0072.
+# Other overrides are run identity, logging, maps and hardware.
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -70,13 +90,15 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=$PD/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v19 \
+    env.map_dir=$PD/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v20 \
     env.num_maps=128 \
+    env.obs_traffic_light_yellow_remaining=true \
+    env.scripted_pedestrian_ratio=0.3 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
-    vec.num_envs=60 \
-    ${ROLLOUT_DTYPE:+train.rollout_dtype=$ROLLOUT_DTYPE} \
+    vec.num_envs=128 \
+    train.rollout_dtype=float16 \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
     train.final_model_name=${FINAL_MODEL_NAME} \
@@ -105,14 +127,15 @@ echo "Submitting AlpaSim eval for ${MODEL_PATH}"
 RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
     || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
 
-# parallel_eval places one shard per allocated node via srun, so each shard's 128
-# env workers get a full node's cores instead of sharing the batch host.
+# parallel_eval runs 8 srun shards per node (one GPU and an eighth of the CPUs each, 60 blocking workers like
+# training) so the eval uses every GPU and thread of the allocation; 60 workers x 5 scenarios = 300 scenarios per 9000-step episode.
 echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} .venv/bin/python scripts/parallel_eval.py carla \
-    --total-scenarios 40000 \
+    --total-scenarios 80000 \
     --num-nodes 4 \
+    --shards-per-node 8 \
     env.map_dir=$PD/pufferlib/resources/drive/binaries/carla \
-    vec.num_envs=128 \
+    vec.num_envs=60 \
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
     env.eval_perceived_size_margin_m=0.2 \

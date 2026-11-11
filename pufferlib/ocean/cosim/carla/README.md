@@ -42,10 +42,15 @@ srun --jobid=$JOBID --overlap \
 Optional env vars (see `leaderboard_agent.py` docstring): `COSIM_DEVICE`,
 `COSIM_DYNAMICS_SOURCE`, `COSIM_NUM_AGENTS`, `COSIM_MAX_SPEED_MPS` (ego speed cap via
 C_vel; default = the checkpoint's `base_max_speed_mps`, must stay inside the trained range),
-`COSIM_ZERO_PARTNER_STOPPED_TIME` (1 = partners' `seconds_stopped` obs feature held at 0, ego
-untouched; ablation for the parked-car / red-light-queue avoidance), `COSIM_VRU_SIZE_PAD_M`
+`COSIM_ZERO_PARTNER_STOPPED_TIME` (1 = vehicle partners' `seconds_stopped` obs feature held at 0, ego
+and walkers untouched; ablation for the parked-car / red-light-queue avoidance), `COSIM_VRU_SIZE_PAD_M`
 (added to the length and width of every walker and two-wheeler box in the policy's obs; the
-longest6 scripts set 0.8 m), `COSIM_OBS_HTML`,
+longest6 scripts set 0.8 m), `COSIM_OBS_SLOTS_PARTNERS_N` (partner slots in the policy's obs;
+default = the checkpoint's training value, the slots are max-pooled so any count transfers; the
+longest6 v1 script sets 40, GIGAFLOW's eval value), `COSIM_WALKER_SPEED_FLOOR_MPS` (diagnostic,
+default 0: for 1.5 s after a walker first appears the policy reads it as moving at least this fast
+along its facing direction, so CARLA's standing-then-ramping Scenario3 walker looks like a training
+walker; world logs and collision checks stay raw), `COSIM_OBS_HTML`,
 `COSIM_DEBUG_CARLA_VIEW`, `COSIM_RECORD_INFRACTIONS`.
 
 ### Ego dynamics source
@@ -77,6 +82,41 @@ the actual motion. This removes the dynamics-mismatch tracking lag at the cost
 of the ego no longer being a physically-simulated CARLA vehicle; the
 leaderboard's route/collision/infraction criteria still see it correctly since
 they only read its pose.
+
+`COSIM_DYNAMICS_SOURCE=carla_pedals` drives the CARLA vehicle the way the leaderboard
+prescribes: the agent only returns a `carla.VehicleControl` (steer, throttle, brake, reverse) from
+`run_step`, nothing else touches the ego, and the gearbox stays automatic: the leaderboard resets
+`manual_gear_shift` on every control, so the agent cannot select gears. Like nuPlan's
+`ego_dynamics=nuplan_bicycle`, CARLA is the plant: pose, speed, yaw rate and the current gear are
+re-read every tick, while acceleration and steering angle stay the jerk integrator's own state. The
+jerk model moves the box centre along its heading, whereas the CARLA car turns about its rear axle,
+so its centre travels up to 13 degrees inside its heading in a tight turn. The policy is therefore
+given the direction of travel as its heading (body heading + the slip the commanded steering gives
+at `rear_axle_to_center_m` ahead of the rear axle); with the body heading it cut every corner
+(0.6 m at a 7 m radius). `controller.py`'s `PedalMap` turns acceleration and steering angle
+into pedals and steer with constant gains and no feedback (the policy closes the loop). The gains
+are per ego blueprint and per gear (`PEDAL_GAINS_BY_BLUEPRINT`: `mkz_2020` for longest6 v2,
+`mkz2017` for v1, measured open loop on a straight road with each gear held); an unmeasured car is
+refused. For the gear CARLA reports, throttle = the throttle that holds the current speed + the
+target acceleration divided by that gear's acceleration per unit throttle, clipped at zero: CARLA's
+engine braking makes the throttle the main brake too. The brake pedal supplies what exceeds the
+gear's engine braking, capped at `max_engine_braking_mps2` so that hard braking acts at once, and
+the whole deceleration while the gearbox shifts (gear 0: the engine is disconnected). Steer = path
+curvature divided by the curvature one unit of steer gives, which falls with speed. A car that
+has braked to below `STANDSTILL_SPEED_MPS` is held on the full brake, reads exactly stopped and,
+like the jerk model, starts its acceleration again from zero. From there a positive acceleration
+launches it forward; on a negative one it stays on the brake and never backs up
+(`COSIM_PEDAL_REVERSE=1`: it launches backward with `VehicleControl.reverse`, the throttle from
+the reverse gains, and the brake for a positive acceleration while it rolls backward; on longest6
+v1 that scored 88.9 against 91.3 driving score). The route
+summary line prints how far the gains are off (`accel_bias_*`, per gear
+`accel_bias_by_gear_mps2` = (ticks, bias) with reverse as gear -1, `yaw_rate_gain`). An automatic
+shift leaves the car without drive for `gear_shift_seconds` (0.5 s on the v1 car), which no pedal
+value can make up for and the policy has never seen: it would sprint through a yellow and arrive
+late. So in this mode the policy sees that much less remaining yellow than CARLA reports and stops
+at those lights instead (`COSIM_PEDAL_YELLOW_MARGIN=0`: it sees CARLA's value and sprints). Scripts
+11 and 14 pass both switches through and tag the result folder `_reverse` / `_noyellowmargin`.
+Not handled: road grade (gravity is not compensated).
 
 ### Bin frame calibration
 

@@ -15,6 +15,11 @@ import pufferlib.viz
 
 ZLIB_REPLAY_DIR_NAME = "replays_zlib"
 ZLIB_REPLAY_SUFFIX = ".replay.zlib"
+OBSERVATION_AGENT_MODES = ("all", "infracting")
+INFRACTION_METRIC_INDICES = tuple(
+    pufferlib.viz.METRIC_LABELS.index(name) for name in ("collision", "offroad", "red_light", "stop_sign")
+)
+POOL_CHUNK_PREFIX = "pool_"
 
 
 def _eval_replay_stem(summary, episode_id):
@@ -39,6 +44,11 @@ class EvalReplayCapture:
         if capture_batch_steps <= 0:
             raise RuntimeError("Replay capture requires a positive resample frequency")
         self.capture_observations = capture_observations
+        self.observation_agents = args["eval"]["capture_observations_agents"]
+        if self.observation_agents not in OBSERVATION_AGENT_MODES:
+            raise pufferlib.APIUsageError(
+                f"eval.capture_observations_agents must be one of {OBSERVATION_AGENT_MODES}, got {self.observation_agents!r}"
+            )
         self.replay_writer_count = num_workers
         if self.capture_observations:
             observation_replay_writer_count = args["eval"]["observation_replay_writer_count"]
@@ -144,6 +154,8 @@ class EvalReplayCapture:
         replay = {"env": self.env_config, **replay_environment["frames"]}
         for replay_key, history_values in self.policy_history.items():
             replay[replay_key] = history_values[:episode_length, global_agent_start:global_agent_end]
+        if self.capture_observations and self.observation_agents == "infracting":
+            keep_observations_of_infracting_agents(replay)
         replay_stem = _eval_replay_stem(summary, self.episode_id_offset + episode_id)
         replay_path = os.path.abspath(os.path.join(self.replay_output_dir, f"{replay_stem}{ZLIB_REPLAY_SUFFIX}"))
         self.pending_replays.append((replay_environment["scenario"], replay, replay_path))
@@ -162,6 +174,17 @@ class EvalReplayCapture:
             ):
                 pass
         self.pending_replays = []
+
+
+def keep_observations_of_infracting_agents(replay):
+    """Zero the observations and encoder pool winners of every agent without an infraction in the episode (the
+    zeros deflate to nothing: a 50-agent page shrinks about 4x), listing the kept agents as replay["obs_agents"]."""
+    metrics = np.asarray(replay["metrics_f32"])
+    infracting = np.any(metrics[:, :, list(INFRACTION_METRIC_INDICES)] > 0, axis=(0, 2))
+    replay["obs_agents"] = np.flatnonzero(infracting).tolist()
+    for replay_key in ["obs"] + [key for key in replay if key.startswith(POOL_CHUNK_PREFIX)]:
+        if replay.get(replay_key) is not None:
+            replay[replay_key][:, ~infracting] = 0
 
 
 def _render_eval_replays(episode_summaries, out_dir, keep_zlib_replays, max_renderer_count=None):

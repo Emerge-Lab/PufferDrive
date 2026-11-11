@@ -8,6 +8,7 @@ from matplotlib.collections import LineCollection, PatchCollection, PolyCollecti
 from matplotlib.patches import Circle
 import os
 import json
+import re
 import zlib
 import base64
 import struct
@@ -80,6 +81,9 @@ PAYLOAD_CHUNK_SIZE = 4 * 1024 * 1024
 OBS_QUANTIZE_FRAME_CHUNK = 64
 REPLAY_COMPRESSION_LEVEL = 1
 REPLAY_HEADER_PROBE_BYTES = 1 << 16
+PAYLOAD_CHUNK_PATTERN = re.compile(
+    rb'<script type="application/octet-stream" class="payload-chunk">([A-Za-z0-9+/=]*)</script>'
+)
 REPLAY_INFLATE_MAX_ROUNDS = 1 << 12
 SIMULATOR_FIGSIZE = (20.0, 20.0)
 SIMULATOR_DPI = 100
@@ -489,6 +493,7 @@ def unpack_obs(
     agent_idx: int = 0,
     obs_partner_relative_velocity: bool = False,
     obs_lane_speed_limit: bool = False,
+    obs_traffic_light_yellow_remaining: bool = False,
 ):
     """
     Unpack the flattened observation into ego, map, partner, and traffic-control views.
@@ -511,7 +516,9 @@ def unpack_obs(
     lane_feature_size = binding.LANE_FEATURES + (binding.LANE_SPEED_LIMIT_FEATURES if obs_lane_speed_limit else 0)
     boundary_feature_size = binding.BOUNDARY_FEATURES
     # Traffic control obs
-    traffic_control_feature_size = binding.TRAFFIC_CONTROL_FEATURES
+    traffic_control_feature_size = binding.TRAFFIC_CONTROL_FEATURES + (
+        binding.TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES if obs_traffic_light_yellow_remaining else 0
+    )
     lane_segment_count = compute_effective_road_obs_count(obs_slots_lane_n, obs_dropout_lane)
     boundary_segment_count = compute_effective_road_obs_count(obs_slots_boundary_n, obs_dropout_boundary)
 
@@ -593,6 +600,7 @@ def plot_observation(
     true_width_m=None,
     obs_partner_relative_velocity=False,
     obs_lane_speed_limit=False,
+    obs_traffic_light_yellow_remaining=False,
 ) -> np.ndarray:
     """Plot observation in ego-centric frame.
 
@@ -615,6 +623,7 @@ def plot_observation(
         agent_idx=agent_idx,
         obs_partner_relative_velocity=obs_partner_relative_velocity,
         obs_lane_speed_limit=obs_lane_speed_limit,
+        obs_traffic_light_yellow_remaining=obs_traffic_light_yellow_remaining,
     )
     scales = _obs_scales(
         obs_norm_goal_offset_m=obs_norm_goal_offset_m,
@@ -786,7 +795,8 @@ def plot_observation(
     for i in range(traffic_controls_obs.shape[0]):
         if np.all(traffic_controls_obs[i] == 0):
             continue
-        rel_x1, rel_y1, rel_x2, rel_y2, _, control_type, state = traffic_controls_obs[i]
+        rel_x1, rel_y1, rel_x2, rel_y2 = traffic_controls_obs[i][:4]
+        control_type, state = traffic_controls_obs[i][-2:]
         control_type = int(control_type)
         if control_type == binding.TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT:
             ax.plot(
@@ -1022,6 +1032,7 @@ def encode_interactive_replay(scenario, replay):
         "active_count": int(replay["raw_action"].shape[1]),
         "obs_dim": int(replay["obs"].shape[2]) if replay.get("obs") is not None else 0,
         "obs_layout": "agent_dim_frame_delta" if replay.get("obs") is not None else None,
+        "obs_agents": replay.get("obs_agents"),  # None: every agent's observations are stored
         "action_type": env_cfg.get("action_type", "continuous"),
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
         "num_goals": int(env_cfg["num_goals"]),
@@ -1035,7 +1046,12 @@ def encode_interactive_replay(scenario, replay):
         + (int(binding.LANE_SPEED_LIMIT_FEATURES) if env_cfg.get("obs_lane_speed_limit") else 0),
         "lane_speed_limit_idx": int(binding.LANE_FEATURES) if env_cfg.get("obs_lane_speed_limit") else -1,
         "boundary_features": int(binding.BOUNDARY_FEATURES),
-        "traffic_features": int(binding.TRAFFIC_CONTROL_FEATURES),
+        "traffic_features": int(binding.TRAFFIC_CONTROL_FEATURES)
+        + (
+            int(binding.TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES)
+            if env_cfg.get("obs_traffic_light_yellow_remaining")
+            else 0
+        ),
         "lane_count": int(lane_count),
         "boundary_count": int(boundary_count),
         "traffic_obs_count": int(env_cfg["obs_slots_traffic_controls_n"]),
@@ -1232,6 +1248,8 @@ __PAYLOAD_CHUNKS__
         const PARTNER_BLINDNESS_OUTLINE_COLOR = "#6d28d9";
         const PHANTOM_BRAKING_OUTLINE_COLOR = "#b45309";
         const INFRACTION_METRIC_COUNT = 4;
+        // [agent idx, first frame, end frame, name]: infractions the embedding page reports besides the env's own metrics
+        const AGENT_MARKS = window.REPLAY_AGENT_MARKS || [];
         const DEFAULT_GOAL_RADIUS_METERS = 2;
         const SVG_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>';
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
@@ -1404,7 +1422,7 @@ self.onmessage = async event => {
             for (let metricIdx=0;metricIdx<INFRACTION_METRIC_COUNT;metricIdx++) {
                 if (C.metrics_f32[metricsBase+metricIdx] > 0) return true;
             }
-            return false;
+            return AGENT_MARKS.some(mark => mark[0] === idx && frame >= mark[1] && frame < mark[2]);
         }
         function rr(x, y, w, h, r) { ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h); }
         function drawAgentBody(a, outline) {
@@ -1653,7 +1671,7 @@ self.onmessage = async event => {
             const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(v(o),v(o+1)), cs=rot(v(o+4),v(o+5)); out.push([xy[0],xy[1],2*v(o+3)*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i),feat===LF?v(o+6)*(H.scales.road_width_to_position||0):0,feat===LF && limitIdx >= 0 ? v(o+limitIdx)*speedScale : null]); } return out; };
             const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(v(o),v(o+1)), h=Math.atan2(v(o+6),v(o+5)); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:v(o+3)*H.scales.veh_len_to_position,w:v(o+4)*H.scales.veh_width_to_position,h:h,pool:poolAt("pool_partner",frame,slot,i)}); }
             const gps = []; for(let i=0;i<H.num_goals;i++){ const o=targetStart+i*H.goal_features; if(zero(o,H.goal_features)) continue; let scale=H.scales.goal_to_position, xy=rot(v(o)*scale, v(o+1)*scale); gps.push(xy); }
-            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(v(o),v(o+1)), b=rot(v(o+2),v(o+3)); controls.push({type:Math.round(v(o+5)), state:Math.round(v(o+6)), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
+            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(v(o),v(o+1)), b=rot(v(o+2),v(o+3)); controls.push({type:Math.round(v(o+TF-2)), state:Math.round(v(o+TF-1)), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
             return {ego:{w:v(egoStart+1)*H.scales.veh_width_to_position,l:v(egoStart+2)*H.scales.veh_len_to_position,limit:speedScale ? v(egoStart+EGO_LANE_SPEED_LIMIT_FEATURE)*speedScale : null}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane",LF), bounds:roads(boundsStart,H.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
         }
         function drawObs(frame, trueSize) {
@@ -1818,10 +1836,13 @@ self.onmessage = async event => {
             }
             updatePolicy(f, agent);
             const warnings = [];
+            const sinceOnset = (name, onset) => onset < f ? `${name} since <a href="#" style="color:inherit" onclick="step=${onset};play=false;updateBtn();draw(true);return false">step ${onset}</a>` : name;
             ["COLLISION", "OFFROAD", "RED LIGHT", "STOP SIGN"].forEach((name, metricIdx) => {
                 const onset = infractionOnset(f, agent.idx, metricIdx);
-                if (onset < 0) return;
-                warnings.push(onset < f ? `${name} since <a href="#" style="color:inherit" onclick="step=${onset};play=false;updateBtn();draw(true);return false">step ${onset}</a>` : name);
+                if (onset >= 0) warnings.push(sinceOnset(name, onset));
+            });
+            AGENT_MARKS.forEach(mark => {
+                if (mark[0] === agent.idx && f >= mark[1] && f < mark[2]) warnings.push(sinceOnset(mark[3], mark[1]));
             });
             const warnKey = warnings.join('|'), warnRow = document.getElementById('warn-row');
             if (warnKey !== lastWarnKey) { lastWarnKey = warnKey; warnRow.style.display = warnings.length ? 'flex' : 'none'; warnRow.innerHTML = warnings.map(w=>`<span class="warn-chip">${w}</span>`).join(''); }
@@ -2005,10 +2026,21 @@ def save_interactive_replay_zlib(scenario, replay, filename):
     return compressed_payload
 
 
+def read_replay_source(path):
+    """-> the compressed replay bytes of a .replay.zlib, or of a rendered page (its base64 payload chunks)."""
+    with open(path, "rb") as source_file:
+        data = source_file.read()
+    if not str(path).endswith(".html"):
+        return data
+    chunks = PAYLOAD_CHUNK_PATTERN.findall(data)
+    if not chunks:
+        raise ValueError(f"{path}: no replay payload chunks in the page")
+    return b"".join(base64.b64decode(chunk) for chunk in chunks)
+
+
 def render_interactive_replay_zlib(replay_path, filename):
-    with open(replay_path, "rb") as replay_file:
-        compressed_payload = replay_file.read()
-    _render_interactive_replay_payload(compressed_payload, filename)
+    """replay_path: a .replay.zlib, or a rendered page whose embedded payload is rendered again."""
+    _render_interactive_replay_payload(read_replay_source(replay_path), filename)
 
 
 def replay_step_link(step, seconds=None):
@@ -2018,6 +2050,13 @@ def replay_step_link(step, seconds=None):
         f'<a href="#" style="color:inherit;text-decoration:underline dotted" '
         f'onclick="step={int(step)};play=false;updateBtn();draw(true);return false">{label}</a>'
     )
+
+
+def replay_agent_marks(marks):
+    """<script> for a panel injected ahead of the viewer: marks = [(agent idx, first frame, frame count, name)] draws
+    the agent as infringing on those frames, with `name` as its warning chip, whatever the env's own metrics say."""
+    rows = [[int(agent_idx), int(first), int(first) + int(count), str(name)] for agent_idx, first, count, name in marks]
+    return f"<script>window.REPLAY_AGENT_MARKS={json.dumps(rows, separators=(',', ':'))};</script>"
 
 
 def _inflate_through(decompressor, raw, needed_bytes):
@@ -2042,10 +2081,9 @@ def _inflate_replay_prefix(compressed, chunk_names):
 
 
 def read_replay_zlib(replay_path, chunk_names=None):
-    """-> (header dict, chunk name -> ndarray view) of a saved .replay.zlib; chunk_names limits the chunks
-    returned and the inflated prefix of the stream."""
-    with open(replay_path, "rb") as replay_file:
-        compressed = replay_file.read()
+    """-> (header dict, chunk name -> ndarray view) of a saved .replay.zlib or of a rendered page; chunk_names
+    limits the chunks returned and the inflated prefix of the stream."""
+    compressed = read_replay_source(replay_path)
     raw = zlib.decompress(compressed) if chunk_names is None else _inflate_replay_prefix(compressed, chunk_names)
     header_len = struct.unpack("<I", raw[:4])[0]
     header = json.loads(raw[4 : 4 + header_len])
