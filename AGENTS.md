@@ -14,6 +14,18 @@ Before running any command, explain to the user what will run and why.
 - **Rebuild C (mandatory after .c/.h change):** `python setup.py build_ext --inplace --force`
 - **Train:** `puffer train puffer_drive [train.learning_rate=0.001 env.num_agents=512]`
 
+## Local experiment-results downloads
+
+After every local results download, compress the downloaded CSVs in place before
+marking the download complete:
+`find <download_directory> -type f -name '*.csv' -print0 | xargs -0 -P4 -n1 afsctool -c -T LZFSE`.
+Use parallel single-file calls; this installed afsctool misparses options during
+directory traversal.
+Use the directories for the downloaded batch. Keep the `.csv` filenames: APFS
+compression is transparent to readers. Leave verification enabled (never use
+`-n`). This is the user's default for results under `ICLR27/` and other local
+experiment archives; JSON/YAML files remain unchanged.
+
 ## WOMD Adversarial Training
 Use converted WOMD `.bin` scenarios and a frozen target checkpoint. Training uses
 `pufferlib/config/puffer_drive.yaml`; selecting an evaluation benchmark does not

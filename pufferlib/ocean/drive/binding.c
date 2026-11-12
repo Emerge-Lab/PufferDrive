@@ -2359,6 +2359,29 @@ static int my_episode_to_dict(PyObject *dict, Env *env) {
     return 0;
 }
 
+static const char *RELABEL_VARIANT_NAMES[RELABEL_VARIANT_COUNT]
+    = {"default", "jerk", "rho05", "rho15", "decel4", "decel6", "lat05", "lat2"};
+
+static const char *RELABEL_DIAGNOSTIC_NAMES[]
+    = {"cf_target_speed_at_collision_mps",
+       "cf_target_speed_at_tau_mps",
+       "cf_target_accel_at_tau_mps2",
+       "cf_tau_max_seconds",
+       "cf_fail_reason",
+       "cf_danger_trigger",
+       "cf_min_ttc_at_check_seconds",
+       "cf_lateral_gap_at_check_meters",
+       "cf_check_seconds_before_collision",
+       "cf_check_offset_seconds",
+       "col_relative_heading_deg",
+       "col_target_speed_mps",
+       "col_hitter_speed_mps",
+       "col_closing_speed_mps",
+       "col_hitter_max_decel_5s_mps2",
+       "col_hitter_max_abs_lat_accel_5s_mps2",
+       "col_adversaries_within_20m",
+       "col_second_adversary_in_cf"};
+
 static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     float total_distance_travelled = log->total_distance_travelled * n;
     float total_infractions = log->total_infractions * n;
@@ -2447,6 +2470,30 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         log->reward_target_unavoidable * traffic_scale);
     assign_to_dict(dict, "traffic_reward_components/target_at_fault", log->reward_target_at_fault * traffic_scale);
     float target_collision_count = log->sdc_target_collision_count;
+    if (env->eval_mode) {
+        static const char *variant_fields[] = {"class", "tau_seconds", "history_limited"};
+        for (int field_idx = 0; field_idx < RELABEL_FIELD_COUNT; field_idx++) {
+            char field_name[128];
+            if (field_idx < RELABEL_TARGET_SPEED) {
+                snprintf(
+                    field_name,
+                    sizeof(field_name),
+                    "cf_%s_%s",
+                    RELABEL_VARIANT_NAMES[field_idx / RELABEL_VARIANT_FIELD_COUNT],
+                    variant_fields[field_idx % RELABEL_VARIANT_FIELD_COUNT]);
+            } else {
+                snprintf(
+                    field_name,
+                    sizeof(field_name),
+                    "%s",
+                    RELABEL_DIAGNOSTIC_NAMES[field_idx - RELABEL_TARGET_SPEED]);
+            }
+            assign_to_dict(
+                dict,
+                field_name,
+                target_collision_count > 0.0f ? log->relabel_values[field_idx] / target_collision_count : NAN);
+        }
+    }
     float target_collision_scale = target_collision_count > 0.0f ? 1.0f / target_collision_count : 0.0f;
     float avoidable_collision_count = log->sdc_target_avoidable_collision_count;
     float avoidable_collision_scale = avoidable_collision_count > 0.0f ? 1.0f / avoidable_collision_count : 0.0f;
