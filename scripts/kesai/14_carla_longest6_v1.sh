@@ -56,7 +56,7 @@
 # its standard eval; never reported: a run with missing route records (a completion reports once every route has one)
 # and the scenario-free variant).
 # COSIM_DYNAMICS_SOURCE (carla_pedals, default: CARLA's physics moves the ego, driven only by the VehicleControl the agent
-# returns; tags the folder _carla_pedals; pufferdrive: the ego is teleported along PufferDrive's own dynamics).
+# returns; pufferdrive: the ego is teleported along PufferDrive's own dynamics, tags the folder _pufferdrive).
 # Ablations of carla_pedals: COSIM_PEDAL_REVERSE (0, default: the car never backs up; 1 = it reverses, tags the folder _reverse) and
 # COSIM_PEDAL_YELLOW_MARGIN (1, default; 0 = the policy sees CARLA's remaining yellow, tags the folder _noyellowmargin).
 #
@@ -181,9 +181,12 @@ pick_port_base() {
 PORT_BASE=$(pick_port_base "$PORT_BASE" 12000 22000) || { echo "no free port range for $WORKERS workers (ss -ltun)"; exit 1; }
 echo "port base $PORT_BASE: rpc $PORT_BASE+50w, TM $((PORT_BASE + 6000))+50w"
 
-TAG=longest6_v1$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")${SEEDS:+_seeds$(echo "$SEEDS" | tr ' ' '-')}
-TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")${COSIM_OBS_SLOTS_PARTNERS_N:+_partners$COSIM_OBS_SLOTS_PARTNERS_N}
-TAG=$TAG$([ "$COSIM_DYNAMICS_SOURCE" = "pufferdrive" ] || echo "_$COSIM_DYNAMICS_SOURCE")
+# The standard eval's folder is carla_longest6_v1_<date>_<job>; a setting that differs from its default adds its tag.
+TAG=longest6_v1$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")
+case "$SEEDS" in "0 1 2") ;; "") TAG=${TAG}_legacyseed ;; *) TAG=${TAG}_seeds$(echo "$SEEDS" | tr ' ' '-') ;; esac
+TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0.8" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
+TAG=$TAG$([ "$COSIM_OBS_SLOTS_PARTNERS_N" = "40" ] || echo "_partners${COSIM_OBS_SLOTS_PARTNERS_N:-trained}")
+TAG=$TAG$([ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ] || echo "_$COSIM_DYNAMICS_SOURCE")
 if [ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ]; then
     TAG=$TAG$([ "$COSIM_PEDAL_REVERSE" = "0" ] || echo "_reverse")$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
 fi

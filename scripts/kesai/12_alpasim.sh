@@ -172,7 +172,11 @@ EOF
 [ ${#SCENES[@]} -gt 0 ] || { echo "no scenes to evaluate"; exit 1; }
 
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
-OUT=$RUN_DIR/eval/alpasim_${GOAL_MODE//:/}_r${GOAL_RADIUS_M}$([ "$VRU_SIZE_PAD_M" = "0" ] || echo "_vrupad$VRU_SIZE_PAD_M")$([ "$PARTNER_SPLIT_LENGTH_M" = "0" ] || echo "_split$PARTNER_SPLIT_LENGTH_M")_$(basename "$CKPT" .pt)_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+# The standard eval's folder is alpasim_<date>_<job>; a setting that differs from the values above adds its tag.
+FOLDER_TAG=$([ "$GOAL_MODE" = "gt_time:5" ] || echo "_${GOAL_MODE//:/}")$([ "$GOAL_RADIUS_M" = "2" ] || echo "_r$GOAL_RADIUS_M")
+FOLDER_TAG=$FOLDER_TAG$([ "$VRU_SIZE_PAD_M" = "0.8" ] || echo "_vrupad$VRU_SIZE_PAD_M")$([ "$PARTNER_SPLIT_LENGTH_M" = "7" ] || echo "_split$PARTNER_SPLIT_LENGTH_M")
+FOLDER_TAG=$FOLDER_TAG$([ "$(basename "$CKPT" .pt)" = "final_model" ] || echo "_$(basename "$CKPT" .pt)")
+OUT=$RUN_DIR/eval/alpasim${FOLDER_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT"
 # the trainer deletes every older models/model_*.pt when it saves the next one: evaluate a copy that outlives the run
 CKPT_SOURCE=$CKPT

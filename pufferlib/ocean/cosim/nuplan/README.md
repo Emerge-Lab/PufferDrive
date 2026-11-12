@@ -17,8 +17,8 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   transforms), recompute observations, run the policy on the ego row,
   `env.step` (the jerk model integrates the ego's accel/steering intent one
   dt), and return that intent as an action trajectory for nuPlan's ego plant.
-- Ego plant (script 9 runs it with floor 0 and the center cap at margin 0.95: run 431 = 93.01; it tags the
-  run `_bicycle_vmin<floor>[_centercap<m>]_clamp`): nuPlan's `KinematicBicycleModel`, driven through
+- Ego plant (script 9 runs it with floor 0 and the center cap at margin 0.95: run 431 = 93.01; a different
+  floor or cap tags the result folder `_vmin<floor>`, `_nocentercap` or `_centercap<m>`): nuPlan's `KinematicBicycleModel`, driven through
   CaRL's `one_stage_controller` exactly like CaRL, with the model's own actuator lag (the challenge presets
   pin the controller). Every step the shadow ego takes nuPlan's pose, speed
   and yaw rate but keeps its own jerk-integrated accel/steering (the state the policy was trained to
@@ -33,7 +33,7 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   the bicycle model: nuPlan scores the acceleration at the vehicle center, which the devkit computes as
   rear-axle accel + d*yaw_rate^2 + d*yaw_accel (d = 1.46 m), so pulling away at the 2.30 m/s^2 cap into a
   left turn reads above the 2.40 bound (Val14: ~250 scenarios). `bicycle_center_accel_cap`
-  (`BICYCLE_CENTER_ACCEL_CAP`, tag `_centercap`) is CaRL's clip_angular_adjustment: the plant's accel is
+  (`BICYCLE_CENTER_ACCEL_CAP`) is CaRL's clip_angular_adjustment: the plant's accel is
   reduced while turning so that reading stays under the cap (`bicycle_center_accel_cap_margin`,
   `BICYCLE_CENTER_ACCEL_CAP_MARGIN`, leaves headroom for nuPlan's Savitzky-Golay overshoot).
   `STANDSTILL_JERK_DEADBAND` (tag `_deadband<v>`) overrides the shadow env's standstill jerk deadband

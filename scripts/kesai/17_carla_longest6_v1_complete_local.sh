@@ -6,7 +6,7 @@
 # one GPU, then results.csv, the HTML report and the obs replay gallery are rebuilt over all routes. Nothing from the
 # cluster is overwritten: the replaced route folders and worker logs move to <run>/pre_completion_<stamp>/.
 #
-# Usage: bash scripts/kesai/17_carla_longest6_v1_complete_local.sh experiments/k_scaled_0050_1000/eval/carla_longest6_v1_vrupad0.8_<date>_<jobid>
+# Usage: bash scripts/kesai/17_carla_longest6_v1_complete_local.sh experiments/k_scaled_0050_1000/eval/carla_longest6_v1_<date>_<jobid>
 #
 # Overridable env: CKPT (default: the model folder the run sits in, else the model named in its run_info.txt under
 # $PD/experiments), WORKERS (8: ~2 cores and 2.5-5 GB each, the GPU stays idle), PORT_BASE (2200; never 2000, the

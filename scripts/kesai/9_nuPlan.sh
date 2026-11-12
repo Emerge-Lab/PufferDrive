@@ -87,26 +87,26 @@ export BICYCLE_CENTER_ACCEL_CAP_MARGIN=${BICYCLE_CENTER_ACCEL_CAP_MARGIN:-0.95}
 # nuPlan's sits 1.46 m behind (four inside-rear corner collisions in run 426): a training-side item, no eval-side
 # conversion.
 export STANDSTILL_JERK_DEADBAND=${STANDSTILL_JERK_DEADBAND:-}
+# The standard eval's folder is nuplan_val14[_nonreactive]_<date>_<job>; a setting that differs from the values above adds its tag.
 ABLATION_TAG=""
-[ "$SLIDING_GOAL_WINDOW" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_slide"
-[ "$STARTUP_ACCEL_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
-[ "$STARTUP_BRAKE_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jbrk${STARTUP_BRAKE_JERK_CAP}"
-[ "$VRU_SIZE_PAD_M" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_vrupad${VRU_SIZE_PAD_M}m"
+[ "$SLIDING_GOAL_WINDOW" != "true" ] && ABLATION_TAG="${ABLATION_TAG}_noslide"
+[ "$STARTUP_ACCEL_JERK_CAP" != "2" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
+[ "$STARTUP_BRAKE_JERK_CAP" != "2" ] && ABLATION_TAG="${ABLATION_TAG}_jbrk${STARTUP_BRAKE_JERK_CAP}"
+[ "$VRU_SIZE_PAD_M" != "0.8" ] && ABLATION_TAG="${ABLATION_TAG}_vrupad${VRU_SIZE_PAD_M}m"
 [ "$CITY_BIN_DIR" != "$SHARED_DATA/nuplan/PufferDrive" ] && ABLATION_TAG="${ABLATION_TAG}_bins$(basename "$CITY_BIN_DIR")"
-[ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && ABLATION_TAG="${ABLATION_TAG}_slots${OBS_SLOTS_PARTNERS_N}"
-[ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && ABLATION_TAG="${ABLATION_TAG}_margin${EVAL_PERCEIVED_SIZE_MARGIN_M}"
-[ -n "${REWARD_OVERSPEED:-}" ] && ABLATION_TAG="${ABLATION_TAG}_overspeed${REWARD_OVERSPEED}"
-[ "$LANE_WIDTH_CLIP_MAX_M" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_lanew${LANE_WIDTH_CLIP_MIN_M}-${LANE_WIDTH_CLIP_MAX_M}"
-# _roadblock (below), _bicycle and _clamp name what every run uses now: kept so folder names match the earlier evals
-ABLATION_TAG="${ABLATION_TAG}_bicycle_vmin${BICYCLE_MIN_SPEED_MPS}"
-if [ "$BICYCLE_CENTER_ACCEL_CAP" = "true" ]; then
-    ABLATION_TAG="${ABLATION_TAG}_centercap"
-    [ "$BICYCLE_CENTER_ACCEL_CAP_MARGIN" != "1.0" ] && ABLATION_TAG="${ABLATION_TAG}${BICYCLE_CENTER_ACCEL_CAP_MARGIN}"
-fi
-ABLATION_TAG="${ABLATION_TAG}_clamp"
+[ "${OBS_SLOTS_PARTNERS_N:-40}" != "40" ] && ABLATION_TAG="${ABLATION_TAG}_slots${OBS_SLOTS_PARTNERS_N}"
+[ "${EVAL_PERCEIVED_SIZE_MARGIN_M:-0.2}" != "0.2" ] && ABLATION_TAG="${ABLATION_TAG}_margin${EVAL_PERCEIVED_SIZE_MARGIN_M}"
+[ "${REWARD_OVERSPEED:-0.1}" != "0.1" ] && ABLATION_TAG="${ABLATION_TAG}_overspeed${REWARD_OVERSPEED}"
+[ "$LANE_WIDTH_CLIP_MAX_M" = "0" ] && ABLATION_TAG="${ABLATION_TAG}_nolanew"
+[ "$LANE_WIDTH_CLIP_MAX_M" != "0" ] && [ "$LANE_WIDTH_CLIP_MIN_M-$LANE_WIDTH_CLIP_MAX_M" != "2.85-4.4" ] \
+    && ABLATION_TAG="${ABLATION_TAG}_lanew${LANE_WIDTH_CLIP_MIN_M}-${LANE_WIDTH_CLIP_MAX_M}"
+[ "$BICYCLE_MIN_SPEED_MPS" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_vmin${BICYCLE_MIN_SPEED_MPS}"
+[ "$BICYCLE_CENTER_ACCEL_CAP" != "true" ] && ABLATION_TAG="${ABLATION_TAG}_nocentercap"
+[ "$BICYCLE_CENTER_ACCEL_CAP" = "true" ] && [ "$BICYCLE_CENTER_ACCEL_CAP_MARGIN" != "0.95" ] \
+    && ABLATION_TAG="${ABLATION_TAG}_centercap${BICYCLE_CENTER_ACCEL_CAP_MARGIN}"
 [ -n "$STANDSTILL_JERK_DEADBAND" ] && ABLATION_TAG="${ABLATION_TAG}_deadband${STANDSTILL_JERK_DEADBAND}"
 # results: the model's own eval folder, next to the PufferDrive benchmark evals (overview.csv, scenarios.csv, obs_html/, simulation_log/, details/)
-export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}_roadblock${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
 # NO_TRAIN skips the training-only CUDA extension (_C, never imported by the planner): the cp39 nuPlan env builds only
 # the C binding, so nvcc 13.4 on kesai never meets this env's cu128 torch (script 12 builds the same way)
