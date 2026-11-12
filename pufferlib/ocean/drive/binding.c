@@ -1734,10 +1734,11 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 return NULL;
             }
 
-            PyObject *tuple = PyTuple_New(3);
+            PyObject *tuple = PyTuple_New(4);
             PyTuple_SetItem(tuple, 0, agent_offsets);
             PyTuple_SetItem(tuple, 1, map_ids_list);
             PyTuple_SetItem(tuple, 2, PyLong_FromLong(env_count));
+            PyTuple_SetItem(tuple, 3, PyLong_FromLong(env_count));
             return tuple;
         }
 
@@ -1797,10 +1798,11 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         free(agent_counts);
 
-        PyObject *tuple = PyTuple_New(3);
+        PyObject *tuple = PyTuple_New(4);
         PyTuple_SetItem(tuple, 0, agent_offsets);
         PyTuple_SetItem(tuple, 1, map_ids_list);
         PyTuple_SetItem(tuple, 2, PyLong_FromLong(env_count));
+        PyTuple_SetItem(tuple, 3, PyLong_FromLong(env_count));
         return tuple;
     }
 
@@ -1827,6 +1829,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         }
     }
     int sampling_attempt_count = 0;
+    int deferred_map_count = 0;
 
     while (total_agent_count < num_agents && env_count < max_envs
            && (candidate_map_ids == NULL || sampling_attempt_count++ < num_agents + num_maps)
@@ -1898,10 +1901,16 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         c_close(env);
         free(env);
         if (!fits) {
+            deferred_map_count = 1;
             break;
         }
     }
     free(candidate_map_ids);
+    // Eval cursor advance includes skipped maps, so the next batch never rescans them.
+    int scanned_map_count = env_count;
+    if (eval_mode && !use_eval_map_indices) {
+        scanned_map_count = s_map_counter - starting_map_counter - deferred_map_count;
+    }
     if (total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }
@@ -1913,10 +1922,11 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
     Py_DECREF(agent_offsets);
     Py_DECREF(map_ids);
-    PyObject *tuple = PyTuple_New(3);
+    PyObject *tuple = PyTuple_New(4);
     PyTuple_SetItem(tuple, 0, resized_agent_offsets);
     PyTuple_SetItem(tuple, 1, resized_map_ids);
     PyTuple_SetItem(tuple, 2, final_env_count);
+    PyTuple_SetItem(tuple, 3, PyLong_FromLong(scanned_map_count));
     return tuple;
 }
 

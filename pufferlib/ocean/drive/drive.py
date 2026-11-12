@@ -424,7 +424,7 @@ class Drive(pufferlib.PufferEnv):
         self.current_num_eval_scenarios = self._next_eval_batch_size()
 
         # Iterate through all maps to count total agents that can be initialized for each map
-        agent_offsets, map_ids, num_envs = binding.shared(
+        agent_offsets, map_ids, num_envs, scanned_map_count = binding.shared(
             map_files=self.map_files,
             num_agents=num_agents,
             num_maps=num_maps,
@@ -449,7 +449,7 @@ class Drive(pufferlib.PufferEnv):
             goal_source=self.goal_source,
         )
         # In eval mode, don't wrap counter - allows termination condition to work correctly
-        self.starting_map_counter = self.starting_map_counter + num_envs
+        self.starting_map_counter = self.starting_map_counter + scanned_map_count
         # Set once a worker has evaluated its whole map window; a frozen worker
         # stops stepping and emitting so it can't re-process or double-count.
         self._eval_exhausted = self.eval_mode and self.current_num_eval_scenarios == 0
@@ -682,7 +682,6 @@ class Drive(pufferlib.PufferEnv):
                 if self.current_num_eval_scenarios == 0:
                     self._eval_exhausted = True
                     return (self.observations, self.rewards, self.terminals, self.truncations, info)
-                binding.vec_close(self.c_envs)
                 # Pairs already replayed this sweep; slice the rest so a deferred
                 # scene resumes exactly where the previous batch stopped.
                 pair_start = self.starting_map_counter - self.starting_map_counter_init
@@ -692,7 +691,7 @@ class Drive(pufferlib.PufferEnv):
                 remaining_agent_counts = (
                     self.eval_agent_counts[pair_start:] if self.eval_agent_counts is not None else None
                 )
-                agent_offsets, map_ids, num_envs = binding.shared(
+                agent_offsets, map_ids, num_envs, scanned_map_count = binding.shared(
                     num_agents=self.num_agents,
                     num_maps=self.num_maps,
                     starting_map_counter=self.starting_map_counter,
@@ -716,11 +715,15 @@ class Drive(pufferlib.PufferEnv):
                     goal_radius=self.goal_radius,
                     goal_source=self.goal_source,
                 )
+                if num_envs == 0:
+                    self._eval_exhausted = True
+                    return (self.observations, self.rewards, self.terminals, self.truncations, info)
+                binding.vec_close(self.c_envs)
                 self.agent_offsets = agent_offsets
                 self.map_ids = map_ids
                 self.num_envs = num_envs
                 # In eval mode, don't wrap counter - allows termination condition to work correctly
-                self.starting_map_counter = self.starting_map_counter + num_envs
+                self.starting_map_counter = self.starting_map_counter + scanned_map_count
                 env_ids = []
                 for i in range(num_envs):
                     cur = agent_offsets[i]
