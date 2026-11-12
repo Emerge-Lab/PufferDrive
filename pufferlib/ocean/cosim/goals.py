@@ -103,20 +103,6 @@ class RouteGoalWindow:
         self._push(next_start)
         return True
 
-    def snapshot(self):
-        """State to hand back to restore(): the window and how many of its goals the env has consumed."""
-        if not self.pushed:
-            raise RuntimeError("RouteGoalWindow.snapshot needs a pushed window")
-        current_goal_idx, _ = self.env.get_agent_goal_progress(self.agent_idx)
-        return self.window_start, self.current_index, current_goal_idx
-
-    def restore(self, snapshot):
-        """Undo everything since snapshot(), e.g. the goals a forecast rollout consumed."""
-        window_start, current_index, current_goal_idx = snapshot
-        self._push(window_start)
-        self.current_index = current_index
-        self.env.set_agent_goal_progress(self.agent_idx, current_goal_idx)
-
     def _push(self, start):
         sel = self.goals[start : start + self.num_goals]
         self.env.set_agent_goals(

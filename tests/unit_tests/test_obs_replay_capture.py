@@ -30,7 +30,6 @@ def _fixture_env():
         scenario_length=400,
         resample_frequency=1_000_000,
         termination_mode=False,
-        terminate_on_goal=False,
         report_interval=1,
         num_goals=NUM_GOALS,
         goal_radius=2.0,

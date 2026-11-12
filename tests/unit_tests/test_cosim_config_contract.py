@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Config contract for the co-simulation integrations (pufferlib/ocean/cosim).
 
-The CARLA leaderboard agent, the standalone CARLA co-sim, and the nuPlan
-planner all rebuild the checkpoint's shadow Drive env FROM ITS config.yaml
+The CARLA leaderboard agent and the nuPlan planner both rebuild the
+checkpoint's shadow Drive env FROM ITS config.yaml
 (saved next to the checkpoint from pufferlib/config/puffer_drive.yaml) via
 cosim/arch.py's shadow_env_kwargs: every Drive-accepted env key is adopted,
 then CLEAN_EVAL_OVERRIDES is applied, then the co-sim's structural keys win.
@@ -42,7 +42,6 @@ COSIM_ENV_KEYS = (
     "max_goal_spacing",
     "goal_radius",
     "num_goals",
-    "dynamics_model",
     "goal_speed",
     "goal_source",
     "reward_conditioning",
@@ -53,7 +52,7 @@ COSIM_ENV_KEYS = (
 # falls back to the same Drive default the training run used -- consistent.
 
 # Top-level keys the cosim policy loaders read (leaderboard_agent.py,
-# carla_cosim.py, nuplan/planner.py): getattr(drive_torch, cfg["policy_name"])
+# nuplan/planner.py): getattr(drive_torch, cfg["policy_name"])
 # and policy_cls(env, **cfg["policy"]).
 COSIM_TOP_LEVEL_KEYS = ("policy", "policy_name")
 
@@ -155,7 +154,7 @@ class TestShadowEnvKwargs(unittest.TestCase):
 
     def test_int_infraction_behaviors_normalize_to_strings(self):
         """Saved checkpoint configs may carry resolved enum ints for the
-        infraction behaviors (weights/mimolette: collision_behavior: 1);
+        infraction behaviors (collision_behavior: 1);
         Drive.__init__ only accepts the strings."""
         from pufferlib.ocean.cosim.arch import shadow_env_kwargs
 
@@ -185,15 +184,6 @@ class TestShadowEnvKwargs(unittest.TestCase):
         self.assertEqual(kwargs["num_maps"], 1)
         self.assertEqual(kwargs["resample_frequency"], 0)
         self.assertEqual(kwargs["map_dir"], "town.bin")
-
-    def test_defaults_only_fill_gaps(self):
-        """`defaults` (DEFAULT_ARCH / dummy-run arch) must lose to a real
-        checkpoint config."""
-        from pufferlib.ocean.cosim.arch import shadow_env_kwargs
-
-        kwargs = shadow_env_kwargs({"env": {"goal_source": "route"}}, defaults={"goal_source": "map", "num_goals": 3})
-        self.assertEqual(kwargs["goal_source"], "route")
-        self.assertEqual(kwargs["num_goals"], 3)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,6 @@
     "pedestrian_collision_rate": 0.0,
     "pedestrian_crossings": 0.0,
     "red_light_violation_rate": 0.009838026948273182,
-    "reward_components/ade": 0.0,
     "reward_components/collision": -0.03214438278228045,
     "reward_components/comfort": -0.44294892586767676,
     "reward_components/goal": 0.008311012107878924,

@@ -1325,14 +1325,11 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         experiment_dir = drive_benchmark.resolve_run_dir(args["load_model_path"])
         config_yaml_path = os.path.join(experiment_dir, "config.yaml")
         KEYS_OF_INTEREST = {
-            "action_type",
-            "dynamics_model",
             "goal_source",
             "goal_regen_mode",
             "num_goals",
             "min_goal_spacing",
             "max_goal_spacing",
-            "obs_goal_lane_distance",
             "reward_conditioning",
             "reward_randomization",
             "trajectory_prediction_length",
@@ -1349,7 +1346,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
             "obs_slots_traffic_controls_n",
             "traffic_lights_enabled",
             "stop_signs_enabled",
-            "yield_signs_enabled",
         }
         if os.path.exists(config_yaml_path):
             print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")

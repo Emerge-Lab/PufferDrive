@@ -111,22 +111,14 @@ class ActionType(Enum):
     continuous = 1
 
 
-class DynamicsModel(Enum):
-    classic = 0
-    jerk = 1
-
-
 class InfractionBehavior(Enum):
     ignore = 0
     stop = 1
-    remove = 2
 
 
 class ControlMode(Enum):
     control_vehicles = 0
-    control_agents = 1
-    control_wosac = 2
-    control_sdc_only = 3
+    control_sdc_only = 1
 
 
 class Controller(Enum):
@@ -148,8 +140,7 @@ class NonVehicleController(Enum):
 
 class InitMode(Enum):
     create_all_valid = 0
-    create_only_controlled = 1
-    create_controllable_types = 2
+    create_controllable_types = 1
 
 
 class GoalRegen(Enum):
@@ -221,14 +212,10 @@ class DriveEnvConfig:
     num_agents: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     min_agents_per_env: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     max_agents_per_env: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
-    action_type: ActionType = MISSING
-    dynamics_model: DynamicsModel = MISSING
-    reset_accel_on_stop: bool = MISSING
     dt: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     base_max_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     max_speed_mps: float | None = _constrained_field(POSITIVE_NUMBER_CONSTRAINT, default=None)
     conditioning_speed_scale: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
-    spawn_initial_speed: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     spawn_lateral_offset_max_frac: float = _constrained_field(PROBABILITY_CONSTRAINT)
     spawn_heading_max_deg: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     pose_noise_xy_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
@@ -243,7 +230,6 @@ class DriveEnvConfig:
     stop_sign_behavior: InfractionBehavior = MISSING
     disable_red_light_infractions: bool = MISSING
     red_light_train_front_margin_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
-    red_light_train_rear_margin_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     disable_stop_sign_infractions: bool = MISSING
     traffic_light_junction_phases: bool = MISSING
     traffic_light_green_min_s: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
@@ -251,7 +237,6 @@ class DriveEnvConfig:
     traffic_light_yellow_max_s: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     traffic_lights_enabled: bool = MISSING
     stop_signs_enabled: bool = MISSING
-    yield_signs_enabled: bool = MISSING
     use_map_cache: bool = MISSING
     preload_map_cache: bool = MISSING
     use_neighbor_cache: bool = MISSING
@@ -259,9 +244,7 @@ class DriveEnvConfig:
     resample_frequency: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     termination_mode: bool = MISSING
     inactive_agent_threshold: float = _constrained_field(PROBABILITY_CONSTRAINT)
-    terminate_on_goal: bool = MISSING
     init_step: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
-    init_step_spread: bool = MISSING
     init_step_min_horizon: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     stagger_first_episode: bool = MISSING
     control_mode: ControlMode = MISSING
@@ -274,10 +257,8 @@ class DriveEnvConfig:
     eval_training_render: bool = MISSING
     goal_regen_mode: GoalRegen = MISSING
     goal_source: GoalSource = MISSING
-    obs_goal_lane_distance: bool = MISSING
     goal_radius: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     goal_speed: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
-    goal_speed_randomization: bool = MISSING
     goal_reach_requires_speed: bool = MISSING
     num_goals: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     min_goal_spacing: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
@@ -285,7 +266,6 @@ class DriveEnvConfig:
     goal_heading_max_deg: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     reward_conditioning: bool = MISSING
     reward_randomization: bool = MISSING
-    reward_log_sampling: bool = MISSING
     reward_goal: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_collision: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_offroad: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
@@ -299,17 +279,12 @@ class DriveEnvConfig:
     reward_reverse: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_timestep: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     reward_overspeed: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
-    overspeed_tolerance_mps: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
-    reward_ade: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     allow_map_subset: bool = MISSING
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     obs_slots_boundary_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     obs_slots_partners_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
-    obs_partner_relative_velocity: bool = MISSING
-    obs_lane_heading_signed: bool = MISSING
-    obs_lane_speed_limit: bool = MISSING
     obs_slots_traffic_controls_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     obs_traffic_light_yellow_remaining: bool = MISSING
     obs_dropout_lane: float = _constrained_field(PROBABILITY_CONSTRAINT)
@@ -339,12 +314,9 @@ class DriveEnvConfig:
     partner_blindness_prob_min: float = _constrained_field(PROBABILITY_CONSTRAINT)
     partner_blindness_trigger_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     partner_blindness_duration_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
-    partner_blindness_corridor: bool = MISSING
-    partner_blindness_time_fraction_max: float = _constrained_field(PROBABILITY_CONSTRAINT)
     phantom_braking_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     phantom_braking_trigger_prob: float = _constrained_field(PROBABILITY_CONSTRAINT)
     phantom_braking_duration_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
-    phantom_braking_freeze_steering: bool = MISSING
     scripted_pedestrian_ratio: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
 
     # Added by benchmark overlays after the base Hydra config is composed.
@@ -362,7 +334,6 @@ class DrivePolicyConfig:
     context_input_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     encoder_activation: Activation = MISSING
     encoder_layer_norm: bool = MISSING
-    mask_padded_features: bool = MISSING
     backbone_hidden_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     backbone_num_layers: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     backbone_activation: Activation = MISSING
@@ -375,7 +346,6 @@ class DrivePolicyConfig:
     critic_head_layer_norm: bool = MISSING
     fp32_heads: bool = MISSING
     fused_slot_encoder: bool = False
-    shared_network: bool = MISSING
     action_type: ActionType = MISSING
 
 
@@ -572,8 +542,6 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.num_agents", "must be at least env.min_agents_per_env")
     if env["init_step"] >= env["scenario_length"]:
         _raise_config_error(context, "env.init_step", "must be smaller than env.scenario_length")
-    if env["spawn_initial_speed"] > env["base_max_speed_mps"]:
-        _raise_config_error(context, "env.spawn_initial_speed", "must not exceed env.base_max_speed_mps")
     if env["min_goal_spacing"] > env["max_goal_spacing"]:
         _raise_config_error(context, "env.min_goal_spacing", "must not exceed env.max_goal_spacing")
     if env["partner_blindness_prob_min"] > env["partner_blindness_prob"]:
@@ -583,10 +551,6 @@ def _validate_cross_field_constraints(config, context):
 
     if env["reward_randomization"] and not env["reward_conditioning"]:
         _raise_config_error(context, "env.reward_randomization", "requires env.reward_conditioning")
-    if env["init_step_spread"] and env["simulation_mode"] != "replay":
-        _raise_config_error(context, "env.init_step_spread", "is only supported in replay mode")
-    if env["init_step_spread"] and env["init_step_min_horizon"] >= env["scenario_length"]:
-        _raise_config_error(context, "env.init_step_min_horizon", "must be smaller than env.scenario_length")
     if env["goal_source"] in ("gt", "gt_map") and env["simulation_mode"] != "replay":
         _raise_config_error(context, "env.goal_source", f"'{env['goal_source']}' is only supported in replay mode")
     if env["stagger_first_episode"] and env["init_step"] + env["init_step_min_horizon"] > env["scenario_length"]:
@@ -595,8 +559,6 @@ def _validate_cross_field_constraints(config, context):
             "env.stagger_first_episode",
             "requires env.init_step + env.init_step_min_horizon <= env.scenario_length",
         )
-    if env["terminate_on_goal"] and (env["simulation_mode"] != "replay" or env["control_mode"] != "control_sdc_only"):
-        _raise_config_error(context, "env.terminate_on_goal", "requires replay mode with control_sdc_only")
     if env.get("eval_mode") is not None and (
         not isinstance(env["eval_mode"], (bool, int)) or env["eval_mode"] not in (0, 1)
     ):
@@ -613,15 +575,6 @@ def _validate_cross_field_constraints(config, context):
 
     if env["num_goals"] > binding.MAX_GOALS:
         _raise_config_error(context, "env.num_goals", f"must not exceed {binding.MAX_GOALS}")
-
-    policy = config["policy"]
-    # Discrete policy outputs can be decoded into continuous controls; the inverse has no defined mapping.
-    if env["action_type"] == "discrete" and policy["action_type"] == "continuous":
-        _raise_config_error(
-            context,
-            "policy.action_type",
-            "cannot be continuous when env.action_type is discrete",
-        )
 
     train = config["train"]
     if train["render_num_maps"] is not None and train["render_num_maps"] > config["env"]["num_maps"]:
@@ -740,16 +693,7 @@ def _validate_map_resources(env, context):
     elif os.path.isdir(map_dir):
         available_maps = sum(name.endswith(".bin") for name in os.listdir(map_dir))
     else:
-        message = f"path does not exist: {map_dir}"
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        manifest_path = os.path.join(repo_root, "data_utils", "datasets.yaml")
-        dataset_name = os.path.basename(os.path.normpath(str(map_dir)))
-        if os.path.isfile(manifest_path):
-            with open(manifest_path) as manifest_file:
-                is_registered_dataset = any(line.startswith(f"{dataset_name}:") for line in manifest_file)
-            if is_registered_dataset:
-                message += f"; fetch it with: python data_utils/fetch_data.py {dataset_name}"
-        _raise_config_error(context, "env.map_dir", message)
+        _raise_config_error(context, "env.map_dir", f"path does not exist: {map_dir}")
     if available_maps == 0:
         _raise_config_error(context, "env.map_dir", "contains no .bin maps")
     if env["num_maps"] > available_maps:

@@ -22,11 +22,7 @@ Nothing in this module imports `nuplan` at module scope, so the pure-python bin
 writer stays testable from an env without the nuplan-devkit installed.
 """
 
-import math
-import os
 from pathlib import Path
-
-from typing import Tuple
 
 import numpy as np
 
@@ -56,36 +52,6 @@ _NUPLAN_LIGHT_STATE = {
 
 FAR_AWAY = 1.0e6  # park surplus PufferDrive agents out of observation range
 ROUTE_SEARCH_DEPTH_BLOCKS = 30  # PDM's Dijkstra window over route roadblocks
-
-# Env/obs layout the carla_combined gigaflow policy expects at eval time (a
-# fallback for shadow_env_kwargs' checkpoint-config adoption, see
-# cosim/arch.py -- only used for keys the checkpoint config doesn't set, i.e.
-# chiefly the no-checkpoint dummy run). Override per-checkpoint via the
-# planner's `env_overrides` when the training config differs.
-DEFAULT_ARCH = dict(
-    goal_source="external",  # route goal windows are pushed by the planner
-    num_goals=3,
-    obs_slots_lane_n=80,
-    obs_slots_boundary_n=40,
-    obs_slots_partners_n=16,
-    obs_slots_traffic_controls_n=4,
-    obs_range_partner_m=200.0,
-    obs_range_road_front_m=200.0,
-    obs_range_road_behind_m=40.0,
-    obs_range_road_side_m=50.0,
-    obs_range_traffic_control_m=100.0,
-    obs_norm_xy_offset_m=200.0,
-    obs_norm_goal_offset_m=200.0,
-    obs_norm_road_seg_length_m=10.0,
-    obs_norm_road_seg_width_m=5.0,
-    obs_norm_veh_length_m=15.0,
-    obs_norm_veh_width_m=10.0,
-    reward_conditioning=True,
-    goal_speed=20.0,  # reward conditioning: arrive at goals at up to 20 m/s
-    goal_radius=6.0,
-    dynamics_model="jerk",
-    dt=0.1,  # lockstep with nuPlan's 10 Hz planner interval
-)
 
 
 class NuPlanTransform:
@@ -154,30 +120,11 @@ def write_drive_bin(roads, traffic, out_path: Path, scenario_id: str, centroid=(
     _mbin.write_bin(data, out_path)
 
 
-def expert_route_xy(scenario) -> np.ndarray:
-    """(N, 2) logged ego-center trajectory for the whole scenario window, in
-    nuPlan map coordinates -- the ground-truth path the expert actually drove.
-    Preferred goal source over `route_centerline`: a lane-graph walk only knows
-    which roadblocks are on-route, not which lane within a multi-lane block or
-    which fork at a split, so it can place goals on a parallel or turning lane;
-    the logged trajectory has neither ambiguity. Starts at the scenario's
-    initial ego state (iteration 0), so no start-position trim is needed
-    (unlike route_centerline, whose first lane can start well behind the ego).
-    Duck-typed on `EgoState`-like objects (`.center.x/.y`), not a real nuPlan
-    import, so this stays testable without the devkit installed."""
-    return np.array(
-        [[s.center.x, s.center.y] for s in scenario.get_expert_ego_trajectory()],
-        dtype=np.float64,
-    ).reshape(-1, 2)
-
-
-def route_centerline(map_api, route_roadblock_ids, start_x: float, start_y: float, start_heading: float):
-    """Lane-graph route through the route roadblocks -> ((N, 2) centerline in
-    nuPlan map coordinates, [lane ids along it]), PDM-style: the starting lane
-    is the on-route lane under the ego with the smallest heading error (never
-    a crossing lane of the same junction), then Dijkstra over the route's lane
-    graph to the last roadblock. The first lane is trimmed to the point
-    nearest the ego."""
+def route_lane_ids(map_api, route_roadblock_ids, start_x: float, start_y: float, start_heading: float):
+    """Lane-graph route through the route roadblocks -> [lane ids along it],
+    PDM-style: the starting lane is the on-route lane under the ego with the
+    smallest heading error (never a crossing lane of the same junction), then
+    Dijkstra over the route's lane graph to the last roadblock."""
     from nuplan.common.actor_state.state_representation import Point2D
     from nuplan.common.maps.maps_datatypes import SemanticMapLayer
     from carl_nuplan.planning.simulation.planner.pdm_planner.utils.graph_search.dijkstra import Dijkstra
@@ -190,7 +137,7 @@ def route_centerline(map_api, route_roadblock_ids, start_x: float, start_y: floa
         if block is not None and block.interior_edges:
             blocks.append(block)
     if not blocks:
-        return np.zeros((0, 2)), []
+        return []
     route_lanes = {lane.id: lane for block in blocks for lane in block.interior_edges}
 
     def _lane_pts(lane):
@@ -224,27 +171,7 @@ def route_centerline(map_api, route_roadblock_ids, start_x: float, start_y: floa
             break
         if len(candidate_path) > len(path):
             path = candidate_path
-
-    lane_points = [_lane_pts(lane) for lane in path]
-    start_idx = int(np.argmin(np.hypot(*(lane_points[0] - (start_x, start_y)).T)))
-    lane_points[0] = lane_points[0][start_idx:]
-    return np.concatenate(lane_points, axis=0), [str(lane.id) for lane in path]
-
-
-def indices_along(polyline: np.ndarray, spacing: float) -> np.ndarray:
-    """(N, 2) polyline -> vertex indices every `spacing` meters of arc length (+ the endpoint)."""
-    if len(polyline) < 2:
-        return np.arange(len(polyline))
-    seg = np.hypot(*np.diff(polyline, axis=0).T)
-    cum = np.concatenate([[0.0], np.cumsum(seg)])
-    indices = [int(np.searchsorted(cum, s)) for s in np.arange(spacing, cum[-1], spacing)]
-    indices.append(len(polyline) - 1)
-    return np.asarray(indices, dtype=np.int64)
-
-
-def goals_along(centerline: np.ndarray, spacing: float) -> np.ndarray:
-    """(N, 2) polyline -> fixed goal sequence every `spacing` meters (+ endpoint)."""
-    return np.asarray(centerline, dtype=np.float64)[indices_along(centerline, spacing)]
+    return [str(lane.id) for lane in path]
 
 
 def _route_blocks(map_api, route_roadblock_ids):
@@ -260,79 +187,6 @@ def _route_blocks(map_api, route_roadblock_ids):
             continue
         blocks.append(block)
     return blocks
-
-
-def _baseline_xy(lane) -> np.ndarray:
-    return np.array([[p.x, p.y] for p in lane.baseline_path.discrete_path], dtype=np.float64)
-
-
-def _ego_lane(lanes, x, y, heading):
-    """The lane nearest to the pose among the co-directional ones (baseline heading within 90 deg at the
-    nearest point), else the nearest lane of all."""
-    heading_dir = np.array([np.cos(heading), np.sin(heading)])
-    best_key, best_lane = None, None
-    for lane in lanes:
-        pts = _baseline_xy(lane)
-        k = int(np.argmin(np.hypot(*(pts - (x, y)).T)))
-        seg = pts[min(k + 1, len(pts) - 1)] - pts[max(k - 1, 0)]
-        key = (seg @ heading_dir <= 0.0, float(np.hypot(*(pts[k] - (x, y)))))
-        if best_key is None or key < best_key:
-            best_key, best_lane = key, lane
-    return best_lane
-
-
-def _continuing_lane(block, prev_lane, next_block, prev_xy):
-    """The block's lane the previous lane flows into and that flows on into the next route block; when no
-    lane does both, one that flows on beats one that only flows in (change lanes early, not late); ties go
-    to the lane nearest prev_xy."""
-    successor_ids = {edge.id for edge in prev_lane.outgoing_edges}
-
-    def key(lane):
-        flows_in = lane.id in successor_ids
-        flows_on = next_block is None or any(edge.get_roadblock_id() == next_block.id for edge in lane.outgoing_edges)
-        return (
-            not (flows_in and flows_on),
-            not flows_on,
-            not flows_in,
-            float(np.min(np.hypot(*(_baseline_xy(lane) - prev_xy).T))),
-        )
-
-    return min(block.interior_edges, key=key)
-
-
-def roadblock_lane_goals(
-    map_api, route_roadblock_ids, start_x, start_y, start_heading, min_spacing: float, min_ahead_m: float
-):
-    """Route roadblock goals on lane baselines chosen for lane continuity -> (N, 2) in nuPlan map coordinates.
-    Blocks, start block, min_ahead_m and min_spacing as in roadblock_centroid_goals; each block's goal is the
-    point nearest its centroid on the block's continuing lane (see _continuing_lane, seeded with the ego's
-    lane), so goals cue a lane change only where the lane graph forces one instead of pulling toward the
-    road centre on multi-lane roads."""
-    from shapely.geometry import Point
-
-    blocks = _route_blocks(map_api, route_roadblock_ids)
-    if not blocks:
-        return np.zeros((0, 2))
-    start_idx = int(np.argmin([block.polygon.distance(Point(start_x, start_y)) for block in blocks]))
-    heading_dir = np.array([np.cos(start_heading), np.sin(start_heading)])
-    lane = _ego_lane(blocks[start_idx].interior_edges, start_x, start_y, start_heading)
-    prev_xy = np.array([start_x, start_y], dtype=np.float64)
-    goals = []
-    for block_idx in range(start_idx, len(blocks)):
-        block = blocks[block_idx]
-        if block_idx > start_idx:
-            next_block = blocks[block_idx + 1] if block_idx + 1 < len(blocks) else None
-            lane = _continuing_lane(block, lane, next_block, prev_xy)
-        centroid = block.polygon.centroid
-        pts = _baseline_xy(lane)
-        goal = pts[int(np.argmin(np.hypot(pts[:, 0] - centroid.x, pts[:, 1] - centroid.y)))]
-        if block_idx == start_idx and (goal - (start_x, start_y)) @ heading_dir < min_ahead_m:
-            continue
-        if goals and np.hypot(*(goal - goals[-1])) < min_spacing:
-            continue
-        goals.append(goal)
-        prev_xy = goal
-    return np.array(goals, dtype=np.float64).reshape(-1, 2)
 
 
 def roadblock_centroid_goals(
@@ -643,32 +497,6 @@ def pad_vru_partner_sizes(types, lengths, widths, pad_m: float):
     return lengths, widths
 
 
-def split_long_partners(x, y, z, h, vx, vy, types, lengths, widths, max_length_m: float):
-    """Partners longer than max_length_m become ceil(length / max_length_m) equal boxes along their heading, in
-    place of the original (training spawns nothing longer than 7 m; a 12 m bus is one box the policy never saw)."""
-    out = [[] for _ in range(9)]
-    for j in range(len(x)):
-        pieces = max(1, int(math.ceil(float(lengths[j]) / max_length_m)))
-        piece_length = float(lengths[j]) / pieces
-        for k in range(pieces):
-            along = (k + 0.5) * piece_length - 0.5 * float(lengths[j])
-            values = (
-                x[j] + along * math.cos(h[j]),
-                y[j] + along * math.sin(h[j]),
-                z[j],
-                h[j],
-                vx[j],
-                vy[j],
-                types[j],
-                piece_length,
-                widths[j],
-            )
-            for column, value in zip(out, values):
-                column.append(value)
-    dtypes = (np.float32,) * 6 + (np.int32, np.float32, np.float32)
-    return tuple(np.array(column, dtype) for column, dtype in zip(out, dtypes))
-
-
 def nearest_partner_slots(x, y, ego_x: float, ego_y: float, slots: int):
     """Row order for at most `slots` partners: the devkit order when they fit, else nearest to the ego first."""
     if len(x) <= slots:
@@ -733,61 +561,3 @@ def traffic_light_states(
         elif j not in route_elements and _LIGHT_RESTRICTIVENESS[state] < _LIGHT_RESTRICTIVENESS[int(states[j])]:
             states[j] = state
     return states
-
-
-SYMMETRIC_WIDTH_MIN_M = 1.0  # floor where a baseline touches its polygon edge (lane tips, fan-outs)
-SYMMETRIC_WIDTH_MAX_M = 50.0  # PufferDrive's loader limit
-SYMMETRIC_WIDTH_MATCH_TOL_M = 0.5  # mean vertex distance to the matched baseline; farther lanes keep their widths
-SYMMETRIC_WIDTH_SEARCH_M = 3.0
-
-
-def symmetric_lane_widths(roads, transform: NuPlanTransform, map_objects) -> Tuple[int, int]:
-    """Rewrite every bin lane's per-vertex widths as twice the distance to the nearer boundary of the nuPlan
-    lane / lane connector whose baseline the bin lane lies on: the widest symmetric corridor around the
-    centerline. `map_objects` expose baseline_path / left_boundary / right_boundary with `.linestring`.
-    Returns (lanes patched, lanes left unchanged because no baseline matched)."""
-    import shapely
-    from shapely.strtree import STRtree
-
-    baselines = [obj.baseline_path.linestring for obj in map_objects]
-    tree = STRtree(baselines)
-    patched = unmatched = 0
-    for road in roads:
-        if "widths" not in road or not road["S"]:
-            continue
-        ux, uy = transform.bin_to_loc(np.asarray(road["x"], np.float64), np.asarray(road["y"], np.float64))
-        points = shapely.points(ux, uy)
-        search = shapely.box(ux.min(), uy.min(), ux.max(), uy.max()).buffer(SYMMETRIC_WIDTH_SEARCH_M)
-        candidates = tree.query(search)
-        if not len(candidates):
-            unmatched += 1
-            continue
-        mean_dist = [float(np.mean(shapely.distance(baselines[c], points))) for c in candidates]
-        best = int(candidates[int(np.argmin(mean_dist))])
-        if min(mean_dist) > SYMMETRIC_WIDTH_MATCH_TOL_M:
-            unmatched += 1
-            continue
-        try:
-            left = map_objects[best].left_boundary.linestring
-            right = map_objects[best].right_boundary.linestring
-        except Exception:  # noqa: BLE001 -- a connector without a scaled-width polygon row keeps its widths
-            unmatched += 1
-            continue
-        nearer = np.minimum(shapely.distance(left, points), shapely.distance(right, points))
-        road["widths"] = tuple(np.clip(2.0 * nearer, SYMMETRIC_WIDTH_MIN_M, SYMMETRIC_WIDTH_MAX_M).tolist())
-        patched += 1
-    return patched, unmatched
-
-
-def patch_bin_lane_widths(bin_path: Path, out_path: Path, transform: NuPlanTransform, map_objects) -> Tuple[int, int]:
-    """Copy of `bin_path` with symmetric_lane_widths applied, written atomically to `out_path`."""
-    data = _mbin.read_bin(Path(bin_path))
-    if not data["has_width_section"]:
-        raise ValueError(f"{bin_path}: no LANEWID1 section to rewrite")
-    counts = symmetric_lane_widths(data["roads"], transform, map_objects)
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out_path.with_name(f"{out_path.name}.{os.getpid()}.tmp")
-    _mbin.write_bin(data, tmp)
-    os.replace(tmp, out_path)
-    return counts

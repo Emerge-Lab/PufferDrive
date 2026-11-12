@@ -51,8 +51,6 @@ static inline Drive drive_test_env_config(
     int num_agents,
     int use_map_cache) {
     Drive env = {0};
-    env.action_type = 0;
-    env.dynamics_model = DYNAMICS_MODEL_CLASSIC;
     env.reward_goal = 1.0f;
     env.reward_collision = 3.0f;
     env.reward_offroad = 3.0f;
@@ -66,7 +64,6 @@ static inline Drive drive_test_env_config(
     env.reward_stop_line = 1.0f;
     env.reward_timestep = 0.000025f;
     env.reward_overspeed = 0.05f;
-    env.reward_ade = 0.0f;
     env.collision_behavior = INFRACTION_BEHAVIOR_IGNORE;
     env.offroad_behavior = INFRACTION_BEHAVIOR_IGNORE;
     env.traffic_light_behavior = INFRACTION_BEHAVIOR_IGNORE;
@@ -75,7 +72,6 @@ static inline Drive drive_test_env_config(
     env.conditioning_speed_scale = 1.5f;
     env.goal_radius = 2.0f;
     env.goal_speed = 3.0f;
-    env.goal_speed_randomization = 1;
     env.goal_reach_requires_speed = 0;
     env.min_goal_spacing = 20.0f;
     env.max_goal_spacing = 60.0f;
@@ -83,23 +79,19 @@ static inline Drive drive_test_env_config(
     env.num_goals = 3;
     env.goal_regen_mode = GOAL_REGEN_FINITE;
     env.goal_source = GOAL_SOURCE_ROUTE;
-    env.obs_goal_lane_distance = 0;
     env.obs_slots_lane_n = 32;
     env.obs_slots_boundary_n = 32;
     env.obs_slots_lane_kept = 32;
     env.obs_slots_boundary_kept = 32;
     env.obs_slots_partners_n = 16;
-    env.obs_partner_relative_velocity = 0;
     env.obs_slots_traffic_controls_n = 4;
     env.traffic_lights_enabled = 1;
     env.traffic_light_green_min_s = 3.0f;
     env.traffic_light_yellow_min_s = 2.0f;
     env.traffic_light_yellow_max_s = 3.0f;
     env.stop_signs_enabled = 0;
-    env.yield_signs_enabled = 0;
     env.dt = 0.1f;
     env.base_max_speed_mps = 20.0f;
-    env.spawn_initial_speed = 0.0f;
     env.spawn_lateral_offset_max_frac = 0.0f;
     env.spawn_heading_max_deg = 0.0f;
     env.scenario_length = 91;
@@ -139,8 +131,6 @@ static inline Drive drive_test_env_config(
     env.partner_blindness_prob_min = 0.0f;
     env.partner_blindness_trigger_prob = 0.1f;
     env.partner_blindness_duration = 10;
-    env.partner_blindness_corridor = 1;
-    env.partner_blindness_time_fraction_max = 0.0f;
     env.phantom_braking_prob = 0.0f;
     env.phantom_braking_trigger_prob = 0.0f;
     env.phantom_braking_duration = 10;
@@ -155,23 +145,6 @@ static inline Drive drive_test_make_env(const char *map_file, int simulation_mod
 }
 
 static inline void drive_set_neutral_actions(Drive *env) {
-    if (env->action_type == 0) {
-        int *actions = (int *) env->actions;
-        int neutral;
-        if (env->dynamics_model == DYNAMICS_MODEL_JERK) {
-            int num_long = sizeof(JERK_LONG) / sizeof(JERK_LONG[0]);
-            int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
-            neutral = (num_long / 2) * num_lat + (num_lat / 2);
-        } else {
-            int num_accel = sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]);
-            int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
-            neutral = (num_accel / 2) * num_steer + (num_steer / 2);
-        }
-        for (int i = 0; i < env->active_agent_count; i++) {
-            actions[i] = neutral;
-        }
-        return;
-    }
     float (*actions)[2] = (float (*)[2]) env->actions;
     for (int i = 0; i < env->active_agent_count; i++) {
         actions[i][0] = 0.0f;

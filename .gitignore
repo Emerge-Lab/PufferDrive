@@ -153,36 +153,17 @@ wandb/
 raylib*/
 box2d*/
 
-# Temp Impulse Wars files
-pufferlib/ocean/impulse_wars/*-debug/
-pufferlib/ocean/impulse_wars/*-release/
-pufferlib/ocean/impulse_wars/debug-*/
-pufferlib/ocean/impulse_wars/release-*/
-pufferlib/ocean/impulse_wars/benchmark/
-
 # Ignore data files
 data/
 pufferlib/resources/drive/binaries/*/
 !pufferlib/resources/drive/binaries/carla/
-!pufferlib/resources/drive/binaries/carla_lhs/
 !pufferlib/resources/drive/binaries/carla/**
 # Re-ignore .DS_Store inside carla binaries
 pufferlib/resources/drive/binaries/carla/.DS_Store
-# Driving behaviour eval binary directories
-!pufferlib/resources/drive/binaries/longitudinal/
-!pufferlib/resources/drive/binaries/longitudinal/**
-!pufferlib/resources/drive/binaries/lateral/
-!pufferlib/resources/drive/binaries/lateral/**
-!pufferlib/resources/drive/binaries/dense/
-!pufferlib/resources/drive/binaries/dense/**
-!pufferlib/resources/drive/binaries/obstacles/
-!pufferlib/resources/drive/binaries/obstacles/**
-!pufferlib/resources/drive/binaries/vru/
-!pufferlib/resources/drive/binaries/vru/**
 # Single-bin fixtures used by tests/test_drive_map_types.py
 !pufferlib/resources/drive/binaries/nuplan/
 !pufferlib/resources/drive/binaries/nuplan/**
-# SDC-replay fixture map used by tests/unit_tests/test_terminate_on_goal.py
+# SDC-replay fixture map used by tests/unit_tests/test_waypoint_burn_through.py
 !pufferlib/resources/drive/binaries/sdc_replay_test/
 !pufferlib/resources/drive/binaries/sdc_replay_test/**
 

@@ -19,7 +19,6 @@ BUILD_CUDA_EXT = bool(CUDA_HOME or ROCM_HOME)
 # Build with DEBUG=1 to enable debug symbols
 DEBUG = os.getenv("DEBUG", "0") == "1"
 PROFILE = os.getenv("PROFILE", "0") == "1"
-NO_OCEAN = os.getenv("NO_OCEAN", "0") == "1"
 NO_TRAIN = os.getenv("NO_TRAIN", "0") == "1"
 
 # Shared compile args for all platforms
@@ -150,19 +149,16 @@ class TorchBuildExt(cpp_extension.BuildExtension):
         super().run()
 
 
-c_extensions = []
-c_extension_paths = []
-if not NO_OCEAN:
-    c_extension_paths = ["pufferlib/ocean/drive"]
-    c_extensions = [
-        Extension(
-            "pufferlib.ocean.drive.binding",
-            sources=["pufferlib/ocean/drive/binding.c"],
-            include_dirs=[numpy.get_include()],
-            extra_compile_args=extra_compile_args,
-            extra_link_args=extra_link_args,
-        )
-    ]
+c_extension_paths = ["pufferlib/ocean/drive"]
+c_extensions = [
+    Extension(
+        "pufferlib.ocean.drive.binding",
+        sources=["pufferlib/ocean/drive/binding.c"],
+        include_dirs=[numpy.get_include()],
+        extra_compile_args=extra_compile_args,
+        extra_link_args=extra_link_args,
+    )
+]
 
 
 # Check if CUDA compiler is available. You need cuda dev, not just runtime.
@@ -207,7 +203,6 @@ install_requires = [
     "numpy",
     "gymnasium==0.29.1",
     "pyyaml",
-    "awscli",
 ]
 
 if not NO_TRAIN:
@@ -225,9 +220,6 @@ if not NO_TRAIN:
         "wandb",
         "wandb-workspaces",
         "tensorboard",
-        "jupytext",
-        "torchinfo",
-        "ipywidgets",
     ]
 
 setup(

@@ -7,8 +7,3 @@ recursive-include pufferlib/resources *
 recursive-exclude experiments *
 recursive-exclude wandb *
 recursive-exclude tests *
-include box2d-linux-amd64/libbox2d.a
-recursive-exclude box2d-web *
-recursive-exclude pufferlib/ocean/impulse_wars/debug* *
-recursive-exclude pufferlib/ocean/impulse_wars/release* *
-recursive-exclude box2d* *

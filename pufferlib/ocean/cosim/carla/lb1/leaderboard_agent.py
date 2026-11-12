@@ -23,9 +23,6 @@ policy_server.py from the inherited environment, see shadow_ego.py):
   COSIM_SERVER_PYTHON          python of the PufferDrive venv that runs policy_server.py
                                (default: <repo>/.venv/bin/python)
   COSIM_DEBUG_CARLA_VIEW=/dir  write a CARLA chase-camera mp4 per route (native tick rate)
-  COSIM_RECORD_INFRACTIONS=/dir  write a short chase-cam clip (last ~5 s) per ego infraction flagged by
-                               the shadow env (pd_*) or by the Leaderboard 1.0 criteria recomputed in
-                               the server (carla_*, lb1/ground_truth.py)
 
 CARLA 0.9.10 differences handled here: no World.cast_ray (the ego's body chord rests on the lane's OpenDRIVE
 height profile, lifted by the road mesh's offset from it as probed by a downward semantic lidar; the egg's
@@ -38,7 +35,6 @@ import os
 import re
 import socket
 import subprocess
-from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -56,8 +52,6 @@ SERVER_ENV_DROPPED = ("LD_LIBRARY_PATH", "PYTHONPATH", "PYTHONHOME")  # the gara
 PROTOCOL_TIMEOUT_S = 600.0  # one reply per tick; the evaluator's own agent watchdog is --timeout (600 s)
 SERVER_EXIT_TIMEOUT_S = 60.0
 
-INFRACTION_CLIP_SECONDS = 5.0
-INFRACTION_MIN_SEPARATION_M = 10.0
 CARLA_VIEW_SENSOR_ID = "puffer_chase_cam"
 CARLA_VIEW_WIDTH, CARLA_VIEW_HEIGHT, CARLA_VIEW_FOV = 960, 540, 90
 CARLA_VIEW_TRANSFORM = dict(x=-2.0, y=0.0, z=2.1, roll=0.0, pitch=-15.0, yaw=0.0)  # within the 3 m sensor radius
@@ -258,7 +252,7 @@ def stop_sign_geometry(world, carla_map):
 
 
 class Mp4Writer:
-    """Streams RGB uint8 frames to an mp4 via OpenCV (carla_cosim.Mp4Writer, importable here)."""
+    """Streams RGB uint8 frames to an mp4 via OpenCV (cosim.mp4.Mp4Writer, importable here)."""
 
     def __init__(self, out_path, fps):
         self.out_path = str(out_path)
@@ -280,13 +274,6 @@ class Mp4Writer:
         if self.writer is not None:
             self.writer.release()
             self.writer = None
-
-
-def write_mp4(out_path, frames, fps):
-    writer = Mp4Writer(out_path, fps)
-    for frame in frames:
-        writer.append_data(frame)
-    writer.close()
 
 
 class RoadProbe:
@@ -385,8 +372,7 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
         route_index = re.sub(r"[^\w.-]", "_", str(route_index)) if route_index else "route"
         self.route_tag = f"{route_index}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
         self.debug_carla_view_dir = os.environ.get("COSIM_DEBUG_CARLA_VIEW", None)
-        self.record_infractions_dir = os.environ.get("COSIM_RECORD_INFRACTIONS", None)
-        self.ground_truth = bool(self.record_infractions_dir or os.environ.get("COSIM_TELEMETRY"))
+        self.ground_truth = bool(os.environ.get("COSIM_TELEMETRY"))
         self.server = PolicyServerLink(str(Path(path_to_conf_file).resolve()), self.route_tag)
         self.partner_slots = int(self.server.config["partner_slots"])
         self.partner_max_abs_dz_m = float(self.server.config["partner_max_abs_dz_m"])
@@ -405,7 +391,7 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
         self._previous_pitch_rad = 0.0
 
     def sensors(self):
-        if not self.debug_carla_view_dir and not self.record_infractions_dir:
+        if not self.debug_carla_view_dir:
             return []
         sensor = {
             "type": "sensor.camera.rgb",
@@ -453,7 +439,6 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
             "ego": {
                 "extent": [body.extent.x, body.extent.y, body.extent.z],
                 "box_z": body.location.z,
-                "wheels": wheels,
                 "blueprint": self.vehicle.type_id,
                 "state": actor_state_row(self.vehicle),
             },
@@ -462,7 +447,6 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
             "driving_waypoints": driving_waypoint_samples(self.cmap),
             "lights": light_geometry(self.lights, self.cmap, self.light_probe_steps_m),
             "stop_signs": stop_sign_geometry(self.world, self.cmap),
-            "infraction_flags": bool(self.record_infractions_dir),
             "ground_truth": self.ground_truth,
         }
         reply = self.server.request({"type": "init", "route": route})
@@ -473,11 +457,6 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
             Path(self.debug_carla_view_dir).mkdir(parents=True, exist_ok=True)
             out = str(Path(self.debug_carla_view_dir) / f"{self.route_tag}.mp4")
             self.carla_view_writer = Mp4Writer(out, fps=round(1.0 / self.tick_dt))
-        if self.record_infractions_dir:
-            Path(self.record_infractions_dir).mkdir(parents=True, exist_ok=True)
-            self.infraction_buffer = deque(maxlen=int(INFRACTION_CLIP_SECONDS / self.tick_dt))
-            self.infraction_counter = 0
-            self.last_infraction_location = self.vehicle.get_location()
         if self.ground_truth:
             blueprint = self.world.get_blueprint_library().find("sensor.other.collision")
             self._collision_sensor = self.world.spawn_actor(blueprint, carla.Transform(), attach_to=self.vehicle)
@@ -593,24 +572,6 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
         if abs(step_m) > MESH_OFFSET_DEADBAND_M:
             self.mesh_offset_m += max(-MESH_OFFSET_MAX_STEP_M, min(MESH_OFFSET_MAX_STEP_M, step_m))
 
-    def _maybe_save_infraction_clip(self, pd_flags, carla_flags):
-        """One mp4 of the rolling chase-cam buffer per flagged ego infraction, at most once per
-        INFRACTION_MIN_SEPARATION_M of ego travel (as ../leaderboard_agent.py)."""
-        fired = [f"pd_{name}" for name, value in (pd_flags or {}).items() if value > 0.0]
-        fired += [f"carla_{name}" for name, value in (carla_flags or {}).items() if value > 0.0]
-        if not fired or not self.infraction_buffer:
-            return
-        location = self.vehicle.get_location()
-        if location.distance(self.last_infraction_location) <= INFRACTION_MIN_SEPARATION_M:
-            return
-        out = str(
-            Path(self.record_infractions_dir) / f"{self.route_tag}_{'_'.join(fired)}_{self.infraction_counter:02d}.mp4"
-        )
-        write_mp4(out, list(self.infraction_buffer), fps=round(1.0 / self.tick_dt))
-        print(f"[puffer_agent_lb1] infraction {fired} -> {out}", flush=True)
-        self.infraction_counter += 1
-        self.last_infraction_location = location
-
     def run_step(self, input_data, timestamp, sensors=None):
         self.step += 1
         if not self.initialized:
@@ -622,8 +583,6 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
             rgb = bgra[:, :, [2, 1, 0]]
             if self.carla_view_writer is not None:
                 self.carla_view_writer.append_data(rgb)
-            if self.record_infractions_dir:
-                self.infraction_buffer.append(rgb.copy())
 
         message = {"type": "tick", "snapshot": self._snapshot(), "ground_truth": None}
         if self.ground_truth:
@@ -631,8 +590,6 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
         reply = self.server.request(message)
         if reply.get("motion") is not None:
             self._teleport_carla_ego(reply["motion"])
-        if self.record_infractions_dir:
-            self._maybe_save_infraction_clip(reply.get("pd_flags"), reply.get("carla_flags"))
         if reply.get("control") is None:
             return carla.VehicleControl()
         steer, throttle, brake, reverse = reply["control"]

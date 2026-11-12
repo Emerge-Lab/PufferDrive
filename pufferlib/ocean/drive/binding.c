@@ -4,35 +4,14 @@
 
 #define Env Drive
 #define MY_SHARED
-#define MY_PUT
 #define MY_GET
 #define MY_RESEED
-
-// Total slot count of g_map_cache (live entries plus NULL holes from freed entries).
-static PyObject *map_cache_size_py(PyObject *self __attribute__((unused)), PyObject *args __attribute__((unused))) {
-    return PyLong_FromLong((long) g_map_cache_count);
-}
-
-// Count of slots currently holding a SharedMapData (non-NULL slots only).
-static PyObject *map_cache_live_count_py(
-    PyObject *self __attribute__((unused)),
-    PyObject *args __attribute__((unused))) {
-    long live = 0;
-    for (int i = 0; i < g_map_cache_count; i++) {
-        if (g_map_cache[i] != NULL) {
-            live++;
-        }
-    }
-    return PyLong_FromLong(live);
-}
 
 static PyObject *map_cache_preload_py(PyObject *self __attribute__((unused)), PyObject *args, PyObject *kwargs);
 static PyObject *map_cache_release_py(PyObject *self __attribute__((unused)), PyObject *args, PyObject *kwargs);
 
 // clang-format off
 #define MY_METHODS \
-    {"map_cache_size", map_cache_size_py, METH_NOARGS, "Map cache slot count."}, \
-    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}, \
     {"map_cache_preload", (PyCFunction) map_cache_preload_py, METH_VARARGS | METH_KEYWORDS, \
      "Build and retain configured map geometry for forked workers."}, \
     {"map_cache_release", (PyCFunction) map_cache_release_py, METH_VARARGS | METH_KEYWORDS, \
@@ -67,69 +46,6 @@ static void my_reseed(Env *env, uint64_t seed) {
     rng_seed(&env->seed_stream_rng, seed);
     // Defeat c_reset's timestep==0 fast path so the new stream regenerates the episode
     env->timestep = -1;
-}
-
-static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
-    PyObject *obs = PyDict_GetItemString(kwargs, "observations");
-    if (!PyObject_TypeCheck(obs, &PyArray_Type)) {
-        PyErr_SetString(PyExc_TypeError, "Observations must be a NumPy array");
-        return 1;
-    }
-    PyArrayObject *observations = (PyArrayObject *) obs;
-    if (!PyArray_ISCONTIGUOUS(observations)) {
-        PyErr_SetString(PyExc_ValueError, "Observations must be contiguous");
-        return 1;
-    }
-    env->observations = PyArray_DATA(observations);
-
-    PyObject *act = PyDict_GetItemString(kwargs, "actions");
-    if (!PyObject_TypeCheck(act, &PyArray_Type)) {
-        PyErr_SetString(PyExc_TypeError, "Actions must be a NumPy array");
-        return 1;
-    }
-    PyArrayObject *actions = (PyArrayObject *) act;
-    if (!PyArray_ISCONTIGUOUS(actions)) {
-        PyErr_SetString(PyExc_ValueError, "Actions must be contiguous");
-        return 1;
-    }
-    env->actions = PyArray_DATA(actions);
-    if (PyArray_ITEMSIZE(actions) == sizeof(double)) {
-        PyErr_SetString(PyExc_ValueError, "Action tensor passed as float64 (pass np.float32 buffer)");
-        return 1;
-    }
-
-    PyObject *rew = PyDict_GetItemString(kwargs, "rewards");
-    if (!PyObject_TypeCheck(rew, &PyArray_Type)) {
-        PyErr_SetString(PyExc_TypeError, "Rewards must be a NumPy array");
-        return 1;
-    }
-    PyArrayObject *rewards = (PyArrayObject *) rew;
-    if (!PyArray_ISCONTIGUOUS(rewards)) {
-        PyErr_SetString(PyExc_ValueError, "Rewards must be contiguous");
-        return 1;
-    }
-    if (PyArray_NDIM(rewards) != 1) {
-        PyErr_SetString(PyExc_ValueError, "Rewards must be 1D");
-        return 1;
-    }
-    env->rewards = PyArray_DATA(rewards);
-
-    PyObject *term = PyDict_GetItemString(kwargs, "terminals");
-    if (!PyObject_TypeCheck(term, &PyArray_Type)) {
-        PyErr_SetString(PyExc_TypeError, "Terminals must be a NumPy array");
-        return 1;
-    }
-    PyArrayObject *terminals = (PyArrayObject *) term;
-    if (!PyArray_ISCONTIGUOUS(terminals)) {
-        PyErr_SetString(PyExc_ValueError, "Terminals must be contiguous");
-        return 1;
-    }
-    if (PyArray_NDIM(terminals) != 1) {
-        PyErr_SetString(PyExc_ValueError, "Terminals must be 1D");
-        return 1;
-    }
-    env->terminals = PyArray_DATA(terminals);
-    return 0;
 }
 
 static PyObject *my_get(PyObject *dict, Env *env) {
@@ -248,16 +164,6 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         return NULL;
     }
     if (PyDict_SetItemString(dict, "length", v) < 0) {
-        Py_DECREF(v);
-        return NULL;
-    }
-    Py_DECREF(v);
-
-    v = PyLong_FromLong(env->dynamics_model);
-    if (!v) {
-        return NULL;
-    }
-    if (PyDict_SetItemString(dict, "dynamics_model", v) < 0) {
         Py_DECREF(v);
         return NULL;
     }
@@ -1999,9 +1905,6 @@ static PyObject *map_cache_release_py(
 }
 
 static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
-    env->action_type = (int) unpack(kwargs, "action_type");
-    env->dynamics_model = (int) unpack(kwargs, "dynamics_model");
-    env->reset_accel_on_stop = (bool) unpack(kwargs, "reset_accel_on_stop");
     env->reward_goal = (float) unpack(kwargs, "reward_goal");
     env->reward_collision = (float) unpack(kwargs, "reward_collision");
     env->reward_offroad = (float) unpack(kwargs, "reward_offroad");
@@ -2015,12 +1918,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_stop_line = (float) unpack(kwargs, "reward_stop_line");
     env->reward_timestep = (float) unpack(kwargs, "reward_timestep");
     env->reward_overspeed = (float) unpack(kwargs, "reward_overspeed");
-    env->overspeed_tolerance_mps = (float) unpack(kwargs, "overspeed_tolerance_mps");
-    if (!(env->overspeed_tolerance_mps >= 0.0f) || !isfinite(env->overspeed_tolerance_mps)) {
-        PyErr_SetString(PyExc_ValueError, "overspeed_tolerance_mps must be finite and >= 0");
-        return -1;
-    }
-    env->reward_ade = (float) unpack(kwargs, "reward_ade");
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->disable_red_light_infractions = (int) unpack(kwargs, "disable_red_light_infractions");
@@ -2067,18 +1964,13 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     }
     env->goal_regen_mode = (int) unpack(kwargs, "goal_regen_mode");
     env->goal_source = (int) unpack(kwargs, "goal_source");
-    env->obs_goal_lane_distance = (int) unpack(kwargs, "obs_goal_lane_distance");
     env->obs_slots_boundary_n = (int) unpack(kwargs, "obs_slots_boundary_n");
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
-    env->obs_partner_relative_velocity = (int) unpack(kwargs, "obs_partner_relative_velocity");
-    env->obs_lane_heading_signed = (int) unpack(kwargs, "obs_lane_heading_signed");
-    env->obs_lane_speed_limit = (int) unpack(kwargs, "obs_lane_speed_limit");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
     env->obs_traffic_light_yellow_remaining = (int) unpack(kwargs, "obs_traffic_light_yellow_remaining");
     env->traffic_lights_enabled = (bool) unpack(kwargs, "traffic_lights_enabled");
     env->stop_signs_enabled = (bool) unpack(kwargs, "stop_signs_enabled");
-    env->yield_signs_enabled = (bool) unpack(kwargs, "yield_signs_enabled");
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
     env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
     env->obs_stride_merge_segments = (int) unpack(kwargs, "obs_stride_merge_segments");
@@ -2089,7 +1981,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "max_speed_mps must be a positive finite float");
         return -1;
     }
-    env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
     env->spawn_lateral_offset_max_frac = (float) unpack(kwargs, "spawn_lateral_offset_max_frac");
     env->spawn_heading_max_deg = (float) unpack(kwargs, "spawn_heading_max_deg");
     env->pose_noise_xy_m = (float) unpack(kwargs, "pose_noise_xy_m");
@@ -2112,7 +2003,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         return -1;
     }
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
-    env->goal_speed_randomization = (int) unpack(kwargs, "goal_speed_randomization");
     env->conditioning_accel_scale = (float) unpack(kwargs, "conditioning_accel_scale");
     env->conditioning_speed_scale = (float) unpack(kwargs, "conditioning_speed_scale");
     if (!(env->conditioning_speed_scale >= 1.0f) || !isfinite(env->conditioning_speed_scale)) {
@@ -2123,7 +2013,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->scenario_length = (int) unpack(kwargs, "scenario_length");
     env->termination_mode = (int) unpack(kwargs, "termination_mode");
     env->inactive_agent_threshold = (float) unpack(kwargs, "inactive_agent_threshold");
-    env->terminate_on_goal = (int) unpack(kwargs, "terminate_on_goal");
     char *map_file = unpack_str(kwargs, "map_file");
     env->map_name = map_file;
     env->num_controllable_agents = (int) unpack(kwargs, "max_agents");
@@ -2163,7 +2052,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     }
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
-    env->reward_log_sampling = (bool) unpack(kwargs, "reward_log_sampling");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->obs_norm_speed_mps = (float) unpack(kwargs, "obs_norm_speed_mps");
@@ -2179,11 +2067,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->red_light_train_front_margin_m = (float) unpack(kwargs, "red_light_train_front_margin_m");
     if (!(env->red_light_train_front_margin_m >= 0.0f) || !isfinite(env->red_light_train_front_margin_m)) {
         PyErr_SetString(PyExc_ValueError, "red_light_train_front_margin_m must be finite and >= 0");
-        return -1;
-    }
-    env->red_light_train_rear_margin_m = (float) unpack(kwargs, "red_light_train_rear_margin_m");
-    if (!(env->red_light_train_rear_margin_m >= 0.0f) || !isfinite(env->red_light_train_rear_margin_m)) {
-        PyErr_SetString(PyExc_ValueError, "red_light_train_rear_margin_m must be finite and >= 0");
         return -1;
     }
     env->obs_partner_split_length_m = (float) unpack(kwargs, "obs_partner_split_length_m");
@@ -2216,16 +2099,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->partner_blindness_trigger_prob = (float) unpack(kwargs, "partner_blindness_trigger_prob");
     env->partner_blindness_duration
         = (int) ceilf((float) unpack(kwargs, "partner_blindness_duration_seconds") / env->dt);
-    env->partner_blindness_corridor = (int) unpack(kwargs, "partner_blindness_corridor");
-    env->partner_blindness_time_fraction_max = (float) unpack(kwargs, "partner_blindness_time_fraction_max");
-    if (!(env->partner_blindness_time_fraction_max >= 0.0f && env->partner_blindness_time_fraction_max <= 1.0f)) {
-        PyErr_SetString(PyExc_ValueError, "partner_blindness_time_fraction_max must be within [0, 1]");
-        return -1;
-    }
     env->phantom_braking_prob = (float) unpack(kwargs, "phantom_braking_prob");
     env->phantom_braking_trigger_prob = (float) unpack(kwargs, "phantom_braking_trigger_prob");
     env->phantom_braking_duration = (int) ceilf((float) unpack(kwargs, "phantom_braking_duration_seconds") / env->dt);
-    env->phantom_braking_freeze_steering = (int) unpack(kwargs, "phantom_braking_freeze_steering");
 
     if (init(env) != 0) {
         PyErr_Format(PyExc_RuntimeError, "Failed to initialise the env for map %s (reason on stderr)", env->map_name);
@@ -2334,7 +2210,6 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/timestep", log->reward_timestep);
     assign_to_dict(dict, "reward_components/reverse", log->reward_reverse);
     assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
-    assign_to_dict(dict, "reward_components/ade", log->reward_ade);
 
     if (env->compute_eval_metrics) {
         // Puffer score components

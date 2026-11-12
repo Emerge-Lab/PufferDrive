@@ -77,14 +77,11 @@
 
 // Which agents get initialized at reset
 #define INIT_MODE_CREATE_ALL_VALID 0
-#define INIT_MODE_CREATE_ONLY_CONTROLLED 1
-#define INIT_MODE_CREATE_CONTROLLABLE_TYPES 2
+#define INIT_MODE_CREATE_CONTROLLABLE_TYPES 1
 
 // Which initialized agents the policy controls
 #define CONTROL_MODE_VEHICLES 0
-#define CONTROL_MODE_AGENTS 1
-#define CONTROL_MODE_WOSAC 2
-#define CONTROL_MODE_SDC_ONLY 3
+#define CONTROL_MODE_SDC_ONLY 1
 
 // Per-agent controller
 #define CONTROLLER_STATIC 0
@@ -99,7 +96,6 @@
 // What happens to an agent on collision/infraction
 #define INFRACTION_BEHAVIOR_IGNORE 0
 #define INFRACTION_BEHAVIOR_STOP 1
-#define INFRACTION_BEHAVIOR_REMOVE 2
 
 // Goal set refresh policy
 #define GOAL_REGEN_FINITE 0  // regenerate the full goal set once all are reached
@@ -112,21 +108,12 @@
 #define GOAL_SOURCE_EXTERNAL 3 // co-sim: goal windows pushed by the external sim (c_set_agent_goals)
 #define GOAL_SOURCE_GT_MAP 4   // logged-trajectory goals projected onto the nearest co-directional lane center
 
-// Dynamics model
-#define DYNAMICS_MODEL_CLASSIC 0
-#define DYNAMICS_MODEL_JERK 1
-
-// Action representation
-#define ACTION_TYPE_DISCRETE 0
-#define ACTION_TYPE_CONTINUOUS 1
-
 // =====================================================================================
 // 3. DYNAMICS
 // =====================================================================================
 
 #define MAX_BACKWARD_SPEED -2.0f
 #define STEERING_LIMIT 0.667f
-static const float REAR_AXLE_RATIO = 0.5f;
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
 static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 
@@ -135,11 +122,8 @@ static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 static const float JERK_LONG[NUM_JERK_LONG_ACTIONS] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[NUM_JERK_LAT_ACTIONS] = {-4.0f, 0.0f, 4.0f};
 
-// Discrete action space, DYNAMICS_MODEL_CLASSIC
-#define NUM_ACCELERATION_ACTIONS 7
+// exported for alpasim-training, which reads the steering obs normalizer as STEERING_VALUES[-1]
 #define NUM_STEERING_ACTIONS 9
-static const float ACCELERATION_VALUES[NUM_ACCELERATION_ACTIONS]
-    = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
 static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
     = {-0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f};
 
@@ -329,18 +313,18 @@ static const int ROAD_OFFSETS[25][2]
 
 #define EGO_FEATURES 11
 #define LANE_FEATURES 9
-#define LANE_SPEED_LIMIT_FEATURES 1 // appended per lane row when obs_lane_speed_limit is set
+#define LANE_SPEED_LIMIT_FEATURES 1 // the lane's speed limit, after the LANE_FEATURES columns
+#define LANE_ROW_FEATURES (LANE_FEATURES + LANE_SPEED_LIMIT_FEATURES)
 #define BOUNDARY_FEATURES 6
 #define PARTNER_FEATURES 9
-#define PARTNER_RELATIVE_VELOCITY_FEATURES 2 // appended per partner row when obs_partner_relative_velocity is set
+#define PARTNER_RELATIVE_VELOCITY_FEATURES 2 // velocity relative to ego, after the PARTNER_FEATURES columns
+#define PARTNER_ROW_FEATURES (PARTNER_FEATURES + PARTNER_RELATIVE_VELOCITY_FEATURES)
 #define TRAFFIC_CONTROL_FEATURES 7
 #define TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES 1 // before type/state when obs_traffic_light_yellow_remaining is set
 #define GOAL_FEATURES 3
 #define OBS_VALID_COUNT_FEATURES 4
 // Heading deviation since last kept point that forces a keep when obs stride > 1 (~15 degrees).
 #define OBS_STRIDE_HEADING_THRESHOLD 0.2618f
-// Lateral slack beyond the ego's half width on each side of a blind partner's forward corridor
-#define PARTNER_BLINDNESS_CORRIDOR_MARGIN_M 1.0f
 
 // =====================================================================================
 // 9. REWARDS
@@ -443,7 +427,6 @@ static const int ROAD_OFFSETS[25][2]
 #define REWARD_F32_TIMESTEP_IDX 10
 #define REWARD_F32_REVERSE_IDX 11
 #define REWARD_F32_OVERSPEED_IDX 12
-#define REWARD_F32_ADE_IDX 13
-#define REWARD_F32_FIELDS 14
+#define REWARD_F32_FIELDS 13
 
 #endif

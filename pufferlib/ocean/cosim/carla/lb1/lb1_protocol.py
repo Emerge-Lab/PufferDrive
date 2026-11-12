@@ -4,12 +4,11 @@ sibling module (the leaderboard puts the agent's directory on sys.path), the ser
 
 Handshake, then one request/reply pair per CARLA tick:
   server -> client  {"type": "config", "partner_slots", "partner_max_abs_dz_m", "light_probe_steps_m",
-                     "dynamics_source", "infraction_flags"}
+                     "dynamics_source"}
   client -> server  {"type": "init", "route": shadow_ego.init_route dict}        -> {"type": "ready"}
   client -> server  {"type": "tick", "snapshot": shadow_ego.step dict,
                      "ground_truth": lb1/ground_truth.py observation or null}     -> {"type": "control",
-                     "motion": [...] | null, "control": [steer, throttle, brake, reverse] | null,
-                     "pd_flags": {...} | null, "carla_flags": {...} | null}
+                     "motion": [...] | null, "control": [steer, throttle, brake, reverse] | null}
   client -> server  {"type": "finish"}                                            -> {"type": "done"}
 """
 

@@ -372,7 +372,6 @@ static int test_step_observations_follow_goal_updates(void) {
         Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
         env.goal_source = goal_sources[case_idx];
         env.goal_regen_mode = regen_modes[case_idx];
-        env.obs_goal_lane_distance = 1;
         env.goal_reach_requires_speed = 1;
         allocate(&env);
         c_reset(&env);

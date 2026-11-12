@@ -34,6 +34,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pufferlib
+from pufferlib.ocean.drive import binding
 from pufferlib.pufferl import load_config, load_env
 
 SEED = 42
@@ -74,7 +75,6 @@ def _build_config():
             "num_agents": 16,  # per-env -> 8 envs * 16 = 128 total agents
             "min_agents_per_env": 16,
             "max_agents_per_env": 16,
-            "action_type": "discrete",
             "num_maps": 2,
             "use_map_cache": True,
             "map_dir": "pufferlib/resources/drive/binaries/carla",
@@ -92,16 +92,27 @@ def _is_number(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool)
 
 
-def _random_actions(vecenv, rng):
-    return rng.integers(0, vecenv.single_action_space.n, size=vecenv.num_agents).astype(np.int32)
+def _jerk_action_table():
+    """Continuous action of every class of the policy's jerk grid, class = long_idx * num_lat + lat_idx."""
+    jerk_long = np.asarray(binding.JERK_LONG, dtype=np.float32)
+    jerk_lat = np.asarray(binding.JERK_LAT, dtype=np.float32)
+    long_norm = np.where(jerk_long < 0.0, jerk_long / -jerk_long[0], jerk_long / jerk_long[-1])
+    lat_norm = jerk_lat / jerk_lat[-1]
+    class_idx = np.arange(len(jerk_long) * len(jerk_lat))
+    return np.stack([long_norm[class_idx // len(jerk_lat)], lat_norm[class_idx % len(jerk_lat)]], axis=-1)
+
+
+def _random_actions(vecenv, rng, action_table):
+    return action_table[rng.integers(0, len(action_table), size=vecenv.num_agents)]
 
 
 def _capture_env_means(vecenv, rng):
     env_acc = defaultdict(list)
+    action_table = _jerk_action_table()
     vecenv.reset(seed=SEED)
     for _ in range(EPOCHS):
         for _ in range(BPTT_HORIZON):
-            _, _, _, _, infos = vecenv.step(_random_actions(vecenv, rng))
+            _, _, _, _, infos = vecenv.step(_random_actions(vecenv, rng, action_table))
             for info in infos:
                 for k, v in pufferlib.unroll_nested_dict(info):
                     if isinstance(v, np.ndarray):

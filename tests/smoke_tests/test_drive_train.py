@@ -139,7 +139,6 @@ def _build_config():
             "num_agents": 16,  # per-env active count
             "min_agents_per_env": 16,  # fixed active count -> deterministic, packed
             "max_agents_per_env": 16,
-            "action_type": "discrete",
             "num_maps": 2,  # few maps -> fast load
             "use_map_cache": True,  # share map geometry across envs in a worker
             "map_dir": "pufferlib/resources/drive/binaries/carla",

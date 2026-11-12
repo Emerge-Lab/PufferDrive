@@ -55,7 +55,6 @@ def _lane_width_obs(map_dir, **clip_kwargs):
         scenario_length=400,
         resample_frequency=1_000_000,
         termination_mode=False,
-        terminate_on_goal=False,
         obs_dropout_lane=0.0,
         obs_dropout_boundary=0.0,
         obs_norm_road_seg_width_m=ROAD_SEG_WIDTH_NORM_M,

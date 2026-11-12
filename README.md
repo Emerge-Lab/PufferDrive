@@ -16,16 +16,14 @@ python setup.py build_ext --inplace --force
 ## Tests
 
 ```bash
-# Run the local suites: Python unit tests, C sim tests, replay-HTML smoke
-# test, notebook executions. Rebuilds the C extension automatically when a
-# .c/.h file changed, and installs missing test deps.
+# Run the local suites: Python unit tests, eval integration tests, C sim tests.
+# Rebuilds the C extension automatically when a .c/.h file changed.
 make test
 
 # Individual suites
 make test-unit       # tests/unit_tests
 make test-c          # tests/drive (dynamics, geometry, IDM, collisions, ...)
 make test-smoke      # replay-HTML smoke test
-make test-notebooks  # execute every checked-in notebook end-to-end
 
 # Force-rebuild the C extension regardless of timestamps
 make rebuild
@@ -103,14 +101,6 @@ python scripts/submit_cluster.py \
 ## Data
 
 Place binaries under `pufferlib/resources/drive/binaries/`.
-
-- **Shared datasets (S3):** `python data_utils/fetch_data.py` downloads the
-  default ~10 GB nuPlan mini sets; `--list` shows everything fetchable by
-  name — see [`docs/data_storage.md`](docs/data_storage.md). Lab IAM
-  credentials are needed only for private datasets — public ones (and
-  install, build, and training on the bundled maps) need no AWS account.
-- **nuPlan (replay training/eval):** fetched by the default above, or convert
-  yourself — see [`docs/nuplan_data.md`](docs/nuplan_data.md).
 
 ## Train
 
@@ -221,17 +211,14 @@ To add a metric to the report: add its key to `TREND_METRICS` /
 | `simulation_mode` | `"gigaflow"` | `"gigaflow"` (procedural) or `"replay"` (Data-driven) |
 | `num_agents` | `1024` | Total agents across all workers |
 | `min/max_agents_per_env` | `1 / 80` | Per-env agent count range |
-| `action_type` | `"discrete"` | `"discrete"`, `"continuous"`, `"trajectory"`, `"trajectory_frenet"`, `"trajectory_jerk"` |
-| `dynamics_model` | `"jerk"` | `"classic"` or `"jerk"` |
 | `scenario_length` | `1280` | Steps per episode |
-| `collision_behavior` | `1` | `0` ignore, `1` stop, `2` remove |
+| `collision_behavior` | `1` | `0` ignore, `1` stop |
 | `offroad_behavior` | `1` | Same options |
 | `traffic_light_behavior` | `1` | Same options |
 | `stop_sign_behavior` | `1` | Same options |
 | `traffic_lights_enabled` | `True` | Observe and enforce traffic lights |
 | `stop_signs_enabled` | `False` | Observe and enforce stop signs (CaRL RunStopSign2 semantics, penalised with `reward_stop_line`) |
-| `yield_signs_enabled` | `False` | Observe yield signs |
-| `control_mode` | `"control_vehicles"` | `"control_vehicles"`, `"control_agents"`, `"control_sdc_only"` |
+| `control_mode` | `"control_vehicles"` | `"control_vehicles"`, `"control_sdc_only"` |
 | `reward_conditioning` | `False` | Condition policy on reward weights |
 | `reward_randomization` | `False` | Randomize reward weights each episode |
 
@@ -269,20 +256,6 @@ To add a metric to the report: add its key to `TREND_METRICS` /
 | `encoder_activation` / `backbone_activation` | `"relu"` / `"gelu"` | Options: `relu`, `tanh`, `gelu` |
 | `actor_hidden_size` / `critic_hidden_size` | `512` | Head widths (`*_num_layers = 0` → linear heads) |
 
-## Notebooks
-
-Stored as jupytext `.py` files in `notebooks/`; open them directly in Jupyter (jupytext pairs them) or convert with `jupytext --to ipynb notebooks/01_observations.py`.
-
-| Notebook | Purpose |
-|----------|---------|
-| `01_observations.py` | Verify obs vector packing, normalization, interpretability |
-| `02_rewards.py` | Reward magnitudes, component breakdown, correlation with behavior |
-| `03_metrics.py` | Episode metrics, `vec_log` aggregation, episode boundary handling |
-| `04_training.py` | End-to-end data flow: env → policy → loss; encoding, sampling, advantages, gradients |
-| `05_inference.py` | Config loading, policy forward pass, rollouts (det. vs stochastic), value accuracy |
-| `06_architecture.py` | Model summary, per-encoder breakdown, forward pass shape tracing, weight distributions |
-
-
 ## Debug
 
 **C build issues**
@@ -290,8 +263,7 @@ Stored as jupytext `.py` files in `notebooks/`; open them directly in Jupyter (j
 # Verbose build with AddressSanitizer
 DEBUG=1 python setup.py build_ext --inplace --force
 
-# Skip unrelated extensions
-NO_OCEAN=1 python setup.py build_ext --inplace --force
+# Skip the training-only CUDA extension
 NO_TRAIN=1 python setup.py build_ext --inplace --force
 
 # Debug train

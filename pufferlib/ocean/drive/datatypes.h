@@ -30,10 +30,6 @@ static inline int is_road_grid_candidate(int type) {
     return is_road_lane(type) || is_road_edge(type);
 }
 
-static inline int is_controllable_agent(int type) {
-    return (type == VEHICLE || type == PEDESTRIAN || type == CYCLIST);
-}
-
 struct Agent {
     int id;
     int type;
@@ -110,7 +106,6 @@ struct Agent {
     float current_goal_z;          // alias = list_goal_z[current_goal_idx]
     int current_goal_idx;          // index of next goal to reach (0..N-1)
     int goal_count;                // number of active goals (<= num_goals)
-    float lane_goal_spacing_m;     // co-sim forecast agent: goals follow the lane ahead at this spacing; 0 = off
     float gt_goal_x;               // Last valid ground-truth goal position x
     float gt_goal_y;               // Last valid ground-truth goal position y
     float gt_goal_z;               // Last valid ground-truth goal position z
@@ -135,11 +130,10 @@ struct Agent {
     // Reward conditioning coefficients (per-agent, randomized at spawn)
     float reward_coefs[NUM_REWARD_COEFS];
 
-    int phantom_braking_counter;          // >0 means currently phantom braking
-    int partner_blindness_counter;        // steps left in the current blind interval, 0 = sees partners normally
-    float partner_blindness_trigger_prob; // per-step chance of starting a blind interval while not blind
-    unsigned char is_blind_partner;       // episode-level flag: agent may restrict partner visibility
-    unsigned char is_phantom_braker;      // episode-level flag: agent may phantom-brake
+    int phantom_braking_counter;     // >0 means currently phantom braking
+    int partner_blindness_counter;   // steps left in the current blind interval, 0 = sees partners normally
+    unsigned char is_blind_partner;  // episode-level flag: agent may restrict partner visibility
+    unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
 };
 
 struct ScriptedPedestrian {

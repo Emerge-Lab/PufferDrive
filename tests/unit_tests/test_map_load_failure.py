@@ -17,8 +17,6 @@ def _kwargs(map_dir, simulation_mode):
         "allow_map_subset": True,
         "map_dir": str(map_dir),
         "simulation_mode": simulation_mode,
-        "action_type": "continuous",
-        "dynamics_model": "jerk",
         "scenario_length": 50,
         "resample_frequency": 0,
         "termination_mode": 0,

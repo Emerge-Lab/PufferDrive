@@ -9,10 +9,10 @@ Evaluate a PufferDrive-trained policy with **CaRL's unmodified `original_leaderb
 Zero changes to CaRL. The leaderboard imports any agent file via `--agent`, so the whole integration is this package:
 
 - `shadow_ego.py` — `ShadowEgo`, the carla-free core shared with the Leaderboard 1.0 integration (`lb1/`).
-  Loads a PufferDrive checkpoint, builds the shadow `Drive` env from the checkpoint's config, calibrates the bin frame, maps lights/stop signs and route goals, and every CARLA tick (the shadow env runs at the 0.05 s tick, no action repeat): overwrites ALL shadow agents (ego included) from the CARLA-frame snapshot (ego pose/velocity, nearest vehicles+walkers with true bounding boxes, traffic-light states, route goals from the leaderboard's target points), recomputes observations, runs the policy and integrates one dt into the ego's next pose (or a target (speed, yaw) for the controller). All per-route logs (telemetry, world log, obs replay, obs dump) are written here.
+  Loads a PufferDrive checkpoint, builds the shadow `Drive` env from the checkpoint's config, calibrates the bin frame, maps lights/stop signs and route goals, and every CARLA tick (the shadow env runs at the 0.05 s tick, no action repeat): overwrites ALL shadow agents (ego included) from the CARLA-frame snapshot (ego pose/velocity, nearest vehicles+walkers with true bounding boxes, traffic-light states, route goals from the leaderboard's target points), recomputes observations, runs the policy and integrates one dt into the ego's next pose (or into pedals and steer for CARLA's own physics). All per-route logs (telemetry, world log, obs replay) are written here.
 - `leaderboard_agent.py` — `AutonomousAgent` subclass (entry point `PufferAgent`), the CARLA side: reads the ground truth into the snapshot, teleports the ego to the returned pose (resting it on the road mesh), runs CaRL's criteria for the `carla_*` telemetry columns, and returns a `carla.VehicleControl` every tick. Get `sensor.camera.rgb` chase cam via `sensors()` — the leaderboard's own standard sensor mechanism, so this doesn't touch the read-only-w.r.t.-CARLA contract; frames stream straight to an mp4 writer. `COSIM_OBS_HTML` records the interactive observation replay (exact policy input/outputs).
-- `controller.py` — `TrackingController`:
-  convert that shadow-env kinematic target into actual throttle/brake/steer at CARLA's native tick rate
+- `controller.py` — `PedalMap`:
+  turns the jerk integrator's acceleration and steering into throttle/brake/steer for CARLA's own vehicle physics (`COSIM_DYNAMICS_SOURCE=carla_pedals`)
 - `lb1/` — the same policy under carla_garage's Leaderboard 1.0 (CARLA 0.9.10.1, longest6 v1): a Python 3.7 client agent plus `policy_server.py` running `ShadowEgo` in the PufferDrive venv; see `lb1/README.md`.
 
 All shadow-env assumptions about the model (observation layout, dynamics model, dt, goal
@@ -32,7 +32,7 @@ without it; `leaderboard_agent.py` refuses to start when it is unset):
 
 ```bash
 JOBID=14401249
-export CKPT=/scratch/yw4142/PufferDrive_nightly/weights/mimolette/models/model_puffer_drive_003815.pt
+export CKPT=/scratch/yw4142/PufferDrive_nightly/experiments/<run>/final_model.pt
 export SCENARIO_RUNNER_ROOT=/scratch/yw4142/CaRL/CARLA/original_leaderboard/scenario_runner
 
 srun --jobid=$JOBID --overlap \
@@ -47,23 +47,12 @@ and walkers untouched; ablation for the parked-car / red-light-queue avoidance),
 (added to the length and width of every walker and two-wheeler box in the policy's obs; the
 longest6 scripts set 0.8 m), `COSIM_OBS_SLOTS_PARTNERS_N` (partner slots in the policy's obs;
 default = the checkpoint's training value, the slots are max-pooled so any count transfers; the
-longest6 v1 script sets 40, GIGAFLOW's eval value), `COSIM_WALKER_SPEED_FLOOR_MPS` (diagnostic,
-default 0: for 1.5 s after a walker first appears the policy reads it as moving at least this fast
-along its facing direction, so CARLA's standing-then-ramping Scenario3 walker looks like a training
-walker; world logs and collision checks stay raw), `COSIM_OBS_HTML`,
-`COSIM_DEBUG_CARLA_VIEW`, `COSIM_RECORD_INFRACTIONS`.
+longest6 v1 script sets 40, GIGAFLOW's eval value), `COSIM_OBS_HTML`,
+`COSIM_DEBUG_CARLA_VIEW`.
 
 ### Ego dynamics source
 
-`COSIM_DYNAMICS_SOURCE=carla` (default) converts the shadow env's target
-(speed, yaw) into `carla.VehicleControl` via `controller.py`'s
-`TrackingController`, and CARLA's own vehicle physics moves the ego — subject
-to real tracking lag against a jerk-model target the policy never trained
-against (measured: `yaw_err_max` up to 90° on a real route, and even a
-zero-CARLA-physics bicycle+PI proxy of the same controller shows a real
-lane_dist/lane_angle drift within ~1s of a sustained turn).
-
-`COSIM_DYNAMICS_SOURCE=pufferdrive` skips the controller entirely: PufferDrive's
+`COSIM_DYNAMICS_SOURCE=pufferdrive` (default): PufferDrive's
 own dynamics (the ones the policy was trained on) move the ego, and the CARLA
 actor is teleported to the post-step pose every tick, where the next tick's
 observation reads it. The teleport keeps the body flat on CARLA's road plane
@@ -73,21 +62,18 @@ grades of 5-15 deg buried the wheels in the mesh and logged 20-30
 `static.road` collisions per route. Physics is left ON — disabling
 it on this already-active, leaderboard-managed hero actor segfaults the UE4
 engine (tried at several points in the agent's init sequence, same crash every
-time) — but `set_transform()` overrides it every step regardless, so the net
-effect matches the standalone `carla_cosim.py` loop's design (which disables
-physics, but only because it spawns its own ego before any tick happens).
+time) — but `set_transform()` overrides it every step regardless.
 Target linear/angular velocity is also pushed each step so CARLA's own
 `get_velocity()` (read by CaRL's own criteria, e.g. `MinSpeedTest`) reflects
-the actual motion. This removes the dynamics-mismatch tracking lag at the cost
-of the ego no longer being a physically-simulated CARLA vehicle; the
-leaderboard's route/collision/infraction criteria still see it correctly since
-they only read its pose.
+the actual motion. The ego is then no longer a physically-simulated CARLA
+vehicle; the leaderboard's route/collision/infraction criteria still see it
+correctly since they only read its pose.
 
 `COSIM_DYNAMICS_SOURCE=carla_pedals` drives the CARLA vehicle the way the leaderboard
 prescribes: the agent only returns a `carla.VehicleControl` (steer, throttle, brake, reverse) from
 `run_step`, nothing else touches the ego, and the gearbox stays automatic: the leaderboard resets
-`manual_gear_shift` on every control, so the agent cannot select gears. Like nuPlan's
-`ego_dynamics=nuplan_bicycle`, CARLA is the plant: pose, speed, yaw rate and the current gear are
+`manual_gear_shift` on every control, so the agent cannot select gears. Like the nuPlan planner's
+bicycle model, CARLA is the plant: pose, speed, yaw rate and the current gear are
 re-read every tick, while acceleration and steering angle stay the jerk integrator's own state. The
 jerk model moves the box centre along its heading, whereas the CARLA car turns about its rear axle,
 so its centre travels up to 13 degrees inside its heading in a tight turn. The policy is therefore
@@ -137,15 +123,6 @@ per-route diagnosis (standstills with the ego's own light state, infractions loc
 six-frame top-down strips over the bin map, speed plots and the chase-cam / top-down videos.
 `<run_dir>` is the directory holding `result.json`, `world_log/`, `telemetry/` and `carla_view/`.
 
-### Infraction clips
-
-`COSIM_RECORD_INFRACTIONS=/dir` keeps a rolling ~5 s chase-cam buffer and dumps
-one short mp4 whenever the shadow env's own detectors flag an ego
-collision/offroad/red-light (at most one clip per 10 m of ego travel) — the
-co-sim analog of CaRL `eval_agent.py`'s `RECORD=1` infraction videos. The
-trigger is the shadow env's proxy detection, not the leaderboard's official
-infraction ledger; use it for debugging, not scoring.
-
 ### Route goals and the GPS lane-distance feature
 
 Goals are the leaderboard's own target points (`set_global_plan`'s sparse
@@ -158,7 +135,7 @@ route's first point sits under the ego and is skipped. Each goal's direction
 is the dense plan's local direction there; on the C side `set_agent_goals`
 snaps each goal to its nearest direction-matched drivable lane
 (`find_goal_lane` in drive.h), so the GPS lane-distance observation columns
-(`obs_goal_lane_distance`) are live, matching how `goal_source=map` training
+are live, matching how `goal_source=map` training
 goals always carry a lane. Requires the town bin to carry a lane graph (all
 `carla/opendrive__Town*.bin` do).
 
@@ -170,7 +147,7 @@ CARLA server, runs the evaluator, and writes `result.json` + videos under
 
 ```bash
 PD=/scratch/yw4142/PufferDrive_cosim
-CKPT=$PD/weights/mimolette/models/model_puffer_drive_003815.pt
+CKPT=$PD/experiments/<run>/final_model.pt
 RUNDIR=/scratch/yw4142/runs/cosim_lb_$(date +%Y%m%d_%H%M%S)
 mkdir -p "$RUNDIR"
 sbatch -A torch_pr_355_tandon_advanced -p l40s_public --gres=gpu:1 -c 8 --mem=64G -t 02:00:00 \
@@ -187,7 +164,7 @@ against two jobs landing on the same node:
 
 ```bash
 PD=/scratch/yw4142/PufferDrive_cosim
-CKPT=$PD/weights/mimolette/models/model_puffer_drive_003815.pt
+CKPT=$PD/experiments/<run>/final_model.pt
 SPLIT=/scratch/yw4142/CaRL/CARLA/custom_leaderboard/leaderboard/data/longest6_split
 BASE=/scratch/yw4142/runs/cosim_lb_parallel_$(date +%Y%m%d_%H%M%S)
 for i in $(seq -w 0 35); do

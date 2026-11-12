@@ -21,7 +21,7 @@ class DriveBackbone(nn.Module):
     """
     Neural network backbone
     Architecture features:
-      - Split Actor/Critic (configurable)
+      - Split Actor/Critic
     """
 
     fused_slot_encoder = False  # class default: tests build instances without __init__
@@ -35,9 +35,6 @@ class DriveBackbone(nn.Module):
         return nn.Sequential(*layers)
 
     def _encode_and_pool(self, objects, valid_counts, encoder):
-        if not self.mask_padded_features:
-            return encoder(objects).max(dim=1).values
-
         if self.fused_slot_encoder and fused_encoder_active(objects):
             return fused_encode_and_pool(objects, valid_counts, encoder)
 
@@ -64,7 +61,6 @@ class DriveBackbone(nn.Module):
         encoder_layer_norm,
         backbone_activation,
         backbone_layer_norm,
-        mask_padded_features,
         fused_slot_encoder,
     ):
         super().__init__()
@@ -96,7 +92,6 @@ class DriveBackbone(nn.Module):
             + binding.NUM_TRAFFIC_CONTROL_STATES
         )
         self.obs_valid_count_features = binding.OBS_VALID_COUNT_FEATURES
-        self.mask_padded_features = mask_padded_features
         # Context size (reward coefficients + target info)
         self.context_dim = env.num_reward_coefs + env.goal_dim
 
@@ -125,8 +120,6 @@ class DriveBackbone(nn.Module):
         self.fused_slot_encoder = fused_slot_encoder
         if fused_slot_encoder and validate_fused_encoder is None:
             raise ImportError("fused_slot_encoder=true requires triton")
-        if fused_slot_encoder and not mask_padded_features:
-            raise ValueError("fused_slot_encoder requires mask_padded_features=true")
         slot_encoder_names = ("lane_encoder", "boundary_encoder", "partner_encoder", "traffic_control_encoder")
         for encoder_name in slot_encoder_names:
             if fused_slot_encoder and hasattr(self, encoder_name):
@@ -332,8 +325,6 @@ class Drive(nn.Module):
         encoder_layer_norm: bool,
         backbone_activation: str,
         backbone_layer_norm: bool,
-        shared_network: bool,
-        mask_padded_features: bool,
         action_type: str,
         actor_head_layer_norm: bool = False,
         critic_head_layer_norm: bool = False,
@@ -342,15 +333,8 @@ class Drive(nn.Module):
     ):
         super().__init__()
 
-        if env.dynamics_model_flag == binding.DYNAMICS_MODEL_JERK:
-            action_long_values, action_lat_values = binding.JERK_LONG, binding.JERK_LAT
-        elif env.dynamics_model_flag == binding.DYNAMICS_MODEL_CLASSIC:
-            action_long_values, action_lat_values = binding.ACCELERATION_VALUES, binding.STEERING_VALUES
-        else:
-            raise ValueError(f"Unsupported dynamics model: {env.dynamics_model}")
-
-        action_long = torch.tensor(action_long_values, dtype=torch.float32)
-        action_lat = torch.tensor(action_lat_values, dtype=torch.float32)
+        action_long = torch.tensor(binding.JERK_LONG, dtype=torch.float32)
+        action_lat = torch.tensor(binding.JERK_LAT, dtype=torch.float32)
 
         long_norm = torch.where(
             action_long < 0.0,
@@ -375,8 +359,6 @@ class Drive(nn.Module):
         self.action_long_pos_scale = float(action_long[-1])
         self.action_lat_scale = float(action_lat[-1])
 
-        # Configuration flags from policy kwargs
-        self.shared_network = shared_network
         self.ego_dim = env.ego_features
 
         # Prepare arguments for the Backbone
@@ -395,19 +377,12 @@ class Drive(nn.Module):
             "encoder_layer_norm": encoder_layer_norm,
             "backbone_activation": backbone_activation,
             "backbone_layer_norm": backbone_layer_norm,
-            "mask_padded_features": mask_padded_features,
             "fused_slot_encoder": fused_slot_encoder,
         }
 
-        # Instantiate backbones
+        # Separate actor and critic backbones with the same architecture
         self.actor_backbone = DriveBackbone(**backbone_args)
-
-        # If using shared network, critic backbone is the same as actor backbone.
-        # Otherwise, create a separate critic backbone with the same architecture.
-        if self.shared_network:
-            self.critic_backbone = self.actor_backbone
-        else:
-            self.critic_backbone = DriveBackbone(**backbone_args)
+        self.critic_backbone = DriveBackbone(**backbone_args)
 
         # Setup action and value heads
         self.is_continuous = action_type == "continuous"
@@ -447,15 +422,8 @@ class Drive(nn.Module):
         """
         Forward pass handling both Actor and Critic inference.
         """
-        # Forward pass for actor
         actor_hidden = self.actor_backbone(observations, self.ego_dim)
-
-        # Forward pass for critic (may use separate backbone)
-        if self.shared_network:
-            critic_hidden = actor_hidden
-        else:
-            critic_hidden = self.critic_backbone(observations, self.ego_dim)
-
+        critic_hidden = self.critic_backbone(observations, self.ego_dim)
         return self._run_heads(actor_hidden, critic_hidden)
 
     def _run_heads(self, actor_hidden, critic_hidden):

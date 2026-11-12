@@ -9,7 +9,7 @@
 #     srun --jobid=<job> --overlap bash run_nuplan_planner.sh
 #
 # Required env:
-#   CKPT     PufferDrive checkpoint .pt, or "dummy" for the no-policy wiring test.
+#   CKPT     PufferDrive checkpoint .pt.
 # Optional env:
 #   SPLIT     carl_nuplan scenario_filter. Default: val14_split (the full
 #             closed-loop Val14 benchmark -- ~900 scenarios, "all the
@@ -37,37 +37,17 @@
 #             no cap, SPLIT's own scenario count applies). Handy for a quick
 #             sanity check before committing to the full SPLIT.
 #   GROUP     output group dir. Default: runs/nuplan_leaderboard_<timestamp>.
-#   GOAL_SOURCE=route|roadblock  planner goal source (default route, see pufferdrive_planner.yaml).
 #   SLIDING_GOAL_WINDOW=true|false  refill the goal window after every consumed goal (default false).
 #   STARTUP_ACCEL_JERK_CAP / STARTUP_BRAKE_JERK_CAP  [m/s^3] ego jerk caps for the first
 #             STARTUP_JERK_CAP_SECONDS (default 1.5) of every scenario; unset/0 = off.
 #   VRU_SIZE_PAD_M  [m] add this to pedestrian and bicycle partner boxes' length and width in the policy's
 #             observation (training never spawns below 0.8 m; 0.8 = strictly above the smallest training
 #             vehicle); unset/0 = off.
-#   SYMMETRIC_LANE_WIDTHS=true|false  the shadow env loads a cached copy of the city bin whose lane widths are
-#             twice the centerline's distance to the nearer GPKG boundary (the converter writes left + right,
-#             which overstates nuPlan's parking-strip lanes). Unset = planner yaml, false.
-#   EGO_DYNAMICS=pufferdrive|nuplan_bicycle|nuplan_tracker  ego plant (unset = planner yaml, pufferdrive). nuplan_bicycle drives
-#             nuPlan's KinematicBicycleModel through CaRL's one_stage_controller (the ego_controller override is
-#             added here). BICYCLE_MIN_SPEED_MPS [m/s, <= 0: 0 = no reverse driving, -2 = Drive's floor] and
-#             BICYCLE_UNDO_LOW_PASS=true|false (pre-compensate the model's command lag) tune it; unset = planner yaml.
+#   BICYCLE_MIN_SPEED_MPS  [m/s, <= 0: 0 = no reverse driving, -2 = Drive's floor] speed floor of the ego plant
+#             (nuPlan's KinematicBicycleModel through CaRL's one_stage_controller); unset = planner yaml.
 #             BICYCLE_CENTER_ACCEL_CAP=true|false: reduce the plant's accel while turning so nuPlan's center accel
 #             (rear accel + d*yaw_rate^2 + d*yaw_accel) stays under the accel cap (CaRL clip_angular_adjustment);
-#             BICYCLE_CENTER_ACCEL_CAP_MARGIN (factor on the cap, savgol headroom) and BICYCLE_MAX_YAW_JERK
-#             [rad/s^3, bound on the per-step change of yaw accel via the steering command; 0 = off] tune comfort.
-#             BICYCLE_FLOOR_ACCEL_CLAMP=true|false: clamp the policy's integrated accel to 0 while the plant sits on
-#             the speed floor (unset = planner yaml, true; false reproduces run 426's standstill windup).
-#             EGO_DYNAMICS=nuplan_tracker is GIGAFLOW's nuPlan evaluation: every step the planner rolls the scene out
-#             for the trajectory horizon (the policy drives the ego, everyone else keeps its velocity) and nuPlan's
-#             two_stage_controller tracks the ego's rolled-out trajectory. EGO_TRACKER=lqr|ilqr picks the tracker
-#             (default lqr = nuPlan's default; ilqr = nuPlan's iLQR without its wall-clock solve cap, so the result
-#             does not depend on the node's load). ROLLOUT_STEP_SECONDS [s, rollout step, 0.3 = the training step],
-#             ROLLOUT_POLICY_VEHICLES [vehicles and bicycles the policy also drives in the rollout, nearest first] and
-#             ROLLOUT_ALLOW_REVERSE=true|false [false: an agent the policy would back up stays at rest] tune it;
-#             unset = planner yaml.
-#   EGO_ACCEL_CAP_MPS2  [m/s^2] ego accel cap, any ego dynamics (unset = planner yaml, 0.96 x 2.40).
-#   PARTNER_SPLIT_MAX_LENGTH_M  [m] partners longer than this are shown as equal boxes along their heading
-#             (training spawns at most 7 m, nuPlan buses reach 12.7 m); unset/0 = off.
+#             BICYCLE_CENTER_ACCEL_CAP_MARGIN (factor on the cap, savgol headroom) tunes comfort.
 #   STANDSTILL_JERK_DEADBAND  [m/s^3] shadow-env standstill jerk deadband (unset = arch.py, 1.5; 0 = off: with the
 #             bicycle plant's speed floor the deadband's anti-reverse-creep job is done by the floor).
 #   OBS_SLOTS_PARTNERS_N  shadow-env partner obs slots (unset = planner yaml, 40).
@@ -96,7 +76,7 @@ if [ -z "$INSIDE_PUFFER_CONTAINER" ] && [ -f /share/apps/images/slurm-ib-bind-ap
 fi
 set -u
 
-: "${CKPT:?set CKPT=/path/to/model_xxx.pt (or CKPT=dummy for the wiring test)}"
+: "${CKPT:?set CKPT=/path/to/model_xxx.pt}"
 PY=${PY:-/scratch/yw4142/venvs/pufferdrive/bin/python}
 PD=${PD:-/scratch/yw4142/PufferDrive_cosim}
 export NUPLAN_DATA_ROOT=${NUPLAN_DATA_ROOT:-/scratch/yw4142/datasets/ad/nuplan}
@@ -116,36 +96,14 @@ EXTRA_ARGS=()
 [ "$OBS_HTML" != "0" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.obs_html_dir=$GROUP/obs_html" "planner.pufferdrive_planner.obs_html_render=false")
 CITY_BIN_DIR=${CITY_BIN_DIR:-/scratch/yw4142/datasets/ad/nuplan/maps}
 EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
-[ -n "${GOAL_SOURCE:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.goal_source=$GOAL_SOURCE")
 [ -n "${SLIDING_GOAL_WINDOW:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.sliding_goal_window=$SLIDING_GOAL_WINDOW")
 [ -n "${STARTUP_JERK_CAP_SECONDS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_jerk_cap_seconds=$STARTUP_JERK_CAP_SECONDS")
 [ -n "${STARTUP_ACCEL_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_accel_jerk_cap_mps3=$STARTUP_ACCEL_JERK_CAP")
 [ -n "${STARTUP_BRAKE_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_brake_jerk_cap_mps3=$STARTUP_BRAKE_JERK_CAP")
 [ -n "${VRU_SIZE_PAD_M:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.vru_size_pad_m=$VRU_SIZE_PAD_M")
-[ -n "${SYMMETRIC_LANE_WIDTHS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.symmetric_lane_widths=$SYMMETRIC_LANE_WIDTHS")
-if [ "${EGO_DYNAMICS:-}" = "nuplan_bicycle" ]; then
-    EXTRA_ARGS+=("ego_controller=one_stage_controller" "planner.pufferdrive_planner.ego_dynamics=nuplan_bicycle")
-elif [ "${EGO_DYNAMICS:-}" = "nuplan_tracker" ]; then
-    case "${EGO_TRACKER:-lqr}" in
-        lqr) TRACKER_CONTROLLER=two_stage_controller ;;
-        ilqr) TRACKER_CONTROLLER=two_stage_ilqr_controller ;;
-        *) echo "EGO_TRACKER must be lqr or ilqr, got '${EGO_TRACKER}'"; exit 1 ;;
-    esac
-    EXTRA_ARGS+=("ego_controller=$TRACKER_CONTROLLER" "planner.pufferdrive_planner.ego_dynamics=nuplan_tracker")
-elif [ -n "${EGO_DYNAMICS:-}" ]; then
-    EXTRA_ARGS+=("planner.pufferdrive_planner.ego_dynamics=$EGO_DYNAMICS")
-fi
-[ -n "${ROLLOUT_STEP_SECONDS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.rollout_step_seconds=$ROLLOUT_STEP_SECONDS")
-[ -n "${ROLLOUT_POLICY_VEHICLES:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.rollout_policy_vehicles=$ROLLOUT_POLICY_VEHICLES")
-[ -n "${ROLLOUT_ALLOW_REVERSE:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.rollout_allow_reverse=$ROLLOUT_ALLOW_REVERSE")
 [ -n "${BICYCLE_MIN_SPEED_MPS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_min_speed_mps=$BICYCLE_MIN_SPEED_MPS")
-[ -n "${BICYCLE_UNDO_LOW_PASS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_undo_low_pass=$BICYCLE_UNDO_LOW_PASS")
 [ -n "${BICYCLE_CENTER_ACCEL_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_center_accel_cap=$BICYCLE_CENTER_ACCEL_CAP")
 [ -n "${BICYCLE_CENTER_ACCEL_CAP_MARGIN:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_center_accel_cap_margin=$BICYCLE_CENTER_ACCEL_CAP_MARGIN")
-[ -n "${BICYCLE_MAX_YAW_JERK:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_max_yaw_jerk_radps3=$BICYCLE_MAX_YAW_JERK")
-[ -n "${EGO_ACCEL_CAP_MPS2:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.accel_cap_mps2=$EGO_ACCEL_CAP_MPS2")
-[ -n "${BICYCLE_FLOOR_ACCEL_CLAMP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_floor_accel_clamp=$BICYCLE_FLOOR_ACCEL_CLAMP")
-[ -n "${PARTNER_SPLIT_MAX_LENGTH_M:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.partner_split_max_length_m=$PARTNER_SPLIT_MAX_LENGTH_M")
 [ -n "${STANDSTILL_JERK_DEADBAND:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_standstill_jerk_deadband_mps3=$STANDSTILL_JERK_DEADBAND")
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_slots_partners_n=$OBS_SLOTS_PARTNERS_N")
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_perceived_size_margin_m=$EVAL_PERCEIVED_SIZE_MARGIN_M")

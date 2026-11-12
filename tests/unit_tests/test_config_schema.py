@@ -14,10 +14,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import pufferlib
 from pufferlib.config_schema import (
-    ActionType,
     Controller,
     ControlMode,
-    DynamicsModel,
     GoalRegen,
     GoalSource,
     InfractionBehavior,
@@ -42,8 +40,6 @@ def _screaming_snake(name):
 # before joining, matching drive.h's CONTROL_MODE_VEHICLES etc.
 _DRIFT_CHECKED_ENUMS = [
     (SimulationMode, lambda member: member.name),
-    (ActionType, lambda member: member.name),
-    (DynamicsModel, lambda member: member.name),
     (InfractionBehavior, lambda member: member.name),
     (ControlMode, lambda member: member.name.removeprefix("control_")),
     (Controller, lambda member: member.name),
@@ -61,14 +57,13 @@ class TestConfigSchema(unittest.TestCase):
         args = load_config("puffer_drive")
         self.assertIsNone(validate_puffer_drive_config(args, "test"))
         self.assertIsInstance(args["env"]["collision_behavior"], str)
-        self.assertIn(args["env"]["collision_behavior"], ("ignore", "stop", "remove"))
+        self.assertIn(args["env"]["collision_behavior"], ("ignore", "stop"))
         self.assertIsInstance(args["env"]["control_mode"], str)
         for field_name in (
             "use_map_cache",
             "preload_map_cache",
             "use_neighbor_cache",
             "termination_mode",
-            "terminate_on_goal",
         ):
             self.assertIsInstance(args["env"][field_name], bool)
 
@@ -87,7 +82,6 @@ class TestConfigSchema(unittest.TestCase):
                 "preload_map_cache": 0,
                 "use_neighbor_cache": 0,
                 "termination_mode": 1,
-                "terminate_on_goal": 0,
             }
         )
 
@@ -97,7 +91,6 @@ class TestConfigSchema(unittest.TestCase):
         self.assertIs(normalized["env"]["preload_map_cache"], False)
         self.assertIs(normalized["env"]["use_neighbor_cache"], False)
         self.assertIs(normalized["env"]["termination_mode"], True)
-        self.assertIs(normalized["env"]["terminate_on_goal"], False)
 
     @patch("sys.argv", ["pufferl.py", "env.collision_behavior=sotp"])
     def test_enum_typo_fails_at_load(self):
@@ -234,26 +227,6 @@ class TestConfigSchema(unittest.TestCase):
             r"at env\.obs_lane_stride during training: must be a positive integer",
         ):
             validate_puffer_drive_config(args, "training")
-
-    @patch("sys.argv", ["pufferl.py"])
-    def test_continuous_policy_rejects_discrete_environment(self):
-        args = load_config("puffer_drive")
-        args["env"]["action_type"] = "discrete"
-        args["policy"]["action_type"] = "continuous"
-
-        with self.assertRaisesRegex(
-            pufferlib.APIUsageError,
-            "policy.action_type.*cannot be continuous when env.action_type is discrete",
-        ):
-            validate_puffer_drive_config(args, "test")
-
-    @patch("sys.argv", ["pufferl.py"])
-    def test_discrete_policy_accepts_continuous_environment(self):
-        args = load_config("puffer_drive")
-        args["env"]["action_type"] = "continuous"
-        args["policy"]["action_type"] = "discrete"
-
-        self.assertIsNone(validate_puffer_drive_config(args, "test"))
 
     @patch("sys.argv", ["pufferl.py"])
     def test_failure_replay_rejects_scenario_rendering(self):

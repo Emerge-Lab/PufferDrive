@@ -99,32 +99,6 @@ static int test_nuplan_replay_load_step_log(void) {
     return run_case("nuplan-replay", drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1);
 }
 
-static int test_nuplan_replay_create_only_controlled(void) {
-    srand(7);
-    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 4, 0);
-    env.init_mode = INIT_MODE_CREATE_ONLY_CONTROLLED;
-    env.control_mode = CONTROL_MODE_VEHICLES;
-    allocate(&env);
-    c_reset(&env);
-    EXPECT_EQ_INT(env.active_agent_count, 4);
-    EXPECT_EQ_INT(env.static_agent_count, 0);
-    EXPECT_EQ_INT(env.num_agents, env.active_agent_count + env.static_agent_count);
-    int valid_agent_count = 0;
-    for (int i = 0; i < env.num_total_agents; i++) {
-        valid_agent_count += env.agents[i].sim_valid == 1;
-    }
-    EXPECT_EQ_INT(valid_agent_count, env.num_agents);
-
-    int obs_size = compute_observation_size(&env);
-    for (int t = 0; t < 5; t++) {
-        drive_set_neutral_actions(&env);
-        c_step(&env);
-        EXPECT_TRUE(drive_all_finite(env.observations, env.active_agent_count * obs_size));
-    }
-    free_allocated(&env);
-    return 0;
-}
-
 static int test_short_early_reset_flags_and_logs(void) {
     const float max_spawn_attempts = 30.0f;
     srand(7);
@@ -304,7 +278,6 @@ int main(void) {
     RUN_TEST(test_carla_gigaflow_load_step_log);
     RUN_TEST(test_nuplan_gigaflow_load_step_log);
     RUN_TEST(test_nuplan_replay_load_step_log);
-    RUN_TEST(test_nuplan_replay_create_only_controlled);
     RUN_TEST(test_truncation_and_episode_log);
     RUN_TEST(test_short_early_reset_flags_and_logs);
     RUN_TEST(test_stagger_first_episode);

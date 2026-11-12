@@ -30,12 +30,6 @@ env:
   # GIGAFLOW-specific: minimum/maximum number of agents per environment
   min_agents_per_env: 1
   max_agents_per_env: 150
-  # Actions type - options: "discrete", "continuous"
-  action_type: continuous
-  # Dynamics model - options: "classic", "jerk"
-  dynamics_model: jerk
-  # Jerk dynamics: Zero both accelerations when velocity crosses zero
-  reset_accel_on_stop: true
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap
@@ -44,8 +38,6 @@ env:
   max_speed_mps: null
   # Training C_vel ~ X(a) = 0.5 U(1/a, 1) + 0.5 U(1, a): speed cap = base_max_speed_mps * [1/a, a]; 1.5 = paper (13.3-30 m/s), 2.0 = 10-40 m/s
   conditioning_speed_scale: 2.0
-  # Optional nonzero launch speed for gigaflow random spawns
-  spawn_initial_speed: 0.0
   # Gigaflow spawn pose noise: lateral offset as a fraction of half the lane width, heading offset in degrees
   spawn_lateral_offset_max_frac: 1.0
   spawn_heading_max_deg: 30.0
@@ -59,26 +51,23 @@ env:
   speed_limit_random_delta_mps: 9.72
   speed_limit_random_min_mps: 1.39
   speed_limit_random_max_mps: 36.11
-  # Collision behavior - options: "ignore", "stop", "remove"
+  # Collision behavior - options: "ignore", "stop"
   collision_behavior: stop
-  # Offroad behavior - options: "ignore", "stop", "remove"
+  # Offroad behavior - options: "ignore", "stop"
   offroad_behavior: stop
-  # Traffic light behavior - options: "ignore", "stop", "remove"
+  # Traffic light behavior - options: "ignore", "stop"
   traffic_light_behavior: stop
-  # Stop sign behavior - options: "ignore", "stop", "remove"
+  # Stop sign behavior - options: "ignore", "stop"
   stop_sign_behavior: stop
   # Traffic controls observed and enforced; stop-sign runs are detected as in CaRL's RunStopSign2 (reward_stop_line)
   traffic_lights_enabled: true
   stop_signs_enabled: true
-  yield_signs_enabled: false
   # Skip red light violation detection (metrics, reward, behavior)
   disable_red_light_infractions: false
   # Red light violation = the stop line lies between the ego's tail clearance point (rear edge - 1 m, what CARLA's
   # RunningRedLightTest scores) and its front edge while red, moving or standing: a yellow entry must clear the line
-  # by 1 m. Training-only margins (m): the front one makes the front edge stop that much earlier, the rear one would
-  # extend the tail clearance (0 = CARLA's clearance as is); eval and co-sim use the real edges
+  # by 1 m. Training-only margin (m): the front edge has to stop that much earlier; eval and co-sim use the real edge
   red_light_train_front_margin_m: 0.3
-  red_light_train_rear_margin_m: 0.0
   # Skip stop sign violation detection (metrics, reward, behavior); the sign obs still turn red/green
   disable_stop_sign_infractions: false
   # Cycle the lights of a junction phase-by-phase (TLPHASE1 bins); false keeps independent lights (legacy)
@@ -104,21 +93,14 @@ env:
   termination_mode: true
   # Ratio of inactive agents (stopped/removed) that triggers early reset
   inactive_agent_threshold: 0.4
-  # End the episode as soon as the agent reaches its final goal. Only active in
-  # control_sdc_only replay mode (single active agent).
-  terminate_on_goal: false
   # Determines which step of the trajectory to initialize the agents at upon reset
   init_step: 0
-  # allows to initiate the C environment at random init points - works in replay mode only:
-  init_step_spread: false
-  # sets an upper bound on the random init step
-  # the sampled init step can be at most this close to the end of the episode;
-  # also the shortest first episode when stagger_first_episode is on
+  # the shortest first episode when stagger_first_episode is on
   init_step_min_horizon: 20
   # training only: the first episode after every env (re)creation ends at a random step in
   # [init_step_min_horizon, scenario_length], so sub-envs do not run their episodes in lockstep
   stagger_first_episode: true
-  # options: "control_vehicles", "control_agents", "control_tracks_to_predict", "control_sdc_only"
+  # options: "control_vehicles", "control_sdc_only"
   control_mode: control_vehicles
   # Controller used by agent 0, the canonical SDC/target.
   # options: "static", "policy", "replay", "idm"
@@ -132,7 +114,7 @@ env:
   # Per-agent override, independent of the controllers above: agents flagged mark_as_expert
   # in the scenario data are forced to log-replay (1) or follow their controller setting (0)
   replay_expert_agents: 1
-  # Options: "create_all_valid", "create_only_controlled", "create_controllable_types" (uncontrolled ones static)
+  # Options: "create_all_valid", "create_controllable_types" (vehicles only, uncontrolled ones static)
   init_mode: create_all_valid
   # Enable computation of evaluation-only metrics
   compute_eval_metrics: false
@@ -144,14 +126,10 @@ env:
   # How the goal set is seeded - options: "route" (agent forward route), "map" (uniform free-roam),
   # replay only: "gt" (raw logged trajectory points), "gt_map" (logged points snapped to the nearest lane center)
   goal_source: map
-  # Append normalized lane-graph distance to the current goal lane on each lane obs row
-  obs_goal_lane_distance: True
   # Meters around goal to be considered "reached"
   goal_radius: 2.0
-  # Maximum speed at final waypoint to count goal reward
+  # Maximum speed at final waypoint to count goal reward; pinned under reward_randomization too (GIGAFLOW v_goal = 3)
   goal_speed: 3.0
-  # true: goal-speed coef ~ U(0, 20) per agent under reward_randomization; false: pinned to goal_speed (GIGAFLOW v_goal = 3)
-  goal_speed_randomization: false
   # true: the final goal is only consumed below goal speed (GIGAFLOW R_goal); false: consumed on entry, reward gated
   goal_reach_requires_speed: true
   # Number of target waypoints in the observation (including goal)
@@ -165,7 +143,6 @@ env:
   # --- Rewards ---
   reward_conditioning: true
   reward_randomization: true
-  reward_log_sampling: false
   reward_goal: 1.0
   reward_collision: 1.5
   reward_offroad: 1.5
@@ -179,9 +156,6 @@ env:
   reward_reverse: 0.005
   reward_timestep: 2.5e-05
   reward_overspeed: 0.005
-  # m/s above the lane limit before the overspeed penalty fires
-  overspeed_tolerance_mps: 0.0
-  reward_ade: 0.0
   # --- Map ---
   # Path to map used for training
   map_dir: pufferlib/resources/drive/binaries/carla
@@ -193,12 +167,6 @@ env:
   obs_slots_lane_n: 70
   obs_slots_boundary_n: 50
   obs_slots_partners_n: 20
-  # Append the partner's velocity relative to ego (ego frame, 2 floats) to every partner row (GIGAFLOW observes velocity)
-  obs_partner_relative_velocity: true
-  # Ego lane-angle slot: true = signed heading error theta_f / pi (GIGAFLOW B.1), false = cos(theta_f)
-  obs_lane_heading_signed: true
-  # Append each lane segment's speed limit (/ obs_norm_speed_mps) to its lane row so limit changes ahead are visible
-  obs_lane_speed_limit: true
   obs_slots_traffic_controls_n: 4
   # Append to every traffic-control row the seconds the light stays yellow / traffic_light_yellow_max_s (clipped at 1,
   # 0 unless yellow); co-sims feed the simulator's own timer, clipped to the same training max
@@ -247,18 +215,12 @@ env:
   partner_blindness_trigger_prob: 1.0
   # Duration in seconds of partner blindness once triggered
   partner_blindness_duration_seconds: 3.0
-  # Blind agents keep the partners in their forward corridor (false: they see no partners at all, pre-2026-10-12 rule)
-  partner_blindness_corridor: false
-  # 0 disables; else each blind agent draws its share of time spent blind uniformly from [share set by trigger prob and duration, this]; 1.0 = blind every step
-  partner_blindness_time_fraction_max: 0.0
   # Upper bound of the per-episode phantom-braker rate; each episode draws its rate uniformly from [0, this]
   phantom_braking_prob: 0.1
   # Per-step probability that a flagged phantom-braker actually initiates a brake window
   phantom_braking_trigger_prob: 0.03
   # Duration in seconds of phantom braking once triggered
   phantom_braking_duration_seconds: 3.0
-  # Zero the steering command while a phantom brake is active (false keeps the policy's steering)
-  phantom_braking_freeze_steering: false
   # Scripted pedestrians: each env gets ceil(ratio * agents) walker slots (1.0-1.5 m boxes = CARLA walker plus the 0.8 m
   # eval VRU pad). A slot appears beside a random moving car's lane, plays one behaviour and vanishes for 5-20 s:
   #   40% pop-in crosser (CARLA Leaderboard 1.0 Scenario3): standing at the right kerb 10-17 m ahead, half a lane outside
@@ -281,7 +243,6 @@ policy:
   # Encoder activation - options: "relu", "tanh", "gelu"
   encoder_activation: relu
   encoder_layer_norm: true
-  mask_padded_features: true
   # Shared backbone layer
   backbone_hidden_size: 1024
   backbone_num_layers: 3
@@ -300,8 +261,6 @@ policy:
   fp32_heads: true
   # Fused Triton kernels for the per-slot encoders and their max-pool (same bf16 math, fewer activation bytes)
   fused_slot_encoder: true
-  # Dual or shared actor-critic backbone
-  shared_network: false
   action_type: discrete
 train:
   name: pufferai

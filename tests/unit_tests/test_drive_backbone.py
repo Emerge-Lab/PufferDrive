@@ -5,7 +5,6 @@ from pufferlib.ocean.torch import DriveBackbone
 
 def test_encode_and_pool_masks_padded_objects():
     backbone = object.__new__(DriveBackbone)
-    backbone.mask_padded_features = True
 
     objects = torch.tensor(
         [
@@ -37,11 +36,3 @@ def test_encode_and_pool_masks_padded_objects():
             ]
         ),
     )
-
-
-def test_encode_and_pool_without_masking_pools_every_row():
-    backbone = object.__new__(DriveBackbone)
-    backbone.mask_padded_features = False
-    objects = torch.tensor([[[1.0, 10.0], [2.0, 3.0], [100.0, 100.0]]])
-    pooled = backbone._encode_and_pool(objects, torch.tensor([2]), lambda x: x)
-    torch.testing.assert_close(pooled, torch.tensor([[100.0, 100.0]]))

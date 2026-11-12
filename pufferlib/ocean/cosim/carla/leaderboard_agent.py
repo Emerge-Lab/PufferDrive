@@ -18,16 +18,11 @@ Environment variables (the shadow env's own, COSIM_DEVICE ... COSIM_WORLD_LOG, a
 shadow_ego.py):
   SCENARIO_RUNNER_ROOT         REQUIRED: path to the scenario_runner checkout
                                (route scenarios silently fail to load without it)
-  CARL_WORK_DIR                REQUIRED if COSIM_TELEMETRY or
-                               COSIM_RECORD_INFRACTIONS is set: path to the
+  CARL_WORK_DIR                REQUIRED if COSIM_TELEMETRY is set: path to the
                                CaRL/CARLA checkout, to import its
                                reward.criteria collision/offroad detectors
   COSIM_DEBUG_CARLA_VIEW=/dir  write a CARLA chase-camera mp4 per route (native
                                tick rate, streamed to disk frame-by-frame)
-  COSIM_RECORD_INFRACTIONS=/dir  write a short chase-cam clip (last ~5 s) per
-                               ego infraction (collision/offroad/red-light/stop-sign),
-                               from either the shadow pufferdrive env's own
-                               model (pd_*) or real CARLA ground truth (carla_*)
 """
 
 import math
@@ -47,10 +42,6 @@ from pufferlib.ocean.cosim import carla_bridge as cb
 from pufferlib.ocean.cosim.carla.controller import vehicle_geometry_from_wheels, wheel_rows
 from pufferlib.ocean.cosim.carla.shadow_ego import PARTNER_MAX_ABS_DZ_M, ShadowEgo
 
-# Rolling chase-cam window kept for COSIM_RECORD_INFRACTIONS clips, and the
-# minimum ego travel between two logged infractions (suppresses re-triggering
-INFRACTION_CLIP_SECONDS = 5.0
-INFRACTION_MIN_SEPARATION_M = 10.0
 RED_LIGHT_CHECK_DISTANCE_M = 30.0  # matches CaRL RunRedLight's own distance_light default
 
 ROAD_RAY_HALF_SPAN_M = (
@@ -60,8 +51,7 @@ ROAD_RAY_LABELS = (carla.CityObjectLabel.Roads, carla.CityObjectLabel.RoadLines,
 
 CARLA_VIEW_SENSOR_ID = "puffer_chase_cam"
 CARLA_VIEW_WIDTH, CARLA_VIEW_HEIGHT, CARLA_VIEW_FOV = 960, 540, 90
-# Behind + above the ego, looking forward and down. Closer than
-# carla_cosim.py's standalone chase cam (x=-6.5, z=3.2): the leaderboard
+# Behind + above the ego, looking forward and down: the leaderboard
 # enforces sqrt(x^2+y^2+z^2) <= agent_wrapper.MAX_ALLOWED_RADIUS_SENSOR (3.0 m)
 CARLA_VIEW_TRANSFORM = dict(x=-2.0, y=0.0, z=2.1, roll=0.0, pitch=-15.0, yaw=0.0)
 
@@ -138,7 +128,6 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         self.shadow = ShadowEgo(path_to_conf_file, self.video_tag)
 
         self.debug_carla_view_dir = os.environ.get("COSIM_DEBUG_CARLA_VIEW", None)
-        self.record_infractions_dir = os.environ.get("COSIM_RECORD_INFRACTIONS", None)
 
         self.step = -1
         self.initialized = False
@@ -147,7 +136,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         self._carla_stop_sign = None
 
     def sensors(self):
-        if not self.debug_carla_view_dir and not self.record_infractions_dir:
+        if not self.debug_carla_view_dir:
             return []
         return [
             {
@@ -174,8 +163,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         body = self.vehicle.bounding_box
         self.body_front_m = body.location.x + body.extent.x
         self.body_rear_m = body.location.x - body.extent.x
-        wheels = wheel_rows(self.vehicle)
-        self.wheelbase_m, _ = vehicle_geometry_from_wheels(wheels)
+        self.wheelbase_m, _ = vehicle_geometry_from_wheels(wheel_rows(self.vehicle))
         self.shadow.init_route(
             {
                 "town": town,
@@ -183,7 +171,6 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                 "ego": {
                     "extent": [body.extent.x, body.extent.y, body.extent.z],
                     "box_z": body.location.z,
-                    "wheels": wheels,
                     "blueprint": self.vehicle.type_id,
                     "state": actor_state_row(self.vehicle),
                 },
@@ -192,27 +179,17 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                 "driving_waypoints": cb.driving_waypoint_samples(self.cmap),
                 "lights": cb.light_geometry_from_carla(self.lights, self.cmap),
                 "stop_signs": cb.stop_sign_geometry_from_carla(self.world, self.cmap),
-                "infraction_flags": bool(self.record_infractions_dir),
             }
         )
 
         if self.debug_carla_view_dir:
-            from pufferlib.ocean.cosim.carla_cosim import Mp4Writer
+            from pufferlib.ocean.cosim.mp4 import Mp4Writer
 
             Path(self.debug_carla_view_dir).mkdir(parents=True, exist_ok=True)
             out = str(Path(self.debug_carla_view_dir) / f"{self.video_tag}.mp4")
             self.carla_view_writer = Mp4Writer(out, fps=round(1.0 / self.tick_dt))
 
-        if self.record_infractions_dir:
-            from collections import deque
-
-            Path(self.record_infractions_dir).mkdir(parents=True, exist_ok=True)
-            # Rolling window of the last INFRACTION_CLIP_SECONDS of chase-cam
-            self.infraction_buffer = deque(maxlen=int(INFRACTION_CLIP_SECONDS / self.tick_dt))
-            self.infraction_counter = 0
-            self.last_infraction_location = self.vehicle.get_location()
-
-        if self.shadow.telemetry_dir or self.record_infractions_dir:
+        if self.shadow.telemetry_dir:
             self._init_carla_infraction_detectors()
         self.initialized = True
 
@@ -314,7 +291,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         if "CARL_WORK_DIR" not in os.environ:
             raise RuntimeError(
                 "CARL_WORK_DIR is not set; required to import CaRL's reward.criteria "
-                "collision/offroad detectors for COSIM_TELEMETRY/COSIM_RECORD_INFRACTIONS."
+                "collision/offroad detectors for COSIM_TELEMETRY."
             )
         team_code_dir = str(Path(os.environ["CARL_WORK_DIR"]) / "team_code")
         if team_code_dir not in sys.path:
@@ -396,28 +373,6 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             "stop_sign": float(stop_sign),
         }
 
-    def _maybe_save_infraction_clip(self, pd_flags, carla_flags):
-        """Dump the rolling chase-cam buffer as one mp4 when either infraction
-        source flags an ego infraction (collision/offroad/red-light/stop-sign), at most
-        once per INFRACTION_MIN_SEPARATION_M of ego travel (CaRL eval_agent-
-        style)."""
-        fired = [f"pd_{name}" for name, value in pd_flags.items() if value > 0.0]
-        fired += [f"carla_{name}" for name, value in carla_flags.items() if value > 0.0]
-        if not fired or not self.infraction_buffer:
-            return
-        location = self.vehicle.get_location()
-        if location.distance(self.last_infraction_location) <= INFRACTION_MIN_SEPARATION_M:
-            return
-        from pufferlib.ocean.cosim.carla_cosim import write_mp4
-
-        out = str(
-            Path(self.record_infractions_dir) / f"{self.video_tag}_{'_'.join(fired)}_{self.infraction_counter:02d}.mp4"
-        )
-        write_mp4(out, list(self.infraction_buffer), fps=round(1.0 / self.tick_dt))
-        print(f"[puffer_agent] infraction {fired} -> {out}")
-        self.infraction_counter += 1
-        self.last_infraction_location = location
-
     def run_step(self, input_data, timestamp, sensors=None):
         self.step += 1
         if not self.initialized:
@@ -429,8 +384,6 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             rgb = bgra[:, :, [2, 1, 0]]  # BGRA -> RGB
             if self.carla_view_writer is not None:
                 self.carla_view_writer.append_data(rgb)  # streamed to disk
-            if self.record_infractions_dir:
-                self.infraction_buffer.append(rgb.copy())
 
         if self._carla_collision is not None:
             self._poll_carla_collision()
@@ -441,10 +394,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         if result.motion is not None:
             self._teleport_carla_ego(result.motion)
         if self._carla_collision is not None:
-            carla_flags = self._carla_infractions()
-            self.shadow.telemetry(result, carla_flags)
-            if self.record_infractions_dir:
-                self._maybe_save_infraction_clip(result.pd_flags, carla_flags)
+            self.shadow.telemetry(result, self._carla_infractions())
 
         if result.control is None:
             return carla.VehicleControl()

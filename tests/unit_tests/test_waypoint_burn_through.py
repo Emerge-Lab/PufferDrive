@@ -48,9 +48,8 @@ REACHED_GOAL_METRIC_IDX = 4
 WAYPOINT_MATCH_TOLERANCE = 1e-9
 
 
-def _make_sdc_replay_env(terminate_on_goal: bool):
-    """Single-agent replay/SDC env on the fixture map, identical to the
-    test_terminate_on_goal.py setup (init_step=0, no init randomization)."""
+def _make_sdc_replay_env():
+    """Single-agent replay/SDC env on the fixture map (init_step=0)."""
     return Drive(
         num_agents=1,
         min_agents_per_env=1,
@@ -65,7 +64,6 @@ def _make_sdc_replay_env(terminate_on_goal: bool):
         scenario_length=SCENARIO_LENGTH,
         resample_frequency=1_000_000,
         termination_mode=False,
-        terminate_on_goal=terminate_on_goal,
         report_interval=1,
         num_goals=NUM_GOALS,
         goal_radius=GOAL_RADIUS,
@@ -107,11 +105,11 @@ def _alias_waypoint_index(agent_state, waypoints):
 
 
 def test_each_goal_fire_burns_exactly_one_waypoint():
-    """Full episode with terminate_on_goal disabled: every reached-goal fire must
+    """Full episode: every reached-goal fire must
     advance the goal alias to the immediately-next waypoint (exactly one
     burned), the alias must never move without a fire, and once the final
     waypoint is consumed no further fires may occur (saturation)."""
-    env = _make_sdc_replay_env(terminate_on_goal=False)
+    env = _make_sdc_replay_env()
     try:
         env.reset(seed=0)
         state = _sdc_state(env)
@@ -162,53 +160,11 @@ def test_each_goal_fire_burns_exactly_one_waypoint():
         env.close()
 
     assert truncated_at == SCENARIO_LENGTH, (
-        f"With terminate_on_goal disabled the episode must run to scenario_length="
-        f"{SCENARIO_LENGTH}, but truncated at {truncated_at}."
+        f"The episode must run to scenario_length={SCENARIO_LENGTH}, but truncated at {truncated_at}."
     )
     assert consumed_count == NUM_GOALS, (
         f"Episode should consume all {NUM_GOALS} waypoints exactly "
         f"once each, but accounting shows {consumed_count} consumptions."
-    )
-
-
-def test_goal_termination_accounts_for_every_waypoint():
-    """With terminate_on_goal enabled, the episode may only truncate once every
-    waypoint has been individually consumed: waypoints consumed before stepping
-    (post-reset alias index) + fires observed while stepping + the one fire on
-    the truncating step must equal num_goals. Burn-through would
-    truncate with fewer accounted consumptions."""
-    env = _make_sdc_replay_env(terminate_on_goal=True)
-    try:
-        env.reset(seed=0)
-        state = _sdc_state(env)
-        waypoints = _expected_waypoints(state)
-        consumed_before_stepping = _alias_waypoint_index(state, waypoints)
-
-        zero_action = np.zeros_like(env.actions)
-        fires_observed = 0
-        truncated_at = None
-        for step in range(1, SCENARIO_LENGTH + 1):
-            _, _, _, truncations, _ = env.step(zero_action)
-            if truncations[0]:
-                truncated_at = step
-                break
-            state = _sdc_state(env)
-            if state["metrics_array"][REACHED_GOAL_METRIC_IDX] > 0.0:
-                fires_observed += 1
-    finally:
-        env.close()
-
-    assert truncated_at is not None and truncated_at < SCENARIO_LENGTH, (
-        f"Goal termination should truncate before scenario_length, got {truncated_at}."
-    )
-    # The truncating step itself consumes exactly the one remaining waypoint.
-    total_consumed = consumed_before_stepping + fires_observed + 1
-    assert total_consumed == NUM_GOALS, (
-        f"Truncation fired after {total_consumed} accounted waypoint "
-        f"consumptions ({consumed_before_stepping} before stepping, "
-        f"{fires_observed} observed fires, +1 truncating fire); expected "
-        f"{NUM_GOALS}. Fewer means waypoints were burned through "
-        f"without being presented as goals."
     )
 
 

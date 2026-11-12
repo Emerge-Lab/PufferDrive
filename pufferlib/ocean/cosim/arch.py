@@ -10,6 +10,8 @@ scenario_length, ...) win.
 import inspect
 from pathlib import Path
 
+import yaml
+
 from pufferlib.ocean.drive.drive import Drive
 
 # Mirror of the noise/light/conditioning keys in
@@ -25,7 +27,6 @@ CLEAN_EVAL_OVERRIDES = {
     "partner_blindness_prob": 0.0,
     "partner_blindness_prob_min": 0.0,
     "partner_blindness_trigger_prob": 0.0,
-    "partner_blindness_time_fraction_max": 0.0,
     "phantom_braking_prob": 0.0,
     "phantom_braking_trigger_prob": 0.0,
     "traffic_light_behavior": "stop",
@@ -35,7 +36,6 @@ CLEAN_EVAL_OVERRIDES = {
     "reward_collision": 3.0,
     "reward_offroad": 3.0,
     "reward_stop_line": 1.0,
-    "reward_ade": 0.0,
     "reward_goal": 1.0,
     "reward_overspeed": 0.1,  # training-range max (REWARD_BOUNDS)
     "reward_comfort": 0.05,
@@ -55,9 +55,9 @@ CLEAN_EVAL_OVERRIDES = {
 
 
 # Some saved checkpoint configs store the infraction behaviors as resolved
-# binding enums (0/1/2) instead of the strings Drive.__init__ accepts (e.g.
-# weights/mimolette: collision_behavior: 1); normalize either spelling.
-_INFRACTION_BEHAVIOR_NAMES = {0: "ignore", 1: "stop", 2: "remove"}
+# binding enums (0/1) instead of the strings Drive.__init__ accepts
+# (collision_behavior: 1); normalize either spelling.
+_INFRACTION_BEHAVIOR_NAMES = {0: "ignore", 1: "stop"}
 _INFRACTION_BEHAVIOR_KEYS = ("collision_behavior", "offroad_behavior", "traffic_light_behavior")
 
 
@@ -73,7 +73,34 @@ def checkpoint_config_path(checkpoint):
 
 
 # Settings of removed features: a config saved before the removal may carry them, but only with this value.
-RETIRED_SETTINGS = {("rnn_name",): None}
+RETIRED_SETTINGS = {
+    ("rnn_name",): None,
+    ("env", "action_type"): "continuous",
+    ("env", "dynamics_model"): "jerk",
+    ("env", "reset_accel_on_stop"): True,
+    ("env", "yield_signs_enabled"): False,
+    ("env", "terminate_on_goal"): False,
+    ("env", "init_step_spread"): False,
+    ("env", "reward_ade"): 0.0,
+    ("env", "overspeed_tolerance_mps"): 0.0,
+    ("env", "spawn_initial_speed"): 0.0,
+    ("env", "obs_partner_relative_velocity"): True,
+    ("env", "obs_lane_heading_signed"): True,
+    ("env", "obs_lane_speed_limit"): True,
+    ("env", "obs_goal_lane_distance"): True,
+    ("policy", "shared_network"): False,
+    ("policy", "mask_padded_features"): True,
+}
+# Removed settings that only shaped training (blind and braking agents, reward sampling, training margins):
+# evals switch those off, so a saved config may carry any value.
+RETIRED_TRAINING_SETTINGS = (
+    ("env", "reward_log_sampling"),
+    ("env", "goal_speed_randomization"),
+    ("env", "partner_blindness_corridor"),
+    ("env", "partner_blindness_time_fraction_max"),
+    ("env", "phantom_braking_freeze_steering"),
+    ("env", "red_light_train_rear_margin_m"),
+)
 RETIRED_SECTIONS = ("rnn",)
 
 
@@ -93,9 +120,20 @@ def drop_retired_settings(config):
                 f"only {remaining_value!r} is supported"
             )
         del section[setting_name]
+    for key_path in RETIRED_TRAINING_SETTINGS:
+        section = config
+        for section_name in key_path[:-1]:
+            section = section.get(section_name) or {}
+        section.pop(key_path[-1], None)
     for section_name in RETIRED_SECTIONS:
         config.pop(section_name, None)
     return config
+
+
+def load_checkpoint_config(config_path):
+    """A checkpoint's saved run config without the settings of removed features."""
+    with open(config_path) as config_file:
+        return drop_retired_settings(yaml.safe_load(config_file))
 
 
 # Applied to every co-sim shadow env after CLEAN_EVAL_OVERRIDES: the eval-only semantics the native
@@ -109,15 +147,14 @@ COSIM_EVAL_OVERRIDES = {
 }
 
 
-def shadow_env_kwargs(cfg, defaults=None, overrides=None):
+def shadow_env_kwargs(cfg, overrides=None):
     """Drive kwargs for a co-sim shadow env.
 
-    Precedence: `defaults` (no-checkpoint fallback arch) < checkpoint env
-    config (every Drive-accepted key) < CLEAN_EVAL_OVERRIDES < COSIM_EVAL_OVERRIDES < `overrides`
-    (the co-sim's structural keys)."""
+    Precedence: checkpoint env config (every Drive-accepted key) < CLEAN_EVAL_OVERRIDES
+    < COSIM_EVAL_OVERRIDES < `overrides` (the co-sim's structural keys)."""
     accepted = set(inspect.signature(Drive.__init__).parameters)
     adopted = {k: v for k, v in ((cfg or {}).get("env") or {}).items() if k in accepted}
     for key in _INFRACTION_BEHAVIOR_KEYS:
         if key in adopted and isinstance(adopted[key], int):
             adopted[key] = _INFRACTION_BEHAVIOR_NAMES[adopted[key]]
-    return {**(defaults or {}), **adopted, **CLEAN_EVAL_OVERRIDES, **COSIM_EVAL_OVERRIDES, **(overrides or {})}
+    return {**adopted, **CLEAN_EVAL_OVERRIDES, **COSIM_EVAL_OVERRIDES, **(overrides or {})}

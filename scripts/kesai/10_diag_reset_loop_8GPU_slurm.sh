@@ -82,14 +82,11 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.precision=bfloat16 \
     policy.fp32_heads=true \
     train.tf32=false \
-    env.goal_speed_randomization=false \
     env.goal_reach_requires_speed=true \
-    env.obs_partner_relative_velocity=true \
     env.pose_noise_xy_m=0.025 \
     env.pose_noise_yaw_deg=0.25 \
     env.speed_limit_random_prob=1.0 \
     env.conditioning_speed_scale=2.0 \
-    policy.mask_padded_features=true \
     train.seed=${SEED} \
     ${SPAWN_NOISE_ARGS} \
     tb=True

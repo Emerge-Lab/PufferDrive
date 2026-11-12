@@ -22,19 +22,19 @@ integration is therefore a client/server pair around the shared core:
   snapshot, runs the policy and integrates one dt. All inputs/outputs are CARLA-frame plain data.
 - `leaderboard_agent.py` (this directory) — the `AutonomousAgent` for the garage evaluator (entry point
   `PufferAgentLB1`), Python 3.7, imports nothing from `pufferlib`. On the first tick it reads the town, the
-  ego's box/wheels, the route (`set_global_plan` sparse target points + the dense 1 m route), the driving
+  ego's box, the route (`set_global_plan` sparse target points + the dense 1 m route), the driving
   waypoints, every traffic light's stop waypoints (from the trigger volume: 0.9.10 has no
   `get_stop_waypoints`) and every `traffic.stop` trigger volume, and sends them to the server. Every tick
   it ships ego/partner states and light states, and teleports the ego to the returned pose
-  (`COSIM_DYNAMICS_SOURCE=pufferdrive`) or applies the returned throttle/brake/steer (`carla`). Chase-cam
-  mp4 (`COSIM_DEBUG_CARLA_VIEW`) and infraction clips (`COSIM_RECORD_INFRACTIONS`) are written here.
+  (`COSIM_DYNAMICS_SOURCE=pufferdrive`) or applies the returned throttle/brake/steer (`carla_pedals`). The
+  chase-cam mp4 (`COSIM_DEBUG_CARLA_VIEW`) is written here.
 - `policy_server.py` — started by the agent in the PufferDrive venv (`COSIM_SERVER_PYTHON`, default
   `<repo>/.venv/bin/python`), one process per route, `ShadowEgo` behind `lb1_protocol.py`
-  (length-prefixed JSON over an inherited socket). Telemetry, world log, obs replay and obs dump come out
+  (length-prefixed JSON over an inherited socket). Telemetry, world log and obs replay come out
   of this process (same `COSIM_*` variables and file names as the Leaderboard 2.0 agent).
 - `ground_truth.py` — the Leaderboard 1.0 criteria (red light, stop sign, outside lanes, collision via a
   collision sensor on the client) recomputed from the client's observations, for the `carla_*` telemetry
-  columns and infraction clips. The leaderboard's own `result.json` is the score.
+  columns. The leaderboard's own `result.json` is the score.
 
 Verified 2026-10-05 locally with `k_scaled_0040_1000` on a CARLA 0.9.10.1 offscreen-OpenGL server, policy
 on the CPU at the 20 Hz tick: Town01 route 0 scenario-free completed with DS 100 / RC 100 and no

@@ -1,13 +1,21 @@
 #include "include/drive_fixture.h"
 #include "include/test.h"
 
-static Drive make_pedestrian_env(int num_agents, int pedestrian_slots, float spawn_initial_speed) {
+static Drive make_pedestrian_env(int num_agents, int pedestrian_slots, float car_speed_mps) {
     Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, num_agents, 0);
     env.scripted_pedestrian_slots = pedestrian_slots;
-    env.spawn_initial_speed = spawn_initial_speed;
     env.scenario_length = 400;
     allocate(&env);
     c_reset(&env);
+    for (int i = 0; i < env.active_agent_count; i++) {
+        Agent *car = &env.agents[env.active_agent_indices[i]];
+        if (car->removed) {
+            continue;
+        }
+        car->sim_vx = car_speed_mps * car->cos_heading;
+        car->sim_vy = car_speed_mps * car->sin_heading;
+        update_agent_speed(car);
+    }
     return env;
 }
 

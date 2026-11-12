@@ -22,13 +22,6 @@ static PyObject *my_get(PyObject *dict, Env *env) {
 }
 #endif
 
-static int my_put(Env *env, PyObject *args, PyObject *kwargs);
-#ifndef MY_PUT
-static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
-    return 0;
-}
-#endif
-
 // Re-derive an env's RNG streams from a fresh seed before reset
 static void my_reseed(Env *env, uint64_t seed);
 #ifndef MY_RESEED
@@ -196,48 +189,6 @@ static PyObject *env_init(PyObject *self, PyObject *args, PyObject *kwargs) {
     return PyLong_FromVoidPtr(env);
 }
 
-// Python function to reset the environment
-static PyObject *env_reset(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 2) {
-        PyErr_SetString(PyExc_TypeError, "env_reset requires 2 arguments");
-        return NULL;
-    }
-
-    Env *env = unpack_env(args);
-    if (!env) {
-        return NULL;
-    }
-    c_reset(env);
-    Py_RETURN_NONE;
-}
-
-// Python function to step the environment
-static PyObject *env_step(PyObject *self, PyObject *args) {
-    int num_args = PyTuple_Size(args);
-    if (num_args != 1) {
-        PyErr_SetString(PyExc_TypeError, "env_step requires 1 argument");
-        return NULL;
-    }
-
-    Env *env = unpack_env(args);
-    if (!env) {
-        return NULL;
-    }
-    c_step(env);
-    Py_RETURN_NONE;
-}
-
-// Python function to close the environment
-static PyObject *env_close(PyObject *self, PyObject *args) {
-    Env *env = unpack_env(args);
-    if (!env) {
-        return NULL;
-    }
-    c_close(env);
-    free(env);
-    Py_RETURN_NONE;
-}
-
 static PyObject *env_get(PyObject *self, PyObject *args) {
     Env *env = unpack_env(args);
     if (!env) {
@@ -249,27 +200,6 @@ static PyObject *env_get(PyObject *self, PyObject *args) {
         return NULL;
     }
     return dict;
-}
-
-static PyObject *env_put(PyObject *self, PyObject *args, PyObject *kwargs) {
-    int num_args = PyTuple_Size(args);
-    if (num_args != 1) {
-        PyErr_SetString(PyExc_TypeError, "env_put requires 1 positional argument");
-        return NULL;
-    }
-
-    Env *env = unpack_env(args);
-    if (!env) {
-        return NULL;
-    }
-
-    PyObject *empty_args = PyTuple_New(0);
-    my_put(env, empty_args, kwargs);
-    if (PyErr_Occurred()) {
-        return NULL;
-    }
-
-    Py_RETURN_NONE;
 }
 
 typedef struct {
@@ -296,165 +226,6 @@ static VecEnv *unpack_vecenv(PyObject *args) {
     }
 
     return vec;
-}
-
-static PyObject *vec_init(PyObject *self, PyObject *args, PyObject *kwargs) {
-    if (PyTuple_Size(args) != 7) {
-        PyErr_SetString(PyExc_TypeError, "vec_init requires 6 arguments");
-        return NULL;
-    }
-
-    VecEnv *vec = (VecEnv *) calloc(1, sizeof(VecEnv));
-    if (!vec) {
-        PyErr_SetString(PyExc_MemoryError, "Failed to allocate vec env");
-        return NULL;
-    }
-    PyObject *num_envs_arg = PyTuple_GetItem(args, 5);
-    if (!PyObject_TypeCheck(num_envs_arg, &PyLong_Type)) {
-        PyErr_SetString(PyExc_TypeError, "num_envs must be an integer");
-        return NULL;
-    }
-    int num_envs = PyLong_AsLong(num_envs_arg);
-    if (num_envs <= 0) {
-        PyErr_SetString(PyExc_TypeError, "num_envs must be greater than 0");
-        return NULL;
-    }
-    vec->num_envs = num_envs;
-    vec->envs = (Env **) calloc(num_envs, sizeof(Env *));
-    if (!vec->envs) {
-        PyErr_SetString(PyExc_MemoryError, "Failed to allocate vec env");
-        return NULL;
-    }
-
-    PyObject *seed_obj = PyTuple_GetItem(args, 6);
-    if (!PyObject_TypeCheck(seed_obj, &PyLong_Type)) {
-        PyErr_SetString(PyExc_TypeError, "seed must be an integer");
-        return NULL;
-    }
-    int seed = PyLong_AsLong(seed_obj);
-
-    PyObject *obs = PyTuple_GetItem(args, 0);
-    if (!PyObject_TypeCheck(obs, &PyArray_Type)) {
-        PyErr_SetString(PyExc_TypeError, "Observations must be a NumPy array");
-        return NULL;
-    }
-    PyArrayObject *observations = (PyArrayObject *) obs;
-    if (!PyArray_ISCONTIGUOUS(observations)) {
-        PyErr_SetString(PyExc_ValueError, "Observations must be contiguous");
-        return NULL;
-    }
-    if (PyArray_NDIM(observations) < 2) {
-        PyErr_SetString(PyExc_ValueError, "Batched Observations must be at least 2D");
-        return NULL;
-    }
-
-    PyObject *act = PyTuple_GetItem(args, 1);
-    if (!PyObject_TypeCheck(act, &PyArray_Type)) {
-        PyErr_SetString(PyExc_TypeError, "Actions must be a NumPy array");
-        return NULL;
-    }
-    PyArrayObject *actions = (PyArrayObject *) act;
-    if (!PyArray_ISCONTIGUOUS(actions)) {
-        PyErr_SetString(PyExc_ValueError, "Actions must be contiguous");
-        return NULL;
-    }
-    if (PyArray_ITEMSIZE(actions) == sizeof(double)) {
-        PyErr_SetString(PyExc_ValueError, "Action tensor passed as float64 (pass np.float32 buffer)");
-        return NULL;
-    }
-
-    PyObject *rew = PyTuple_GetItem(args, 2);
-    if (!PyObject_TypeCheck(rew, &PyArray_Type)) {
-        PyErr_SetString(PyExc_TypeError, "Rewards must be a NumPy array");
-        return NULL;
-    }
-    PyArrayObject *rewards = (PyArrayObject *) rew;
-    if (!PyArray_ISCONTIGUOUS(rewards)) {
-        PyErr_SetString(PyExc_ValueError, "Rewards must be contiguous");
-        return NULL;
-    }
-    if (PyArray_NDIM(rewards) != 1) {
-        PyErr_SetString(PyExc_ValueError, "Rewards must be 1D");
-        return NULL;
-    }
-
-    PyObject *term = PyTuple_GetItem(args, 3);
-    if (!PyObject_TypeCheck(term, &PyArray_Type)) {
-        PyErr_SetString(PyExc_TypeError, "Terminals must be a NumPy array");
-        return NULL;
-    }
-    PyArrayObject *terminals = (PyArrayObject *) term;
-    if (!PyArray_ISCONTIGUOUS(terminals)) {
-        PyErr_SetString(PyExc_ValueError, "Terminals must be contiguous");
-        return NULL;
-    }
-    if (PyArray_NDIM(terminals) != 1) {
-        PyErr_SetString(PyExc_ValueError, "Terminals must be 1D");
-        return NULL;
-    }
-
-    PyObject *trunc = PyTuple_GetItem(args, 4);
-    if (!PyObject_TypeCheck(trunc, &PyArray_Type)) {
-        PyErr_SetString(PyExc_TypeError, "Truncations must be a NumPy array");
-        return NULL;
-    }
-    PyArrayObject *truncations = (PyArrayObject *) trunc;
-    if (!PyArray_ISCONTIGUOUS(truncations)) {
-        PyErr_SetString(PyExc_ValueError, "Truncations must be contiguous");
-        return NULL;
-    }
-    if (PyArray_NDIM(truncations) != 1) {
-        PyErr_SetString(PyExc_ValueError, "Truncations must be 1D");
-        return NULL;
-    }
-
-    // If kwargs is NULL, create a new dictionary
-    if (kwargs == NULL) {
-        kwargs = PyDict_New();
-    } else {
-        Py_INCREF(kwargs); // We need to increment the reference since we'll be modifying it
-    }
-
-    for (int i = 0; i < num_envs; i++) {
-        Env *env = (Env *) calloc(1, sizeof(Env));
-        if (!env) {
-            PyErr_SetString(PyExc_MemoryError, "Failed to allocate environment");
-            Py_DECREF(kwargs);
-            return NULL;
-        }
-        vec->envs[i] = env;
-
-        // // Make sure the log is initialized to 0
-        memset(&env->log, 0, sizeof(Log));
-
-        env->observations = (void *) ((char *) PyArray_DATA(observations) + i * PyArray_STRIDE(observations, 0));
-        env->actions = (void *) ((char *) PyArray_DATA(actions) + i * PyArray_STRIDE(actions, 0));
-        env->rewards = (void *) ((char *) PyArray_DATA(rewards) + i * PyArray_STRIDE(rewards, 0));
-        env->terminals = (void *) ((char *) PyArray_DATA(terminals) + i * PyArray_STRIDE(terminals, 0));
-        env->truncations = (void *) ((char *) PyArray_DATA(truncations) + i * PyArray_STRIDE(truncations, 0));
-
-        // Assumes each process has the same number of environments
-        int env_seed = i + seed * vec->num_envs;
-
-        // Add the seed to kwargs for this environment
-        PyObject *py_seed = PyLong_FromLong(env_seed);
-        if (PyDict_SetItemString(kwargs, "seed", py_seed) < 0) {
-            PyErr_SetString(PyExc_RuntimeError, "Failed to set seed in kwargs");
-            Py_DECREF(py_seed);
-            Py_DECREF(kwargs);
-            return NULL;
-        }
-        Py_DECREF(py_seed);
-
-        PyObject *empty_args = PyTuple_New(0);
-        my_init(env, empty_args, kwargs);
-        if (PyErr_Occurred()) {
-            return NULL;
-        }
-    }
-
-    Py_DECREF(kwargs);
-    return PyLong_FromVoidPtr(vec);
 }
 
 // Python function to close the environment
@@ -843,7 +614,6 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
                 rewards_f32[reward_base + REWARD_F32_TIMESTEP_IDX] = log->reward_timestep;
                 rewards_f32[reward_base + REWARD_F32_REVERSE_IDX] = log->reward_reverse;
                 rewards_f32[reward_base + REWARD_F32_OVERSPEED_IDX] = log->reward_overspeed;
-                rewards_f32[reward_base + REWARD_F32_ADE_IDX] = log->reward_ade;
             }
         }
 
@@ -876,46 +646,6 @@ static PyObject *vec_close(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-static PyObject *get_global_agent_state(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 7) {
-        PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 7 arguments");
-        return NULL;
-    }
-
-    Env *env = unpack_env(args);
-    if (!env) {
-        return NULL;
-    }
-
-    Drive *drive = (Drive *) env; // Cast to Drive*
-
-    // Get the numpy arrays from arguments
-    PyObject *x_arr = PyTuple_GetItem(args, 1);
-    PyObject *y_arr = PyTuple_GetItem(args, 2);
-    PyObject *z_arr = PyTuple_GetItem(args, 3);
-    PyObject *heading_arr = PyTuple_GetItem(args, 4);
-    PyObject *id_arr = PyTuple_GetItem(args, 5);
-    PyObject *length_arr = PyTuple_GetItem(args, 6);
-    PyObject *width_arr = PyTuple_GetItem(args, 7);
-
-    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(z_arr) || !PyArray_Check(heading_arr)
-        || !PyArray_Check(id_arr) || !PyArray_Check(length_arr) || !PyArray_Check(width_arr)) {
-        PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
-        return NULL;
-    }
-
-    float *x_data = (float *) PyArray_DATA((PyArrayObject *) x_arr);
-    float *y_data = (float *) PyArray_DATA((PyArrayObject *) y_arr);
-    float *z_data = (float *) PyArray_DATA((PyArrayObject *) z_arr);
-    float *heading_data = (float *) PyArray_DATA((PyArrayObject *) heading_arr);
-    int *id_data = (int *) PyArray_DATA((PyArrayObject *) id_arr);
-    float *length_data = (float *) PyArray_DATA((PyArrayObject *) length_arr);
-    float *width_data = (float *) PyArray_DATA((PyArrayObject *) width_arr);
-
-    c_get_global_agent_state(drive, 0, x_data, y_data, z_data, heading_data, id_data, length_data, width_data);
-
-    Py_RETURN_NONE;
-}
 static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 9) {
         PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 9 arguments");
@@ -1253,31 +983,6 @@ static PyObject *vec_get_agent_goal_progress(PyObject *self, PyObject *args) {
     return Py_BuildValue("(ii)", current_goal_idx, goal_count);
 }
 
-static PyObject *vec_set_agent_goal_progress(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 3) {
-        PyErr_SetString(
-            PyExc_TypeError,
-            "vec_set_agent_goal_progress requires 3 arguments (vec_env, agent_idx, current_goal_idx)");
-        return NULL;
-    }
-    VecEnv *vec = unpack_vecenv(args);
-    if (!vec) {
-        return NULL;
-    }
-    int agent_idx = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
-    int current_goal_idx = (int) PyLong_AsLong(PyTuple_GetItem(args, 2));
-    if (PyErr_Occurred()) {
-        return NULL;
-    }
-    if (c_set_agent_goal_progress((Drive *) vec->envs[0], agent_idx, current_goal_idx) != 0) {
-        PyErr_SetString(
-            PyExc_ValueError,
-            "vec_set_agent_goal_progress: agent index out of range or current_goal_idx outside 0..goal_count");
-        return NULL;
-    }
-    Py_RETURN_NONE;
-}
-
 static PyObject *vec_set_agent_goals(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 7) {
         PyErr_SetString(PyExc_TypeError, "vec_set_agent_goals requires 7 arguments");
@@ -1317,98 +1022,6 @@ static PyObject *vec_set_agent_goals(PyObject *self, PyObject *args) {
             MAX_GOALS);
         return NULL;
     }
-    Py_RETURN_NONE;
-}
-
-static PyObject *vec_set_agent_lane_goals(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 4) {
-        PyErr_SetString(
-            PyExc_TypeError,
-            "vec_set_agent_lane_goals requires 4 arguments (vec_env, idx, spacing_m, placed_goal_counts)");
-        return NULL;
-    }
-    VecEnv *vec = unpack_vecenv(args);
-    if (!vec) {
-        return NULL;
-    }
-    PyObject *idx_arr = PyTuple_GetItem(args, 1);
-    PyObject *counts_arr = PyTuple_GetItem(args, 3);
-    double spacing_m = PyFloat_AsDouble(PyTuple_GetItem(args, 2));
-    if (PyErr_Occurred()) {
-        return NULL;
-    }
-    if (!PyArray_Check(idx_arr) || !PyArray_Check(counts_arr) || PyArray_TYPE((PyArrayObject *) idx_arr) != NPY_INT32
-        || PyArray_TYPE((PyArrayObject *) counts_arr) != NPY_INT32) {
-        PyErr_SetString(PyExc_TypeError, "vec_set_agent_lane_goals: idx and placed_goal_counts must be int32 arrays");
-        return NULL;
-    }
-    int count = (int) PyArray_SIZE((PyArrayObject *) idx_arr);
-    if ((int) PyArray_SIZE((PyArrayObject *) counts_arr) != count) {
-        PyErr_SetString(PyExc_ValueError, "vec_set_agent_lane_goals: placed_goal_counts must have the length of idx");
-        return NULL;
-    }
-    const int *idx = (const int *) PyArray_DATA((PyArrayObject *) idx_arr);
-    int *placed_goal_counts = (int *) PyArray_DATA((PyArrayObject *) counts_arr);
-    if (c_set_agent_lane_goals((Drive *) vec->envs[0], count, idx, (float) spacing_m, placed_goal_counts) != 0) {
-        PyErr_SetString(
-            PyExc_ValueError,
-            "vec_set_agent_lane_goals: agent index out of range, agent without a pose, or spacing_m not > 0");
-        return NULL;
-    }
-    Py_RETURN_NONE;
-}
-
-static PyObject *get_ground_truth_trajectories(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 8) {
-        PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 8 arguments");
-        return NULL;
-    }
-
-    Env *env = unpack_env(args);
-    if (!env) {
-        return NULL;
-    }
-
-    Drive *drive = (Drive *) env;
-
-    // Get the numpy arrays from arguments
-    PyObject *x_arr = PyTuple_GetItem(args, 1);
-    PyObject *y_arr = PyTuple_GetItem(args, 2);
-    PyObject *z_arr = PyTuple_GetItem(args, 3);
-    PyObject *heading_arr = PyTuple_GetItem(args, 4);
-    PyObject *valid_arr = PyTuple_GetItem(args, 5);
-    PyObject *id_arr = PyTuple_GetItem(args, 6);
-    PyObject *scenario_id_arr = PyTuple_GetItem(args, 7);
-
-    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(z_arr) || !PyArray_Check(heading_arr)
-        || !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(scenario_id_arr)) {
-        PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
-        return NULL;
-    }
-
-    float *x_data = (float *) PyArray_DATA((PyArrayObject *) x_arr);
-    float *y_data = (float *) PyArray_DATA((PyArrayObject *) y_arr);
-    float *z_data = (float *) PyArray_DATA((PyArrayObject *) z_arr);
-    float *heading_data = (float *) PyArray_DATA((PyArrayObject *) heading_arr);
-    int *valid_data = (int *) PyArray_DATA((PyArrayObject *) valid_arr);
-    int *id_data = (int *) PyArray_DATA((PyArrayObject *) id_arr);
-    int *scenario_id_data = (int *) PyArray_DATA((PyArrayObject *) scenario_id_arr);
-
-    if (PyArray_NDIM((PyArrayObject *) x_arr) != 2) {
-        PyErr_SetString(PyExc_ValueError, "trajectory arrays must be 2D [num_agents, num_timesteps]");
-        return NULL;
-    }
-    c_get_global_ground_truth_trajectories(
-        drive,
-        (int) PyArray_DIM((PyArrayObject *) x_arr, 1),
-        x_data,
-        y_data,
-        z_data,
-        heading_data,
-        valid_data,
-        id_data,
-        scenario_id_data);
-
     Py_RETURN_NONE;
 }
 
@@ -1496,67 +1109,6 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
     Py_RETURN_NONE;
 }
 
-static PyObject *vec_get_road_edge_counts(PyObject *self, PyObject *args) {
-    VecEnv *vec = unpack_vecenv(args);
-    if (!vec) {
-        return NULL;
-    }
-
-    int total_polylines = 0, total_points = 0;
-    for (int i = 0; i < vec->num_envs; i++) {
-        Drive *drive = (Drive *) vec->envs[i];
-        int np, tp;
-        c_get_road_edge_counts(drive, &np, &tp);
-        total_polylines += np;
-        total_points += tp;
-    }
-    return Py_BuildValue("(ii)", total_polylines, total_points);
-}
-
-static PyObject *vec_get_road_edge_polylines(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 5) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_road_edge_polylines requires 5 arguments");
-        return NULL;
-    }
-
-    VecEnv *vec = unpack_vecenv(args);
-    if (!vec) {
-        return NULL;
-    }
-
-    PyObject *x_arr = PyTuple_GetItem(args, 1);
-    PyObject *y_arr = PyTuple_GetItem(args, 2);
-    PyObject *lengths_arr = PyTuple_GetItem(args, 3);
-    PyObject *scenario_ids_arr = PyTuple_GetItem(args, 4);
-
-    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(lengths_arr)
-        || !PyArray_Check(scenario_ids_arr)) {
-        PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
-        return NULL;
-    }
-
-    float *x_base = (float *) PyArray_DATA((PyArrayObject *) x_arr);
-    float *y_base = (float *) PyArray_DATA((PyArrayObject *) y_arr);
-    int *lengths_base = (int *) PyArray_DATA((PyArrayObject *) lengths_arr);
-    int *scenario_ids_base = (int *) PyArray_DATA((PyArrayObject *) scenario_ids_arr);
-
-    int poly_offset = 0, pt_offset = 0;
-    for (int i = 0; i < vec->num_envs; i++) {
-        Drive *drive = (Drive *) vec->envs[i];
-        int np, tp;
-        c_get_road_edge_counts(drive, &np, &tp);
-        c_get_road_edge_polylines(
-            drive,
-            &x_base[pt_offset],
-            &y_base[pt_offset],
-            &lengths_base[poly_offset],
-            &scenario_ids_base[poly_offset]);
-        poly_offset += np;
-        pt_offset += tp;
-    }
-    Py_RETURN_NONE;
-}
-
 static double unpack(PyObject *kwargs, char *key) {
     PyObject *val = PyDict_GetItemString(kwargs, key);
     if (val == NULL) {
@@ -1617,13 +1169,8 @@ static PyMethodDef methods[]
         (PyCFunction) env_init,
         METH_VARARGS | METH_KEYWORDS,
         "Init environment with observation, action, reward, terminal, truncation arrays"},
-       {"env_reset", env_reset, METH_VARARGS, "Reset the environment"},
-       {"env_step", env_step, METH_VARARGS, "Step the environment"},
-       {"env_close", env_close, METH_VARARGS, "Close the environment"},
        {"env_get", env_get, METH_VARARGS, "Get the environment state"},
-       {"env_put", (PyCFunction) env_put, METH_VARARGS | METH_KEYWORDS, "Put stuff into env"},
        {"vectorize", vectorize, METH_VARARGS, "Make a vector of environment handles"},
-       {"vec_init", (PyCFunction) vec_init, METH_VARARGS | METH_KEYWORDS, "Initialize a vector of environments"},
        {"vec_reset", vec_reset, METH_VARARGS, "Reset the vector of environments"},
        {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
        {"vec_per_episode_log",
@@ -1638,7 +1185,6 @@ static PyMethodDef methods[]
         METH_VARARGS,
         "Fill compact obs_html frame arrays from a VecEnv"},
        {"shared", (PyCFunction) my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
-       {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
        {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
        {"vec_set_agent_states",
         vec_set_agent_states,
@@ -1665,31 +1211,14 @@ static PyMethodDef methods[]
         METH_VARARGS,
         "Move traffic-light stop lines onto the external sim's own (co-sim)"},
        {"vec_set_agent_goals", vec_set_agent_goals, METH_VARARGS, "Set an agent's goal waypoints (co-sim)"},
-       {"vec_set_agent_lane_goals",
-        vec_set_agent_lane_goals,
-        METH_VARARGS,
-        "Give agents goals along their lane ahead (co-sim forecast)"},
-       {"vec_set_agent_goal_progress",
-        vec_set_agent_goal_progress,
-        METH_VARARGS,
-        "Set the consumed-goal count of one agent's window (co-sim)"},
        {"vec_get_agent_goal_progress",
         vec_get_agent_goal_progress,
         METH_VARARGS,
         "(current_goal_idx, goal_count) of one agent (co-sim)"},
-       {"get_ground_truth_trajectories", get_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories"},
        {"vec_get_global_ground_truth_trajectories",
         vec_get_global_ground_truth_trajectories,
         METH_VARARGS,
         "Get ground truth trajectories from vectorized env"},
-       {"vec_get_road_edge_counts",
-        vec_get_road_edge_counts,
-        METH_VARARGS,
-        "Get road edge polyline counts from vectorized env"},
-       {"vec_get_road_edge_polylines",
-        vec_get_road_edge_polylines,
-        METH_VARARGS,
-        "Get road edge polylines from vectorized env"},
        MY_METHODS,
        {NULL, NULL, 0, NULL}};
 
@@ -1773,7 +1302,6 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "CONTROLLER_IDM", CONTROLLER_IDM);
     PyModule_AddIntConstant(m, "INFRACTION_BEHAVIOR_IGNORE", INFRACTION_BEHAVIOR_IGNORE);
     PyModule_AddIntConstant(m, "INFRACTION_BEHAVIOR_STOP", INFRACTION_BEHAVIOR_STOP);
-    PyModule_AddIntConstant(m, "INFRACTION_BEHAVIOR_REMOVE", INFRACTION_BEHAVIOR_REMOVE);
     PyModule_AddIntConstant(m, "SIMULATION_MODE_GIGAFLOW", SIMULATION_MODE_GIGAFLOW);
     PyModule_AddIntConstant(m, "SIMULATION_MODE_REPLAY", SIMULATION_MODE_REPLAY);
     // Ego obs normalization (obs[4] * ACCEL_LONG_NORM = accel_long m/s^2); co-sim reads
@@ -1786,16 +1314,9 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddObject(m, "AGENT_STOPPED_SPEED_THRESHOLD", PyFloat_FromDouble(AGENT_STOPPED_SPEED_THRESHOLD));
     PyModule_AddObject(m, "CONDITIONING_ACC_MIN", PyFloat_FromDouble(REWARD_BOUNDS[REWARD_COEF_ACC].min_val));
     PyModule_AddObject(m, "CONDITIONING_ACC_MAX", PyFloat_FromDouble(REWARD_BOUNDS[REWARD_COEF_ACC].max_val));
-    PyModule_AddIntConstant(m, "ACTION_TYPE_DISCRETE", ACTION_TYPE_DISCRETE);
-    PyModule_AddIntConstant(m, "ACTION_TYPE_CONTINUOUS", ACTION_TYPE_CONTINUOUS);
-    PyModule_AddIntConstant(m, "DYNAMICS_MODEL_CLASSIC", DYNAMICS_MODEL_CLASSIC);
-    PyModule_AddIntConstant(m, "DYNAMICS_MODEL_JERK", DYNAMICS_MODEL_JERK);
     PyModule_AddIntConstant(m, "CONTROL_MODE_VEHICLES", CONTROL_MODE_VEHICLES);
-    PyModule_AddIntConstant(m, "CONTROL_MODE_AGENTS", CONTROL_MODE_AGENTS);
-    PyModule_AddIntConstant(m, "CONTROL_MODE_WOSAC", CONTROL_MODE_WOSAC);
     PyModule_AddIntConstant(m, "CONTROL_MODE_SDC_ONLY", CONTROL_MODE_SDC_ONLY);
     PyModule_AddIntConstant(m, "INIT_MODE_CREATE_ALL_VALID", INIT_MODE_CREATE_ALL_VALID);
-    PyModule_AddIntConstant(m, "INIT_MODE_CREATE_ONLY_CONTROLLED", INIT_MODE_CREATE_ONLY_CONTROLLED);
     PyModule_AddIntConstant(m, "INIT_MODE_CREATE_CONTROLLABLE_TYPES", INIT_MODE_CREATE_CONTROLLABLE_TYPES);
     PyObject_SetAttrString(m, "MULTI_LANE_FULL_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_FULL_SCORE_TIME));
     PyObject_SetAttrString(m, "MULTI_LANE_HALF_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_HALF_SCORE_TIME));
@@ -1804,7 +1325,6 @@ PyMODINIT_FUNC PyInit_binding(void) {
     // exact values the sim uses, so the two can never drift apart.
     if (add_float_table_constant(m, "JERK_LONG", JERK_LONG, NUM_JERK_LONG_ACTIONS) < 0
         || add_float_table_constant(m, "JERK_LAT", JERK_LAT, NUM_JERK_LAT_ACTIONS) < 0
-        || add_float_table_constant(m, "ACCELERATION_VALUES", ACCELERATION_VALUES, NUM_ACCELERATION_ACTIONS) < 0
         || add_float_table_constant(m, "STEERING_VALUES", STEERING_VALUES, NUM_STEERING_ACTIONS) < 0) {
         Py_DECREF(m);
         return NULL;

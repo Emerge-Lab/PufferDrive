@@ -2,8 +2,8 @@
 
 Each shard runs an independent `puffer eval` process over a disjoint scenario
 window (eval.scenario_offset), then the per-shard episode_metrics.csv files are
-merged into a single report; wandb=True writes its km/infraction into the summary
-of the training wandb run (self-play benchmark only). scripts/eval/tidy_selfplay_eval.py
+merged into a single report; wandb=True logs its km/infraction to the training
+wandb run (self-play benchmark only). scripts/eval/tidy_selfplay_eval.py
 then folds the shard folders into the aggregate dir (evaluation_summary.json,
 obs_html/ with every shard's failure pages, details/); --keep-shards leaves them.
 --num-gpus runs one shard per local GPU; --num-nodes runs the shards as srun steps

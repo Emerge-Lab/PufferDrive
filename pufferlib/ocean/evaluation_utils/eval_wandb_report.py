@@ -1,4 +1,4 @@
-"""Write one finished evaluation's headline metric into the summary of the wandb run that trained the checkpoint."""
+"""Log one finished evaluation's headline metric to the wandb run that trained the checkpoint."""
 
 import argparse
 import csv
@@ -9,6 +9,7 @@ import math
 import numbers
 import os
 import re
+import tempfile
 import time
 
 import yaml
@@ -47,9 +48,11 @@ RUN_CONFIG_FILE_NAME = "config.yaml"
 RUN_IDENTITY_KEYS = ("run_name", "wandb_project")
 REPORT_LOCK_FILE_NAME = ".eval_wandb_report.lock"
 WANDB_RUNNING_STATE = "running"
-SUMMARY_FLOAT_REL_TOLERANCE = 1e-9
-SUMMARY_VERIFY_ATTEMPT_COUNT = 3
-SUMMARY_VERIFY_BACKOFF_SECONDS = 2.0
+WANDB_RESUME_EXISTING_RUN = "must"
+WANDB_BOOKKEEPING_KEY_PREFIX = "_"
+STORED_FLOAT_REL_TOLERANCE = 1e-9
+REPORT_VERIFY_ATTEMPT_COUNT = 3
+REPORT_VERIFY_BACKOFF_SECONDS = 2.0
 
 
 class EvalReportError(Exception):
@@ -180,64 +183,96 @@ def load_run_identity(run_config_path):
     return run_identity
 
 
+def stored_value_matches(expected_value, stored_value):
+    """Whether wandb holds the expected value; numbers may differ by the server's float formatting."""
+    values_are_numbers = isinstance(expected_value, numbers.Real) and isinstance(stored_value, numbers.Real)
+    if values_are_numbers and math.isclose(expected_value, stored_value, rel_tol=STORED_FLOAT_REL_TOLERANCE):
+        return True
+    return json.dumps(expected_value, sort_keys=True) == json.dumps(stored_value, sort_keys=True)
+
+
 def find_summary_mismatches(expected_summary, stored_summary):
-    """Keys whose stored value is not the expected one; numbers may differ by the server's float formatting."""
+    """Keys whose stored value is not the expected one; wandb's own bookkeeping keys advance with every session."""
     mismatched_keys = []
     for key in sorted(expected_summary.keys() | stored_summary.keys()):
-        expected_value = expected_summary.get(key)
-        stored_value = stored_summary.get(key)
-        values_are_numbers = isinstance(expected_value, numbers.Real) and isinstance(stored_value, numbers.Real)
-        if values_are_numbers and math.isclose(expected_value, stored_value, rel_tol=SUMMARY_FLOAT_REL_TOLERANCE):
+        if key.startswith(WANDB_BOOKKEEPING_KEY_PREFIX):
             continue
-        if json.dumps(expected_value, sort_keys=True) != json.dumps(stored_value, sort_keys=True):
+        if not stored_value_matches(expected_summary.get(key), stored_summary.get(key)):
             mismatched_keys.append(key)
     return mismatched_keys
 
 
-def write_run_summary(run_identity, reported_values):
-    """Set summary values of a finished wandb run and verify that nothing else in its summary changed."""
+def log_run_metric(run_identity, metric_key, headline_value, result_source):
+    """Append the metric to a finished wandb run as a history row (charts plot history, not the summary), then verify."""
     import wandb
 
     run_path = f"{run_identity['wandb_project']}/{run_identity['run_name']}"
-    run = wandb.Api().run(run_path)
-    if run.state == WANDB_RUNNING_STATE:
+    api = wandb.Api()
+    trained_run = api.run(run_path)
+    if trained_run.state == WANDB_RUNNING_STATE:
         raise EvalReportError(
-            f"wandb run {run_path} is still running and its own logger would overwrite the summary; report again "
-            "once training has finished"
+            f"wandb run {run_path} is still running and a second session would collide with its logger; report "
+            "again once training has finished"
         )
+    source_key = metric_key + SOURCE_KEY_SUFFIX
+    expected_summary = {**trained_run.summary_metrics, metric_key: headline_value, source_key: result_source}
+    last_step_before_report = trained_run.history_keys["lastStep"]
 
-    expected_summary = {**run.summary_metrics, **reported_values}
-    run.summary.update(reported_values)
+    with tempfile.TemporaryDirectory() as session_dir:
+        session = wandb.init(
+            entity=trained_run.entity,
+            project=run_identity["wandb_project"],
+            id=run_identity["run_name"],
+            resume=WANDB_RESUME_EXISTING_RUN,
+            dir=session_dir,
+            settings=wandb.Settings(console="off", x_disable_meta=True, x_disable_stats=True),
+        )
+        try:
+            session.log({metric_key: headline_value})
+            session.summary[source_key] = result_source
+        finally:
+            session.finish()
 
     mismatched_keys = []
-    for attempt_idx in range(SUMMARY_VERIFY_ATTEMPT_COUNT):
-        time.sleep(attempt_idx * SUMMARY_VERIFY_BACKOFF_SECONDS)
-        mismatched_keys = find_summary_mismatches(expected_summary, wandb.Api().run(run_path).summary_metrics)
-        if not mismatched_keys:
+    for attempt_idx in range(REPORT_VERIFY_ATTEMPT_COUNT):
+        time.sleep(attempt_idx * REPORT_VERIFY_BACKOFF_SECONDS)
+        # the api object caches runs; a second Api() would repeat the service handshake, which can time out
+        api.flush()
+        stored_run = api.run(run_path)
+        mismatched_keys = find_summary_mismatches(expected_summary, stored_run.summary_metrics)
+        # the run's key index, not a history query: sampled history trails a finished session by seconds
+        stored_history_keys = stored_run.history_keys
+        history_row_stored = (
+            metric_key in stored_history_keys["keys"] and stored_history_keys["lastStep"] > last_step_before_report
+        )
+        if not mismatched_keys and history_row_stored:
             return
+    if mismatched_keys:
+        raise EvalReportError(
+            f"wandb run {run_path}: summary keys differ from the intended report, check them: {mismatched_keys}"
+        )
     raise EvalReportError(
-        f"wandb run {run_path}: summary keys differ from the intended update, check them: {mismatched_keys}"
+        f"wandb run {run_path}: {metric_key} did not reach the run's history; the charts will not show it"
     )
 
 
 def report_headline_metric(eval_type, result_path, run_dir, expected_episode_count=None):
-    """Report one evaluation's headline metric; a repeated report replaces the run's value for that eval type."""
+    """Report one evaluation's headline metric; a repeated report becomes the run's value for that eval type."""
     headline_value = read_headline_value(eval_type, result_path, expected_episode_count)
     run_identity = load_run_identity(os.path.join(run_dir, RUN_CONFIG_FILE_NAME))
     metric_key = HEADLINE_METRIC_KEYS[eval_type]
     result_source = os.path.relpath(os.path.abspath(result_path), os.path.abspath(run_dir))
-    reported_values = {metric_key: headline_value, metric_key + SOURCE_KEY_SUFFIX: result_source}
 
-    # the wandb API replaces the whole summary: evals of one run finishing together must not interleave
+    # a session appends at the history offset and summary it read when it opened: evals of one run must not overlap
     with open(os.path.join(run_dir, REPORT_LOCK_FILE_NAME), "w") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
-        write_run_summary(run_identity, reported_values)
+        log_run_metric(run_identity, metric_key, headline_value, result_source)
 
     print(
         f"wandb run {run_identity['wandb_project']}/{run_identity['run_name']}: {metric_key} = {headline_value} "
         f"({result_source})"
     )
-    return reported_values
+    return {metric_key: headline_value, metric_key + SOURCE_KEY_SUFFIX: result_source}
 
 
 def parse_arguments():

@@ -1,11 +1,6 @@
-"""Bird's Eye View visualization for PufferDrive scenarios using Matplotlib."""
+"""Interactive HTML replays of PufferDrive scenarios: encoding, rendering and the gallery index."""
 
-import matplotlib.figure
-import matplotlib.patches as mpatches
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.collections import LineCollection, PatchCollection, PolyCollection
-from matplotlib.patches import Circle
 import os
 import json
 import re
@@ -16,24 +11,6 @@ import struct
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import compute_effective_road_obs_count
 
-
-COLORS = {
-    "pedestrian": "#2E8B57",
-    "cyclist": "#FF8C00",
-    "road_line": "#808080",
-    "road_edge": "#000000",
-    "lane": "#D3D3D3",
-    "inactive_agent": "#808080",
-    "background": "#F5F5F5",
-}
-
-TRAFFIC_LIGHT_COLORS = {
-    binding.TRAFFIC_CONTROL_STATE_UNKNOWN: "#808080",
-    binding.TRAFFIC_CONTROL_STATE_RED: "#FF0000",
-    binding.TRAFFIC_CONTROL_STATE_YELLOW: "#FFFF00",
-    binding.TRAFFIC_CONTROL_STATE_GREEN: "#00FF00",
-    binding.TRAFFIC_CONTROL_STATE_OFF: "#808080",
-}
 
 VEHICLE_COLORS = [
     "#681D00",
@@ -85,36 +62,6 @@ PAYLOAD_CHUNK_PATTERN = re.compile(
     rb'<script type="application/octet-stream" class="payload-chunk">([A-Za-z0-9+/=]*)</script>'
 )
 REPLAY_INFLATE_MAX_ROUNDS = 1 << 12
-SIMULATOR_FIGSIZE = (20.0, 20.0)
-SIMULATOR_DPI = 100
-SIMULATOR_GOAL_RADIUS_METERS = 2.0
-SIMULATOR_DEFAULT_RADIUS_METERS = 100.0
-
-
-def _get_bounds(scenario):
-    map_corners = scenario.get("map_corners")
-    if map_corners and len(map_corners) >= 4:
-        center_x = (map_corners[0] + map_corners[2]) / 2
-        center_y = (map_corners[1] + map_corners[3]) / 2
-        radius = max(map_corners[2] - map_corners[0], map_corners[3] - map_corners[1]) / 2 * 1.02
-        return (center_x - radius, center_x + radius, center_y - radius, center_y + radius)
-    radius = SIMULATOR_DEFAULT_RADIUS_METERS
-    return (-radius, radius, -radius, radius)
-
-
-def _traffic_control_kind(control_type):
-    control_type = int(control_type)
-    if control_type == binding.TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT:
-        return "light"
-    if control_type == binding.TRAFFIC_CONTROL_TYPE_STOP_SIGN:
-        return "stop"
-    if control_type == binding.TRAFFIC_CONTROL_TYPE_YIELD_SIGN:
-        return "yield"
-    return None
-
-
-def _traffic_light_color(state):
-    return TRAFFIC_LIGHT_COLORS.get(int(state), COLORS["inactive_agent"])
 
 
 def _obs_scales(
@@ -146,698 +93,6 @@ def _obs_scales(
         "road_width_to_position": 1.0 if inverse_xy_scale is None else obs_norm_road_seg_width_m * inverse_xy_scale,
         "speed_to_mps": obs_norm_speed_mps,
     }
-
-
-def _build_road_data(road_elements):
-    lanes, lines, edges = [], [], []
-    for elem in road_elements or []:
-        if not isinstance(elem, dict):
-            continue
-        x, y, t = elem.get("x"), elem.get("y"), elem.get("type", 0)
-        if not x or not y:
-            continue
-        pts = np.column_stack((np.asarray(x), np.asarray(y)))
-        if 1 <= t <= 3:
-            lanes.append(pts)
-        elif 11 <= t <= 18:
-            lines.append(pts)
-        elif 21 <= t <= 23:
-            edges.append(pts)
-    return {
-        "lanes": lanes,
-        "lines": lines,
-        "edges": edges,
-    }
-
-
-def _render_roads(ax, road_data):
-    if not road_data:
-        return
-    lanes = road_data.get("lanes") or []
-    lines = road_data.get("lines") or []
-    edges = road_data.get("edges") or []
-    if lanes:
-        ax.add_collection(LineCollection(lanes, colors=COLORS["lane"], linewidths=0.8, alpha=0.7, zorder=1))
-    if lines:
-        ax.add_collection(
-            LineCollection(
-                lines,
-                colors=COLORS["road_line"],
-                linewidths=0.8,
-                alpha=0.6,
-                linestyles=(0, (5, 5)),
-                zorder=2,
-            )
-        )
-    if edges:
-        ax.add_collection(LineCollection(edges, colors=COLORS["road_edge"], linewidths=0.8, alpha=0.8, zorder=2))
-
-
-def _build_traffic_data(traffic_elements):
-    traffic_lights = []  # (stop_line, states)
-    stop_signs = []  # stop_line endpoints
-    yield_signs = []  # stop_line endpoints
-    for elem in traffic_elements or []:
-        if not isinstance(elem, dict):
-            continue
-        t_type = elem.get("type", binding.TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT)
-        sl = elem.get("stop_line")
-        if sl is None or len(sl) < 4:
-            continue
-        kind = _traffic_control_kind(t_type)
-        if kind == "light":
-            traffic_lights.append({"stop_line": sl, "states": elem.get("states", [])})
-        elif kind == "stop":
-            stop_signs.append(sl)
-        elif kind == "yield":
-            yield_signs.append(sl)
-    return {
-        "traffic_lights": traffic_lights,
-        "stop_signs": stop_signs,
-        "yield_signs": yield_signs,
-    }
-
-
-def _render_traffic(ax, traffic_data, timestep):
-    if not traffic_data:
-        return
-    # Traffic lights — colored by state
-    for light in traffic_data.get("traffic_lights", []):
-        sl = light["stop_line"]
-        states = light["states"]
-        state = int(states[timestep]) if states and len(states) > timestep else 0
-        color = _traffic_light_color(state)
-        ax.plot([sl[0], sl[3]], [sl[1], sl[4]], color=color, linewidth=3, solid_capstyle="butt", alpha=0.9, zorder=15)
-
-    # Stop signs — red/black striped
-    for sl in traffic_data.get("stop_signs", []):
-        ax.plot([sl[0], sl[3]], [sl[1], sl[4]], color="black", linewidth=4, solid_capstyle="butt", alpha=0.9, zorder=15)
-        ax.plot(
-            [sl[0], sl[3]],
-            [sl[1], sl[4]],
-            color="#FF0000",
-            linewidth=2.5,
-            solid_capstyle="butt",
-            alpha=0.9,
-            zorder=15,
-            linestyle=(0, (3, 2)),
-        )
-
-    # Yield signs — yellow/black striped
-    for sl in traffic_data.get("yield_signs", []):
-        ax.plot([sl[0], sl[3]], [sl[1], sl[4]], color="black", linewidth=4, solid_capstyle="butt", alpha=0.9, zorder=15)
-        ax.plot(
-            [sl[0], sl[3]],
-            [sl[1], sl[4]],
-            color="#FFD700",
-            linewidth=2.5,
-            solid_capstyle="butt",
-            alpha=0.9,
-            zorder=15,
-            linestyle=(0, (3, 2)),
-        )
-
-
-def _render_agents(ax, agents, active_indices, static_indices, px_per_meter):
-    if not agents:
-        return
-    active_set, static_set = set(active_indices or []), set(static_indices or [])
-    vehicles = []
-    vehicle_lengths = []
-    vehicle_widths = []
-    vehicle_headings = []
-    vehicle_colors = []
-    vehicle_edges = []
-    text_items = []
-    goal_points = []
-    goal_colors = []
-    ped_patches = []
-    cyclist_patches = []
-    font_size = max(12, int(px_per_meter / 5))
-
-    for idx, agent in enumerate(agents):
-        if idx not in active_set and idx not in static_set:
-            continue
-        if not agent.get("sim_valid"):
-            continue
-        x, y = agent.get("sim_x"), agent.get("sim_y")
-        if x is None or y is None:
-            continue
-
-        agent_type = agent.get("type", 1)
-        agent_id = agent.get("id", idx)
-        is_active = idx in active_set
-        color = VEHICLE_COLORS[agent_id % len(VEHICLE_COLORS)] if is_active else COLORS["inactive_agent"]
-        edge = "black" if is_active else COLORS["inactive_agent"]
-
-        if agent_type == 1:
-            if agent.get("stopped"):
-                color = "red"
-            length = agent.get("sim_length", 4)
-            width = agent.get("sim_width", 2)
-            heading = agent.get("sim_heading", 0)
-
-            vehicles.append((x, y))
-            vehicle_lengths.append(length)
-            vehicle_widths.append(width)
-            vehicle_headings.append(heading)
-            vehicle_colors.append(color)
-            vehicle_edges.append(edge)
-
-            text_items.append((x, y + width, str(agent_id)))
-
-            if is_active:
-                gx, gy = agent.get("current_goal_x"), agent.get("current_goal_y")
-                if gx is not None and gy is not None:
-                    goal_points.append((gx, gy))
-                    goal_colors.append(color)
-        elif agent_type == 2:
-            ped_patches.append(
-                Circle(
-                    (x, y),
-                    radius=0.5,
-                    facecolor=COLORS["pedestrian"],
-                    edgecolor="black",
-                    linewidth=0.7,
-                    alpha=0.85,
-                    zorder=10,
-                )
-            )
-        elif agent_type == 3:
-            cyclist_patches.append(
-                Circle(
-                    (x, y),
-                    radius=0.8,
-                    facecolor=COLORS["cyclist"],
-                    edgecolor="black",
-                    linewidth=1.5,
-                    alpha=0.85,
-                    zorder=10,
-                )
-            )
-
-    if vehicles:
-        centers = np.asarray(vehicles, dtype=float)
-        lengths = np.asarray(vehicle_lengths, dtype=float)
-        widths = np.asarray(vehicle_widths, dtype=float)
-        headings = np.asarray(vehicle_headings, dtype=float)
-        cos_h = np.cos(headings)
-        sin_h = np.sin(headings)
-        half_l = lengths / 2.0
-        half_w = widths / 2.0
-        base = np.stack(
-            (
-                np.stack((half_l, half_w), axis=1),
-                np.stack((half_l, -half_w), axis=1),
-                np.stack((-half_l, -half_w), axis=1),
-                np.stack((-half_l, half_w), axis=1),
-            ),
-            axis=1,
-        )
-        rot_x = base[:, :, 0] * cos_h[:, None] - base[:, :, 1] * sin_h[:, None]
-        rot_y = base[:, :, 0] * sin_h[:, None] + base[:, :, 1] * cos_h[:, None]
-        polys = np.stack((rot_x, rot_y), axis=2) + centers[:, None, :]
-
-        ax.add_collection(
-            PolyCollection(
-                polys,
-                facecolors=vehicle_colors,
-                edgecolors=vehicle_edges,
-                linewidths=0.7,
-                alpha=0.8,
-                zorder=10,
-            )
-        )
-
-        dx = lengths * 0.6 * cos_h
-        dy = lengths * 0.6 * sin_h
-        segments = np.stack((centers, centers + np.stack((dx, dy), axis=1)), axis=1)
-        ax.add_collection(LineCollection(segments, colors=vehicle_colors, linewidths=0.7, zorder=11))
-
-        head_len = widths * 0.25
-        head_half_width = widths * 0.2
-        tip = centers + np.stack((dx, dy), axis=1)
-        dir_vec = np.stack((cos_h, sin_h), axis=1)
-        perp_vec = np.stack((-sin_h, cos_h), axis=1)
-        base_center = tip - dir_vec * head_len[:, None]
-        left = base_center + perp_vec * head_half_width[:, None]
-        right = base_center - perp_vec * head_half_width[:, None]
-        arrows = np.stack((tip, left, right), axis=1)
-        ax.add_collection(
-            PolyCollection(
-                arrows,
-                facecolors=vehicle_colors,
-                edgecolors="black",
-                linewidths=0.3,
-                zorder=12,
-            )
-        )
-
-    if text_items:
-        for x, y, text in text_items:
-            ax.text(
-                x,
-                y,
-                text,
-                fontsize=font_size,
-                color="black",
-                ha="center",
-                va="bottom",
-                fontweight="bold",
-                zorder=12,
-            )
-
-    if goal_points:
-        gx, gy = zip(*goal_points)
-        ax.scatter(gx, gy, s=20, c=goal_colors, marker="o", zorder=13)
-        goal_patches = [Circle((x, y), radius=SIMULATOR_GOAL_RADIUS_METERS) for x, y in goal_points]
-        ax.add_collection(
-            PatchCollection(
-                goal_patches,
-                facecolors="none",
-                edgecolors=goal_colors,
-                linewidths=1.0,
-                linestyles="--",
-                zorder=13,
-            )
-        )
-
-    if ped_patches:
-        ax.add_collection(PatchCollection(ped_patches, match_original=True))
-    if cyclist_patches:
-        ax.add_collection(PatchCollection(cyclist_patches, match_original=True))
-
-
-def plot_simulator_state(scenario, timestep: int = 0) -> np.ndarray:
-    """Render simulator state to RGB image array."""
-    road_data = _build_road_data(scenario.get("road_elements", []))
-    traffic_data = _build_traffic_data(scenario.get("traffic_elements", []))
-
-    bounds = _get_bounds(scenario)
-    x_min, x_max, y_min, y_max = bounds
-
-    px_per_meter = min(
-        SIMULATOR_FIGSIZE[0] * SIMULATOR_DPI / (x_max - x_min),
-        SIMULATOR_FIGSIZE[1] * SIMULATOR_DPI / (y_max - y_min),
-    )
-
-    fig, ax = plt.subplots()
-    fig.set_size_inches(SIMULATOR_FIGSIZE)
-    fig.set_dpi(SIMULATOR_DPI)
-    fig.set_facecolor(COLORS["background"])
-    ax.set_facecolor(COLORS["background"])
-
-    ax.set_aspect("equal")
-    ax.set_title(
-        f"PufferDrive | {scenario.get('dataset_name', '')} | {scenario.get('scenario_id', '')} | t={timestep}",
-        fontsize=max(14, int(px_per_meter / 8)),
-        fontweight="bold",
-    )
-
-    _render_roads(ax, road_data)
-    _render_traffic(ax, traffic_data, timestep)
-
-    _render_agents(
-        ax,
-        scenario.get("agents", []),
-        scenario.get("active_agent_indices", []),
-        scenario.get("static_agent_indices", []),
-        px_per_meter,
-    )
-
-    ax.set_xlim(x_min, x_max)
-    ax.set_ylim(y_min, y_max)
-
-    return _img_from_fig(fig)
-
-
-def _img_from_fig(fig: matplotlib.figure.Figure) -> np.ndarray:
-    fig.subplots_adjust(left=0.01, bottom=0.02, right=1.00, top=0.96)
-    fig.canvas.draw()
-    data = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
-    img = data.reshape(fig.canvas.get_width_height()[::-1] + (4,))[:, :, 1:]
-    plt.close(fig)
-    return img
-
-
-def unpack_obs(
-    obs_flat,
-    reward_conditioning: bool = False,
-    num_goals: int = 5,
-    obs_slots_partners_n: int = 16,
-    obs_slots_lane_n: int = 16,
-    obs_slots_boundary_n: int = 16,
-    obs_slots_traffic_controls_n: int = 16,
-    obs_dropout_lane: float = 0.0,
-    obs_dropout_boundary: float = 0.0,
-    agent_idx: int = 0,
-    obs_partner_relative_velocity: bool = False,
-    obs_lane_speed_limit: bool = False,
-    obs_traffic_light_yellow_remaining: bool = False,
-):
-    """
-    Unpack the flattened observation into ego, map, partner, and traffic-control views.
-    Args:
-        obs_flat: flattened observation tensor of shape (batch_size, obs_dim) or (obs_dim,)
-    Return:
-        ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs
-    """
-    obs_flat = np.asarray(obs_flat)
-    if obs_flat.ndim == 1:
-        obs_flat = obs_flat[None, :]
-
-    ego_dim = binding.EGO_FEATURES
-
-    # Partner obs
-    partner_feature_size = binding.PARTNER_FEATURES + (
-        binding.PARTNER_RELATIVE_VELOCITY_FEATURES if obs_partner_relative_velocity else 0
-    )
-    # Road obs
-    lane_feature_size = binding.LANE_FEATURES + (binding.LANE_SPEED_LIMIT_FEATURES if obs_lane_speed_limit else 0)
-    boundary_feature_size = binding.BOUNDARY_FEATURES
-    # Traffic control obs
-    traffic_control_feature_size = binding.TRAFFIC_CONTROL_FEATURES + (
-        binding.TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES if obs_traffic_light_yellow_remaining else 0
-    )
-    lane_segment_count = compute_effective_road_obs_count(obs_slots_lane_n, obs_dropout_lane)
-    boundary_segment_count = compute_effective_road_obs_count(obs_slots_boundary_n, obs_dropout_boundary)
-
-    # Target obs
-    goal_features = binding.GOAL_FEATURES
-    goal_dim = num_goals * goal_features
-
-    # Extract ego state
-    ego_state = obs_flat[:, :ego_dim]
-
-    target_start = ego_dim
-    if reward_conditioning:
-        target_start += binding.NUM_REWARD_COEFS
-
-    target_end = target_start + goal_dim
-    target_obs = obs_flat[:, target_start:target_end]
-    target_obs = target_obs.reshape(-1, num_goals, goal_features)
-
-    # Extract partners
-    partners_start = target_end
-    partners_end = partners_start + obs_slots_partners_n * partner_feature_size
-    partners_obs = obs_flat[:, partners_start:partners_end]
-    partners_obs = partners_obs.reshape(-1, obs_slots_partners_n, partner_feature_size)
-
-    # Extract lane elements
-    lane_start = partners_end
-    lane_end = lane_start + lane_segment_count * lane_feature_size
-    lane_obs = obs_flat[:, lane_start:lane_end]
-    lane_obs = lane_obs.reshape(-1, lane_segment_count, lane_feature_size)
-
-    # Extract boundary elements
-    boundary_start = lane_end
-    boundary_end = boundary_start + boundary_segment_count * boundary_feature_size
-    boundary_obs = obs_flat[:, boundary_start:boundary_end]
-    boundary_obs = boundary_obs.reshape(-1, boundary_segment_count, boundary_feature_size)
-
-    # Extract traffic controls
-    traffic_start = boundary_end
-    traffic_end = traffic_start + obs_slots_traffic_controls_n * traffic_control_feature_size
-    if obs_slots_traffic_controls_n > 0:
-        traffic_controls_obs = obs_flat[:, traffic_start:traffic_end]
-        traffic_controls_obs = traffic_controls_obs.reshape(
-            -1, obs_slots_traffic_controls_n, traffic_control_feature_size
-        )
-    else:
-        traffic_controls_obs = np.zeros((obs_flat.shape[0], 0, traffic_control_feature_size))
-
-    return (
-        ego_state[agent_idx],
-        target_obs[agent_idx],
-        partners_obs[agent_idx],
-        lane_obs[agent_idx],
-        boundary_obs[agent_idx],
-        traffic_controls_obs[agent_idx],
-    )
-
-
-def plot_observation(
-    obs,
-    reward_conditioning=False,
-    num_goals=10,
-    obs_slots_partners_n=16,
-    obs_slots_lane_n=32,
-    obs_slots_boundary_n=32,
-    obs_slots_traffic_controls_n=4,
-    obs_dropout_lane=0.0,
-    obs_dropout_boundary=0.0,
-    obs_lane_stride=1,
-    obs_boundary_stride=1,
-    obs_goal_lane_distance=False,
-    agent_idx=0,
-    obs_norm_goal_offset_m=100.0,
-    obs_norm_xy_offset_m=100.0,
-    obs_norm_veh_width_m=10.0,
-    obs_norm_veh_length_m=15.0,
-    obs_norm_road_seg_length_m=5.0,
-    obs_norm_road_seg_width_m=5.0,
-    true_length_m=None,
-    true_width_m=None,
-    obs_partner_relative_velocity=False,
-    obs_lane_speed_limit=False,
-    obs_traffic_light_yellow_remaining=False,
-) -> np.ndarray:
-    """Plot observation in ego-centric frame.
-
-    Args:
-        obs: flattened observation tensor
-        true_length_m/true_width_m: physical ego size, drawn dashed when it differs from the observed size
-    """
-    fig, ax = plt.subplots(figsize=(20, 20))
-
-    ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs = unpack_obs(
-        obs,
-        reward_conditioning=reward_conditioning,
-        num_goals=num_goals,
-        obs_slots_partners_n=obs_slots_partners_n,
-        obs_slots_lane_n=obs_slots_lane_n,
-        obs_slots_boundary_n=obs_slots_boundary_n,
-        obs_slots_traffic_controls_n=obs_slots_traffic_controls_n,
-        obs_dropout_lane=obs_dropout_lane,
-        obs_dropout_boundary=obs_dropout_boundary,
-        agent_idx=agent_idx,
-        obs_partner_relative_velocity=obs_partner_relative_velocity,
-        obs_lane_speed_limit=obs_lane_speed_limit,
-        obs_traffic_light_yellow_remaining=obs_traffic_light_yellow_remaining,
-    )
-    scales = _obs_scales(
-        obs_norm_goal_offset_m=obs_norm_goal_offset_m,
-        obs_norm_xy_offset_m=obs_norm_xy_offset_m,
-        obs_norm_veh_width_m=obs_norm_veh_width_m,
-        obs_norm_veh_length_m=obs_norm_veh_length_m,
-        obs_norm_road_seg_length_m=obs_norm_road_seg_length_m,
-        obs_norm_road_seg_width_m=obs_norm_road_seg_width_m,
-    )
-    target_position_scale = scales["goal_to_position"]
-
-    ego_speed, ego_width, ego_length, steering_angle, accel_long, accel_lat, lcenter, lalign, speed_limit, *_ = (
-        ego_state
-    )
-
-    ego_width *= scales["veh_width_to_position"]
-    ego_length *= scales["veh_len_to_position"]
-
-    # Ego vehicle at origin
-    ax.add_patch(
-        mpatches.Rectangle(
-            (-ego_length / 2, -ego_width / 2),
-            ego_length,
-            ego_width,
-            facecolor="#0055FF",
-            edgecolor="#FFD700",
-            linewidth=4,
-            alpha=0.9,
-            zorder=10,
-        )
-    )
-    if true_length_m is not None and true_width_m is not None:
-        true_length = true_length_m / obs_norm_xy_offset_m
-        true_width = true_width_m / obs_norm_xy_offset_m
-        ax.add_patch(
-            mpatches.Rectangle(
-                (-true_length / 2, -true_width / 2),
-                true_length,
-                true_width,
-                facecolor="none",
-                edgecolor="#FFD700",
-                linewidth=2,
-                linestyle="--",
-                zorder=12,
-            )
-        )
-    # SDC label above the vehicle
-    ax.text(
-        0,
-        ego_width / 2 + 0.03,
-        "SDC",
-        ha="center",
-        va="bottom",
-        fontsize=11,
-        fontweight="bold",
-        color="#FFD700",
-        bbox=dict(boxstyle="round,pad=0.2", facecolor="#0055FF", edgecolor="#FFD700", linewidth=1.5),
-        zorder=11,
-    )
-
-    # Draw target waypoints
-    for i in range(target_obs.shape[0]):
-        if np.all(target_obs[i] == 0):
-            continue
-        wp_x = target_obs[i][0] * target_position_scale
-        wp_y = target_obs[i][1] * target_position_scale
-        color = "red" if i == 0 else "orange"
-        marker = "*" if i == 0 else "o"
-        s = 200 if i == 0 else 80
-        ax.scatter(wp_x, wp_y, color=color, marker=marker, s=s, zorder=15)
-
-    # Add dynamics info text for DYNAMICS_MODEL_JERK model
-    ego_info = f"Speed: {ego_speed:.2f}\nLane Centering: {lcenter:.2f}\nLane Align: {lalign:.2f}\nSpeed Limit: {speed_limit:.2f}"
-
-    ego_info += f"\nSteering: {steering_angle:.3f}\naccel_long: {accel_long:.2f}\naccel_lat: {accel_lat:.2f}"
-
-    ax.text(
-        0.02,
-        0.98,
-        ego_info,
-        transform=ax.transAxes,
-        fontsize=10,
-        verticalalignment="top",
-        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
-    )
-
-    # Partner agents
-    for i in range(partners_obs.shape[0]):
-        if np.all(partners_obs[i] == 0):
-            continue
-        rel_x, rel_y = partners_obs[i][0], partners_obs[i][1]
-        length = partners_obs[i][3] * scales["veh_len_to_position"]
-        width = partners_obs[i][4] * scales["veh_width_to_position"]
-        heading_cos, heading_sin = partners_obs[i][5], partners_obs[i][6]
-        heading = np.arctan2(heading_sin, heading_cos)
-
-        rect = mpatches.Rectangle(
-            (-length / 2, -width / 2),
-            length,
-            width,
-            facecolor="gray",
-            edgecolor="black",
-            linewidth=1,
-            alpha=0.6,
-            zorder=9,
-        )
-        rect.set_transform(plt.matplotlib.transforms.Affine2D().rotate(heading).translate(rel_x, rel_y) + ax.transData)
-        ax.add_patch(rect)
-
-    # Road elements
-    rl2p = scales["road_length_to_position"]
-    rw2p = scales["road_width_to_position"]
-    count_lane = 0
-    for i in range(lane_obs.shape[0]):
-        if np.all(lane_obs[i] == 0):
-            continue
-        count_lane += 1
-        rel_x, rel_y = lane_obs[i][0], lane_obs[i][1]
-        length = 2 * lane_obs[i][3] * rl2p
-        dir_cos, dir_sin = lane_obs[i][4], lane_obs[i][5]
-        # idx 7 = goal_dist_abs (0 near goal lane -> 1 far/unreachable); green->red colormap
-        color = plt.cm.RdYlGn_r(float(lane_obs[i][7])) if obs_goal_lane_distance else "lightgrey"
-        width = lane_obs[i][6] * rw2p
-        band = mpatches.Rectangle((-length / 2, -width / 2), length, width, facecolor=color, alpha=0.15, zorder=0)
-        band.set_transform(
-            plt.matplotlib.transforms.Affine2D().rotate(np.arctan2(dir_sin, dir_cos)).translate(rel_x, rel_y)
-            + ax.transData
-        )
-        ax.add_patch(band)
-        ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
-        ax.plot(
-            [rel_x + dir_cos * length / 2, rel_x - dir_cos * length / 2],
-            [rel_y + dir_sin * length / 2, rel_y - dir_sin * length / 2],
-            color=color,
-            linewidth=1,
-            zorder=1,
-        )
-
-    count_boundary = 0
-    for i in range(boundary_obs.shape[0]):
-        if np.all(boundary_obs[i] == 0):
-            continue
-        count_boundary += 1
-        rel_x, rel_y = boundary_obs[i][0], boundary_obs[i][1]
-        length = 2 * boundary_obs[i][3] * rl2p
-        dir_cos, dir_sin = boundary_obs[i][4], boundary_obs[i][5]
-        color = "black"
-        ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
-        ax.plot(
-            [rel_x + dir_cos * length / 2, rel_x - dir_cos * length / 2],
-            [rel_y + dir_sin * length / 2, rel_y - dir_sin * length / 2],
-            color=color,
-            linewidth=1,
-            zorder=1,
-        )
-
-    ax.text(
-        0.12,
-        0.95,
-        f"Lanes: {count_lane}\nBoundaries: {count_boundary}\nStride: {obs_lane_stride}/{obs_boundary_stride}"
-        + ("\nLanes: green=near goal -> red=far" if obs_goal_lane_distance else ""),
-        transform=ax.transAxes,
-        fontsize=10,
-        verticalalignment="top",
-        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
-    )
-
-    # Traffic controls
-    for i in range(traffic_controls_obs.shape[0]):
-        if np.all(traffic_controls_obs[i] == 0):
-            continue
-        rel_x1, rel_y1, rel_x2, rel_y2 = traffic_controls_obs[i][:4]
-        control_type, state = traffic_controls_obs[i][-2:]
-        control_type = int(control_type)
-        if control_type == binding.TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT:
-            ax.plot(
-                [rel_x1, rel_x2],
-                [rel_y1, rel_y2],
-                color=_traffic_light_color(state),
-                linewidth=2.5,
-                solid_capstyle="round",
-                alpha=0.9,
-                zorder=12,
-            )
-            continue
-
-        overlay = "#FF0000" if control_type == binding.TRAFFIC_CONTROL_TYPE_STOP_SIGN else "#FFD700"
-        ax.plot(
-            [rel_x1, rel_x2],
-            [rel_y1, rel_y2],
-            color="black",
-            linewidth=3.5,
-            solid_capstyle="round",
-            alpha=0.9,
-            zorder=12,
-        )
-        ax.plot(
-            [rel_x1, rel_x2],
-            [rel_y1, rel_y2],
-            color=overlay,
-            linewidth=2.2,
-            solid_capstyle="round",
-            alpha=0.9,
-            zorder=13,
-            linestyle=(0, (3, 2)),
-        )
-
-    ax.axis((-1, 1, -1, 1))
-    ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("X (ego frame)", fontsize=16)
-    ax.set_ylabel("Y (ego frame)", fontsize=16)
-    ax.set_title("Observation (Ego-Centric View)", fontsize=18, fontweight="bold")
-    # ax.grid(True, alpha=0.3)
-    return _img_from_fig(fig)
 
 
 def _pack_replay_binary(header, chunks):
@@ -1034,17 +289,14 @@ def encode_interactive_replay(scenario, replay):
         "obs_layout": "agent_dim_frame_delta" if replay.get("obs") is not None else None,
         "obs_agents": replay.get("obs_agents"),  # None: every agent's observations are stored
         "action_type": env_cfg.get("action_type", "continuous"),
-        "dynamics_model": env_cfg.get("dynamics_model", "classic"),
         "num_goals": int(env_cfg["num_goals"]),
         "reward_conditioning": bool(env_cfg["reward_conditioning"]),
         "obs_slots_partners_n": int(env_cfg["obs_slots_partners_n"]),
         "ego_dim": int(binding.EGO_FEATURES),
         "reward_coef_count": int(binding.NUM_REWARD_COEFS),
-        "partner_features": int(binding.PARTNER_FEATURES)
-        + (int(binding.PARTNER_RELATIVE_VELOCITY_FEATURES) if env_cfg.get("obs_partner_relative_velocity") else 0),
-        "lane_features": int(binding.LANE_FEATURES)
-        + (int(binding.LANE_SPEED_LIMIT_FEATURES) if env_cfg.get("obs_lane_speed_limit") else 0),
-        "lane_speed_limit_idx": int(binding.LANE_FEATURES) if env_cfg.get("obs_lane_speed_limit") else -1,
+        "partner_features": int(binding.PARTNER_FEATURES) + int(binding.PARTNER_RELATIVE_VELOCITY_FEATURES),
+        "lane_features": int(binding.LANE_FEATURES) + int(binding.LANE_SPEED_LIMIT_FEATURES),
+        "lane_speed_limit_idx": int(binding.LANE_FEATURES),
         "boundary_features": int(binding.BOUNDARY_FEATURES),
         "traffic_features": int(binding.TRAFFIC_CONTROL_FEATURES)
         + (
@@ -1237,10 +489,9 @@ __PAYLOAD_CHUNKS__
         const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];
         // Order must match the REWARD_COEF_* indices in constants.h.
         const COEF_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","throttle","steer","acc","speed"];
-        const REWARD_LABELS = ["collision","offroad","red light","stop sign","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed","ADE"];
-        const EGO_OBS_LABELS = ["speed","width","length","steer","accel lon","accel lat","lane dist","lane angle (cos | err/pi)","speed limit","stopped","lane curvature"];
+        const REWARD_LABELS = ["collision","offroad","red light","stop sign","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed"];
+        const EGO_OBS_LABELS = ["speed","width","length","steer","accel lon","accel lat","lane dist","lane angle (err/pi)","speed limit","stopped","lane curvature"];
         const EGO_COND_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","C_throttle","C_steer","C_acc","C_vel"];
-        const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
         const JLONG = [-15,-4,0,4], JLAT = [-4,0,4];
         const DYNAMIC_EXPERT_COLOR = "#c4c8cf";
         const STATIC_AGENT_COLOR = "#4a505a";
@@ -1735,18 +986,18 @@ self.onmessage = async event => {
             let labels = [];
             if (discrete) {
                 // Probability heatmap over the 2D action grid (rows x cols), index i = row * cols.length + col.
-                const jerk = H.dynamics_model === "jerk", rows = jerk ? JLONG : ACCEL, cols = jerk ? JLAT : STEER;
+                const rows = JLONG, cols = JLAT;
                 html += `<div class="heat" style="grid-template-columns:auto repeat(${cols.length},1fr)">`;
                 html += '<div class="heat-lab"></div>' + cols.map(v=>`<div class="heat-lab">${v.toFixed(1)}</div>`).join('');
                 for (let r=0;r<rows.length;r++) { html += `<div class="heat-lab">${rows[r].toFixed(1)}</div>`; for (let cI=0;cI<cols.length;cI++) html += '<div class="heat-cell"></div>'; }
-                html += `</div><div class="heat-cap">${jerk ? 'jerk_long &#8595; / jerk_lat &#8594;' : 'accel &#8595; / steer &#8594;'}</div>`;
+                html += '</div><div class="heat-cap">jerk_long &#8595; / jerk_lat &#8594;</div>';
                 if (C.action_index && actionDims === 2) {
                     // continuous env driven by the distribution mean: the grid highlights the argmax, these are the executed values
-                    labels = jerk ? ["jerk_long","jerk_lat"] : ["accel","steer"];
+                    labels = ["jerk_long","jerk_lat"];
                     labels.forEach(l => html += `<div class="item"><span class="name">executed ${l} (mean)</span><span class="num pol-act">-</span></div>`);
                 }
             } else {
-                labels = H.action_type === "continuous" ? (H.dynamics_model === "jerk" ? ["jerk_long","jerk_lat"] : ["accel","steer"]) : Array.from({length:actionDims}, (_,i)=>`p${i}`);
+                labels = H.action_type === "continuous" ? ["jerk_long","jerk_lat"] : Array.from({length:actionDims}, (_,i)=>`p${i}`);
                 labels.forEach(l => html += `<div class="item"><span class="name">${l}</span><span class="num pol-act">-</span></div>`);
                 if (C.policy_mean) { labels.forEach(l => html += `<div class="item"><span class="name">mean ${l}</span><span class="num pol-mean">-</span></div><div class="item"><span class="name">std ${l}</span><span class="num pol-std">-</span></div>`); html += '<div class="item"><span class="name">log prob</span><span class="num" data-pol="lp">-</span></div>'; }
             }
@@ -1786,7 +1037,7 @@ self.onmessage = async event => {
                 }
                 for (let i=0;i<refs.acts.length;i++) {
                     const clip = C.clipped_action[ab+i];
-                    const scaled = H.dynamics_model === "jerk" ? (i===0 ? (clip < 0 ? clip*15 : clip*4) : clip*4) : (i===0 ? clip*4 : clip*.667);
+                    const scaled = i===0 ? (clip < 0 ? clip*15 : clip*4) : clip*4;
                     refs.acts[i].textContent = scaled.toFixed(2) + ' / ' + clip.toFixed(2);
                 }
                 return;
@@ -1794,7 +1045,7 @@ self.onmessage = async event => {
             for (let i=0;i<refs.acts.length;i++) {
                 const raw = C.raw_action[ab+i], clip = C.clipped_action[ab+i];
                 let scaled = clip;
-                if (H.action_type === "continuous") scaled = H.dynamics_model === "jerk" ? (i===0 ? (clip < 0 ? clip*15 : clip*4) : clip*4) : (i===0 ? clip*4 : clip*.667);
+                if (H.action_type === "continuous") scaled = i===0 ? (clip < 0 ? clip*15 : clip*4) : clip*4;
                 refs.acts[i].textContent = scaled.toFixed(2) + ' / ' + raw.toFixed(2);
             }
             if (C.policy_mean) { for (let i=0;i<refs.means.length;i++){ refs.means[i].textContent = C.policy_mean[ab+i].toFixed(3); refs.stds[i].textContent = C.policy_std[ab+i].toFixed(3); } refs.polLp.textContent = C.policy_log_prob[s].toFixed(3); }

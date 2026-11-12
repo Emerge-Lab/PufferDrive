@@ -22,8 +22,6 @@ def _make_env(**overrides):
         "allow_map_subset": True,
         "map_dir": MAP_DIR,
         "simulation_mode": "gigaflow",
-        "action_type": "continuous",
-        "dynamics_model": "jerk",
         "scenario_length": 120,
         "resample_frequency": 1_000_000,
         "termination_mode": 0,

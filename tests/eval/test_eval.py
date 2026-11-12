@@ -30,21 +30,36 @@ BENCHMARK_SCENARIO_LENGTH = 48
 WANDB_RUN_NAME = "k_exp_0002_1000"
 WANDB_PROJECT = "nightly-multi-long"
 WANDB_TRAINING_SUMMARY = {"environment/collision_rate": 0.0123}
+WANDB_TRAINING_LAST_STEP = 1000190509056
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CARLA_MAP_DIR = REPO_ROOT / "pufferlib/resources/drive/binaries/carla"
 REPLAY_MAP_DIR = REPO_ROOT / "pufferlib/resources/drive/binaries/sdc_replay_test"
 
 
 class ZeroPolicy(torch.nn.Module):
-    def __init__(self, action_count):
+    """Discrete jerk-grid policy with uniform logits: mode selection always takes class 0."""
+
+    is_continuous = False
+
+    def __init__(self):
         super().__init__()
-        self.action_count = action_count
+        jerk_long = torch.tensor(binding.JERK_LONG)
+        jerk_lat = torch.tensor(binding.JERK_LAT)
+        long_norm = torch.where(jerk_long < 0.0, jerk_long / -jerk_long[0], jerk_long / jerk_long[-1])
+        lat_norm = jerk_lat / jerk_lat[-1]
+        class_idx = torch.arange(len(jerk_long) * len(jerk_lat))
+        self.action_table = torch.stack(
+            [long_norm[class_idx // len(jerk_lat)], lat_norm[class_idx % len(jerk_lat)]], -1
+        )
 
     def forward_eval(self, observations):
         batch_size = observations.shape[0]
-        logits = torch.zeros((batch_size, self.action_count), device=observations.device)
+        logits = torch.zeros((batch_size, len(self.action_table)), device=observations.device)
         values = torch.zeros((batch_size, 1), device=observations.device)
-        return (logits,), values
+        return logits, values
+
+    def discrete_actions_to_continuous(self, actions):
+        return self.action_table[actions.long()]
 
 
 def _load_config():
@@ -147,8 +162,6 @@ def _standalone_eval_args(benchmark_config_path):
             "use_map_cache": True,
             "scenario_length": CARLA_SCENARIO_LENGTH,
             "resample_frequency": CARLA_SCENARIO_LENGTH,
-            "action_type": "discrete",
-            "dynamics_model": "classic",
         }
     )
     _set_small_observation_config(args)
@@ -199,7 +212,7 @@ def carla_evaluation(tmp_path_factory):
         benchmark_results = pufferl.eval(
             env_name="puffer_drive",
             args=args,
-            policy=ZeroPolicy(action_count=63),
+            policy=ZeroPolicy(),
             eval_output_dir=str(output_root),
             eval_output_subdir="standard",
             benchmark_names="carla_test",
@@ -289,7 +302,8 @@ def test_eval_report_reduces_distance_per_infraction_from_raw_totals():
 
 
 def _run_standalone_eval_with_wandb(tmp_path, monkeypatch, benchmark_name):
-    """Evaluate a checkpoint folder with wandb=True against a stub wandb -> (run dir, stored summary, run paths)."""
+    """Evaluate a checkpoint folder with wandb=True against a stub wandb
+    -> (run dir, stored summary, stored history rows, requested run paths)."""
     run_dir = tmp_path / WANDB_RUN_NAME
     benchmark_config_path = _write_benchmark_config(
         tmp_path / "benchmark.yaml",
@@ -311,42 +325,64 @@ def _run_standalone_eval_with_wandb(tmp_path, monkeypatch, benchmark_name):
     args["wandb"] = True
 
     stored_summary = dict(WANDB_TRAINING_SUMMARY)
+    stored_history = [{**WANDB_TRAINING_SUMMARY, "_step": WANDB_TRAINING_LAST_STEP}]
     requested_run_paths = []
 
     def fetch_run(run_path):
         requested_run_paths.append(run_path)
+        logged_keys = {key for row in stored_history for key in row if not key.startswith("_")}
         return types.SimpleNamespace(
             state="finished",
+            entity="emerge_",
             summary_metrics=dict(stored_summary),
-            summary=types.SimpleNamespace(update=stored_summary.update),
+            history_keys={"keys": dict.fromkeys(logged_keys, {}), "lastStep": stored_history[-1]["_step"]},
         )
 
+    def log_history_row(values):
+        stored_history.append({**values, "_step": stored_history[-1]["_step"] + 1})
+        stored_summary.update(values)
+
+    def open_session(**init_kwargs):
+        return types.SimpleNamespace(log=log_history_row, summary=stored_summary, finish=lambda: None)
+
     stub_wandb = types.ModuleType("wandb")
-    stub_wandb.Api = lambda: types.SimpleNamespace(run=fetch_run)
+    stub_wandb.Api = lambda: types.SimpleNamespace(run=fetch_run, flush=lambda: None)
+    stub_wandb.Settings = lambda **settings: settings
+    stub_wandb.init = open_session
     monkeypatch.setitem(sys.modules, "wandb", stub_wandb)
 
-    pufferl.eval(env_name="puffer_drive", args=args, policy=ZeroPolicy(action_count=63))
-    return run_dir, stored_summary, requested_run_paths
+    pufferl.eval(env_name="puffer_drive", args=args, policy=ZeroPolicy())
+    return run_dir, stored_summary, stored_history, requested_run_paths
 
 
 def test_standalone_selfplay_eval_reports_its_km_per_infraction_to_wandb(tmp_path, monkeypatch):
-    run_dir, stored_summary, requested_run_paths = _run_standalone_eval_with_wandb(tmp_path, monkeypatch, "carla")
+    run_dir, stored_summary, stored_history, requested_run_paths = _run_standalone_eval_with_wandb(
+        tmp_path, monkeypatch, "carla"
+    )
 
     summary_path = next(run_dir.glob("eval/carla/*/evaluation_summary.json"))
     distance_per_infraction_meters = json.loads(summary_path.read_text())["metrics_mean"]["avg_distance_per_infraction"]
+    km_per_infraction = distance_per_infraction_meters / 1000.0
     assert set(requested_run_paths) == {f"{WANDB_PROJECT}/{WANDB_RUN_NAME}"}
     assert stored_summary == {
         **WANDB_TRAINING_SUMMARY,
-        "final_eval/selfplay_km_per_infraction": distance_per_infraction_meters / 1000.0,
+        "final_eval/selfplay_km_per_infraction": km_per_infraction,
         "final_eval/selfplay_km_per_infraction_source": str(summary_path.relative_to(run_dir)),
     }
+    # The charts plot history rows: the value is one, a step after training's last.
+    assert stored_history[1:] == [
+        {"final_eval/selfplay_km_per_infraction": km_per_infraction, "_step": WANDB_TRAINING_LAST_STEP + 1}
+    ]
 
 
 def test_standalone_eval_of_another_benchmark_reports_nothing_to_wandb(tmp_path, monkeypatch):
-    _, stored_summary, requested_run_paths = _run_standalone_eval_with_wandb(tmp_path, monkeypatch, "carla_fast")
+    _, stored_summary, stored_history, requested_run_paths = _run_standalone_eval_with_wandb(
+        tmp_path, monkeypatch, "carla_fast"
+    )
 
     assert requested_run_paths == []
     assert stored_summary == WANDB_TRAINING_SUMMARY
+    assert len(stored_history) == 1
 
 
 def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
@@ -382,7 +418,7 @@ def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
         total_steps,
         "Seed replay",
         CARLA_SCENARIO_COUNT,
-        policy=ZeroPolicy(action_count=63),
+        policy=ZeroPolicy(),
     )
     replay_output_dir = carla_evaluation["output_root"] / "seed_replay"
     replay_summary = drive_benchmark._write_eval_reports(
@@ -421,8 +457,6 @@ def _replay_render_args():
             "max_agents_per_env": 1,
             "num_maps": 1,
             "map_dir": str(REPLAY_MAP_DIR),
-            "action_type": "discrete",
-            "dynamics_model": "jerk",
             "simulation_mode": "replay",
             "control_mode": "control_sdc_only",
             "sdc_controller": "replay",
@@ -430,7 +464,6 @@ def _replay_render_args():
             "scenario_length": 64,
             "resample_frequency": 64,
             "termination_mode": False,
-            "terminate_on_goal": False,
             "goal_source": "gt",
             "num_goals": 3,
             "compute_eval_metrics": True,
@@ -491,7 +524,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
         total_steps,
         "Replay capture",
         expected_episodes=2,
-        policy=ZeroPolicy(action_count=12),
+        policy=ZeroPolicy(),
         replay_output_dir=replay_output_dir,
         capture_observations=capture_observations,
     )
@@ -524,7 +557,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
         assert required_chunks <= set(header["chunks"])
         assert header["agent_goal_radius_field"] == 12
         assert header["chunks"]["agent_f32"]["shape"][2] == 13
-        assert header["chunks"]["rewards_f32"]["shape"][2] == 14
+        assert header["chunks"]["rewards_f32"]["shape"][2] == binding.REWARD_F32_FIELDS
         agent_frames = _read_replay_float32_chunk(replay_path, "agent_f32")
         assert np.any(agent_frames[..., header["agent_goal_radius_field"]] > 0.0)
         rewards = _read_replay_float32_chunk(replay_path, "rewards_f32")
@@ -602,8 +635,6 @@ def _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir):
             "control_mode": "control_sdc_only",
             "scenario_length": SDC_SCENARIO_LENGTH,
             "resample_frequency": SDC_SCENARIO_LENGTH,
-            "action_type": "discrete",
-            "dynamics_model": "classic",
         }
     )
     _set_small_observation_config(args)
@@ -644,7 +675,7 @@ def _run_sdc_eval(output_root, map_dir, benchmark_name, max_scenarios_per_batch)
     pufferl.eval(
         env_name="puffer_drive",
         args=args,
-        policy=ZeroPolicy(action_count=63),
+        policy=ZeroPolicy(),
         eval_output_dir=str(output_root),
         eval_output_subdir=benchmark_name,
         benchmark_names=benchmark_name,

@@ -35,8 +35,6 @@ class Drive(pufferlib.PufferEnv):
         reward_stop_line=1.0,
         reward_timestep=0.000025,
         reward_overspeed=0.005,
-        overspeed_tolerance_mps=0.0,
-        reward_ade=0.0,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
         goal_heading_max_deg=0.0,
@@ -60,7 +58,6 @@ class Drive(pufferlib.PufferEnv):
         dt=0.1,
         base_max_speed_mps=20.0,
         max_speed_mps=None,
-        spawn_initial_speed=0.0,
         spawn_lateral_offset_max_frac=0.0,
         spawn_heading_max_deg=0.0,
         pose_noise_xy_m=0.0,
@@ -70,7 +67,6 @@ class Drive(pufferlib.PufferEnv):
         speed_limit_random_min_mps=1.39,
         speed_limit_random_max_mps=36.11,
         goal_speed=3.0,
-        goal_speed_randomization=True,
         conditioning_accel_scale=1.0,
         conditioning_speed_scale=1.5,
         goal_reach_requires_speed=False,
@@ -84,17 +80,12 @@ class Drive(pufferlib.PufferEnv):
         cosim_partner_slots=0,
         cosim_eval_semantics=False,
         scripted_pedestrian_ratio=0.0,
-        action_type="discrete",
-        dynamics_model="classic",
-        reset_accel_on_stop=False,
         simulation_mode="gigaflow",
         termination_mode=False,
         inactive_agent_threshold=0.4,
-        terminate_on_goal=False,
         buf=None,
         seed=1,
         init_step=0,
-        init_step_spread=False,
         init_step_min_horizon=20,
         stagger_first_episode=False,
         eval_mode=0,
@@ -113,26 +104,19 @@ class Drive(pufferlib.PufferEnv):
         config_only=False,
         goal_regen_mode="finite",
         goal_source="route",
-        obs_goal_lane_distance=False,
         reward_conditioning=False,
         reward_randomization=False,
-        reward_log_sampling=False,
         compute_eval_metrics=True,
-        shared_network=True,
         obs_slots_lane_n=32,
         obs_slots_boundary_n=32,
         obs_lane_stride=1,
         obs_boundary_stride=1,
         obs_stride_merge_segments=False,
         obs_slots_partners_n=16,
-        obs_partner_relative_velocity=False,
-        obs_lane_heading_signed=False,
-        obs_lane_speed_limit=False,
         obs_slots_traffic_controls_n=4,
         obs_traffic_light_yellow_remaining=False,
         traffic_lights_enabled=True,
         stop_signs_enabled=False,
-        yield_signs_enabled=False,
         starting_map=0,
         obs_norm_speed_mps=60.0,
         obs_norm_goal_offset_m=100.0,
@@ -144,7 +128,6 @@ class Drive(pufferlib.PufferEnv):
         obs_norm_z_m=10.0,
         eval_perceived_size_margin_m=0.1,
         red_light_train_front_margin_m=0.3,
-        red_light_train_rear_margin_m=0.0,
         obs_partner_split_length_m=0.0,
         obs_lane_width_clip_min_m=0.0,
         obs_lane_width_clip_max_m=0.0,
@@ -160,17 +143,13 @@ class Drive(pufferlib.PufferEnv):
         partner_blindness_prob_min=0.0,
         partner_blindness_trigger_prob=0.1,
         partner_blindness_duration_seconds=1.0,
-        partner_blindness_corridor=True,
-        partner_blindness_time_fraction_max=0.0,
         phantom_braking_prob=0.0,
         phantom_braking_trigger_prob=0.0,
         phantom_braking_duration_seconds=1.0,
-        phantom_braking_freeze_steering=True,
     ):
         self.dt = dt
         self.base_max_speed_mps = float(base_max_speed_mps)
         self.max_speed_mps = self.base_max_speed_mps if max_speed_mps is None else float(max_speed_mps)
-        self.spawn_initial_speed = float(spawn_initial_speed)
         self.spawn_lateral_offset_max_frac = float(spawn_lateral_offset_max_frac)
         self.spawn_heading_max_deg = float(spawn_heading_max_deg)
         if not 0.0 <= self.spawn_lateral_offset_max_frac <= 1.0:
@@ -197,7 +176,6 @@ class Drive(pufferlib.PufferEnv):
                 f"got {speed_limit_random_min_mps} / {speed_limit_random_max_mps}"
             )
         self.goal_speed = float(goal_speed)
-        self.goal_speed_randomization = int(bool(goal_speed_randomization))
         # Eval-time C_acc conditioning coefficient (training samples it in REWARD_BOUNDS[REWARD_COEF_ACC]).
         self.conditioning_speed_scale = float(conditioning_speed_scale)
         if not np.isfinite(self.conditioning_speed_scale) or self.conditioning_speed_scale < 1.0:
@@ -211,9 +189,7 @@ class Drive(pufferlib.PufferEnv):
         self.goal_reach_requires_speed = int(bool(goal_reach_requires_speed))
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
-        self.reward_log_sampling = reward_log_sampling
         self.compute_eval_metrics = compute_eval_metrics
-        self.shared_network = shared_network
         self.num_maps = num_maps
         self.allow_map_subset = bool(allow_map_subset)
         self.report_interval = report_interval
@@ -230,10 +206,6 @@ class Drive(pufferlib.PufferEnv):
         self.reward_stop_line = reward_stop_line
         self.reward_timestep = reward_timestep
         self.reward_overspeed = reward_overspeed
-        self.overspeed_tolerance_mps = float(overspeed_tolerance_mps)
-        if not (self.overspeed_tolerance_mps >= 0.0) or not np.isfinite(self.overspeed_tolerance_mps):
-            raise ValueError(f"overspeed_tolerance_mps must be finite and >= 0, got {overspeed_tolerance_mps}")
-        self.reward_ade = reward_ade
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
@@ -250,11 +222,9 @@ class Drive(pufferlib.PufferEnv):
             "external": binding.GOAL_SOURCE_EXTERNAL,
             "gt_map": binding.GOAL_SOURCE_GT_MAP,
         }[goal_source]
-        self.obs_goal_lane_distance = int(bool(obs_goal_lane_distance))
         infraction_behavior_values = {
             "ignore": binding.INFRACTION_BEHAVIOR_IGNORE,
             "stop": binding.INFRACTION_BEHAVIOR_STOP,
-            "remove": binding.INFRACTION_BEHAVIOR_REMOVE,
         }
         self.collision_behavior = infraction_behavior_values[collision_behavior]
         self.offroad_behavior = infraction_behavior_values[offroad_behavior]
@@ -289,12 +259,8 @@ class Drive(pufferlib.PufferEnv):
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
         self.use_neighbor_cache = use_neighbor_cache
-        self.dynamics_model = dynamics_model
-        self.dynamics_model_flag = {
-            "classic": binding.DYNAMICS_MODEL_CLASSIC,
-            "jerk": binding.DYNAMICS_MODEL_JERK,
-        }[dynamics_model]
-        self.reset_accel_on_stop = reset_accel_on_stop
+        # alpasim-training reads this attribute; the jerk model always zeroes both accelerations at a stop
+        self.reset_accel_on_stop = True
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
         self.max_scenarios_per_batch = max_scenarios_per_batch
@@ -307,7 +273,6 @@ class Drive(pufferlib.PufferEnv):
         self.use_exact_episode_seed = bool(eval_mode) and self.eval_scenario_seeds is not None
         self.termination_mode = termination_mode
         self.inactive_agent_threshold = inactive_agent_threshold
-        self.terminate_on_goal = terminate_on_goal
         self.rng = np.random.default_rng(seed)
         self.min_agents_per_env = min_agents_per_env
         self.max_agents_per_env = max_agents_per_env
@@ -338,12 +303,8 @@ class Drive(pufferlib.PufferEnv):
         self.obs_boundary_stride = obs_boundary_stride
         self.obs_stride_merge_segments = int(bool(obs_stride_merge_segments))
         self.obs_slots_partners_n = obs_slots_partners_n
-        self.obs_partner_relative_velocity = int(bool(obs_partner_relative_velocity))
-        self.obs_lane_heading_signed = int(bool(obs_lane_heading_signed))
-        self.obs_lane_speed_limit = int(bool(obs_lane_speed_limit))
         self.traffic_lights_enabled = traffic_lights_enabled
         self.stop_signs_enabled = stop_signs_enabled
-        self.yield_signs_enabled = yield_signs_enabled
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
         self.obs_traffic_light_yellow_remaining = int(bool(obs_traffic_light_yellow_remaining))
         self.obs_norm_speed_mps = float(obs_norm_speed_mps)
@@ -361,11 +322,6 @@ class Drive(pufferlib.PufferEnv):
         if not np.isfinite(self.red_light_train_front_margin_m) or self.red_light_train_front_margin_m < 0.0:
             raise ValueError(
                 f"red_light_train_front_margin_m must be finite and >= 0. Got: {red_light_train_front_margin_m}"
-            )
-        self.red_light_train_rear_margin_m = float(red_light_train_rear_margin_m)
-        if not np.isfinite(self.red_light_train_rear_margin_m) or self.red_light_train_rear_margin_m < 0.0:
-            raise ValueError(
-                f"red_light_train_rear_margin_m must be finite and >= 0. Got: {red_light_train_rear_margin_m}"
             )
         self.obs_partner_split_length_m = float(obs_partner_split_length_m)
         if not np.isfinite(self.obs_partner_split_length_m) or self.obs_partner_split_length_m < 0.0:
@@ -406,18 +362,11 @@ class Drive(pufferlib.PufferEnv):
         self.partner_blindness_prob_min = float(partner_blindness_prob_min)
         self.partner_blindness_trigger_prob = float(partner_blindness_trigger_prob)
         self.partner_blindness_duration_seconds = float(partner_blindness_duration_seconds)
-        self.partner_blindness_corridor = int(bool(partner_blindness_corridor))
-        self.partner_blindness_time_fraction_max = float(partner_blindness_time_fraction_max)
         self.phantom_braking_prob = float(phantom_braking_prob)
         self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
         self.phantom_braking_duration_seconds = float(phantom_braking_duration_seconds)
-        self.phantom_braking_freeze_steering = int(bool(phantom_braking_freeze_steering))
-        self.partner_features = binding.PARTNER_FEATURES + (
-            binding.PARTNER_RELATIVE_VELOCITY_FEATURES if self.obs_partner_relative_velocity else 0
-        )
-        self.lane_features = binding.LANE_FEATURES + (
-            binding.LANE_SPEED_LIMIT_FEATURES if self.obs_lane_speed_limit else 0
-        )
+        self.partner_features = binding.PARTNER_FEATURES + binding.PARTNER_RELATIVE_VELOCITY_FEATURES
+        self.lane_features = binding.LANE_FEATURES + binding.LANE_SPEED_LIMIT_FEATURES
         self.boundary_features = binding.BOUNDARY_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES + (
             binding.TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES if self.obs_traffic_light_yellow_remaining else 0
@@ -455,10 +404,7 @@ class Drive(pufferlib.PufferEnv):
         self.obs_stats_feature_mask[valid_counts_start_idx:] = False
 
         self.init_step = init_step
-        # Per C environment randomized start point. When on, each parallel environment
-        # starts the episode at a randomized point.
-        self.init_step_spread = bool(init_step_spread)
-        # limit at which we set the starting point from the end of the total episode length
+        # shortest first episode when stagger_first_episode is on
         self.init_step_min_horizon = int(init_step_min_horizon)
         self.stagger_first_episode = int(bool(stagger_first_episode))
         self.init_mode_str = init_mode
@@ -481,8 +427,6 @@ class Drive(pufferlib.PufferEnv):
         }[self.simulation_mode_str]
         self.control_mode = {
             "control_vehicles": binding.CONTROL_MODE_VEHICLES,
-            "control_agents": binding.CONTROL_MODE_AGENTS,
-            "control_wosac": binding.CONTROL_MODE_WOSAC,
             "control_sdc_only": binding.CONTROL_MODE_SDC_ONLY,
         }[self.control_mode_str]
 
@@ -503,21 +447,10 @@ class Drive(pufferlib.PufferEnv):
 
         self.init_mode = {
             "create_all_valid": binding.INIT_MODE_CREATE_ALL_VALID,
-            "create_only_controlled": binding.INIT_MODE_CREATE_ONLY_CONTROLLED,
             "create_controllable_types": binding.INIT_MODE_CREATE_CONTROLLABLE_TYPES,
         }[self.init_mode_str]
 
-        if action_type == "discrete":
-            self._action_type_flag = binding.ACTION_TYPE_DISCRETE
-            if dynamics_model == "classic":
-                self.single_action_space = gymnasium.spaces.Discrete(
-                    len(binding.ACCELERATION_VALUES) * len(binding.STEERING_VALUES)
-                )
-            else:
-                self.single_action_space = gymnasium.spaces.Discrete(len(binding.JERK_LONG) * len(binding.JERK_LAT))
-        else:
-            self._action_type_flag = binding.ACTION_TYPE_CONTINUOUS
-            self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
+        self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
         self.starting_map_counter = starting_map
         self.starting_map_counter_init = starting_map
 
@@ -600,9 +533,6 @@ class Drive(pufferlib.PufferEnv):
 
     def _env_init_kwargs(self, map_file, max_agents):
         return {
-            "action_type": self._action_type_flag,
-            "dynamics_model": self.dynamics_model_flag,
-            "reset_accel_on_stop": self.reset_accel_on_stop,
             "reward_goal": self.reward_goal,
             "reward_collision": self.reward_collision,
             "reward_offroad": self.reward_offroad,
@@ -616,8 +546,6 @@ class Drive(pufferlib.PufferEnv):
             "reward_stop_line": self.reward_stop_line,
             "reward_timestep": self.reward_timestep,
             "reward_overspeed": self.reward_overspeed,
-            "overspeed_tolerance_mps": self.overspeed_tolerance_mps,
-            "reward_ade": self.reward_ade,
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
@@ -637,25 +565,19 @@ class Drive(pufferlib.PufferEnv):
             "num_goals": self.num_goals,
             "goal_regen_mode": self.goal_regen_mode,
             "goal_source": self.goal_source,
-            "obs_goal_lane_distance": self.obs_goal_lane_distance,
             "obs_slots_lane_n": self.obs_slots_lane_n,
             "obs_slots_boundary_n": self.obs_slots_boundary_n,
             "obs_lane_stride": self.obs_lane_stride,
             "obs_boundary_stride": self.obs_boundary_stride,
             "obs_stride_merge_segments": self.obs_stride_merge_segments,
             "obs_slots_partners_n": self.obs_slots_partners_n,
-            "obs_partner_relative_velocity": self.obs_partner_relative_velocity,
-            "obs_lane_heading_signed": self.obs_lane_heading_signed,
-            "obs_lane_speed_limit": self.obs_lane_speed_limit,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "obs_traffic_light_yellow_remaining": self.obs_traffic_light_yellow_remaining,
             "traffic_lights_enabled": self.traffic_lights_enabled,
             "stop_signs_enabled": self.stop_signs_enabled,
-            "yield_signs_enabled": self.yield_signs_enabled,
             "dt": self.dt,
             "base_max_speed_mps": self.base_max_speed_mps,
             "max_speed_mps": self.max_speed_mps,
-            "spawn_initial_speed": self.spawn_initial_speed,
             "spawn_lateral_offset_max_frac": self.spawn_lateral_offset_max_frac,
             "spawn_heading_max_deg": self.spawn_heading_max_deg,
             "pose_noise_xy_m": self.pose_noise_xy_m,
@@ -665,21 +587,19 @@ class Drive(pufferlib.PufferEnv):
             "speed_limit_random_min_mps": self.speed_limit_random_min_mps,
             "speed_limit_random_max_mps": self.speed_limit_random_max_mps,
             "goal_speed": self.goal_speed,
-            "goal_speed_randomization": self.goal_speed_randomization,
             "conditioning_accel_scale": self.conditioning_accel_scale,
             "conditioning_speed_scale": self.conditioning_speed_scale,
             "goal_reach_requires_speed": self.goal_reach_requires_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),
             "inactive_agent_threshold": float(self.inactive_agent_threshold),
-            "terminate_on_goal": int(self.terminate_on_goal),
             "map_file": map_file,
             "max_agents": max_agents,
             "max_agents_per_env": self.max_agents_per_env,
             "cosim_partner_slots": self.cosim_partner_slots,
             "cosim_eval_semantics": self.cosim_eval_semantics,
             "scripted_pedestrian_slots": self._scripted_pedestrian_slots(max_agents),
-            "init_step": self._sample_init_step(),
+            "init_step": self.init_step,
             "init_step_min_horizon": self.init_step_min_horizon,
             "stagger_first_episode": self.stagger_first_episode,
             "init_mode": self.init_mode,
@@ -691,7 +611,6 @@ class Drive(pufferlib.PufferEnv):
             "simulation_mode": self.simulation_mode,
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
-            "reward_log_sampling": self.reward_log_sampling,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
             "eval_training_render": self.eval_training_render,
@@ -706,7 +625,6 @@ class Drive(pufferlib.PufferEnv):
             "obs_norm_z_m": self.obs_norm_z_m,
             "eval_perceived_size_margin_m": self.eval_perceived_size_margin_m,
             "red_light_train_front_margin_m": self.red_light_train_front_margin_m,
-            "red_light_train_rear_margin_m": self.red_light_train_rear_margin_m,
             "obs_partner_split_length_m": self.obs_partner_split_length_m,
             "obs_lane_width_clip_min_m": self.obs_lane_width_clip_min_m,
             "obs_lane_width_clip_max_m": self.obs_lane_width_clip_max_m,
@@ -722,25 +640,15 @@ class Drive(pufferlib.PufferEnv):
             "partner_blindness_prob_min": self.partner_blindness_prob_min,
             "partner_blindness_trigger_prob": self.partner_blindness_trigger_prob,
             "partner_blindness_duration_seconds": self.partner_blindness_duration_seconds,
-            "partner_blindness_corridor": self.partner_blindness_corridor,
-            "partner_blindness_time_fraction_max": self.partner_blindness_time_fraction_max,
             "phantom_braking_prob": self.phantom_braking_prob,
             "phantom_braking_trigger_prob": self.phantom_braking_trigger_prob,
             "phantom_braking_duration_seconds": self.phantom_braking_duration_seconds,
-            "phantom_braking_freeze_steering": self.phantom_braking_freeze_steering,
         }
 
     def _scripted_pedestrian_slots(self, agents_in_env):
         if self.scripted_pedestrian_ratio <= 0.0:
             return 0
         return int(math.ceil(round(self.scripted_pedestrian_ratio * agents_in_env, 6)))
-
-    def _sample_init_step(self):
-        # randomizer for the initialization of the C environment
-        if not self.init_step_spread:
-            return self.init_step
-        upper = self.scenario_length - self.init_step_min_horizon
-        return int(self.rng.integers(0, upper))
 
     def _next_eval_batch_size(self):
         """Scenarios the next eval batch instantiates: whatever is left of this
@@ -1029,25 +937,10 @@ class Drive(pufferlib.PufferEnv):
             np.ascontiguousarray(gdir_y, dtype=np.float32),
         )
 
-    def set_agent_lane_goals(self, idx, spacing_m):
-        """Co-sim forecast: the agents at global indices `idx` have no known route, so their goals follow
-        the lane they are on and its straightest exits, one every `spacing_m` meters; c_step places new
-        ones whenever one is reached. Returns the number of goals placed per agent (0: no lane under the
-        agent, or the lane graph ends within spacing_m)."""
-        idx = np.ascontiguousarray(idx, dtype=np.int32)
-        placed_goal_counts = np.zeros(len(idx), dtype=np.int32)
-        binding.vec_set_agent_lane_goals(self.c_envs, idx, float(spacing_m), placed_goal_counts)
-        return placed_goal_counts
-
     def get_agent_goal_progress(self, agent_idx):
         """Co-sim: (current_goal_idx, goal_count) of one agent. current_goal_idx == goal_count
         means every goal of the current window has been consumed."""
         return binding.vec_get_agent_goal_progress(self.c_envs, int(agent_idx))
-
-    def set_agent_goal_progress(self, agent_idx, current_goal_idx):
-        """Co-sim: set how many goals of one agent's current window count as consumed (0..goal_count),
-        e.g. to undo the goals a forecast rollout consumed."""
-        binding.vec_set_agent_goal_progress(self.c_envs, int(agent_idx), int(current_goal_idx))
 
     # ───────────────────────────────────────
 
@@ -1085,32 +978,6 @@ class Drive(pufferlib.PufferEnv):
 
         return trajectories
 
-    def get_road_edge_polylines(self):
-        """Get road edge polylines for all scenarios.
-
-        Returns:
-            dict with keys 'x', 'y', 'lengths', 'scenario_id' containing numpy arrays.
-            x, y are flattened point coordinates; lengths indicates points per polyline.
-        """
-        num_polylines, total_points = binding.vec_get_road_edge_counts(self.c_envs)
-
-        polylines = {
-            "x": np.zeros(total_points, dtype=np.float32),
-            "y": np.zeros(total_points, dtype=np.float32),
-            "lengths": np.zeros(num_polylines, dtype=np.int32),
-            "scenario_id": np.zeros(num_polylines, dtype=np.int32),
-        }
-
-        binding.vec_get_road_edge_polylines(
-            self.c_envs,
-            polylines["x"],
-            polylines["y"],
-            polylines["lengths"],
-            polylines["scenario_id"],
-        )
-
-        return polylines
-
     # ====== Replay capture (active when capture_replay=True) ======
 
     def _normalize_scenarios(self, state):
@@ -1133,7 +1000,6 @@ class Drive(pufferlib.PufferEnv):
                 "goal_source": self.goal_source,
                 "goal_regen_mode": self.goal_regen_mode,
                 "num_goals": self.num_goals,
-                "dynamics_model": self.dynamics_model,
                 "worker_idx": self.replay_worker_idx,
                 "active_agent_offset": active_agent_offset,
                 "active_agent_count": active_agent_count,

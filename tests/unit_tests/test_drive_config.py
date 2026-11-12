@@ -64,28 +64,9 @@ class TestDriveConfig(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "min <= max"):
             Drive(speed_limit_random_min_mps=20.0, speed_limit_random_max_mps=10.0)
 
-    def test_overspeed_tolerance_validation(self):
-        with self.assertRaisesRegex(ValueError, "overspeed_tolerance_mps"):
-            Drive(overspeed_tolerance_mps=-0.5)
-        with self.assertRaisesRegex(ValueError, "overspeed_tolerance_mps"):
-            Drive(overspeed_tolerance_mps=float("nan"))
-
     def test_conditioning_speed_scale_validation(self):
         with self.assertRaisesRegex(ValueError, "conditioning_speed_scale"):
             Drive(conditioning_speed_scale=0.9)
-
-    @patch("sys.argv", ["pufferl.py", "env.obs_lane_speed_limit=true"])
-    def test_lane_speed_limit_cli_override(self):
-        args = load_config("puffer_drive")
-        self.assertTrue(args["env"]["obs_lane_speed_limit"])
-
-    def test_lane_speed_limit_obs_widens_lane_rows(self):
-        plain = Drive(config_only=True)
-        with_limit = Drive(config_only=True, obs_lane_speed_limit=True)
-        self.assertEqual(with_limit.lane_features, plain.lane_features + binding.LANE_SPEED_LIMIT_FEATURES)
-        self.assertEqual(
-            with_limit.num_obs - plain.num_obs, plain.obs_slots_lane_kept * binding.LANE_SPEED_LIMIT_FEATURES
-        )
 
     @patch("sys.argv", ["pufferl.py", "env.obs_traffic_light_yellow_remaining=true"])
     def test_yellow_remaining_cli_override(self):

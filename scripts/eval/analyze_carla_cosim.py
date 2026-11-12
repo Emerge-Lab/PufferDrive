@@ -41,7 +41,7 @@ from render_carla_obs_html import page_name
 
 import data_utils.mirror_map_bin as mbin
 import pufferlib
-from pufferlib.ocean.cosim.carla_cosim import write_mp4
+from pufferlib.ocean.cosim.mp4 import write_mp4
 
 
 LIGHT_COLOR = {1: "red", 2: "orange", 3: "limegreen", 4: "0.5", 0: "0.7"}

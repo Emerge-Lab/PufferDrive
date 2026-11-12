@@ -3,7 +3,7 @@ job_name: closed_loop_reactive_agents_pufferdrive
 
 defaults:
   - override /observation: idm_agents_observation
-  - override /ego_controller: perfect_tracking_controller # suitable for jerk-based ego dynamics
+  - override /ego_controller: one_stage_controller # CaRL's controller: the planner commands the kinematic bicycle model
   - override /planner: pufferdrive_planner
   - override /simulation_metric: simulation_closed_loop_reactive_agents
   - override /metric_aggregator:

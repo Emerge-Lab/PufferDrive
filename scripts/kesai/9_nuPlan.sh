@@ -54,8 +54,6 @@ export WORKER=ray_distributed
 # at ~2.0 GB once it has cached all four city maps (256 workers = 509 GB, 30 Oct): 384 fills half the hyperthreads and
 # stays under ~770 GB of the 1 TB, leaving the rest to the page cache of the logs.
 export THREADS_PER_NODE=${THREADS_PER_NODE:-$([ "$CLUSTER" = kesai ] && echo 384 || echo 128)}
-# route: lane-graph route goals; roadblock: route roadblock centroids; roadblock_lane: roadblock goals on the lane continuing the ego lane
-export GOAL_SOURCE=roadblock
 # Ablations (see run_nuplan_planner.sh): refill the goal window after every consumed goal; cap the ego's
 # accelerating / braking jerk [m/s^3] for the first 1.5 s of each scenario (0 = off).
 export SLIDING_GOAL_WINDOW=true
@@ -63,10 +61,6 @@ export STARTUP_ACCEL_JERK_CAP=2
 export STARTUP_BRAKE_JERK_CAP=2
 # pedestrian and bicycle partner boxes grow by this much in length and width in the policy's obs (0 = off): 0.8 puts them strictly above the smallest training vehicle
 export VRU_SIZE_PAD_M=0.8
-# lane width = 2 x distance to the nearer GPKG boundary (city bins store left + right, 6 m on nuPlan's parking-strip lanes
-# whose baseline sits 1.7 m from the oncoming side); cached copy of the bin in NUPLAN_EXP_ROOT/pufferdrive_bin_cache.
-# Default off: alone it scored 0.9257 vs 0.9314 for the plain clip (run 295, 2026-10-29): TTC and progress worse, lanes read 2.85-3.4 m.
-export SYMMETRIC_LANE_WIDTHS=${SYMMETRIC_LANE_WIDTHS:-false}
 # Shadow-env obs overrides: partner slots (training 20, GIGAFLOW eval 40; 40 real partners max-pooled is OOD in
 # sidewalk crowds) and the ego perceived-size margin [m per side] (0.2 = native eval; nuPlan's 2.3 x 5.2 m ego
 # reads as 2.7 x 5.6 m). Unset = planner yaml / arch.py defaults (40 / 0.2).
@@ -78,76 +72,41 @@ export REWARD_OVERSPEED=0.1
 # city bins have 22% of segments wider than 5 m, up to 50 m). LANE_WIDTH_CLIP_MAX_M=0 turns it off (pre-2026-10-29 evals).
 export LANE_WIDTH_CLIP_MIN_M=${LANE_WIDTH_CLIP_MIN_M:-2.85}
 export LANE_WIDTH_CLIP_MAX_M=${LANE_WIDTH_CLIP_MAX_M:-4.4}
-# Ego plant (default since 2026-10-30): nuplan_bicycle = nuPlan's KinematicBicycleModel via CaRL's one_stage_controller,
-# driven exactly as CaRL drives it, with the model's own actuator lag (BICYCLE_UNDO_LOW_PASS=false: it realises
-# dt/(dt+tau) of each command; run 431 = 93.01). EGO_DYNAMICS=pufferdrive = the pre-2026-10-30 perfect-tracking eval
-# (shadow jerk model integrates the ego, nuPlan replays the pose; hides yaw rate and the center-accel term from the
-# comfort metrics; 93.12). Ablated: BICYCLE_MIN_SPEED_MPS -2 (Drive's floor) costs ~0.9 on every safety metric;
-# BICYCLE_UNDO_LOW_PASS=true (feedforward inverse of the lag using the plant's time constants) scores 93.48 (run 428)
-# by trading +2.7 comfort for 6 collisions, 4 offroads and 1.2 TTC; kept off to stay faithful to the CaRL plant.
-export EGO_DYNAMICS=${EGO_DYNAMICS:-nuplan_bicycle}
-# EGO_DYNAMICS=nuplan_tracker = GIGAFLOW's nuPlan evaluation: every step the planner rolls the scene out for the 8 s
-# trajectory horizon in ROLLOUT_STEP_SECONDS steps (the policy drives the ego and the nearest ROLLOUT_POLICY_VEHICLES
-# vehicles and bicycles, the rest keeps its velocity) and nuPlan's two_stage_controller tracks the ego's rolled-out
-# trajectory. EGO_TRACKER: lqr = nuPlan's default tracker, ilqr = its iLQR tracker without the wall-clock solve cap.
-# ROLLOUT_ALLOW_REVERSE=false holds an agent the policy would back up at rest (as BICYCLE_MIN_SPEED_MPS=0).
-# ROLLOUT_POLICY_VEHICLES=0: everyone else keeps its observed velocity. 32 (runs 2566/2567, LQR 0.897 / iLQR 0.870 vs
-# 0.923 for the bicycle plant) forecast queue leaders pulling up to the stop line and the ego drove into the gap.
-# Set WANDB_REPORT=0 for a tracker run unless its CLS should replace the standard eval's number in wandb.
-export EGO_TRACKER=${EGO_TRACKER:-lqr}
-export ROLLOUT_STEP_SECONDS=${ROLLOUT_STEP_SECONDS:-0.3}
-export ROLLOUT_POLICY_VEHICLES=${ROLLOUT_POLICY_VEHICLES:-0}
-export ROLLOUT_ALLOW_REVERSE=${ROLLOUT_ALLOW_REVERSE:-false}
+# Ego plant: nuPlan's KinematicBicycleModel via CaRL's one_stage_controller, driven exactly as CaRL drives it, with the
+# model's own actuator lag (it realises dt/(dt+tau) of each command; run 431 = 93.01). The policy's integrated accel is
+# zeroed while the plant sits on the speed floor. Ablated: BICYCLE_MIN_SPEED_MPS -2 (Drive's floor) costs ~0.9 on every
+# safety metric.
 export BICYCLE_MIN_SPEED_MPS=${BICYCLE_MIN_SPEED_MPS:-0}
-export BICYCLE_UNDO_LOW_PASS=${BICYCLE_UNDO_LOW_PASS:-false}
 # Comfort: nuPlan scores the center accel (rear + d*yaw_rate^2 + d*yaw_accel), which the bicycle plant exposes.
 # BICYCLE_CENTER_ACCEL_CAP=true reduces the plant's accel while turning (CaRL clip_angular_adjustment; 248 -> 20
 # positive lon-accel fails), MARGIN 0.95 takes the Savitzky-Golay overshoot residual (+0.2 CLS, run 426).
-# Dead ends: EGO_ACCEL_CAP_MPS2=2.0 (global cap, costs progress, run 421) and BICYCLE_MAX_YAW_JERK=2 (steering
-# inertia the policy never saw: offroad 5%, run 427).
 export BICYCLE_CENTER_ACCEL_CAP=${BICYCLE_CENTER_ACCEL_CAP:-true}
 export BICYCLE_CENTER_ACCEL_CAP_MARGIN=${BICYCLE_CENTER_ACCEL_CAP_MARGIN:-0.95}
-export BICYCLE_MAX_YAW_JERK=${BICYCLE_MAX_YAW_JERK:-0}
-export EGO_ACCEL_CAP_MPS2=${EGO_ACCEL_CAP_MPS2:-}
-# Run-426 anatomy arms: PARTNER_SPLIT_MAX_LENGTH_M=7 (buses up to 12.7 m vs training max 7 m), STANDSTILL_JERK_DEADBAND=0
-# (five stalls were the policy's 0-1.5 m/s^3 start intent being zeroed; the floor now does the deadband's anti-reverse
-# job). Drive's jerk model keeps its axle at the box centre while nuPlan's sits 1.46 m behind (four inside-rear corner
-# collisions in run 426): a training-side item, no eval-side conversion.
-# true since 2026-10-30 evening (tag _clamp): the policy's integrated accel is zeroed while the plant sits on the floor
-# (9 of run 426's 18 stalls had it wound down to -5 at standstill); false = run 426 behaviour.
-export BICYCLE_FLOOR_ACCEL_CLAMP=${BICYCLE_FLOOR_ACCEL_CLAMP:-true}
-export PARTNER_SPLIT_MAX_LENGTH_M=${PARTNER_SPLIT_MAX_LENGTH_M:-}
+# Run-426 anatomy arm: STANDSTILL_JERK_DEADBAND=0 (five stalls were the policy's 0-1.5 m/s^3 start intent being zeroed;
+# the floor now does the deadband's anti-reverse job). Drive's jerk model keeps its axle at the box centre while
+# nuPlan's sits 1.46 m behind (four inside-rear corner collisions in run 426): a training-side item, no eval-side
+# conversion.
 export STANDSTILL_JERK_DEADBAND=${STANDSTILL_JERK_DEADBAND:-}
 ABLATION_TAG=""
 [ "$SLIDING_GOAL_WINDOW" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_slide"
 [ "$STARTUP_ACCEL_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
 [ "$STARTUP_BRAKE_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jbrk${STARTUP_BRAKE_JERK_CAP}"
 [ "$VRU_SIZE_PAD_M" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_vrupad${VRU_SIZE_PAD_M}m"
-[ "$SYMMETRIC_LANE_WIDTHS" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_symw"
 [ "$CITY_BIN_DIR" != "$SHARED_DATA/nuplan/PufferDrive" ] && ABLATION_TAG="${ABLATION_TAG}_bins$(basename "$CITY_BIN_DIR")"
 [ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && ABLATION_TAG="${ABLATION_TAG}_slots${OBS_SLOTS_PARTNERS_N}"
 [ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && ABLATION_TAG="${ABLATION_TAG}_margin${EVAL_PERCEIVED_SIZE_MARGIN_M}"
 [ -n "${REWARD_OVERSPEED:-}" ] && ABLATION_TAG="${ABLATION_TAG}_overspeed${REWARD_OVERSPEED}"
 [ "$LANE_WIDTH_CLIP_MAX_M" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_lanew${LANE_WIDTH_CLIP_MIN_M}-${LANE_WIDTH_CLIP_MAX_M}"
-if [ "$EGO_DYNAMICS" = "nuplan_bicycle" ]; then
-    ABLATION_TAG="${ABLATION_TAG}_bicycle_vmin${BICYCLE_MIN_SPEED_MPS}"
-    [ "$BICYCLE_UNDO_LOW_PASS" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_nolag"
-    if [ "$BICYCLE_CENTER_ACCEL_CAP" = "true" ]; then
-        ABLATION_TAG="${ABLATION_TAG}_centercap"
-        [ "$BICYCLE_CENTER_ACCEL_CAP_MARGIN" != "1.0" ] && ABLATION_TAG="${ABLATION_TAG}${BICYCLE_CENTER_ACCEL_CAP_MARGIN}"
-    fi
-    [ "$BICYCLE_MAX_YAW_JERK" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_yawjerk${BICYCLE_MAX_YAW_JERK}"
-    [ "$BICYCLE_FLOOR_ACCEL_CLAMP" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_clamp"
+# _roadblock (below), _bicycle and _clamp name what every run uses now: kept so folder names match the earlier evals
+ABLATION_TAG="${ABLATION_TAG}_bicycle_vmin${BICYCLE_MIN_SPEED_MPS}"
+if [ "$BICYCLE_CENTER_ACCEL_CAP" = "true" ]; then
+    ABLATION_TAG="${ABLATION_TAG}_centercap"
+    [ "$BICYCLE_CENTER_ACCEL_CAP_MARGIN" != "1.0" ] && ABLATION_TAG="${ABLATION_TAG}${BICYCLE_CENTER_ACCEL_CAP_MARGIN}"
 fi
-if [ "$EGO_DYNAMICS" = "nuplan_tracker" ]; then
-    ABLATION_TAG="${ABLATION_TAG}_tracker_${EGO_TRACKER}_step${ROLLOUT_STEP_SECONDS}_veh${ROLLOUT_POLICY_VEHICLES}"
-    [ "$ROLLOUT_ALLOW_REVERSE" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_reverse"
-fi
-[ -n "$EGO_ACCEL_CAP_MPS2" ] && ABLATION_TAG="${ABLATION_TAG}_acap${EGO_ACCEL_CAP_MPS2}"
-[ -n "$PARTNER_SPLIT_MAX_LENGTH_M" ] && ABLATION_TAG="${ABLATION_TAG}_split${PARTNER_SPLIT_MAX_LENGTH_M}"
+ABLATION_TAG="${ABLATION_TAG}_clamp"
 [ -n "$STANDSTILL_JERK_DEADBAND" ] && ABLATION_TAG="${ABLATION_TAG}_deadband${STANDSTILL_JERK_DEADBAND}"
 # results: the model's own eval folder, next to the PufferDrive benchmark evals (overview.csv, scenarios.csv, obs_html/, simulation_log/, details/)
-export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}_${GOAL_SOURCE}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}_roadblock${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
 # NO_TRAIN skips the training-only CUDA extension (_C, never imported by the planner): the cp39 nuPlan env builds only
 # the C binding, so nvcc 13.4 on kesai never meets this env's cu128 torch (script 12 builds the same way)

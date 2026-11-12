@@ -34,7 +34,7 @@ import nuplan_run_layout  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-from pufferlib.ocean.cosim.carla_cosim import write_mp4  # noqa: E402
+from pufferlib.ocean.cosim.mp4 import write_mp4  # noqa: E402
 
 SCORE_COLS = [
     "score",

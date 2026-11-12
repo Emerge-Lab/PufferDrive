@@ -2,7 +2,7 @@
 
 Started by the agent in the PufferDrive venv, one process per route, talking lb1_protocol over an
 inherited socket: `init` builds the ShadowEgo for the route, every `tick` runs one policy step and
-answers with the ego command (teleport pose or control values) plus both infraction sources,
+answers with the ego command (teleport pose or control values),
 `finish` flushes the per-route outputs. Options come from the COSIM_* environment variables
 (shadow_ego.py), inherited from the evaluator.
 
@@ -27,13 +27,11 @@ from pufferlib.ocean.cosim.carla.shadow_ego import MAX_POLICY_STEPS, PARTNER_MAX
 MAX_MESSAGES = MAX_POLICY_STEPS + 16  # ticks plus the handshake; the shadow env caps the route before this
 
 
-def reply_for_step(result, carla_flags):
+def reply_for_step(result):
     return {
         "type": "control",
         "motion": None if result.motion is None else [float(v) for v in result.motion],
         "control": None if result.control is None else [float(v) for v in result.control],
-        "pd_flags": result.pd_flags,
-        "carla_flags": carla_flags,
     }
 
 
@@ -70,7 +68,7 @@ def serve(sock, shadow):
             if ground_truth is not None and message.get("ground_truth") is not None:
                 carla_flags = ground_truth.update(snapshot, message["ground_truth"])
             shadow.telemetry(result, carla_flags)
-            lb1_protocol.send_message(sock, reply_for_step(result, carla_flags))
+            lb1_protocol.send_message(sock, reply_for_step(result))
         elif kind == "finish":
             shadow.finish()
             lb1_protocol.send_message(sock, {"type": "done"})

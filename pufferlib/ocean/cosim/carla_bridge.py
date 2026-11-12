@@ -281,10 +281,6 @@ def light_state_from_name(state_name) -> int:
     return LIGHT_STATE_BY_NAME.get(state_name, 0)
 
 
-def carla_light_to_puffer(state) -> int:
-    return light_state_from_name(state.name)
-
-
 def carla_yellow_remaining_s(elapsed_s, yellow_time_s):
     """Seconds a CARLA light stays yellow by its own phase timer (get_yellow_time - get_elapsed_time), or None
     when a scenario froze that timer."""

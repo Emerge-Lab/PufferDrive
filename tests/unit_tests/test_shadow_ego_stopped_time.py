@@ -22,10 +22,7 @@ def _state_to_bin(x, y, z, yaw_deg, vx, vy, yaw_rate, accel_x, accel_y, box_z, e
 def _shadow(zero_partner_stopped_time):
     return SimpleNamespace(
         transform=SimpleNamespace(state_to_bin=_state_to_bin),
-        step_count=0,
-        tick_dt=STEP_SECONDS,
         dt=STEP_SECONDS,
-        walker_speed_floor_mps=0.0,
         zero_partner_stopped_time=zero_partner_stopped_time,
         _partner_stopped_speed_threshold=0.2,
         _partner_stopped_s={},
