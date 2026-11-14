@@ -11,7 +11,6 @@ The calibrate range runs a matmul of known size so the tensor-op metric is conve
 import argparse
 import copy
 import csv
-import json
 import os
 import sys
 
@@ -74,22 +73,6 @@ def build_policy_and_obs(rows, fused):
     return policy, obs.repeat(repeats, 1)
 
 
-def fse_config_name():
-    import pufferlib.ocean.fused_slot_encoder as fse
-
-    if fse.CONFIG_OVERRIDE is not None:
-        return "override"
-    return "table"
-
-
-def apply_kernel_config(path):
-    import pufferlib.ocean.fused_slot_encoder as fse
-
-    with open(path) as handle:
-        fse.CONFIG_OVERRIDE = fse.KernelConfig(**json.load(handle))
-    print(f"kernel config override: {fse.CONFIG_OVERRIDE}")
-
-
 def run_phases(rows, fused):
     import pufferlib.pytorch
 
@@ -144,7 +127,7 @@ def run_phases(rows, fused):
     mfu = f" update_mfu={100 * update_rate / peak:.1f}% rollout_mfu={100 * rollout_rate / peak:.1f}%"
     print(
         f"RESULT fused={int(fused)} rows={rows} update_ms={wall_ms['update']:.2f} rollout_ms={wall_ms['rollout']:.2f}"
-        f" update_tflops={update_rate:.1f} rollout_tflops={rollout_rate:.1f}{mfu} config={fse_config_name()}"
+        f" update_tflops={update_rate:.1f} rollout_tflops={rollout_rate:.1f}{mfu}"
     )
     a = torch.randn(CALIBRATE_N, CALIBRATE_N, device="cuda", dtype=torch.bfloat16)
     b = torch.randn_like(a)
@@ -240,13 +223,10 @@ def main():
     parser.add_argument("--rows", type=int, default=65536, help="update minibatch rows")
     parser.add_argument("--fused", action="store_true", help="enable policy.fused_slot_encoder")
     parser.add_argument("--parse", help="ncu raw-page CSV to summarize instead of running")
-    parser.add_argument("--kernel-config", help="JSON KernelConfig (from tune_fused_slot_encoder.py --write-config)")
     args = parser.parse_args()
     if args.parse:
         parse(args.parse, args.rows)
         return
-    if args.kernel_config:
-        apply_kernel_config(args.kernel_config)
     run_phases(args.rows, args.fused)
 
 

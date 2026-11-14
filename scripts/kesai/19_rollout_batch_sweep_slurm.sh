@@ -31,10 +31,10 @@ NUM_ENVS=${NUM_ENVS:-60}
 NUM_AGENTS=${NUM_AGENTS:-4096}
 BATCH_SIZES=${BATCH_SIZES:-"60 30 20 15 12 10"}
 RESULT_FILE=$PD/experiments/logs/rollout_sweep_${SLURM_JOB_ID}_result.txt
-echo "=== rollout sweep: ${NUM_ENVS} workers x ${NUM_AGENTS} agents, float16 obs, fused+cuda encoder ===" | tee ${RESULT_FILE}
+echo "=== rollout sweep: ${NUM_ENVS} workers x ${NUM_AGENTS} agents, float16 obs, fused encoder ===" | tee ${RESULT_FILE}
 for B in ${BATCH_SIZES}; do
     echo "--- vec.batch_size=${B} ---" | tee -a ${RESULT_FILE}
-    env PUFFER_SLOT_ENCODER_BACKEND=cuda python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch 32768 --fused \
+    python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch 32768 --fused \
         --rollout-only --profile --warmup 1 --epochs 3 \
         env.num_agents=${NUM_AGENTS} train.rollout_dtype=float16 env.scenario_length=1200 vec.batch_size=${B} 2>&1 \
         | grep -E "ROLLOUT_RESULT|NUMA|^  (env|eval_copy|eval_forward|eval_misc|eval) |^epoch|Error|error" | tee -a ${RESULT_FILE}

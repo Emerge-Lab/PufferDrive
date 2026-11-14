@@ -1,4 +1,4 @@
-"""The fused Triton slot encoder must reproduce DriveBackbone._encode_and_pool under bf16 autocast.
+"""The fused slot encoder must reproduce DriveBackbone._encode_and_pool under bf16 autocast.
 
 Agreement is checked at bf16 rounding level against the eager autocast path (gradient to the first maximal slot, as
 torch.max does) and against an fp32 ground truth:
@@ -12,11 +12,10 @@ from torch import nn
 import pufferlib.pytorch
 
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="fused slot encoder needs CUDA + Triton")
+pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="fused slot encoder needs CUDA")
 
-ENCODER_SHAPES = [(35, 10, 256), (30, 6, 256), (20, 11, 256), (4, 14, 128)]
-# None = the table config of this GPU; the second config exercises 64-row tiles with 8 warps
-KERNEL_CONFIGS = {"table": None, "wide": (64, 64, 8, 2, 128, 64, 8, 2, 64, 4)}
+# the last two sit on the kernels' limits: 16 features at width 256, the wide input tile at width 128
+ENCODER_SHAPES = [(35, 10, 256), (30, 6, 256), (20, 11, 256), (4, 14, 128), (8, 16, 256), (8, 32, 128)]
 BATCH = 1024
 BF16_ULP_AT_FOUR = 2.0**-6
 
@@ -79,18 +78,8 @@ def relative_error(a, b):
     return ((a - b).norm() / b.norm().clamp_min(1e-12)).item()
 
 
-@pytest.fixture(params=list(KERNEL_CONFIGS), ids=list(KERNEL_CONFIGS))
-def kernel_config(request):
-    import pufferlib.ocean.fused_slot_encoder as fse
-
-    fields = KERNEL_CONFIGS[request.param]
-    fse.CONFIG_OVERRIDE = fse.KernelConfig(*fields) if fields else None
-    yield request.param
-    fse.CONFIG_OVERRIDE = None
-
-
 @pytest.mark.parametrize("slots,features,width", ENCODER_SHAPES)
-def test_fused_matches_autocast_reference(slots, features, width, kernel_config):
+def test_fused_matches_autocast_reference(slots, features, width):
     torch.manual_seed(0)
     encoder = make_encoder(features, width)
     objects, counts, grad_pooled = make_inputs(slots, features, width, seed=slots)

@@ -6,13 +6,7 @@ import torch.nn.functional as F
 
 import pufferlib
 from pufferlib.ocean.drive import binding
-
-try:
-    from pufferlib.ocean.fused_slot_encoder import fused_encode_and_pool, fused_encoder_active, validate_fused_encoder
-except ModuleNotFoundError as import_error:  # triton ships only with CUDA torch wheels
-    if import_error.name != "triton":
-        raise
-    fused_encode_and_pool = fused_encoder_active = validate_fused_encoder = None
+from pufferlib.ocean.fused_slot_encoder import fused_encode_and_pool, fused_encoder_active, validate_fused_encoder
 
 ACTIVATIONS = {"relu": nn.ReLU, "tanh": nn.Tanh, "gelu": nn.GELU}
 SLOT_COUNT_ATTRIBUTE_BY_ENCODER = {
@@ -124,8 +118,6 @@ class DriveBackbone(nn.Module):
             encoders_out += context_input_size
 
         self.fused_slot_encoder = fused_slot_encoder
-        if fused_slot_encoder and validate_fused_encoder is None:
-            raise ImportError("fused_slot_encoder=true requires triton")
         slot_encoder_names = ("lane_encoder", "boundary_encoder", "partner_encoder", "traffic_control_encoder")
         for encoder_name in slot_encoder_names:
             if fused_slot_encoder and hasattr(self, encoder_name):

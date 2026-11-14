@@ -44,11 +44,6 @@ export VECLIB_MAXIMUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
-# Hand-written CUDA slot-encoder kernels instead of the Triton ones (same math); triton to compare. Passed per command,
-# never exported: sbatch copies this shell's environment into the eval jobs below, whose interpreters lack cuda-bindings.
-SLOT_ENCODER_BACKEND=cuda
-echo "slot encoder backend: ${SLOT_ENCODER_BACKEND}"
-
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # Blocking env workers: kesai nodes give 60 threads per rank (--exclusive); vec.num_envs=60 is one worker per thread (0053/0059,
@@ -81,7 +76,7 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # 0080 = 0079 with 0075's per-rank minibatch (393216, 12.6M rows per optimizer step): a third of 0079's optimizer steps at the same 1.5e-3 rate.
 # Other overrides are run identity, logging, maps and hardware.
 # Execute torchrun across all nodes using srun
-PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
+srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
     --nproc-per-node=8 \
     --rdzv_id=${SLURM_JOB_ID} \
@@ -133,7 +128,7 @@ RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
 # parallel_eval runs 8 srun shards per node (one GPU and an eighth of the CPUs each, 60 blocking workers like
 # training) so the eval uses every GPU and thread of the allocation; 60 workers x 5 scenarios = 300 scenarios per 9000-step episode.
 echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
-PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} .venv/bin/python scripts/parallel_eval.py carla \
+.venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 80000 \
     --num-nodes 4 \
     --shards-per-node 8 \

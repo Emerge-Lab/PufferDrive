@@ -442,7 +442,7 @@ class PufferDrivePlanner(AbstractPlanner):
             )
         policy_kwargs = dict(cfg["policy"])
         if torch.device(self._device).type == "cpu":
-            policy_kwargs["fused_slot_encoder"] = False  # CUDA-only triton kernel; CPU uses the reference path
+            policy_kwargs["fused_slot_encoder"] = False  # CUDA-only kernels; CPU uses the reference path
         policy = getattr(drive_torch, cfg.get("policy_name", "Drive"))(self._env, **policy_kwargs)
         checkpoint = _checkpoint_cache.get(str(self._checkpoint_path))
         if checkpoint is None:

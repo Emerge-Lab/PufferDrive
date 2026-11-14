@@ -1,9 +1,6 @@
-"""CUDA (NVRTC) backend for the fused slot encoder: the same Linear -> LayerNorm -> ReLU -> Linear -> masked
-max-pool forward and its backward as the Triton kernels in fused_slot_encoder.py, written with mma.sync tensor-core
-instructions, smem-staged LayerNorm and cp.async weight streaming. Selected with PUFFER_SLOT_ENCODER_BACKEND=cuda.
-
-Measured on an RTX 5090 at 65536 rows (2026-10-15): forward 1.08-1.14x faster than Triton with activation stores
-(training), 1.24-1.35x without (rollout); backward on par (0.98-1.00x, bandwidth-bound dataflow).
+"""CUDA (NVRTC) kernels of the fused slot encoder: the Linear -> LayerNorm -> ReLU -> Linear -> masked max-pool
+forward and its backward behind the custom ops in fused_slot_encoder.py, written with mma.sync tensor-core
+instructions, smem-staged LayerNorm and cp.async weight streaming.
 """
 
 import functools
@@ -18,8 +15,8 @@ except ImportError:  # cuda-python < 12.6 kept the modules at the package root
         from cuda import nvrtc, cuda as cu
     except ImportError as import_error:
         raise ImportError(
-            "PUFFER_SLOT_ENCODER_BACKEND=cuda needs the cuda-bindings package (NVRTC + driver API); "
-            "install it or unset the variable to use the Triton kernels"
+            "the fused slot encoder needs the cuda-bindings package (NVRTC + driver API); "
+            "install it or set policy.fused_slot_encoder=false"
         ) from import_error
 
 CUDA_SRC_FWD = r"""
@@ -405,7 +402,7 @@ def feature_pad(F):
 
 
 def cuda_slot_encoder_fwd(x, counts, w1_padded, b1, gamma, beta, w2, b2, store_acts):
-    """Mirror of fused_slot_encoder_fwd; w2 is [D][D] (not transposed). Returns pooled, argmax (uint8, STORE only), normed_relu."""
+    """Fused forward; w2 is [D][D] (not transposed). Returns pooled, argmax (uint8, STORE only), normed_relu."""
     B, S, F = x.shape
     D, F_PAD = w1_padded.shape
     assert x.dtype == torch.float32 and w1_padded.dtype == torch.bfloat16 and w2.dtype == torch.bfloat16
@@ -937,7 +934,7 @@ def bwd_rows_per_block(rows, device_index):
 
 
 def cuda_slot_encoder_bwd(x, counts, w1_padded, b1, gamma, beta, w2, normed_relu, argmax, grad_pooled):
-    """Mirror of fused_slot_encoder_bwd: returns grad_w1, grad_b1, grad_gamma, grad_beta, grad_w2, grad_b2."""
+    """Fused backward: returns grad_w1, grad_b1, grad_gamma, grad_beta, grad_w2, grad_b2."""
     B, S, F = x.shape
     D, F_PAD = w1_padded.shape
     func, threads, smem, _, _ = _compile_bwd(D, F_PAD, x.device.index or 0)

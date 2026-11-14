@@ -36,7 +36,7 @@ export VECLIB_MAXIMUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
-PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND:-cuda} .venv/bin/python scripts/parallel_eval.py carla \
+.venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios ${TOTAL_SCENARIOS} \
     --num-nodes ${SLURM_JOB_NUM_NODES} \
     --shards-per-node 8 \

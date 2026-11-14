@@ -1,6 +1,24 @@
+import pytest
 import torch
+from torch import nn
 
+from pufferlib.ocean.fused_slot_encoder import validate_fused_encoder
 from pufferlib.ocean.torch import DriveBackbone
+
+
+def slot_encoder(in_features, width):
+    return nn.Sequential(nn.Linear(in_features, width), nn.LayerNorm(width), nn.ReLU(), nn.Linear(width, width))
+
+
+@pytest.mark.parametrize("in_features,width", [(16, 256), (32, 128), (32, 64)])
+def test_fused_encoder_accepts_the_shapes_at_the_kernel_limits(in_features, width):
+    validate_fused_encoder(slot_encoder(in_features, width))
+
+
+@pytest.mark.parametrize("in_features,width", [(17, 256), (33, 128), (10, 512), (10, 96)])
+def test_fused_encoder_rejects_shapes_the_kernels_cannot_run(in_features, width):
+    with pytest.raises(ValueError, match="fused_slot_encoder supports"):
+        validate_fused_encoder(slot_encoder(in_features, width))
 
 
 def test_encode_and_pool_masks_padded_objects():
