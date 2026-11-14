@@ -443,9 +443,6 @@ class Drive(nn.Module):
             value = self.critic_head(critic_hidden)
         return actions, value
 
-    def forward_train(self, x):
-        return self.forward(x)
-
     def forward_eval(self, x):
         return self.forward(x)
 

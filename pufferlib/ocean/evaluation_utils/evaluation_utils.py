@@ -58,12 +58,6 @@ def _load_yaml_mapping(path, label):
     return _require_mapping(value, label)
 
 
-def _positive_int(value, label):
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise pufferlib.APIUsageError(f"{label} must be a positive integer")
-    return value
-
-
 def _resolve_map_indices(map_dir, map_names):
     """Map each logged map name back to its index in the sorted .bin map set."""
     if os.path.isfile(map_dir) and str(map_dir).endswith(".bin"):
@@ -141,6 +135,8 @@ def load_checkpoint_architecture(args):
     merged["policy"].update(_require_mapping(checkpoint_config.get("policy"), "checkpoint config policy"))
     checkpoint_env = _require_mapping(checkpoint_config.get("env"), "checkpoint config env")
     accepted_env_keys = puffer_drive_constructor_keys()
+    # a config saved before this obs column existed carries no key: that policy has no such column
+    merged["env"]["obs_traffic_light_yellow_remaining"] = False
     merged["env"].update({key: value for key, value in checkpoint_env.items() if key in accepted_env_keys})
     if "policy_name" not in checkpoint_config:
         raise pufferlib.APIUsageError("Checkpoint config is missing policy_name")

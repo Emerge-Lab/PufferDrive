@@ -32,8 +32,6 @@ struct Log {
     float n;
     float episode_return;
     float episode_length;
-    float expert_static_car_count;
-    float static_car_count;
     float score;
     float offroad_rate;
     float collision_rate;
@@ -44,9 +42,7 @@ struct Log {
     float comfort_violation_window_count;
     float velocity_progress_sum;
     float lane_center_rate;
-    float lane_heading_aligned_rate;
     float dnf_rate;
-    float avg_displacement_error;
     float avg_speed_per_agent;
     // Puffer score components
     float at_fault_collision_rate;
@@ -74,7 +70,6 @@ struct Log {
     float ttc_puffer_rate;
     float multiplier;
     float weighted_average;
-    float reached_goal_gt;
     float reward_collision;
     float reward_offroad;
     float reward_red_light;
@@ -201,7 +196,6 @@ struct Drive {
     int scenario_length;
     int log_length;
     float log_dt;
-    int num_objects;
     int num_objects_of_interest;
     int *objects_of_interest;
     int num_tracks_to_predict;
@@ -2415,8 +2409,6 @@ static void add_log(Drive *env) {
         }
         episode_log.total_distance_travelled += agent->distance_since_spawn;
         episode_log.total_infractions += infraction_count;
-        float displacement_error = env->logs[i].avg_displacement_error;
-        episode_log.avg_displacement_error += displacement_error;
         episode_log.episode_length += env->logs[i].episode_length;
         episode_log.episode_return += env->logs[i].episode_return;
         episode_log.pedestrian_collision_rate += env->logs[i].pedestrian_collision_rate;
@@ -2440,7 +2432,6 @@ static void add_log(Drive *env) {
         episode_log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
         // Lane metrics (normalized per timestep for average per episode)
         episode_log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
-        episode_log.lane_heading_aligned_rate += env->logs[i].lane_heading_aligned_rate / safe_timestep;
         if (env->compute_eval_metrics) {
             env->logs[i].progress_ratio = agent->distance_since_spawn / reference_progress_distance;
             env->logs[i].comfort_score = calculate_duration_scaled_violation_score(
@@ -2474,9 +2465,6 @@ static void add_log(Drive *env) {
         }
         episode_log.n += 1;
     }
-    // Log composition counts per agent so vec_log averaging recovers the per-env value
-    episode_log.expert_static_car_count += env->expert_static_agent_count;
-    episode_log.static_car_count += env->static_agent_count;
 
     // Fold this episode into the cumulative log that vec_log averages and resets.
     int num_log_fields = sizeof(Log) / sizeof(float);
@@ -4983,18 +4971,6 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
             agent->current_goal_z = agent->list_goal_z[agent->current_goal_idx];
         }
     }
-
-    float distance_to_goal_gt = compute_point_to_segment_distance(
-        agent->gt_goal_x,
-        agent->gt_goal_y,
-        agent->prev_x,
-        agent->prev_y,
-        agent->sim_x,
-        agent->sim_y);
-    float goal_gt_z_dist = fabsf(agent->sim_z - agent->gt_goal_z);
-    if (distance_to_goal_gt < GT_GOAL_RADIUS_M && goal_gt_z_dist < Z_BUFFER) {
-        agent_log->reached_goal_gt = 1.0f;
-    }
 }
 
 static void compute_rewards(Drive *env, int i) {
@@ -5050,7 +5026,6 @@ static void compute_rewards(Drive *env, int i) {
     // Get lane angle metric: cos(θ_f) where θ_f = heading diff from lane
     float cos_theta = agent->metrics_array[LANE_ANGLE_IDX];
     float theta_f = acosf(fminf(fmaxf(cos_theta, -1.0f), 1.0f)); // Get |θ_f| from cos
-    agent_log->lane_heading_aligned_rate += (cos_theta >= LANE_ALIGN_COS_THRESHOLD) ? 1.0f : 0.0f;
 
     // Rl-align: min(cos,0) + vel_align*min(cos*v,0) + 0.0025*(1-|θ|/(π/2))
     float against_lane_penalty = fminf(cos_theta, 0.0f); // negative when >90 degrees off
@@ -5105,8 +5080,6 @@ static void compute_rewards(Drive *env, int i) {
     float speed_reward = -agent->reward_coefs[REWARD_COEF_OVERSPEED] * env->dt * agent->metrics_array[SPEED_LIMIT_IDX];
     env->rewards[i] += speed_reward;
     agent_log->reward_overspeed += speed_reward;
-
-    agent_log->avg_displacement_error = agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
 
     // Update episode return
     agent_log->episode_return += env->rewards[i];

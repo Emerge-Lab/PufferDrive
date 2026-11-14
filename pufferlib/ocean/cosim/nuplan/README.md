@@ -141,9 +141,6 @@ uv run convert --preset nuplan --map_only \
   --output /scratch/yw4142/datasets/ad/nuplan/maps
 ```
 
-Do NOT use `nuplan_bridge.write_drive_bin` for city bins — it writes an empty
-lane graph (`n: 0`), which silently zeroes the GPS goal columns.
-
 ## Features not obtainable from nuPlan
 
 - Background (DetectionsTracks) agents carry no acceleration/angular velocity —
@@ -161,6 +158,3 @@ lane graph (`n: 0`), which silently zeroes the GPS goal columns.
 - [ ] The full Val14 split (both challenges) has never been run to
   completion, so total wall time are unmeasured.
 - [ ] Double check static variables
-- [ ] `nuplan_bridge.write_drive_bin` should build a lane graph (or refuse
-  `--map_only`-style use) so a regenerated bin can't silently lose the GPS
-  goal features (deployed city bins already have graphs; see above)

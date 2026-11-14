@@ -30,7 +30,7 @@
 #define CYCLIST 3
 
 // -- ROAD TYPE
-// Ranges are load-bearing: is_road_lane/is_road_line/is_road_edge in datatypes.h
+// Ranges are load-bearing: is_road_lane/is_road_edge in datatypes.h
 // classify by decade (0-9 lanes, 10-19 lines, 20-29 edges, 30+ misc).
 #define LANE_UNKNOWN 0
 #define LANE_FREEWAY 1
@@ -279,7 +279,6 @@ static const int ROAD_OFFSETS[25][2]
 #define ROUTE_TARGET_DISTANCE 1000.0f
 #define ROUTE_EXIT_MAX_CANDIDATES 5
 #define GOAL_HEADING_MAX_ATTEMPTS 8
-#define GT_GOAL_RADIUS_M 6.0f
 // Max snap distance from an externally-set (co-sim) goal waypoint to its lane; route goals are
 // already lane-centered upstream, so anything farther is off the drivable network -> no lane.
 #define GOAL_LANE_SNAP_MAX_DIST_M 6.0f
@@ -349,7 +348,7 @@ static const int ROAD_OFFSETS[25][2]
 // 10. METRICS & SCORING
 // =====================================================================================
 
-// Indices into Agent.metrics_array; NUM_METRICS must stay equal to the index count
+// Indices into Agent.metrics_array; NUM_METRICS is the slot count, slots 11 and 15 are unused
 #define NUM_METRICS 18
 #define COLLISION_IDX 0
 #define OFFROAD_IDX 1
@@ -362,12 +361,10 @@ static const int ROAD_OFFSETS[25][2]
 #define VELOCITY_PROGRESS_IDX 8
 #define SPEED_LIMIT_IDX 9
 #define AVG_DISPLACEMENT_ERROR_IDX 10
-#define PROGRESSION_IDX 11
 // Evaluation metrics
 #define AT_FAULT_COLLISION_IDX 12
 #define TTC_IDX 13
 #define DISTANCE_TO_COLLISION_IDX 14
-#define PROGRESS_RATIO_IDX 15
 #define MULTI_LANE_TIME_IDX 16
 #define MULTI_LANE_SCORE_IDX 17
 

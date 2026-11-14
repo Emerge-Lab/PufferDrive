@@ -18,8 +18,8 @@ from CARLA. Traffic lights are matched geometrically at planner-build time
 (`match_connectors_to_stop_lines`) so live traffic-light status
 (`PlannerInput.traffic_light_data`) can be written with set_traffic_light_states.
 
-Nothing in this module imports `nuplan` at module scope, so the pure-python bin
-writer stays testable from an env without the nuplan-devkit installed.
+Nothing in this module imports `nuplan` at module scope, so the geometry
+helpers stay testable from an env without the nuplan-devkit installed.
 """
 
 from pathlib import Path
@@ -28,11 +28,6 @@ import numpy as np
 
 import data_utils.mirror_map_bin as _mbin
 
-# PufferDrive road types (datatypes.h): lanes 0-9, road lines 10-19, edges 20-29
-LANE_SURFACE_STREET = 2
-ROAD_LINE_BROKEN_WHITE = 11
-ROAD_EDGE_BOUNDARY = 21
-MISC_CROSSWALK = 31
 TRAFFIC_TYPE_LIGHT = 1  # matches the CARLA bins' traffic-element type
 
 # nuPlan TrackedObjectType -> PufferDrive agent type (1=vehicle 2=ped 3=cyclist)
@@ -66,58 +61,6 @@ class NuPlanTransform:
 
     def bin_to_loc(self, bx, by):
         return bx + self.ox, by + self.oy
-
-
-def _polyline_heading(xy: np.ndarray) -> np.ndarray:
-    """Per-point forward-tangent headings; last point repeats."""
-    d = np.diff(xy, axis=0)
-    h = np.arctan2(d[:, 1], d[:, 0])
-    return np.append(h, h[-1] if len(h) else 0.0).astype(np.float32)
-
-
-def _road_entry(road_id: int, road_type: int, xy: np.ndarray, entry=None, exit_=None, speed_limit=-1.0) -> dict:
-    """One road element in mirror_map_bin's dict schema."""
-    xy = np.asarray(xy, dtype=np.float32)
-    S = len(xy)
-    e = {
-        "id": road_id,
-        "type": road_type,
-        "S": S,
-        "x": tuple(xy[:, 0].tolist()),
-        "y": tuple(xy[:, 1].tolist()),
-        "z": tuple([0.0] * S),
-        "headings": tuple(_polyline_heading(xy).tolist()),
-    }
-    if 0 <= road_type <= 9:
-        seg = np.hypot(*np.diff(xy, axis=0).T) if S > 1 else np.array([0.0])
-        cum = np.concatenate([[0.0], np.cumsum(seg)]).astype(np.float32)[:S]
-        e["entry_lanes"] = tuple(entry or [])
-        e["exit_lanes"] = tuple(exit_ or [])
-        e["speed_limit"] = float(speed_limit if speed_limit is not None else -1.0)
-        e["length"] = float(cum[-1])
-        e["cum_lengths"] = tuple(cum.tolist())
-    return e
-
-
-def write_drive_bin(roads, traffic, out_path: Path, scenario_id: str, centroid=(0.0, 0.0, 0.0)):
-    """Write a map-only PufferDrive bin (0 agents, 0 objects, empty lane graph),
-    like the CARLA town bins. `roads`/`traffic` follow mirror_map_bin's schema."""
-    data = {
-        "agents": [],
-        "roads": roads,
-        "traffic": traffic,
-        "objects": [],
-        "lane_graph": {"n": 0, "lane_ids": (), "distances": ()},
-        "scenario_id": scenario_id.encode("utf-8")[:128].ljust(128, b"\0"),
-        "dataset_name": b"nuplan".ljust(32, b"\0"),
-        "log_length": 0,
-        "log_dt": 0.0,
-        "objects_of_interest": (),
-        "tracks_to_predict": (),
-        "centroid": (float(centroid[0]), float(centroid[1]), float(centroid[2])),
-    }
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    _mbin.write_bin(data, out_path)
 
 
 def route_lane_ids(map_api, route_roadblock_ids, start_x: float, start_y: float, start_heading: float):

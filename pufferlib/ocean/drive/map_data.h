@@ -829,7 +829,6 @@ int load_map_binary(const char *filename, Drive *drive) {
     drive->num_total_agents = num_total_agents;
     drive->num_road_elements = num_roads;
     drive->num_traffic_elements = num_traffic;
-    drive->num_objects = num_objects;
 
     if (num_total_agents > 0) {
         drive->agents = (Agent *) calloc(num_total_agents, sizeof(Agent));

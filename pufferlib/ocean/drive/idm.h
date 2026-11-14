@@ -673,7 +673,6 @@ static int idm_set_pose_on_lane_segment(
     agent->sin_heading = sinf(agent->sim_heading);
     agent->current_route_idx = route_idx;
     agent->current_lane_idx = lane_idx;
-    agent->current_lane_geometry_idx = seg_idx;
     return 1;
 }
 

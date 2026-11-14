@@ -137,7 +137,7 @@ def load_checkpoint_config(config_path):
 
 
 # Applied to every co-sim shadow env after CLEAN_EVAL_OVERRIDES: the eval-only semantics the native
-# benchmark gets from eval_mode (scripts/kesai/7_eval_8node_slurm.sh passes the 0.2 m margin and the
+# benchmark gets from eval_mode (scripts/kesai/3_train_64GPU_multinode_slurm.sh passes the 0.2 m margin and the
 # 1.5 m/s^3 standstill deadband), which the co-sim env cannot enter because eval_mode's scenario
 # batching needs a full agent pool.
 COSIM_EVAL_OVERRIDES = {

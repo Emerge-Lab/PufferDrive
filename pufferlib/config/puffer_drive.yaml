@@ -8,9 +8,7 @@ wandb_group: debug
 # same run_name and train.data_dir resumes that run instead of starting a new one.
 run_name: default_run
 tb: false
-local_rank: 0
 tag: null
-eval_simulation: null
 package: ocean
 env_name: puffer_drive
 policy_name: Drive
@@ -170,7 +168,7 @@ env:
   obs_slots_traffic_controls_n: 4
   # Append to every traffic-control row the seconds the light stays yellow / traffic_light_yellow_max_s (clipped at 1,
   # 0 unless yellow); co-sims feed the simulator's own timer, clipped to the same training max
-  obs_traffic_light_yellow_remaining: false
+  obs_traffic_light_yellow_remaining: true
   # Fraction of segment observation slots to drop (reduces obs size)
   obs_dropout_lane: 0.5
   obs_dropout_boundary: 0.4
@@ -231,7 +229,7 @@ env:
   #   10% kerb stepper: pops in like a crosser, steps 0.5-1.5 m toward the road edge or away from it, stands 8-25 s.
   # Shares and ranges are the PEDESTRIAN_* constants in constants.h. Scripted, never policy-controlled, no observations
   # of their own; cars see them as partners and collide with them normally. 0 disables.
-  scripted_pedestrian_ratio: 0.0
+  scripted_pedestrian_ratio: 0.3
 policy:
   # Encoder layer (per-encoder embedding width)
   ego_input_size: 128

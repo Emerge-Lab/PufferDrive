@@ -216,7 +216,6 @@ if not NO_TRAIN:
         "pyarrow",
         "tqdm",
         "matplotlib==3.11.0",
-        "imageio",
         "wandb",
         "wandb-workspaces",
         "tensorboard",

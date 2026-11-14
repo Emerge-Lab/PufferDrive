@@ -846,20 +846,6 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
-            tmp = PyLong_FromLong(a->reached_goal_this_episode);
-            if (!tmp) {
-                Py_DECREF(agent);
-                Py_DECREF(agents_list);
-                return NULL;
-            }
-            if (PyDict_SetItemString(agent, "reached_goal_this_episode", tmp) < 0) {
-                Py_DECREF(tmp);
-                Py_DECREF(agent);
-                Py_DECREF(agents_list);
-                return NULL;
-            }
-            Py_DECREF(tmp);
-
             tmp = PyLong_FromLong(a->current_route_idx);
             if (!tmp) {
                 Py_DECREF(agent);
@@ -2180,7 +2166,6 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "red_light_violation_rate", log->red_light_violation_rate);
     assign_to_dict(dict, "stop_sign_violation_rate", log->stop_sign_violation_rate);
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
-    // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
     assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
     assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);

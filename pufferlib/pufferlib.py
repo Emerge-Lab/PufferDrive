@@ -63,10 +63,6 @@ class PufferEnv:
         self.agent_ids = np.arange(self.num_agents)
 
     @property
-    def agent_per_batch(self):
-        return self.num_agents
-
-    @property
     def emulated(self):
         """Native envs do not use emulation"""
         return False

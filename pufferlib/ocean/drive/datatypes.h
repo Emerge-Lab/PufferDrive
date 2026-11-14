@@ -10,20 +10,8 @@ static inline int is_drivable_road_lane(int type) {
     return (type == LANE_FREEWAY || type == LANE_SURFACE_STREET);
 }
 
-static inline int is_road_line(int type) {
-    return (type >= 10 && type <= 19);
-}
-
 static inline int is_road_edge(int type) {
     return (type >= 20 && type <= 29);
-}
-
-static inline int is_misc_road(int type) {
-    return type >= MISC_UNKNOWN;
-}
-
-static inline int is_road(int type) {
-    return is_road_lane(type) || is_road_line(type) || is_road_edge(type);
 }
 
 static inline int is_road_grid_candidate(int type) {
@@ -78,12 +66,10 @@ struct Agent {
     // Metrics and status tracking (size must match NUM_METRICS in drive.h)
     float metrics_array[NUM_METRICS]; // [collision, offroad, red_light, stop_sign, reached_goal, lane_dist, lane_angle,
                                       // comfort_violation, velocity_progress, speed_limit, avg_displacement_error,
-                                      // progression, at_fault_collision, ttc, distance_to_collision, progress_ratio,
+                                      // unused, at_fault_collision, ttc, distance_to_collision, unused,
                                       // multi_lane_time, multi_lane_score]
     int current_lane_idx;
     int previous_lane_idx;
-    int current_lane_geometry_idx;
-    int reached_goal_this_episode;
     int num_goals_reached;
     int active_agent;
     int mark_as_expert;

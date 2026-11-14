@@ -264,19 +264,6 @@ def _grad_normed_relu_columns(
 
 
 @triton.jit
-def _layer_norm_grad_columns(
-    x_bf16, mean, rstd, grad_normed_relu, n_offs, w1_ptr, b1_ptr, gamma_ptr, beta_ptr, F_PAD: tl.constexpr
-):
-    gamma_chunk = tl.load(gamma_ptr + n_offs)
-    beta_chunk = tl.load(beta_ptr + n_offs)
-    pre_norm = _pre_norm_chunk(x_bf16, n_offs, w1_ptr, b1_ptr, F_PAD)
-    normalized = (pre_norm - mean[:, None]) * rstd[:, None]
-    normed = normalized * gamma_chunk[None, :] + beta_chunk[None, :]
-    grad_normed = tl.where(normed > 0.0, grad_normed_relu, 0.0)
-    return normalized, grad_normed, grad_normed * gamma_chunk[None, :]
-
-
-@triton.jit
 def _backward_rows_full(
     x_bf16,
     rows,

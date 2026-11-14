@@ -64,16 +64,6 @@ def wrap_deg_180(d):
     return (d + 180.0) % 360.0 - 180.0
 
 
-def _bin_lane_points(bin_path: str) -> np.ndarray:
-    """All lane-polyline (x, y) points from a bin (type 0..9 == lanes)."""
-    data = _mbin.read_bin(Path(bin_path))
-    pts = []
-    for road in data["roads"]:
-        if 0 <= road["type"] <= 9:
-            pts.extend(zip(road["x"], road["y"]))
-    return np.asarray(pts, dtype=np.float64)
-
-
 def town_offset(bin_path: str):
     """CARLA<->bin (tx, ty): the bin's stored centroid when present (bin =
     original - centroid, and CARLA = original y-flipped, so the offset is just
@@ -210,9 +200,6 @@ class CarlaTransform:
     def yaw_to_bin(self, yaw_deg):
         return -math.radians(yaw_deg)
 
-    def vel_to_bin(self, vx, vy):
-        return vx, -vy
-
     def state_to_bin(self, x, y, z, yaw_deg, vx, vy, angular_velocity_z_deg_s, accel_x, accel_y, box_z, box_extent_z):
         """(x, y, z, heading, vx, vy, yaw_rate, accel_long) in the bin frame from a CARLA-frame actor state.
         Angular velocity (deg/s) and acceleration (m/s^2, world frame) must come from CARLA's own physics, not
@@ -224,30 +211,9 @@ class CarlaTransform:
         yaw_rate = -math.radians(
             angular_velocity_z_deg_s
         )  # mirrored y flips rotation sense, like yaw_to_bin's negation
-        accel_long = accel_x * math.cos(heading) + (-accel_y) * math.sin(heading)  # mirror y, like vel_to_bin
+        accel_long = accel_x * math.cos(heading) + (-accel_y) * math.sin(heading)  # mirror y, like the velocity
         ground_z = z + box_z - box_extent_z
         return (bx, by, self.z_to_bin(ground_z), heading, vx, -vy, yaw_rate, accel_long)
-
-    def actor_state_to_bin(self, actor):
-        """state_to_bin of a live CARLA actor."""
-        tf = actor.get_transform()
-        v = actor.get_velocity()
-        av = actor.get_angular_velocity()
-        acc = actor.get_acceleration()
-        box = actor.bounding_box
-        return self.state_to_bin(
-            tf.location.x,
-            tf.location.y,
-            tf.location.z,
-            tf.rotation.yaw,
-            v.x,
-            v.y,
-            av.z,
-            acc.x,
-            acc.y,
-            box.location.z,
-            box.extent.z,
-        )
 
     # --- bin frame -> CARLA (to teleport the ego back into CARLA) ---
     def bin_to_loc(self, bx, by):

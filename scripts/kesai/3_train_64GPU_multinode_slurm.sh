@@ -96,8 +96,6 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     train.data_dir=${DATA_DIR} \
     env.map_dir=$PD/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v20 \
     env.num_maps=128 \
-    env.obs_traffic_light_yellow_remaining=true \
-    env.scripted_pedestrian_ratio=0.3 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \

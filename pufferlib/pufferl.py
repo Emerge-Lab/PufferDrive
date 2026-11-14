@@ -969,13 +969,6 @@ def dist_sum(value, device):
     return tensor.item()
 
 
-def dist_mean(value, device):
-    if not torch.distributed.is_initialized():
-        return value
-
-    return dist_sum(value, device) / torch.distributed.get_world_size()
-
-
 def shutdown_distributed():
     if not torch.distributed.is_initialized():
         return

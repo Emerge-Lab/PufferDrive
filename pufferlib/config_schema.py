@@ -451,9 +451,7 @@ class PufferDriveConfig:
     wandb_group: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     run_name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     tb: bool = MISSING
-    local_rank: int = MISSING
     tag: str | None = MISSING
-    eval_simulation: bool | None = MISSING
     package: PackageName = MISSING
     env_name: EnvironmentName = MISSING
     policy_name: PolicyName = MISSING

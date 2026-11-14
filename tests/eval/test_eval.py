@@ -103,6 +103,7 @@ def _write_benchmark_config(
                     "obs_dropout_lane": 0.0,
                     "obs_dropout_boundary": 0.0,
                     "speed_limit_random_prob": 0.0,
+                    "scripted_pedestrian_ratio": 0.0,
                 },
                 "benchmarks": [
                     {
@@ -385,6 +386,24 @@ def test_standalone_eval_of_another_benchmark_reports_nothing_to_wandb(tmp_path,
     assert len(stored_history) == 1
 
 
+@pytest.mark.parametrize("saved_yellow_remaining", [None, False, True], ids=["absent", "off", "on"])
+def test_checkpoint_keeps_its_own_yellow_remaining_column(tmp_path, saved_yellow_remaining):
+    """The yaml default is on; a config saved before the column existed has no key and must load without it."""
+    saved_args = _load_config()
+    if saved_yellow_remaining is None:
+        del saved_args["env"]["obs_traffic_light_yellow_remaining"]
+    else:
+        saved_args["env"]["obs_traffic_light_yellow_remaining"] = saved_yellow_remaining
+    _write_checkpoint_run_dir(tmp_path / "run", saved_args)
+
+    args = _load_config()
+    args["load_model_path"] = saved_args["load_model_path"]
+    merged, _ = drive_benchmark.load_checkpoint_architecture(args)
+
+    assert args["env"]["obs_traffic_light_yellow_remaining"] is True
+    assert merged["env"]["obs_traffic_light_yellow_remaining"] is bool(saved_yellow_remaining)
+
+
 def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
     args = carla_evaluation["args"]
     benchmark_config_path = carla_evaluation["benchmark_config_path"]
@@ -468,6 +487,7 @@ def _replay_render_args():
             "num_goals": 3,
             "compute_eval_metrics": True,
             "speed_limit_random_prob": 0.0,
+            "scripted_pedestrian_ratio": 0.0,
         }
     )
     _set_small_observation_config(args)

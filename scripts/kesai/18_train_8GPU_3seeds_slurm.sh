@@ -9,7 +9,7 @@
 #SBATCH --output experiments/logs/train_3seeds_%a_%A.out
 #SBATCH --error experiments/logs/train_3seeds_%a_%A.err
 #SBATCH --partition dev
-#SBATCH --array=0-1
+#SBATCH --array=0-3
 
 source scripts/kesai/cluster_env.sh || exit 1
 
@@ -23,19 +23,20 @@ echo "Master node: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "Total nodes: ${WORLD_SIZE}"
 start=$(date +%s)
 
-SEEDS=(1000 2000 1000 2000)
-MINIBATCH_SIZES=(262144 262144 393216 393216)
-RUN_PREFIXES=(k_scaled_0073 k_scaled_0073 k_scaled_0074 k_scaled_0074)
+SEEDS=(1000 2000 3000 4000)
+RUN_PREFIX=k_scaled_0081
+WORKER_COUNT=64
+ROLLOUT_STEP_COUNT=64
+MINIBATCH_SIZE=393216
 
 export SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
-MINIBATCH_SIZE=${MINIBATCH_SIZES[$SLURM_ARRAY_TASK_ID]}
 if [ -z "${SEED}" ]; then
     echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} has no run configured; aborting."
     exit 1
 fi
-echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} minibatch=${MINIBATCH_SIZE}"
+echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} workers=${WORKER_COUNT} rollout_steps=${ROLLOUT_STEP_COUNT} minibatch=${MINIBATCH_SIZE}"
 
-export RUN_NAME=${RUN_PREFIXES[$SLURM_ARRAY_TASK_ID]}_${SEED}
+export RUN_NAME=${RUN_PREFIX}_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=$PD/experiments/${RUN_NAME}
@@ -62,7 +63,8 @@ echo "slot encoder backend: ${SLOT_ENCODER_BACKEND}"
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
-# 0073 / 0074 = the 0072 config (3_train_64GPU_multinode_slurm.sh) on one node per training, minibatch 262144 / 393216, seeds 1000 and 2000. Default 0073; 0074: sbatch --array=2-3 scripts/kesai/18_train_8GPU_3seeds_slurm.sh
+# 0073 / 0074 = the 0072 config (3_train_64GPU_multinode_slurm.sh) on one node per training, minibatch 262144 / 393216, seeds 1000 and 2000.
+# 0081 = the 0074 config (minibatch 393216, lr 5e-4) on the current code with a quarter of the rollout per iteration, 29.8k iterations instead of 7451: 64 workers per rank (0074: 128) and 64 steps per rollout (0074: 128). Seeds 1000-4000, one array task each.
 # Execute torchrun across all nodes using srun
 PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -79,12 +81,11 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND} srun --cpus-per-task="$SLURM
     train.data_dir=${DATA_DIR} \
     env.map_dir=$PD/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v20 \
     env.num_maps=128 \
-    env.obs_traffic_light_yellow_remaining=true \
-    env.scripted_pedestrian_ratio=0.3 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
-    vec.num_envs=128 \
+    vec.num_envs=${WORKER_COUNT} \
+    train.bptt_horizon=${ROLLOUT_STEP_COUNT} \
     train.rollout_dtype=float16 \
     train.max_minibatch_size=${MINIBATCH_SIZE} \
     train.minibatch_size=${MINIBATCH_SIZE} \

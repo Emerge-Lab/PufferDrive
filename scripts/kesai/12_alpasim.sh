@@ -29,14 +29,14 @@
 #     the archive being build_alpasim_image.sbatch's, copied over from a docker host (~100 GB of scratch, see the script).
 #
 # Settings are the plain assignments below. Only RUN_DIR, TOPOLOGY and N_SCENES are also read from the environment: 3_train
-# and 7_eval chain this eval after their own by exporting RUN_DIR. The topology follows the GPUs the job holds (8, 2 or 1),
+# and 18_train chain this eval after their own by exporting RUN_DIR. The topology follows the GPUs the job holds (8, 2 or 1),
 # so a run on two GPUs of a shared node (12 scenes in flight instead of 32) is
 #   sbatch --gres gpu:2 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
 # and a smoke test is
 #   N_SCENES=2 sbatch --gres gpu:1 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
-# 3_train / 7_eval submit this eval from inside an array job and sbatch hands its SLURM_ARRAY_* down: the wizard then
+# 18_train submits this eval from inside an array job and sbatch hands its SLURM_ARRAY_* down: the wizard then
 # splits the scenes as if this were array task N and skips the aggregation (k_scaled_0074_2000: no official score)
 unset SLURM_ARRAY_TASK_COUNT SLURM_ARRAY_TASK_ID SLURM_ARRAY_TASK_MIN SLURM_ARRAY_TASK_MAX SLURM_ARRAY_JOB_ID
 

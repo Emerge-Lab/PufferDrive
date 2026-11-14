@@ -68,10 +68,10 @@ class TestDriveConfig(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "conditioning_speed_scale"):
             Drive(conditioning_speed_scale=0.9)
 
-    @patch("sys.argv", ["pufferl.py", "env.obs_traffic_light_yellow_remaining=true"])
+    @patch("sys.argv", ["pufferl.py", "env.obs_traffic_light_yellow_remaining=false"])
     def test_yellow_remaining_cli_override(self):
         args = load_config("puffer_drive")
-        self.assertTrue(args["env"]["obs_traffic_light_yellow_remaining"])
+        self.assertFalse(args["env"]["obs_traffic_light_yellow_remaining"])
 
     def test_yellow_remaining_obs_widens_traffic_control_rows(self):
         plain = Drive(config_only=True)
