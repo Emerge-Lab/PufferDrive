@@ -5,6 +5,7 @@ stay resident for the run.
 """
 
 import multiprocessing
+import os
 import time
 
 import gymnasium
@@ -18,6 +19,8 @@ OBSERVATION_SIZE = 4
 ACTION_COUNT = 2
 FRACTIONAL_OBSERVATION = np.float32(1.0 / 3.0)
 STEP_OBSERVATION_SCALE = np.float32(1.7)
+SIBLING_CPU_OFFSET = 1000
+CACHE_DOMAIN_CORE_COUNT = 8
 PRELOADED = False
 
 
@@ -233,6 +236,74 @@ def test_unsupported_transport_dtype_is_rejected():
             batch_size=1,
             observation_transport_dtype="float64",
         )
+
+
+def _synthetic_cores(core_count):
+    """Cores as read_cpu_cores reports them: (cache domain, [first thread, sibling thread])."""
+    return [
+        (f"domain{core_idx // CACHE_DOMAIN_CORE_COUNT}", [core_idx, core_idx + SIBLING_CPU_OFFSET])
+        for core_idx in range(core_count)
+    ]
+
+
+def _cache_domain_counts(worker_cpus):
+    core_indices = [cpu % SIBLING_CPU_OFFSET for cpu in worker_cpus]
+    return np.bincount([core_idx // CACHE_DOMAIN_CORE_COUNT for core_idx in core_indices]).tolist()
+
+
+def test_pinning_gives_each_buffer_one_worker_per_core():
+    worker_cpus = pufferlib.vector.plan_worker_cpus(_synthetic_cores(32), 64)
+    assert len(set(worker_cpus)) == 64
+    first_buffer, second_buffer = worker_cpus[:32], worker_cpus[32:]
+    assert sorted(first_buffer) == list(range(32))
+    assert sorted(second_buffer) == [core_idx + SIBLING_CPU_OFFSET for core_idx in range(32)]
+
+
+def test_pinning_spreads_small_buffers_evenly_over_cache_domains():
+    worker_cpus = pufferlib.vector.plan_worker_cpus(_synthetic_cores(32), 64)
+    for buffer_start in range(0, 64, 16):
+        assert _cache_domain_counts(worker_cpus[buffer_start : buffer_start + 16]) == [4, 4, 4, 4]
+    assert not {cpu % SIBLING_CPU_OFFSET for cpu in worker_cpus[:16]} & {
+        cpu % SIBLING_CPU_OFFSET for cpu in worker_cpus[16:32]
+    }
+
+
+def test_pinning_with_fewer_cores_than_workers_per_buffer_shares_threads_across_buffers():
+    worker_cpus = pufferlib.vector.plan_worker_cpus(_synthetic_cores(28), 64)
+    assert len(set(worker_cpus)) == 56
+    first_buffer, second_buffer = worker_cpus[:32], worker_cpus[32:]
+    assert len(set(first_buffer)) == 32
+    assert len(set(second_buffer)) == 32
+    assert _cache_domain_counts(first_buffer[28:]) == [1, 1, 1, 1]
+    assert len(set(first_buffer) & set(second_buffer)) == 8
+
+
+class AffinityReportingEnv(MinimalEnv):
+    def reset(self, seed=None):
+        affinity = sorted(os.sched_getaffinity(0))
+        self.observations[:, 0] = affinity[0]
+        self.observations[:, 1] = len(affinity)
+        return self.observations, []
+
+
+@pytest.mark.skipif(not hasattr(os, "sched_setaffinity"), reason="CPU affinity is Linux-only")
+def test_pinned_workers_run_on_their_planned_cpu():
+    vecenv = pufferlib.vector.make(
+        AffinityReportingEnv, backend="Multiprocessing", num_envs=2, num_workers=2, batch_size=2, pin_workers=True
+    )
+    process_cpus = os.sched_getaffinity(0)
+    try:
+        observations, _ = vecenv.reset(seed=1)
+        assert set(vecenv.worker_cpus) <= process_cpus
+        assert observations[:, 0].tolist() == vecenv.worker_cpus
+        assert observations[:, 1].tolist() == [1, 1]
+        vecenv.bind_driver_thread()
+        assert os.sched_getaffinity(0) == (vecenv.driver_cpus or process_cpus)
+        assert not set(vecenv.worker_cpus) & (vecenv.driver_cpus or set())
+        vecenv.release_driver_thread()
+        assert os.sched_getaffinity(0) == process_cpus
+    finally:
+        vecenv.close()
 
 
 class SeedRecordingEnv(MinimalEnv):

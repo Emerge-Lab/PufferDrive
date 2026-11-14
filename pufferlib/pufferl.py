@@ -351,6 +351,8 @@ class PuffeRL:
 
         config = self.config
         device = config["device"]
+        if hasattr(self.vecenv, "bind_driver_thread"):
+            self.vecenv.bind_driver_thread()
 
         self.full_rows = 0
         while self.full_rows < self.segments:
@@ -430,6 +432,8 @@ class PuffeRL:
                 self.vecenv.send(action)
 
         profile("eval_misc", epoch)
+        if hasattr(self.vecenv, "release_driver_thread"):
+            self.vecenv.release_driver_thread()
         self.free_idx = self.total_agents
         self.ep_indices = torch.arange(self.total_agents, dtype=torch.int32)
         self.ep_lengths.zero_()
@@ -1335,28 +1339,56 @@ def pooled_flop_utilization_percent(flop_windows):
     return utilization_percent
 
 
-def bind_process_to_gpu_numa_node(device_index):
-    """Pin this process (and the env workers it forks) to the CPUs of the GPU's NUMA node; no-op without NUMA or sysfs."""
-    if os.environ.get("PUFFER_NUMA_BIND", "1") == "0" or not torch.cuda.is_available():
-        return None
+def gpu_numa_node(device_index):
+    """NUMA node of a CUDA device; None when sysfs does not report one."""
     props = torch.cuda.get_device_properties(device_index)
     pci_dir = f"/sys/bus/pci/devices/{props.pci_domain_id:04x}:{props.pci_bus_id:02x}:{props.pci_device_id:02x}.0"
     try:
         numa_node = int(open(f"{pci_dir}/numa_node").read())
-        if numa_node < 0:
-            return None
-        node_cpus = parse_cpulist(open(f"/sys/devices/system/node/node{numa_node}/cpulist").read())
     except (OSError, ValueError):
         return None
+    return numa_node if numa_node >= 0 else None
+
+
+def rank_core_share(cores, share_count, share_idx):
+    """Contiguous slice of a NUMA node's cores for one of the ranks whose GPUs sit on that node."""
+    cores_per_share = len(cores) // share_count
+    return cores[share_idx * cores_per_share : (share_idx + 1) * cores_per_share]
+
+
+def bind_process_to_gpu_numa_node(device_index, local_devices=None):
+    """Pin this process (and the env workers it forks) to CPUs of the GPU's NUMA node; returns whether it did.
+
+    Ranks in `local_devices` whose GPUs share the node split its cores evenly. No-op without NUMA or sysfs.
+    """
+    if os.environ.get("PUFFER_NUMA_BIND", "1") == "0" or not torch.cuda.is_available():
+        return False
+    numa_node = gpu_numa_node(device_index)
+    if numa_node is None:
+        return False
+    try:
+        node_cpus = parse_cpulist(open(f"/sys/devices/system/node/node{numa_node}/cpulist").read())
+    except (OSError, ValueError):
+        return False
     cpus = node_cpus & os.sched_getaffinity(0)
     if not cpus:
         print(
             f"NUMA bind skipped: GPU {device_index} is on node {numa_node} but none of its CPUs are in this process's affinity mask"
         )
-        return None
+        return False
+    node_devices = [device for device in local_devices or [device_index] if gpu_numa_node(device) == numa_node]
+    share_cpus = cpus
+    if len(node_devices) > 1:
+        node_cores = pufferlib.vector.read_cpu_cores(cpus)
+        share = rank_core_share(node_cores, len(node_devices), node_devices.index(device_index))
+        share_cpus = {cpu for _, core_threads in share for cpu in core_threads}
+    cpus = share_cpus or cpus
     os.sched_setaffinity(0, cpus)
-    print(f"GPU {device_index} on NUMA node {numa_node}: process and env workers bound to {len(cpus)} CPUs")
-    return numa_node
+    print(
+        f"GPU {device_index} on NUMA node {numa_node}: process and env workers bound to {len(cpus)} CPUs "
+        f"({len(node_devices)} local ranks on this node)"
+    )
+    return bool(share_cpus)
 
 
 def train(env_name, args=None, vecenv=None, policy=None, logger=None):
@@ -1415,6 +1447,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         validate_puffer_drive_resources(args, "training")
 
     apply_matmul_env_flags()
+    cpus_bound = False
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     global_rank = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", 0)))
@@ -1424,9 +1457,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         local_rank = int(os.environ["LOCAL_RANK"])
         print(f"rank: {global_rank} (local {local_rank}), MASTER_ADDR={master_addr}, MASTER_PORT={master_port}")
         torch.cuda.set_device(local_rank)
-        bind_process_to_gpu_numa_node(local_rank)
+        local_rank_count = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
+        cpus_bound = bind_process_to_gpu_numa_node(local_rank, range(local_rank_count))
     elif is_cuda_device(args["train"]["device"]) and torch.cuda.is_available():
-        bind_process_to_gpu_numa_node(torch.device(args["train"]["device"]).index or 0)
+        cpus_bound = bind_process_to_gpu_numa_node(torch.device(args["train"]["device"]).index or 0)
 
     train_seed = args["train"]["seed"]
     if train_seed is None:
@@ -1434,7 +1468,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 
     torch_seed, env_seed = derive_rank_seeds(args["vec"]["seed"], train_seed, world_size, global_rank)
     torch.manual_seed(torch_seed)
-    vecenv = vecenv or load_env(env_name, args, seed=env_seed)
+    vecenv = vecenv or load_env(env_name, args, seed=env_seed, pin_workers=cpus_bound)
     policy = policy or load_policy(args, vecenv, env_name)
 
     if "LOCAL_RANK" in os.environ:
@@ -2081,7 +2115,7 @@ def _render_eval_failures(
     }
 
 
-def load_env(env_name, args, seed=None):
+def load_env(env_name, args, seed=None, pin_workers=False):
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
@@ -2089,8 +2123,10 @@ def load_env(env_name, args, seed=None):
     vec_kwargs = dict(args["vec"])
     if seed is not None:
         vec_kwargs["seed"] = seed
-    if args["train"].get("rollout_dtype") == "float16" and vec_kwargs.get("backend") == "Multiprocessing":
-        vec_kwargs["observation_transport_dtype"] = "float16"
+    if vec_kwargs.get("backend") == "Multiprocessing":
+        vec_kwargs["pin_workers"] = pin_workers
+        if args["train"].get("rollout_dtype") == "float16":
+            vec_kwargs["observation_transport_dtype"] = "float16"
     return pufferlib.vector.make(make_env, env_kwargs=args["env"], **vec_kwargs)
 
 

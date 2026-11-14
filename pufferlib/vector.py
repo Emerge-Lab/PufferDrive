@@ -2,6 +2,8 @@
 
 
 import inspect
+import itertools
+import os
 import numpy as np
 from multiprocessing import get_all_start_methods, get_context
 from multiprocessing.connection import wait
@@ -9,6 +11,15 @@ from multiprocessing.connection import wait
 from pufferlib import PufferEnv, set_buffers
 import pufferlib.spaces
 
+VECTOR_OPTIONS = (
+    "num_workers",
+    "batch_size",
+    "zero_copy",
+    "overwork",
+    "backend",
+    "observation_transport_dtype",
+    "pin_workers",
+)
 RESET = 0
 STEP = 1
 SEND = 2
@@ -215,6 +226,39 @@ class Serial:
             env.close()
 
 
+THREAD_SIBLINGS_PATH = "/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list"
+CACHE_DOMAIN_PATH = "/sys/devices/system/cpu/cpu{cpu}/cache/index3/shared_cpu_list"
+
+
+def read_cpu_cores(cpus):
+    """Physical cores among `cpus` in CPU order, each as (L3 cache domain, hardware threads)."""
+    cores = {}
+    for cpu in sorted(cpus):
+        with open(THREAD_SIBLINGS_PATH.format(cpu=cpu)) as siblings_file:
+            core_key = siblings_file.read().strip()
+        cache_domain = ""
+        if os.path.exists(CACHE_DOMAIN_PATH.format(cpu=cpu)):
+            with open(CACHE_DOMAIN_PATH.format(cpu=cpu)) as cache_file:
+                cache_domain = cache_file.read().strip()
+        cores.setdefault(core_key, (cache_domain, []))[1].append(cpu)
+    return list(cores.values())
+
+
+def plan_worker_cpus(cores, worker_count):
+    """One hardware thread per worker: first threads of all cores before siblings, cores round-robin over cache domains.
+
+    Consecutive workers form a buffer and step together, so a buffer lands on different cores, evenly over the domains.
+    """
+    domains = {}
+    for cache_domain, core_threads in cores:
+        domains.setdefault(cache_domain, []).append(core_threads)
+    layers = itertools.zip_longest(*domains.values())
+    interleaved_cores = [core_threads for layer in layers for core_threads in layer if core_threads is not None]
+    sibling_layers = itertools.zip_longest(*interleaved_cores)
+    hardware_threads = [cpu for layer in sibling_layers for cpu in layer if cpu is not None]
+    return [hardware_threads[worker_idx % len(hardware_threads)] for worker_idx in range(worker_count)]
+
+
 def _worker_process(
     env_creators,
     env_args,
@@ -233,7 +277,10 @@ def _worker_process(
     shm,
     is_native,
     seed,
+    worker_cpu,
 ):
+    if worker_cpu is not None:
+        os.sched_setaffinity(0, {worker_cpu})
     # Environments read and write directly to shared memory
     shape = (num_workers, num_envs * num_agents)
     atn_arr = np.ndarray((*shape, *atn_shape), dtype=atn_dtype, buffer=shm["actions"])[worker_idx]
@@ -312,6 +359,7 @@ class Multiprocessing:
         overwork=False,
         seed=0,
         observation_transport_dtype=None,
+        pin_workers=False,
         **kwargs,
     ):
         if batch_size is None:
@@ -419,6 +467,16 @@ class Multiprocessing:
 
         worker_ss = np.random.SeedSequence(seed).spawn(num_workers) if seed is not None else [None] * num_workers
         worker_seeds = [int(ss.generate_state(1)[0]) & 0x7FFFFFFF if ss is not None else None for ss in worker_ss]
+        self.worker_cpus = [None] * num_workers
+        self.driver_cpus = None
+        self._released_driver_cpus = None
+        if pin_workers:
+            cores = read_cpu_cores(os.sched_getaffinity(0))
+            if len(cores) > 1:
+                # a driver thread that shares a core with a worker slows that worker's whole buffer
+                _, driver_core_threads = cores.pop()
+                self.driver_cpus = set(driver_core_threads)
+            self.worker_cpus = plan_worker_cpus(cores, num_workers)
 
         self.processes = []
         for i in range(num_workers):
@@ -444,6 +502,7 @@ class Multiprocessing:
                     self.shm,
                     is_native,
                     worker_seeds[i],
+                    self.worker_cpus[i],
                 ),
             )
             p.start()
@@ -603,6 +662,19 @@ class Multiprocessing:
     def notify(self):
         self.buf["notify"][:] = True
 
+    def bind_driver_thread(self):
+        """Move the calling thread onto the core kept free of pinned workers; release_driver_thread undoes it."""
+        if self.driver_cpus is None:
+            return
+        self._released_driver_cpus = os.sched_getaffinity(0)
+        os.sched_setaffinity(0, self.driver_cpus)
+
+    def release_driver_thread(self):
+        if self._released_driver_cpus is None:
+            return
+        os.sched_setaffinity(0, self._released_driver_cpus)
+        self._released_driver_cpus = None
+
     def pin_observations(self):
         """Register stable shared observations in the trainer's current CUDA context."""
         if self.processes is None:
@@ -729,7 +801,7 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
 
     # Sanity check args
     for k in kwargs:
-        if k not in ["num_workers", "batch_size", "zero_copy", "overwork", "backend", "observation_transport_dtype"]:
+        if k not in VECTOR_OPTIONS:
             raise pufferlib.APIUsageError(f"Invalid argument: {k}")
 
     # TODO: First step action space check

@@ -8,7 +8,7 @@ import pytest
 import torch
 from torch.utils._python_dispatch import TorchDispatchMode
 
-from pufferlib.pufferl import PuffeRL
+from pufferlib.pufferl import PuffeRL, rank_core_share
 from pufferlib.vector import Multiprocessing
 
 
@@ -81,6 +81,13 @@ def test_registered_observation_views_transfer_exactly_and_unpin(shared_vector):
     finally:
         shared_vector.close()
     assert not view.is_pinned()
+
+
+def test_ranks_on_one_numa_node_get_disjoint_equal_core_shares():
+    node_cores = [("domain", [core_idx, core_idx + 256]) for core_idx in range(112)]
+    shares = [rank_core_share(node_cores, 4, share_idx) for share_idx in range(4)]
+    assert [len(share) for share in shares] == [28, 28, 28, 28]
+    assert [core for share in shares for core in share] == node_cores
 
 
 class RejectScalarReadback(TorchDispatchMode):
