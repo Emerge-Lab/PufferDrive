@@ -41,6 +41,7 @@ REWARD_COEF_NAMES = binding.reward_coef_names()
 LEARNER_AGENTS_VALUES = {"all": binding.LEARNER_AGENTS_ALL, "sdc": binding.LEARNER_AGENTS_SDC}
 REWARD_COEF_OVERRIDE_SDC_KEY = "sdc"
 REWARD_COEF_OVERRIDE_OTHERS_KEY = "others"
+REWARD_COEF_OVERRIDE_NEAREST_PREFIX = "nearest_"
 # row_kinds() values: a row no scene owns, a row of an ordinary scene, a row of a log-replay mixing scene.
 ROW_KIND_IDLE = 0
 ROW_KIND_SCENE = 1
@@ -70,18 +71,25 @@ def _reward_coef_override_target(key):
         return binding.REWARD_COEF_TARGET_OTHERS
     if isinstance(key, str) and key.isdigit():
         return int(key)
+    if isinstance(key, str) and key.startswith(REWARD_COEF_OVERRIDE_NEAREST_PREFIX):
+        k = key[len(REWARD_COEF_OVERRIDE_NEAREST_PREFIX) :]
+        if k.isdigit() and int(k) >= 1:
+            return binding.REWARD_COEF_TARGET_NEAREST_BASE - int(k)
     if isinstance(key, int) and not isinstance(key, bool) and key >= 0:
         return key
     raise ValueError(
-        f"reward_coef_overrides key {key!r} must be 'sdc', 'others' or a non-negative agent index within the scenario"
+        f"reward_coef_overrides key {key!r} must be 'sdc', 'others', 'nearest_<k>' (k >= 1) or a non-negative agent "
+        "index within the scenario"
     )
 
 
 def resolve_reward_coef_overrides(overrides, normalized=False):
-    """{"sdc" | "others" | agent_idx: {coef_name: value}} -> [(target_agent_idx, coef_idx, raw_value)].
+    """{"sdc" | "others" | "nearest_<k>" | agent_idx: {coef_name: value}} -> [(target_agent_idx, coef_idx, raw_value)].
 
-    Agent indices address the scenario's agent array (0 = SDC); "others" covers every non-SDC agent and
-    loses to an explicit index. With normalized=True values are conditioning-obs values in [-1, 1].
+    Agent indices address the scenario's agent array (0 = SDC); "others" covers every non-SDC agent;
+    "nearest_<k>" covers the k policy-driven agents nearest the SDC at the episode start. A narrower
+    target wins: others < nearest_<k> < agent index. With normalized=True values are conditioning-obs
+    values in [-1, 1].
     """
     if overrides is None:
         return []

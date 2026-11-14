@@ -272,8 +272,10 @@ static const int ROAD_OFFSETS[25][2]
 // Conditioning obs width without reward_conditioning_displacement; displacement is last so 17-coef policies still fit
 #define NUM_REWARD_COEFS_WITHOUT_DISPLACEMENT 17
 
-// Reward-coef override targets: an agent index (>= 0) or every agent except EGO_IDX
+// Reward-coef override targets: an agent index (>= 0), every agent except EGO_IDX, or the k policy-driven agents
+// nearest EGO_IDX at the episode start (REWARD_COEF_TARGET_NEAREST_BASE - k, k >= 1)
 #define REWARD_COEF_TARGET_OTHERS -1
+#define REWARD_COEF_TARGET_NEAREST_BASE -1000
 #define MAX_REWARD_COEF_OVERRIDES 1024
 #define REWARD_COEF_NORMALIZATION_EPSILON 1e-8f
 

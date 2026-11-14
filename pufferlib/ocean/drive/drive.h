@@ -190,7 +190,7 @@ static struct SharedMapData **g_map_cache = NULL;
 static int g_map_cache_count = 0;
 
 typedef struct {
-    int target_agent_idx; // agent index or REWARD_COEF_TARGET_OTHERS
+    int target_agent_idx; // agent index, REWARD_COEF_TARGET_OTHERS or REWARD_COEF_TARGET_NEAREST_BASE - k
     int coef_idx;
     float value; // raw coefficient, not the normalized obs value
 } RewardCoefOverride;
@@ -294,6 +294,7 @@ struct Drive {
     int reward_log_sampling;
     RewardCoefOverride reward_coef_overrides[MAX_REWARD_COEF_OVERRIDES]; // re-applied after every coef sample
     int reward_coef_override_count;
+    int placing_agents; // set_start_position is running: start positions are not all set, nearest-k waits
     // Goals
     float goal_radius;
     float goal_speed;
@@ -2558,12 +2559,60 @@ static inline void sample_erratic_flags(Drive *env, Agent *agent) {
     agent->partner_blindness_counter = 0;
 }
 
-// Agent-specific entries are applied after REWARD_COEF_TARGET_OTHERS ones so they win.
+// The k of a nearest-k override target, 0 for any other target
+static int nearest_target_k(int target_agent_idx) {
+    return target_agent_idx < REWARD_COEF_TARGET_NEAREST_BASE ? REWARD_COEF_TARGET_NEAREST_BASE - target_agent_idx : 0;
+}
+
+// Rank of agent_idx by distance to EGO_IDX among the placed policy-driven agents (1 = nearest), 0 if unranked
+static int ego_distance_rank(Drive *env, int agent_idx) {
+    const Agent *ego = &env->agents[EGO_IDX];
+    const Agent *agent = &env->agents[agent_idx];
+    if (agent_idx == EGO_IDX || agent->sim_x == INVALID_POSITION || ego->sim_x == INVALID_POSITION) {
+        return 0;
+    }
+    float dx = agent->sim_x - ego->sim_x, dy = agent->sim_y - ego->sim_y;
+    float d2 = dx * dx + dy * dy;
+    int rank = 1;
+    int is_active = 0;
+    for (int j = 0; j < env->active_agent_count; j++) {
+        int other_idx = env->active_agent_indices[j];
+        if (other_idx == agent_idx) {
+            is_active = 1;
+        }
+        const Agent *other = &env->agents[other_idx];
+        if (other_idx == EGO_IDX || other_idx == agent_idx || other->sim_x == INVALID_POSITION) {
+            continue;
+        }
+        float ox = other->sim_x - ego->sim_x, oy = other->sim_y - ego->sim_y;
+        float o2 = ox * ox + oy * oy;
+        if (o2 < d2 || (o2 == d2 && other_idx < agent_idx)) {
+            rank++;
+        }
+    }
+    return is_active ? rank : 0;
+}
+
+// Order: REWARD_COEF_TARGET_OTHERS, then nearest-k, then agent-specific entries, so the narrower target wins.
 static void apply_reward_coef_overrides(Drive *env, int agent_idx) {
     float *reward_coefs = env->agents[agent_idx].reward_coefs;
     for (int i = 0; i < env->reward_coef_override_count; i++) {
         const RewardCoefOverride *entry = &env->reward_coef_overrides[i];
         if (entry->target_agent_idx == REWARD_COEF_TARGET_OTHERS && agent_idx != EGO_IDX) {
+            reward_coefs[entry->coef_idx] = entry->value;
+        }
+    }
+    int rank = -1; // computed on the first nearest-k entry
+    for (int i = 0; i < env->reward_coef_override_count && !env->placing_agents; i++) {
+        const RewardCoefOverride *entry = &env->reward_coef_overrides[i];
+        int k = nearest_target_k(entry->target_agent_idx);
+        if (k == 0) {
+            continue;
+        }
+        if (rank < 0) {
+            rank = ego_distance_rank(env, agent_idx);
+        }
+        if (rank > 0 && rank <= k) {
             reward_coefs[entry->coef_idx] = entry->value;
         }
     }
@@ -2944,6 +2993,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
 }
 
 static void set_start_position(Drive *env) {
+    env->placing_agents = 1;
     for (int i = 0; i < env->num_total_agents; i++) {
         int is_active = 0;
         for (int j = 0; j < env->active_agent_count; j++) {
@@ -3011,6 +3061,15 @@ static void set_start_position(Drive *env) {
         reset_agent_metrics(env, i);
         reset_agent_state(agent);
         generate_reward_coefs(env, i);
+    }
+    // Every start position is set now: add the nearest-k overrides (re-applying the others changes nothing)
+    env->placing_agents = 0;
+    int has_nearest = 0;
+    for (int i = 0; i < env->reward_coef_override_count; i++) {
+        has_nearest |= nearest_target_k(env->reward_coef_overrides[i].target_agent_idx) > 0;
+    }
+    for (int x = 0; has_nearest && x < env->active_agent_count; x++) {
+        apply_reward_coef_overrides(env, env->active_agent_indices[x]);
     }
 }
 

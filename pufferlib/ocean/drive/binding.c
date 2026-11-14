@@ -99,7 +99,8 @@ static int unpack_reward_coef_overrides(PyObject *overrides_obj, RewardCoefOverr
             }
             return -1;
         }
-        if (target_agent_idx < 0 && target_agent_idx != REWARD_COEF_TARGET_OTHERS) {
+        if (target_agent_idx < 0 && target_agent_idx != REWARD_COEF_TARGET_OTHERS
+            && target_agent_idx >= REWARD_COEF_TARGET_NEAREST_BASE) {
             PyErr_Format(PyExc_ValueError, "reward_coef_overrides[%zd]: invalid target %d", i, target_agent_idx);
             return -1;
         }
