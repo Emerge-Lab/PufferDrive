@@ -7,6 +7,7 @@ import os
 import pufferlib
 from pufferlib.ocean.drive import binding
 
+MAP_SPREAD_STEP = 0.6180339887498949  # golden ratio: any run of maps in this order is spread over the sorted list
 LOG_MIN_AGENT_EPISODES = 1  # emit env logs as soon as any episode completed; the trainer weights them by n
 
 
@@ -15,6 +16,14 @@ def compute_effective_road_obs_count(max_count, dropout):
         return 0
     clipped_dropout = min(max(float(dropout), 0.0), 1.0)
     return int(max_count * (1.0 - clipped_dropout))
+
+
+def cache_domain_map_files(map_files, cache_domain_share):
+    """A cache domain's [start, end) fraction of the maps, spread over the sorted list; shares partition the maps."""
+    spread_order = sorted(range(len(map_files)), key=lambda map_idx: (map_idx * MAP_SPREAD_STEP) % 1.0)
+    first = int(cache_domain_share[0] * len(map_files))
+    last = max(int(cache_domain_share[1] * len(map_files)), first + 1)
+    return [map_files[map_idx] for map_idx in sorted(spread_order[first:last])]
 
 
 class Drive(pufferlib.PufferEnv):
@@ -100,6 +109,7 @@ class Drive(pufferlib.PufferEnv):
         replay_expert_agents=1,
         map_dir=None,
         config_only=False,
+        cache_domain_share=None,
         goal_regen_mode="finite",
         goal_source="route",
         reward_conditioning=False,
@@ -406,6 +416,10 @@ class Drive(pufferlib.PufferEnv):
             self.map_files = [map_dir]
         else:
             self.map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
+        if cache_domain_share is not None and not eval_mode:
+            self.map_files = cache_domain_map_files(self.map_files[:num_maps], cache_domain_share)
+            num_maps = len(self.map_files)
+            self.num_maps = num_maps
 
         self.simulation_mode = {
             "gigaflow": binding.SIMULATION_MODE_GIGAFLOW,

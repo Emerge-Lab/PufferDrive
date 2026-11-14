@@ -259,6 +259,20 @@ def plan_worker_cpus(cores, worker_count):
     return [hardware_threads[worker_idx % len(hardware_threads)] for worker_idx in range(worker_count)]
 
 
+def cache_domain_shares(worker_cache_domains):
+    """Per worker, the [start, end) fraction of a resource its cache domain owns, in proportion to the domain's workers."""
+    worker_count = len(worker_cache_domains)
+    domain_sizes = {}
+    for cache_domain in worker_cache_domains:
+        domain_sizes[cache_domain] = domain_sizes.get(cache_domain, 0) + 1
+    domain_shares = {}
+    workers_before = 0
+    for cache_domain, domain_size in domain_sizes.items():
+        domain_shares[cache_domain] = (workers_before / worker_count, (workers_before + domain_size) / worker_count)
+        workers_before += domain_size
+    return [domain_shares[cache_domain] for cache_domain in worker_cache_domains]
+
+
 def _worker_process(
     env_creators,
     env_args,
@@ -468,6 +482,7 @@ class Multiprocessing:
         worker_ss = np.random.SeedSequence(seed).spawn(num_workers) if seed is not None else [None] * num_workers
         worker_seeds = [int(ss.generate_state(1)[0]) & 0x7FFFFFFF if ss is not None else None for ss in worker_ss]
         self.worker_cpus = [None] * num_workers
+        self.worker_cache_shares = [None] * num_workers
         self.driver_cpus = None
         self._released_driver_cpus = None
         if pin_workers:
@@ -477,17 +492,25 @@ class Multiprocessing:
                 _, driver_core_threads = cores.pop()
                 self.driver_cpus = set(driver_core_threads)
             self.worker_cpus = plan_worker_cpus(cores, num_workers)
+            cpu_cache_domains = {cpu: cache_domain for cache_domain, core_threads in cores for cpu in core_threads}
+            self.worker_cache_shares = cache_domain_shares([cpu_cache_domains[cpu] for cpu in self.worker_cpus])
 
         self.processes = []
         for i in range(num_workers):
             start = i * envs_per_worker
             end = start + envs_per_worker
+            worker_env_kwargs = env_kwargs[start:end]
+            takes_cache_share = "cache_domain_share" in inspect.signature(env_creators[start]).parameters
+            if takes_cache_share and self.worker_cache_shares[i] is not None:
+                # envs that keep per-env data hot (maps) partition it so that one cache domain's workers share it
+                cache_share = self.worker_cache_shares[i]
+                worker_env_kwargs = [dict(kwargs, cache_domain_share=cache_share) for kwargs in worker_env_kwargs]
             p = process_context.Process(
                 target=_worker_process,
                 args=(
                     env_creators[start:end],
                     env_args[start:end],
-                    env_kwargs[start:end],
+                    worker_env_kwargs,
                     obs_shape,
                     obs_dtype,
                     transport_dtype,

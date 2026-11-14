@@ -278,11 +278,24 @@ def test_pinning_with_fewer_cores_than_workers_per_buffer_shares_threads_across_
     assert len(set(first_buffer) & set(second_buffer)) == 8
 
 
+def test_cache_domain_shares_partition_a_resource_in_proportion_to_workers():
+    worker_cache_domains = ["a", "b", "a", "c", "b", "a", "a", "c"]
+    shares = pufferlib.vector.cache_domain_shares(worker_cache_domains)
+    assert shares[0] == shares[2] == shares[5] == shares[6] == (0.0, 0.5)
+    assert shares[1] == shares[4] == (0.5, 0.75)
+    assert shares[3] == shares[7] == (0.75, 1.0)
+
+
 class AffinityReportingEnv(MinimalEnv):
+    def __init__(self, buf=None, seed=0, cache_domain_share=None):
+        self.cache_domain_share = cache_domain_share
+        super().__init__(buf=buf, seed=seed)
+
     def reset(self, seed=None):
         affinity = sorted(os.sched_getaffinity(0))
         self.observations[:, 0] = affinity[0]
         self.observations[:, 1] = len(affinity)
+        self.observations[:, 2:4] = self.cache_domain_share
         return self.observations, []
 
 
@@ -297,6 +310,9 @@ def test_pinned_workers_run_on_their_planned_cpu():
         assert set(vecenv.worker_cpus) <= process_cpus
         assert observations[:, 0].tolist() == vecenv.worker_cpus
         assert observations[:, 1].tolist() == [1, 1]
+        assert observations[:, 2:4].tolist() == [list(share) for share in vecenv.worker_cache_shares]
+        assert min(share[0] for share in vecenv.worker_cache_shares) == 0.0
+        assert max(share[1] for share in vecenv.worker_cache_shares) == 1.0
         vecenv.bind_driver_thread()
         assert os.sched_getaffinity(0) == (vecenv.driver_cpus or process_cpus)
         assert not set(vecenv.worker_cpus) & (vecenv.driver_cpus or set())
