@@ -30,6 +30,7 @@ HEADLINE_METRIC_KEYS = {
     EVAL_TYPE_SELFPLAY: "final_eval/selfplay_km_per_infraction",
     EVAL_TYPE_ALPASIM: "final_eval/alpasim_score",
 }
+ALPASIM_AT_FAULT_METRIC_KEY = "final_eval/alpasim_km_per_at_fault_incident"
 SOURCE_KEY_SUFFIX = "_source"
 
 SELFPLAY_BENCHMARK_NAME = "carla"
@@ -43,6 +44,8 @@ NUPLAN_SCENARIOS_FILE_NAME = "scenarios.csv"
 LONGEST6_ROUTES_DIR_NAME = "routes"
 LONGEST6_RECORD_SUFFIX = ".result.json"
 ALPASIM_SCORE_LINE_PATTERN = re.compile(r"official_score (\S+)\s+scenes (\d+)\s+failed (\d+)")
+ALPASIM_AT_FAULT_ROW_NAME = "avg_dist_between_incidents_at_fault"
+ALPASIM_AT_FAULT_LINE_PATTERN = re.compile(ALPASIM_AT_FAULT_ROW_NAME + r"\s+(?:(\S+) km|n/a)\s.*")
 
 RUN_CONFIG_FILE_NAME = "config.yaml"
 RUN_IDENTITY_KEYS = ("run_name", "wandb_project")
@@ -139,6 +142,23 @@ def read_alpasim_score(results_txt_path, expected_scene_count):
     return float(score_match.group(1))
 
 
+def read_alpasim_at_fault_metric(results_txt_path):
+    """AlpaSim's km per at-fault incident (offroad, front or lateral collision); a run without one has no distance."""
+    with open(results_txt_path) as results_file:
+        line_matches = [ALPASIM_AT_FAULT_LINE_PATTERN.fullmatch(line.strip()) for line in results_file]
+    at_fault_matches = [line_match for line_match in line_matches if line_match is not None]
+    if len(at_fault_matches) != 1:
+        raise EvalReportError(f"{results_txt_path} must hold exactly one '{ALPASIM_AT_FAULT_ROW_NAME}' row")
+    km_text = at_fault_matches[0].group(1)
+    if km_text is None:
+        print(f"{results_txt_path}: no at-fault incident, {ALPASIM_AT_FAULT_METRIC_KEY} is not reported")
+        return {}
+    km_per_at_fault_incident = float(km_text)
+    if not math.isfinite(km_per_at_fault_incident) or km_per_at_fault_incident <= 0.0:
+        raise EvalReportError(f"{results_txt_path} holds an unusable '{ALPASIM_AT_FAULT_ROW_NAME}' value: {km_text}")
+    return {ALPASIM_AT_FAULT_METRIC_KEY: km_per_at_fault_incident}
+
+
 def read_headline_value(eval_type, result_path, expected_episode_count):
     """Read an eval type's headline number from its result file; refuses incomplete evaluations."""
     if not os.path.isfile(result_path):
@@ -202,8 +222,8 @@ def find_summary_mismatches(expected_summary, stored_summary):
     return mismatched_keys
 
 
-def log_run_metric(run_identity, metric_key, headline_value, result_source):
-    """Append the metric to a finished wandb run as a history row (charts plot history, not the summary), then verify."""
+def log_run_metrics(run_identity, metric_values, result_source):
+    """Append the metrics to a finished wandb run as one history row (charts plot history, not the summary); verify."""
     import wandb
 
     run_path = f"{run_identity['wandb_project']}/{run_identity['run_name']}"
@@ -214,8 +234,8 @@ def log_run_metric(run_identity, metric_key, headline_value, result_source):
             f"wandb run {run_path} is still running and a second session would collide with its logger; report "
             "again once training has finished"
         )
-    source_key = metric_key + SOURCE_KEY_SUFFIX
-    expected_summary = {**trained_run.summary_metrics, metric_key: headline_value, source_key: result_source}
+    source_values = {metric_key + SOURCE_KEY_SUFFIX: result_source for metric_key in metric_values}
+    expected_summary = {**trained_run.summary_metrics, **metric_values, **source_values}
     last_step_before_report = trained_run.history_keys["lastStep"]
 
     with tempfile.TemporaryDirectory() as session_dir:
@@ -228,8 +248,8 @@ def log_run_metric(run_identity, metric_key, headline_value, result_source):
             settings=wandb.Settings(console="off", x_disable_meta=True, x_disable_stats=True),
         )
         try:
-            session.log({metric_key: headline_value})
-            session.summary[source_key] = result_source
+            session.log(metric_values)
+            session.summary.update(source_values)
         finally:
             session.finish()
 
@@ -242,8 +262,8 @@ def log_run_metric(run_identity, metric_key, headline_value, result_source):
         mismatched_keys = find_summary_mismatches(expected_summary, stored_run.summary_metrics)
         # the run's key index, not a history query: sampled history trails a finished session by seconds
         stored_history_keys = stored_run.history_keys
-        history_row_stored = (
-            metric_key in stored_history_keys["keys"] and stored_history_keys["lastStep"] > last_step_before_report
+        history_row_stored = stored_history_keys["lastStep"] > last_step_before_report and all(
+            metric_key in stored_history_keys["keys"] for metric_key in metric_values
         )
         if not mismatched_keys and history_row_stored:
             return
@@ -252,27 +272,28 @@ def log_run_metric(run_identity, metric_key, headline_value, result_source):
             f"wandb run {run_path}: summary keys differ from the intended report, check them: {mismatched_keys}"
         )
     raise EvalReportError(
-        f"wandb run {run_path}: {metric_key} did not reach the run's history; the charts will not show it"
+        f"wandb run {run_path}: {sorted(metric_values)} did not reach the run's history; the charts will not show it"
     )
 
 
 def report_headline_metric(eval_type, result_path, run_dir, expected_episode_count=None):
-    """Report one evaluation's headline metric; a repeated report becomes the run's value for that eval type."""
+    """Report one evaluation's headline metric (AlpaSim: and its km per at-fault incident); a repeated report
+    becomes the run's value for that eval type."""
     headline_value = read_headline_value(eval_type, result_path, expected_episode_count)
+    metric_values = {HEADLINE_METRIC_KEYS[eval_type]: headline_value}
+    if eval_type == EVAL_TYPE_ALPASIM:
+        metric_values.update(read_alpasim_at_fault_metric(result_path))
     run_identity = load_run_identity(os.path.join(run_dir, RUN_CONFIG_FILE_NAME))
-    metric_key = HEADLINE_METRIC_KEYS[eval_type]
     result_source = os.path.relpath(os.path.abspath(result_path), os.path.abspath(run_dir))
 
     # a session appends at the history offset and summary it read when it opened: evals of one run must not overlap
     with open(os.path.join(run_dir, REPORT_LOCK_FILE_NAME), "w") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
-        log_run_metric(run_identity, metric_key, headline_value, result_source)
+        log_run_metrics(run_identity, metric_values, result_source)
 
-    print(
-        f"wandb run {run_identity['wandb_project']}/{run_identity['run_name']}: {metric_key} = {headline_value} "
-        f"({result_source})"
-    )
-    return {metric_key: headline_value, metric_key + SOURCE_KEY_SUFFIX: result_source}
+    reported_text = ", ".join(f"{metric_key} = {metric_value}" for metric_key, metric_value in metric_values.items())
+    print(f"wandb run {run_identity['wandb_project']}/{run_identity['run_name']}: {reported_text} ({result_source})")
+    return {**metric_values, **{metric_key + SOURCE_KEY_SUFFIX: result_source for metric_key in metric_values}}
 
 
 def parse_arguments():

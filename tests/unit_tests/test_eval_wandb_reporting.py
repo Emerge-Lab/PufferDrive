@@ -26,6 +26,9 @@ ROUTE_COUNT = 3
 SEED_COUNT = 2
 SCENARIO_COUNT = 5
 SCENE_COUNT = 4
+ALPASIM_KM_PER_AT_FAULT_INCIDENT = 6.4502
+ALPASIM_AT_FAULT_ROW = "avg_dist_between_incidents_at_fault    6.4502 km  (0.1550 incidents/km)"
+ALPASIM_NO_AT_FAULT_INCIDENT_ROW = "avg_dist_between_incidents_at_fault n/a  (no incidents)"
 STUB_WANDB_MODULE = """
 import json
 import os
@@ -43,9 +46,9 @@ def _store_run(stored_run):
 
 
 class _SessionSummary:
-    def __setitem__(self, key, value):
+    def update(self, values):
         stored_run = _load_run()
-        stored_run["summary"][key] = value
+        stored_run["summary"].update(values)
         _store_run(stored_run)
 
 
@@ -218,10 +221,17 @@ def _write_selfplay_summary(run_dir, distance_per_infraction_meters, num_episode
     return aggregate_dir / "evaluation_summary.json"
 
 
-def _write_alpasim_results(run_dir, score_line):
+def _write_alpasim_results(run_dir, score_line, at_fault_rows=(ALPASIM_AT_FAULT_ROW,)):
+    """results.txt as 12_alpasim.sh writes it: score line, km between incidents (all, at-fault), per-metric means."""
     out_dir = run_dir / "eval" / "alpasim_gt_time5_r2_final_model_20261102_013615_909"
     out_dir.mkdir(parents=True)
-    (out_dir / "results.txt").write_text(score_line + "\ncollision_any   mean    0.0925  n 400\n")
+    result_lines = [
+        score_line,
+        "avg_dist_between_incidents             3.2251 km  (0.3101 incidents/km)",
+        *at_fault_rows,
+        "collision_any                       mean    0.0925  n 400",
+    ]
+    (out_dir / "results.txt").write_text("".join(line + "\n" for line in result_lines))
     return out_dir / "results.txt"
 
 
@@ -244,14 +254,16 @@ def test_each_eval_type_logs_its_headline_value_and_source(stub_wandb, run_dir, 
 
     eval_wandb_report.report_headline_metric(eval_type, str(result_path), str(run_dir), expected_episode_count)
 
-    metric_key = eval_wandb_report.HEADLINE_METRIC_KEYS[eval_type]
-    reported_values = {metric_key: expected_value, f"{metric_key}_source": str(result_path.relative_to(run_dir))}
+    metric_values = {eval_wandb_report.HEADLINE_METRIC_KEYS[eval_type]: expected_value}
+    if eval_type == eval_wandb_report.EVAL_TYPE_ALPASIM:
+        metric_values[eval_wandb_report.ALPASIM_AT_FAULT_METRIC_KEY] = ALPASIM_KM_PER_AT_FAULT_INCIDENT
+    source_values = {f"{metric_key}_source": str(result_path.relative_to(run_dir)) for metric_key in metric_values}
     reported_step = TRAINING_LAST_STEP + 1
     assert stub_wandb.requested_run_paths[0] == RUN_PATH
-    # The value is a history row, which is what the charts plot; its source string stays out of the history.
-    assert stub_wandb.stored_history == [TRAINING_HISTORY_ROW, {metric_key: expected_value, "_step": reported_step}]
+    # The values are one history row, which is what the charts plot; the source strings stay out of the history.
+    assert stub_wandb.stored_history == [TRAINING_HISTORY_ROW, {**metric_values, "_step": reported_step}]
     # Training's own summary values stay exactly as they were; only wandb's step bookkeeping advances.
-    assert stub_wandb.stored_summary == {**TRAINING_SUMMARY, **reported_values, "_step": reported_step}
+    assert stub_wandb.stored_summary == {**TRAINING_SUMMARY, **metric_values, **source_values, "_step": reported_step}
     assert stub_wandb.finished_session_count == 1
     # One api object for the whole report: each further one repeats a handshake that can time out.
     assert stub_wandb.api_count == 1
@@ -283,6 +295,27 @@ def test_headline_keys_are_one_per_eval_type():
         "nuplan_nonreactive": "final_eval/nuplan_nonreactive_CLS",
         "selfplay": "final_eval/selfplay_km_per_infraction",
         "alpasim": "final_eval/alpasim_score",
+    }
+    assert eval_wandb_report.ALPASIM_AT_FAULT_METRIC_KEY == "final_eval/alpasim_km_per_at_fault_incident"
+
+
+def test_alpasim_without_at_fault_incident_reports_only_the_score(stub_wandb, run_dir):
+    """No at-fault incident means no finite distance between them: the score is logged, the distance is not."""
+    score_line = f"official_score 1.0000  scenes {SCENE_COUNT}  failed 0"
+    result_path = _write_alpasim_results(run_dir, score_line, at_fault_rows=(ALPASIM_NO_AT_FAULT_INCIDENT_ROW,))
+
+    eval_wandb_report.report_headline_metric("alpasim", str(result_path), str(run_dir), SCENE_COUNT)
+
+    reported_step = TRAINING_LAST_STEP + 1
+    assert stub_wandb.stored_history == [
+        TRAINING_HISTORY_ROW,
+        {"final_eval/alpasim_score": 1.0, "_step": reported_step},
+    ]
+    assert stub_wandb.stored_summary == {
+        **TRAINING_SUMMARY,
+        "final_eval/alpasim_score": 1.0,
+        "final_eval/alpasim_score_source": str(result_path.relative_to(run_dir)),
+        "_step": reported_step,
     }
 
 
@@ -332,6 +365,22 @@ def _alpasim_without_score(run_dir):
     return _write_alpasim_results(run_dir, score_line), SCENE_COUNT
 
 
+def _alpasim_without_at_fault_row(run_dir):
+    score_line = f"official_score 0.7832  scenes {SCENE_COUNT}  failed 0"
+    return _write_alpasim_results(run_dir, score_line, at_fault_rows=()), SCENE_COUNT
+
+
+def _alpasim_with_two_at_fault_rows(run_dir):
+    score_line = f"official_score 0.7832  scenes {SCENE_COUNT}  failed 0"
+    return _write_alpasim_results(run_dir, score_line, at_fault_rows=(ALPASIM_AT_FAULT_ROW,) * 2), SCENE_COUNT
+
+
+def _alpasim_with_zero_km_per_at_fault_incident(run_dir):
+    score_line = f"official_score 0.7832  scenes {SCENE_COUNT}  failed 0"
+    zero_km_row = "avg_dist_between_incidents_at_fault    0.0000 km  (inf incidents/km)"
+    return _write_alpasim_results(run_dir, score_line, at_fault_rows=(zero_km_row,)), SCENE_COUNT
+
+
 @pytest.mark.parametrize(
     ("eval_type", "write_result", "error_match"),
     [
@@ -341,6 +390,9 @@ def _alpasim_without_score(run_dir):
         ("alpasim", _alpasim_with_failed_scenes, "1 failed"),
         ("alpasim", _alpasim_subset, "2 of 4 scenes"),
         ("alpasim", _alpasim_without_score, "no official score"),
+        ("alpasim", _alpasim_without_at_fault_row, "exactly one 'avg_dist_between_incidents_at_fault' row"),
+        ("alpasim", _alpasim_with_two_at_fault_rows, "exactly one 'avg_dist_between_incidents_at_fault' row"),
+        ("alpasim", _alpasim_with_zero_km_per_at_fault_incident, "unusable 'avg_dist_between_incidents_at_fault'"),
     ],
 )
 def test_incomplete_evals_are_refused_before_wandb_is_touched(
