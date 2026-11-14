@@ -75,8 +75,8 @@ LOOSE_RTOL = float(os.environ.get("SMOKE_LOOSE_RTOL", "8e-2"))
 ATOL = float(os.environ.get("SMOKE_ATOL", "1e-3"))
 LOOSE_ATOL = float(os.environ.get("SMOKE_LOOSE_ATOL", "5e-3"))
 # Metrics that are sums/EMAs/near-zero means of many floats -> host-FP-sensitive;
-# checked loosely. old_approx_kl is E[-logratio] ~ 0, so it needs the loose ATOL.
-LOOSE_KEYS = frozenset({"value_loss", "ema_max", "episode_return", "old_approx_kl"})
+# checked loosely.
+LOOSE_KEYS = frozenset({"value_loss", "ema_max", "episode_return"})
 
 # Env metrics we expect a random policy to exercise within the run.
 SANITY_KEYS = ("collision_rate", "offroad_rate")
@@ -197,7 +197,7 @@ def _capture_metrics(pufferl):
     for _ in range(EPOCHS):
         pufferl.evaluate()
         # Snapshot env stats BEFORE train()'s mean_and_log() resets them.
-        for k, (value_sum, weight_sum) in pufferl.collect_environment_metric_sums().items():
+        for k, (value_sum, weight_sum) in pufferl.env_metric_sums.items():
             entry = env_acc.setdefault(k, [0.0, 0.0])
             entry[0] += value_sum
             entry[1] += weight_sum

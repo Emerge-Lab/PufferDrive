@@ -148,15 +148,8 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 
 // Agent-agent collision
 #define COLLISION_SKIP_DISP_M 0.1f
-#define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
-#define SPAWN_CLEARANCE_M 1.5f       // Min box-to-box gap between agents at spawn
-#define SPAWN_REJECT_COLLISION 0
-#define SPAWN_REJECT_OFFROAD 1
-#define SPAWN_REJECT_STOP_LINE 2
-#define SPAWN_REJECT_EMPTY_CELL 3
-#define SPAWN_REJECT_REASON_COUNT 4
-#define EARLY_RESET_SHORT_TIMESTEPS 2 // early reset this soon after c_reset means the reset itself failed
-#define SHORT_RESET_MAX_PRINTS 3
+#define COLLISION_PAIR_MARGIN_M 0.5f        // Extra slack on the radius+displacement quick-check before OBB SAT
+#define SPAWN_CLEARANCE_M 1.5f              // Min box-to-box gap between agents at spawn
 #define COSIM_PARTNER_DEFAULT_LENGTH_M 4.5f // co-sim partner slot box until the external sim sets sizes
 #define COSIM_PARTNER_DEFAULT_WIDTH_M 2.0f
 #define COSIM_PARTNER_DEFAULT_HEIGHT_M 1.5f

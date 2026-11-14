@@ -86,6 +86,8 @@ HIDDEN_DASHBOARD_METRICS = {
     "total_distance_travelled_sum",
     "total_infraction_count",
 }
+# sums over one logging window: their size follows the logging cadence, so they are not charted
+UNCHARTED_WINDOW_SUM_METRICS = {"n", "total_distance_travelled", "total_infractions"}
 
 
 def torch_device(device):
@@ -257,9 +259,6 @@ class PuffeRL:
         # Initializations
         self.config = config
         self.vecenv = vecenv
-        self.obs_stats_feature_idx = torch.as_tensor(
-            np.flatnonzero(vecenv.driver_env.obs_stats_feature_mask), device=config["device"]
-        )
         # Workers already exist; registration belongs to this rank's CUDA context.
         if use_cuda and hasattr(vecenv, "pin_observations"):
             with torch.cuda.device(device):
@@ -272,9 +271,9 @@ class PuffeRL:
         self.start_time = time.time()
         self.utilization = Utilization()
         self.profile = Profile()
-        self.stats = defaultdict(list)
+        self.stats = {}
         self.env_metric_sums = {}
-        self.last_stats = defaultdict(list)
+        self.last_stats = {}
         self.losses = {}
         self.best_score = -float("inf")
         self.ema_max = 0.0
@@ -349,16 +348,6 @@ class PuffeRL:
             m = torch.as_tensor(mask).to(device)  # , non_blocking=True)
             done_mask = (d + t).clamp(max=1.0)
 
-            # Obs distribution stats (max/min/mean across the batch and obs
-            # dims, appended per env step). Surfaces clipping / unbounded
-            # features / normalization regressions in wandb.
-            obs_stat_source = (
-                o_device if self.obs_stats_feature_idx is None else o_device[..., self.obs_stats_feature_idx]
-            )
-            self.stats["obs/max"].append(obs_stat_source.max().item())
-            self.stats["obs/min"].append(obs_stat_source.min().item())
-            self.stats["obs/mean"].append(obs_stat_source.mean().item())
-
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
                 logits, value = self.policy.forward_eval(o_device)
@@ -419,7 +408,7 @@ class PuffeRL:
         self.ep_indices = torch.arange(self.total_agents, dtype=torch.int32)
         self.ep_lengths.zero_()
         profile.end()
-        return pufferlib.utils.finalize_environment_metrics(self.collect_environment_metric_sums())
+        return pufferlib.utils.finalize_environment_metrics(self.env_metric_sums)
 
     @record
     def train(self):
@@ -448,7 +437,7 @@ class PuffeRL:
             self.losses = {k: v.item() if isinstance(v, torch.Tensor) else v for k, v in losses.items()}
             logs = self.mean_and_log()
             self.print_dashboard()
-            self.stats = defaultdict(list)
+            self.stats = {}
             self.env_metric_sums = {}
             self.last_log_time = time.time()
             self.last_log_step = self.global_step
@@ -488,7 +477,6 @@ class PuffeRL:
         ratio = logratio.exp()
 
         with torch.no_grad():
-            old_approx_kl = (-logratio).mean()
             approx_kl = ((ratio - 1) - logratio).mean()
             clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
@@ -535,8 +523,6 @@ class PuffeRL:
                 "policy_loss": pg_loss.detach(),
                 "value_loss": v_loss.detach(),
                 "entropy": entropy_loss.detach(),
-                "ent_coef": ent_coef,
-                "old_approx_kl": old_approx_kl,
                 "approx_kl": approx_kl,
                 "clipfrac": clipfrac,
             },
@@ -691,7 +677,7 @@ class PuffeRL:
                 self.optimizer.zero_grad()
 
         if total_minibatches > 0:
-            for key in ("policy_loss", "value_loss", "entropy", "ent_coef", "old_approx_kl", "approx_kl", "clipfrac"):
+            for key in ("policy_loss", "value_loss", "entropy", "approx_kl", "clipfrac"):
                 losses[key] /= total_minibatches
 
         y_pred = flat_values[valid_idx]
@@ -701,12 +687,9 @@ class PuffeRL:
             float("nan") if var_y == 0 else (1 - (y_true - y_pred).var(unbiased=False) / var_y).item()
         )
 
-    def collect_environment_metric_sums(self):
-        return {**pufferlib.utils.environment_metric_sums(self.stats), **self.env_metric_sums}
-
     def mean_and_log(self):
         config = self.config
-        env_metric_sums = self.collect_environment_metric_sums()
+        env_metric_sums = self.env_metric_sums
         losses = {k: float(v) for k, v in self.losses.items()}
         if torch.distributed.is_initialized():
             world_size = torch.distributed.get_world_size()
@@ -734,13 +717,9 @@ class PuffeRL:
         self.agent_steps = agent_steps
         logs = {
             "SPS": dist_sum(self.sps, device),
-            "agent_steps": agent_steps,
-            "uptime": time.time() - self.start_time,
-            "epoch": int(dist_sum(self.epoch, device)),  # VB Why it is a sum ?
             "learning_rate": self.optimizer.param_groups[0]["lr"],
-            **{f"environment/{k}": v for k, v in self.stats.items()},
+            **{f"environment/{k}": v for k, v in self.stats.items() if k not in UNCHARTED_WINDOW_SUM_METRICS},
             **{f"losses/{k}": v for k, v in losses.items()},
-            **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
         }
 
         if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
@@ -1144,7 +1123,7 @@ class WandbLogger:
             resume="allow",
             config=args,
             tags=[args["tag"]] if args["tag"] is not None else [],
-            settings=wandb.Settings(console="off"),
+            settings=wandb.Settings(console="off", x_disable_stats=True),
         )
         self.wandb = wandb
         self.run_id = wandb.run.id

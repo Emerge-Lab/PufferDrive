@@ -205,7 +205,7 @@ def curves_section(wr, project):
     runset = wr.Runset(entity=ENTITY, project=project, name=f"{project} (all nights)")
     panels = [
         wr.LinePlot(
-            x="agent_steps",
+            x="Step",
             y=[m],
             groupby="group",
             groupby_aggfunc="mean",

@@ -87,14 +87,6 @@ struct Log {
     float reward_timestep;
     float reward_reverse;
     float reward_overspeed;
-    float spawn_failed;
-    float spawn_reject_collision;
-    float spawn_reject_offroad;
-    float spawn_reject_stop_line;
-    float spawn_reject_empty_cell;
-    float spawn_failed_goal;
-    float stopped_at_reset;
-    float early_reset_short;
     float pedestrian_collision_rate;
     float pedestrian_crossings;
     float pedestrian_bystanders;
@@ -333,9 +325,6 @@ struct Drive {
     // Logging
     Log log;
     Log *logs;
-    int spawn_reject_counts[SPAWN_REJECT_REASON_COUNT];
-    int spawn_goal_failed;
-    int short_reset_print_count;
     int logs_capacity;
     // Seed
     int eval_episode_done;
@@ -2430,14 +2419,6 @@ static void add_log(Drive *env) {
         episode_log.avg_displacement_error += displacement_error;
         episode_log.episode_length += env->logs[i].episode_length;
         episode_log.episode_return += env->logs[i].episode_return;
-        episode_log.spawn_failed += env->logs[i].spawn_failed;
-        episode_log.spawn_reject_collision += env->logs[i].spawn_reject_collision;
-        episode_log.spawn_reject_offroad += env->logs[i].spawn_reject_offroad;
-        episode_log.spawn_reject_stop_line += env->logs[i].spawn_reject_stop_line;
-        episode_log.spawn_reject_empty_cell += env->logs[i].spawn_reject_empty_cell;
-        episode_log.spawn_failed_goal += env->logs[i].spawn_failed_goal;
-        episode_log.stopped_at_reset += env->logs[i].stopped_at_reset;
-        episode_log.early_reset_short += env->logs[i].early_reset_short;
         episode_log.pedestrian_collision_rate += env->logs[i].pedestrian_collision_rate;
         episode_log.pedestrian_crossings += env->logs[i].pedestrian_crossings;
         episode_log.pedestrian_bystanders += env->logs[i].pedestrian_bystanders;
@@ -3304,10 +3285,6 @@ static void move_scripted_pedestrians(Drive *env) {
 
 static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     Agent *agent = &env->agents[agent_idx];
-    for (int reason = 0; reason < SPAWN_REJECT_REASON_COUNT; reason++) {
-        env->spawn_reject_counts[reason] = 0;
-    }
-    env->spawn_goal_failed = 0;
 
     // Free existing route on reset
     if (agent->route != NULL) {
@@ -3367,7 +3344,6 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
         }
 
         if (candidate_count == 0) {
-            env->spawn_reject_counts[SPAWN_REJECT_EMPTY_CELL]++;
             continue;
         }
 
@@ -3408,12 +3384,10 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
         tmp_agent.current_lane_idx = start_lane_idx;
 
         if (check_spawn_collision(env, &tmp_agent)) {
-            env->spawn_reject_counts[SPAWN_REJECT_COLLISION]++;
             continue;
         }
 
         if (check_spawn_offroad(env, &tmp_agent, spawn_edge_clearance_m)) {
-            env->spawn_reject_counts[SPAWN_REJECT_OFFROAD]++;
             continue;
         }
 
@@ -3421,7 +3395,6 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
         Agent stop_line_probe = tmp_agent;
         stop_line_probe.red_light_latched_idx = -1;
         if (check_red_light_footprint(env, &stop_line_probe, true)) {
-            env->spawn_reject_counts[SPAWN_REJECT_STOP_LINE]++;
             continue;
         }
 
@@ -3461,7 +3434,6 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     if (env->goal_source == GOAL_SOURCE_MAP) {
         if (!generate_new_goals_from_map(env, agent)) {
             printf("[GIGAFLOW WARNING] -> Failed to generate map goals for agent %d\n", agent_idx);
-            env->spawn_goal_failed = 1;
             return false;
         }
         return true;
@@ -3469,17 +3441,11 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
 
     if (!compute_new_route(env, agent, start_lane_idx)) {
         printf("[GIGAFLOW WARNING] -> Failed to compute a new route for agent %d\n", agent_idx);
-        env->spawn_goal_failed = 1;
         return false;
     }
 
     // Compute initial goal
-    if (!generate_new_goals_from_route(env, agent)) {
-        env->spawn_goal_failed = 1;
-        return false;
-    }
-
-    return true;
+    return generate_new_goals_from_route(env, agent);
 }
 
 static void load_pose_from_log(Agent *agent, int step) {
@@ -5930,13 +5896,7 @@ void c_reset(Drive *env) {
                 // Failed spawn: ensure agent is properly invalidated
                 invalidate_agent(&env->agents[agent_idx]);
                 env->agents[agent_idx].removed = 1;
-                env->logs[x].spawn_failed = 1.0f;
             }
-            env->logs[x].spawn_reject_collision = (float) env->spawn_reject_counts[SPAWN_REJECT_COLLISION];
-            env->logs[x].spawn_reject_offroad = (float) env->spawn_reject_counts[SPAWN_REJECT_OFFROAD];
-            env->logs[x].spawn_reject_stop_line = (float) env->spawn_reject_counts[SPAWN_REJECT_STOP_LINE];
-            env->logs[x].spawn_reject_empty_cell = (float) env->spawn_reject_counts[SPAWN_REJECT_EMPTY_CELL];
-            env->logs[x].spawn_failed_goal = (float) env->spawn_goal_failed;
         }
 
         // GIGAFLOW: spawn_agent already set positions, routes, paths, goals.
@@ -5953,7 +5913,6 @@ void c_reset(Drive *env) {
             generate_reward_coefs(env, agent);
             compute_metrics(env, agent_idx, x);
             restore_goal_reached_at_reset(agent, &env->logs[x]);
-            env->logs[x].stopped_at_reset = agent->stopped ? 1.0f : 0.0f;
         }
         update_rollout_masks(env);
         compute_observations(env);
@@ -5985,53 +5944,6 @@ void c_reset(Drive *env) {
     }
     update_rollout_masks(env);
     compute_observations(env);
-}
-
-static void record_short_early_reset(Drive *env) {
-    int removed_count = 0;
-    int stopped_count = 0;
-    float spawn_failed_sum = 0.0f;
-    float stopped_at_reset_sum = 0.0f;
-    float reject_collision_sum = 0.0f;
-    float reject_offroad_sum = 0.0f;
-    float reject_stop_line_sum = 0.0f;
-    float reject_empty_cell_sum = 0.0f;
-    float goal_failed_sum = 0.0f;
-    for (int i = 0; i < env->active_agent_count; i++) {
-        Agent *agent = &env->agents[env->active_agent_indices[i]];
-        env->logs[i].early_reset_short = 1.0f;
-        removed_count += agent->removed ? 1 : 0;
-        stopped_count += agent->stopped ? 1 : 0;
-        spawn_failed_sum += env->logs[i].spawn_failed;
-        stopped_at_reset_sum += env->logs[i].stopped_at_reset;
-        reject_collision_sum += env->logs[i].spawn_reject_collision;
-        reject_offroad_sum += env->logs[i].spawn_reject_offroad;
-        reject_stop_line_sum += env->logs[i].spawn_reject_stop_line;
-        reject_empty_cell_sum += env->logs[i].spawn_reject_empty_cell;
-        goal_failed_sum += env->logs[i].spawn_failed_goal;
-    }
-    if (env->short_reset_print_count >= SHORT_RESET_MAX_PRINTS) {
-        return;
-    }
-    env->short_reset_print_count++;
-    fprintf(
-        stderr,
-        "[DRIVE DIAG] short early reset: map=%s timestep=%d active=%d removed=%d stopped=%d spawn_failed=%.0f "
-        "stopped_at_reset=%.0f rejects collision=%.0f offroad=%.0f stop_line=%.0f empty_cell=%.0f goal_failed=%.0f "
-        "episode_seed=%llu\n",
-        env->map_name,
-        env->timestep,
-        env->active_agent_count,
-        removed_count,
-        stopped_count,
-        (double) spawn_failed_sum,
-        (double) stopped_at_reset_sum,
-        (double) reject_collision_sum,
-        (double) reject_offroad_sum,
-        (double) reject_stop_line_sum,
-        (double) reject_empty_cell_sum,
-        (double) goal_failed_sum,
-        (unsigned long long) env->episode_seed);
 }
 
 void c_step(Drive *env) {
@@ -6134,9 +6046,6 @@ void c_step(Drive *env) {
     }
 
     if (env->timestep == env->episode_end_timestep || early_reset) {
-        if (early_reset && env->timestep <= EARLY_RESET_SHORT_TIMESTEPS) {
-            record_short_early_reset(env);
-        }
         for (int i = 0; i < env->active_agent_count; i++) {
             env->truncations[i] = 1;
         }

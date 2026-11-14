@@ -8,7 +8,6 @@ import pufferlib
 from pufferlib.ocean.drive import binding
 
 LOG_MIN_AGENT_EPISODES = 1  # emit env logs as soon as any episode completed; the trainer weights them by n
-TRAFFIC_CONTROL_CATEGORICAL_FEATURE_COUNT = 2  # type and state
 
 
 def compute_effective_road_obs_count(max_count, dropout):
@@ -391,17 +390,6 @@ class Drive(pufferlib.PufferEnv):
         )
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
-
-        # Observation distribution stats exclude raw traffic-control categories and valid-slot counts.
-        self.obs_stats_feature_mask = np.ones(self.num_obs, dtype=bool)
-        valid_counts_start_idx = self.num_obs - self.obs_valid_count_features
-        traffic_controls_start_idx = (
-            valid_counts_start_idx - self.obs_slots_traffic_controls_n * self.traffic_control_features
-        )
-        for slot_idx in range(self.obs_slots_traffic_controls_n):
-            slot_end_idx = traffic_controls_start_idx + (slot_idx + 1) * self.traffic_control_features
-            self.obs_stats_feature_mask[slot_end_idx - TRAFFIC_CONTROL_CATEGORICAL_FEATURE_COUNT : slot_end_idx] = False
-        self.obs_stats_feature_mask[valid_counts_start_idx:] = False
 
         self.init_step = init_step
         # shortest first episode when stagger_first_episode is on
