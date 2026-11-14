@@ -81,7 +81,6 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     train.total_timesteps=1000000000000 \
     vec.num_envs=${WORKER_COUNT} \
     train.bptt_horizon=${ROLLOUT_STEP_COUNT} \
-    train.rollout_dtype=float16 \
     train.max_minibatch_size=${MINIBATCH_SIZE} \
     train.minibatch_size=${MINIBATCH_SIZE} \
     train.final_model_name=${FINAL_MODEL_NAME} \

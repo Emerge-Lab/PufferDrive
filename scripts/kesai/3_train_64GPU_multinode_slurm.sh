@@ -95,7 +95,6 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
     vec.num_envs=128 \
-    train.rollout_dtype=float16 \
     train.max_minibatch_size=393216 \
     train.minibatch_size=393216 \
     train.learning_rate=0.0015 \

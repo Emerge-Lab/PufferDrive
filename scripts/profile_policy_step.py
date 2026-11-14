@@ -68,7 +68,7 @@ def build_policy_and_obs(rows, fused):
         obs_rows.append(np.array(o, copy=True))
         vecenv.send(np.random.uniform(-1, 1, size=vecenv.action_space.shape).astype(vecenv.action_space.dtype))
     vecenv.close()
-    obs = torch.as_tensor(np.concatenate(obs_rows)).cuda()
+    obs = torch.as_tensor(np.concatenate(obs_rows)).cuda().float()
     repeats = -(-max(rows, ROLLOUT_ROWS) // obs.shape[0])
     return policy, obs.repeat(repeats, 1)
 

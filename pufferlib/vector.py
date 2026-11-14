@@ -221,6 +221,7 @@ def _worker_process(
     env_kwargs,
     obs_shape,
     obs_dtype,
+    transport_dtype,
     atn_shape,
     atn_dtype,
     num_envs,
@@ -236,8 +237,20 @@ def _worker_process(
     # Environments read and write directly to shared memory
     shape = (num_workers, num_envs * num_agents)
     atn_arr = np.ndarray((*shape, *atn_shape), dtype=atn_dtype, buffer=shm["actions"])[worker_idx]
+    all_observations = np.ndarray((*shape, *obs_shape), dtype=transport_dtype, buffer=shm["observations"])
+    shared_observations = all_observations[worker_idx]
+    compress_observations = transport_dtype != obs_dtype
+    env_observations = shared_observations
+    if compress_observations:
+        import torch
+
+        torch.set_num_threads(1)
+        env_observations = np.zeros(shared_observations.shape, dtype=obs_dtype)
+        # torch's float16 cast is vectorized; numpy's costs 1 ms per 1024-agent step
+        transport_tensor = torch.from_numpy(shared_observations)
+        env_tensor = torch.from_numpy(env_observations)
     buf = dict(
-        observations=np.ndarray((*shape, *obs_shape), dtype=obs_dtype, buffer=shm["observations"])[worker_idx],
+        observations=env_observations,
         rewards=np.ndarray(shape, dtype=np.float32, buffer=shm["rewards"])[worker_idx],
         terminals=np.ndarray(shape, dtype=bool, buffer=shm["terminals"])[worker_idx],
         truncations=np.ndarray(shape, dtype=bool, buffer=shm["truncateds"])[worker_idx],
@@ -268,6 +281,8 @@ def _worker_process(
             send_pipe.send(None)
             break
 
+        if compress_observations:
+            transport_tensor.copy_(env_tensor)
         send_pipe.send(infos)
 
 
@@ -296,6 +311,7 @@ class Multiprocessing:
         sync_traj=True,
         overwork=False,
         seed=0,
+        observation_transport_dtype=None,
         **kwargs,
     ):
         if batch_size is None:
@@ -343,7 +359,12 @@ class Multiprocessing:
         obs_space = driver_env.single_observation_space
         obs_shape = obs_space.shape
         obs_dtype = obs_space.dtype
-        obs_ctype = np.ctypeslib.as_ctypes_type(obs_dtype)
+        transport_dtype = np.dtype(observation_transport_dtype or obs_dtype)
+        if transport_dtype != obs_dtype and not (transport_dtype == np.float16 and obs_dtype == np.float32):
+            raise pufferlib.APIUsageError(f"Cannot transport {obs_dtype} observations as {transport_dtype}")
+        self.observation_transport_dtype = transport_dtype
+        # ctypes has no float16, so float16 observations live in a uint16 array
+        obs_ctype = "H" if transport_dtype == np.float16 else np.ctypeslib.as_ctypes_type(obs_dtype)
         atn_space = driver_env.single_action_space
         atn_shape = atn_space.shape
         atn_dtype = atn_space.dtype
@@ -384,7 +405,7 @@ class Multiprocessing:
         self.atn_batch_shape = (self.workers_per_batch, agents_per_worker, *atn_shape)
         self.actions = np.ndarray((*shape, *atn_shape), dtype=atn_dtype, buffer=self.shm["actions"])
         self.buf = dict(
-            observations=np.ndarray((*shape, *obs_shape), dtype=obs_dtype, buffer=self.shm["observations"]),
+            observations=np.ndarray((*shape, *obs_shape), dtype=transport_dtype, buffer=self.shm["observations"]),
             rewards=np.ndarray(shape, dtype=np.float32, buffer=self.shm["rewards"]),
             terminals=np.ndarray(shape, dtype=bool, buffer=self.shm["terminals"]),
             truncations=np.ndarray(shape, dtype=bool, buffer=self.shm["truncateds"]),
@@ -411,6 +432,7 @@ class Multiprocessing:
                     env_kwargs[start:end],
                     obs_shape,
                     obs_dtype,
+                    transport_dtype,
                     atn_shape,
                     atn_dtype,
                     envs_per_worker,
@@ -707,7 +729,7 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
 
     # Sanity check args
     for k in kwargs:
-        if k not in ["num_workers", "batch_size", "zero_copy", "overwork", "backend"]:
+        if k not in ["num_workers", "batch_size", "zero_copy", "overwork", "backend", "observation_transport_dtype"]:
             raise pufferlib.APIUsageError(f"Invalid argument: {k}")
 
     # TODO: First step action space check

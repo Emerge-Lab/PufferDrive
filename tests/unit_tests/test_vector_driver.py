@@ -16,6 +16,8 @@ from pufferlib import PufferEnv
 
 OBSERVATION_SIZE = 4
 ACTION_COUNT = 2
+FRACTIONAL_OBSERVATION = np.float32(1.0 / 3.0)
+STEP_OBSERVATION_SCALE = np.float32(1.7)
 PRELOADED = False
 
 
@@ -182,6 +184,55 @@ def test_dead_worker_raises_instead_of_hanging(monkeypatch):
             vecenv.recv()
     finally:
         vecenv.close()
+
+
+class FractionalObservationEnv(MinimalEnv):
+    def reset(self, seed=None):
+        self.observations[:] = FRACTIONAL_OBSERVATION
+        return self.observations, []
+
+    def step(self, actions):
+        super().step(actions)
+        self.observations[:] = FRACTIONAL_OBSERVATION * STEP_OBSERVATION_SCALE
+        return self.observations, self.rewards, self.terminals, self.truncations, []
+
+
+def test_float16_transport_delivers_the_rounded_env_observations():
+    delivered = {}
+    for transport_dtype in (None, "float16"):
+        vecenv = pufferlib.vector.make(
+            FractionalObservationEnv,
+            backend="Multiprocessing",
+            num_envs=2,
+            num_workers=2,
+            batch_size=2,
+            observation_transport_dtype=transport_dtype,
+        )
+        try:
+            reset_observations, _ = vecenv.reset(seed=1)
+            reset_observations = reset_observations.copy()
+            step_observations, *_ = vecenv.step(np.zeros(vecenv.action_space.shape, dtype=np.int32))
+            delivered[transport_dtype] = (reset_observations, step_observations.copy())
+        finally:
+            vecenv.close()
+    for exact, rounded in zip(delivered[None], delivered["float16"]):
+        assert exact.dtype == np.float32
+        assert rounded.dtype == np.float16
+        assert not np.array_equal(exact, exact.astype(np.float16).astype(np.float32))
+        np.testing.assert_array_equal(rounded, exact.astype(np.float16))
+    assert not np.array_equal(delivered["float16"][0], delivered["float16"][1])
+
+
+def test_unsupported_transport_dtype_is_rejected():
+    with pytest.raises(pufferlib.APIUsageError, match="Cannot transport"):
+        pufferlib.vector.make(
+            MinimalEnv,
+            backend="Multiprocessing",
+            num_envs=1,
+            num_workers=1,
+            batch_size=1,
+            observation_transport_dtype="float64",
+        )
 
 
 class SeedRecordingEnv(MinimalEnv):

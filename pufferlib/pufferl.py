@@ -181,6 +181,11 @@ class PuffeRL:
                 f"Invalid rollout_dtype {rollout_dtype} for observation dtype {obs_space.dtype}"
             )
         self.compress_observations = rollout_dtype != "float32"
+        transport_dtype = getattr(vecenv, "observation_transport_dtype", obs_space.dtype)
+        if transport_dtype != obs_space.dtype and not self.compress_observations:
+            raise pufferlib.APIUsageError(
+                f"Observations arrive as {transport_dtype}; this needs train.rollout_dtype={transport_dtype}"
+            )
 
         self.observations = torch.zeros(
             segments,
@@ -2084,6 +2089,8 @@ def load_env(env_name, args, seed=None):
     vec_kwargs = dict(args["vec"])
     if seed is not None:
         vec_kwargs["seed"] = seed
+    if args["train"].get("rollout_dtype") == "float16" and vec_kwargs.get("backend") == "Multiprocessing":
+        vec_kwargs["observation_transport_dtype"] = "float16"
     return pufferlib.vector.make(make_env, env_kwargs=args["env"], **vec_kwargs)
 
 
