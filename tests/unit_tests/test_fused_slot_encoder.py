@@ -116,6 +116,28 @@ def test_fused_inference_matches_training_forward(slots, features, width):
     assert pooled_eval.dtype == torch.bfloat16
 
 
+@pytest.mark.parametrize("slots,features,width", [ENCODER_SHAPES[0], ENCODER_SHAPES[3], (3, 5, 64)])
+def test_second_layer_weight_gradient_matches_dense_reference(slots, features, width):
+    """The arg-max-only kernel must equal grad_encoded^T @ normed_relu computed densely in float64."""
+    from pufferlib.ocean.cuda_slot_encoder import cuda_slot_encoder_w2_grad
+
+    generator = torch.Generator(device="cuda").manual_seed(slots)
+    batch = BATCH + slots  # off the kernel's row-block size
+    normed_relu = torch.rand(batch * slots, width, device="cuda", generator=generator).to(torch.bfloat16)
+    counts = torch.randint(0, slots + 1, (batch,), device="cuda", generator=generator)
+    winner = torch.randint(0, slots, (batch, width), device="cuda", generator=generator)
+    grad_pooled = (torch.randn(batch, width, device="cuda", generator=generator) * 0.1).to(torch.bfloat16)
+    grad_w2 = cuda_slot_encoder_w2_grad(normed_relu, counts, winner.to(torch.uint8), grad_pooled, slots)
+
+    winner_grad = grad_pooled.double() * (winner < counts[:, None])
+    grad_encoded = torch.zeros(batch, slots, width, dtype=torch.float64, device="cuda")
+    grad_encoded.scatter_(1, winner[:, None, :], winner_grad[:, None, :])
+    reference = grad_encoded.view(batch * slots, width).t() @ normed_relu.double()
+    rounded_reference = reference.to(torch.bfloat16).float()
+    assert (grad_w2 != rounded_reference).float().mean().item() < 1e-3
+    assert (grad_w2 - rounded_reference).abs().max().item() <= 2.0**-7 * reference.abs().max().item()
+
+
 def test_fused_handles_strided_upstream_gradient():
     """The cat backward hands the encoder a strided slice of the feature gradient."""
     from pufferlib.ocean.fused_slot_encoder import fused_encode_and_pool
