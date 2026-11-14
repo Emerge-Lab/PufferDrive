@@ -386,7 +386,7 @@ typedef struct {
 static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {2.0f, 12.0f, 0},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
     {0.05f, 30.0f, 0},     // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(15, 30)
-    {-0.05f, 6.0f, 0},     // REWARD_COEF_COLLISION       α_collision ~ U(-3, 6); negative seeks collisions
+    {-3.0f, 6.0f, 0},      // REWARD_COEF_COLLISION       α_collision ~ U(-3, 6); negative seeks collisions
     {-0.05f, 3.0f, 0},     // REWARD_COEF_OFFROAD         α_boundary ~ U(-1.5, 3); negative seeks offroad
     {0.0f, 0.1f, 0},       // REWARD_COEF_COMFORT         α_comfort ~ U(0, 0.1)
     {2.5e-4f, 2.5e-2f, 0}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ U(2.5e-4, 2.5e-2)
@@ -408,7 +408,7 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
 static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {2.0f, 12.0f, 0},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
     {0.05f, 30.0f, 0},     // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(15, 30)
-    {-0.05f, 6.0f, 0},     // REWARD_COEF_COLLISION       α_collision ~ U(-3, 6); negative seeks collisions
+    {-3.0f, 6.0f, 0},      // REWARD_COEF_COLLISION       α_collision ~ U(-3, 6); negative seeks collisions
     {-0.05f, 3.0f, 0},     // REWARD_COEF_OFFROAD         α_boundary ~ U(-1.5, 3); negative seeks offroad
     {1e-5f, 0.1f, 1},      // REWARD_COEF_COMFORT         α_comfort ~ logU(1e-5, 0.1)
     {2.5e-4f, 2.5e-2f, 1}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ logU(2.5e-4, 2.5e-2)
