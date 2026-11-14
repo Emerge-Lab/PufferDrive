@@ -44,7 +44,6 @@ class Drive(pufferlib.PufferEnv):
         traffic_light_behavior="ignore",
         disable_red_light_infractions=False,
         disable_stop_sign_infractions=False,
-        traffic_light_junction_phases=False,
         traffic_light_green_min_s=3.0,
         traffic_light_yellow_min_s=2.0,
         traffic_light_yellow_max_s=3.0,
@@ -230,7 +229,6 @@ class Drive(pufferlib.PufferEnv):
         self.traffic_light_behavior = infraction_behavior_values[traffic_light_behavior]
         self.disable_red_light_infractions = bool(disable_red_light_infractions)
         self.disable_stop_sign_infractions = bool(disable_stop_sign_infractions)
-        self.traffic_light_junction_phases = bool(traffic_light_junction_phases)
         self.traffic_light_green_min_s = float(traffic_light_green_min_s)
         self.traffic_light_yellow_min_s = float(traffic_light_yellow_min_s)
         self.traffic_light_yellow_max_s = float(traffic_light_yellow_max_s)
@@ -539,7 +537,6 @@ class Drive(pufferlib.PufferEnv):
             "traffic_light_behavior": self.traffic_light_behavior,
             "disable_red_light_infractions": self.disable_red_light_infractions,
             "disable_stop_sign_infractions": self.disable_stop_sign_infractions,
-            "traffic_light_junction_phases": self.traffic_light_junction_phases,
             "traffic_light_green_min_s": self.traffic_light_green_min_s,
             "traffic_light_yellow_min_s": self.traffic_light_yellow_min_s,
             "traffic_light_yellow_max_s": self.traffic_light_yellow_max_s,

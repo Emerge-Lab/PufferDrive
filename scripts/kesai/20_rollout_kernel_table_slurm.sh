@@ -13,7 +13,7 @@
 
 source scripts/kesai/cluster_env.sh || exit 1
 
-# Rollout kernel table of one trainer rank in the script-16 configuration (32 workers x 1024 agents), ~3 minutes.
+# Rollout kernel table of one trainer rank (32 workers x 1024 agents on 18 CPUs), ~3 minutes.
 # Compare the fused_slot_encoder_fwd_cuda<256, 16, false> row across code versions; the cutlass 256x128 GEMM, the
 # simt sgemm and the Memcpy rows are clock anchors that must not move.
 # Usage: sbatch -p low -w rtx-00 scripts/kesai/20_rollout_kernel_table_slurm.sh   # BACKEND=triton NUM_ENVS=.. EXTRA_ARGS=..

@@ -6,6 +6,7 @@ Details:
 Running the test: python -m unittest tests/test_drive_config.py
 """
 
+import io
 import os
 import sys
 import unittest
@@ -16,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pufferlib.config_schema import validate_puffer_drive_config
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
-from pufferlib.pufferl import load_config, pufferlib
+from pufferlib.pufferl import known_cli_overrides, load_config, pufferlib
 
 VERBOSITY = 0
 
@@ -103,11 +104,21 @@ class TestDriveConfig(unittest.TestCase):
         with self.assertRaisesRegex(pufferlib.APIUsageError, "train.learning_rate=<value>"):
             load_config("puffer_drive")
 
-    @patch("sys.argv", ["pufferl.py", "train.learning_rat=0.5"])
-    def test_unknown_override_key_rejected(self):
-        """Typo'd override keys must fail at compose time, not train silently."""
-        with self.assertRaises(Exception):
-            load_config("puffer_drive")
+    @patch("sys.argv", ["pufferl.py", "train.learning_rat=0.5", "train.learning_rate=0.25"])
+    def test_unknown_override_key_warns_and_is_ignored(self):
+        """A job launched before a setting was removed must still run: its stale override only warns."""
+        with patch("sys.stderr", new_callable=io.StringIO) as captured_stderr:
+            args = load_config("puffer_drive")
+        self.assertIn("ignoring override 'train.learning_rat=0.5'", captured_stderr.getvalue())
+        self.assertNotIn("learning_rat", args["train"])
+        self.assertEqual(args["train"]["learning_rate"], 0.25)
+
+    @patch("sys.argv", ["pufferl.py", "env.removed_setting=0", "removed_section.setting=1", "removed=1", "wandb=true"])
+    def test_known_cli_overrides_drop_every_unknown_setting(self):
+        with patch("sys.stderr", new_callable=io.StringIO) as captured_stderr:
+            overrides = known_cli_overrides("puffer_drive")
+        self.assertEqual(overrides, ["wandb=true"])
+        self.assertEqual(captured_stderr.getvalue().count("WARNING: ignoring override"), 3)
 
 
 if __name__ == "__main__":

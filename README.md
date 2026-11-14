@@ -108,7 +108,8 @@ Place binaries under `pufferlib/resources/drive/binaries/`.
 # Single node
 puffer train puffer_drive
 
-# Override config on the fly (Hydra syntax: dotted.key=value)
+# Override config on the fly (Hydra syntax: dotted.key=value). An override for a setting the config
+# does not have is ignored with a WARNING on stderr, so check the log for typos.
 puffer train puffer_drive train.learning_rate=0.001 env.num_agents=512
 
 # Local smoke test on a machine without CUDA

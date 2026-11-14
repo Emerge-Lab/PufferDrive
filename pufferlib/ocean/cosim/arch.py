@@ -91,8 +91,8 @@ RETIRED_SETTINGS = {
     ("policy", "shared_network"): False,
     ("policy", "mask_padded_features"): True,
 }
-# Removed settings that only shaped training (blind and braking agents, reward sampling, training margins):
-# evals switch those off, so a saved config may carry any value.
+# Removed settings that only shaped training (blind and braking agents, reward sampling, training margins, light
+# phases): evals switch those off, so a saved config may carry any value.
 RETIRED_TRAINING_SETTINGS = (
     ("env", "reward_log_sampling"),
     ("env", "goal_speed_randomization"),
@@ -100,6 +100,7 @@ RETIRED_TRAINING_SETTINGS = (
     ("env", "partner_blindness_time_fraction_max"),
     ("env", "phantom_braking_freeze_steering"),
     ("env", "red_light_train_rear_margin_m"),
+    ("env", "traffic_light_junction_phases"),
 )
 RETIRED_SECTIONS = ("rnn",)
 

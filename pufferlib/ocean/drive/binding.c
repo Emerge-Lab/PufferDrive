@@ -1908,7 +1908,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->disable_red_light_infractions = (int) unpack(kwargs, "disable_red_light_infractions");
     env->disable_stop_sign_infractions = (int) unpack(kwargs, "disable_stop_sign_infractions");
-    env->traffic_light_junction_phases = (int) unpack(kwargs, "traffic_light_junction_phases");
     env->traffic_light_green_min_s = (float) unpack(kwargs, "traffic_light_green_min_s");
     env->traffic_light_yellow_min_s = (float) unpack(kwargs, "traffic_light_yellow_min_s");
     env->traffic_light_yellow_max_s = (float) unpack(kwargs, "traffic_light_yellow_max_s");

@@ -231,7 +231,6 @@ class DriveEnvConfig:
     disable_red_light_infractions: bool = MISSING
     red_light_train_front_margin_m: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     disable_stop_sign_infractions: bool = MISSING
-    traffic_light_junction_phases: bool = MISSING
     traffic_light_green_min_s: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     traffic_light_yellow_min_s: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     traffic_light_yellow_max_s: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)

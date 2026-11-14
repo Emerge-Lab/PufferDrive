@@ -1,8 +1,9 @@
 """Model FLOP utilization of the real PPO loop: rollout, update and whole epoch, plus agent steps per second.
 
 Builds the trainer exactly as `puffer train puffer_drive` does, runs warm-up epochs (torch.compile), then measures
-steady-state epochs. Model FLOPs are counted analytically from the policy's linear layers, so no profiler touches
-the compiled policy (a TorchDispatchMode around it makes dynamo skip the frame for the rest of the process).
+steady-state epochs. The model FLOPs per transition and the tensor-core peak of this GPU are the trainer's own
+(the values behind the MFU it logs), so no profiler touches the compiled policy (a TorchDispatchMode around it
+makes dynamo skip the frame for the rest of the process).
 
 Usage:
     python scripts/mfu_bench.py --num-envs 16 --minibatch 131072 [--fused] [--profile] [-- train.seed=3 ...]
@@ -20,8 +21,6 @@ from collections import defaultdict
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import torch
 import torch._dynamo
-from profile_policy_step import peak_bf16_tflops
-from torch import nn
 
 
 ENV_NAME = "puffer_drive"
@@ -36,33 +35,6 @@ PROFILE_SECTIONS = (
     "learn",
     "train_misc",
 )
-SLOT_ENCODER_COUNTS = {
-    "lane_encoder": "obs_slots_lane_kept",
-    "boundary_encoder": "obs_slots_boundary_kept",
-    "partner_encoder": "obs_slots_partners_n",
-    "traffic_control_encoder": "obs_slots_traffic_controls_n",
-}
-
-
-def model_flops_per_transition(policy):
-    """Forward and forward+backward FLOPs of one transition through the policy (matmuls only, the MFU convention)."""
-    forward = 0.0
-    backward = 0.0
-    for name, module in policy.named_modules():
-        if not isinstance(module, nn.Linear):
-            continue
-        rows = 1
-        backbone_name = name.split(".")[0]
-        backbone = getattr(policy, backbone_name, None)
-        for encoder_name, count_attribute in SLOT_ENCODER_COUNTS.items():
-            if encoder_name in name and backbone is not None:
-                rows = getattr(backbone, count_attribute)
-        layer_flops = 2.0 * rows * module.in_features * module.out_features
-        forward += layer_flops
-        # the first layer of every encoder reads observations, which need no input gradient
-        first_encoder_layer = "encoder" in name and name.endswith(".0")
-        backward += layer_flops if first_encoder_layer else 2.0 * layer_flops
-    return forward, forward + backward
 
 
 def print_kernel_table(prof, label, wall_seconds, top=18):
@@ -81,23 +53,6 @@ def print_kernel_table(prof, label, wall_seconds, top=18):
         print(
             f"  {100 * e.self_device_time_total / total_us:5.1f}% {e.self_device_time_total / 1e3:9.1f} {e.count:7d}  {e.key[:110]}"
         )
-
-
-def measure_bf16_peak(seconds=3.0, size=8192):
-    """Achieved dense bf16 matmul TFLOP/s with fp32 accumulation on this device (cuBLAS, large square shapes)."""
-    a = torch.randn(size, size, device="cuda", dtype=torch.bfloat16)
-    b = torch.randn(size, size, device="cuda", dtype=torch.bfloat16)
-    for _ in range(3):
-        a @ b
-    torch.cuda.synchronize()
-    start = time.perf_counter()
-    iterations = 0
-    while time.perf_counter() - start < seconds:
-        a @ b
-        iterations += 1
-    torch.cuda.synchronize()
-    elapsed = time.perf_counter() - start
-    return 2.0 * size**3 * iterations / elapsed / 1e12
 
 
 GEMM_OPS = ("aten::mm", "aten::addmm", "aten::bmm", "aten::baddbmm")  # leaf GEMM ops; linear/matmul wrap these
@@ -137,12 +92,6 @@ def main():
         "--profile", action="store_true", help="print the trainer's section split (env wait, copy, forward, learn)"
     )
     parser.add_argument("--load-model", help="policy checkpoint (.pt) so the rollout shows trained behavior")
-    parser.add_argument(
-        "--measure-peak",
-        action="store_true",
-        help="time large bf16 matmuls (fp32 accumulate, as the model uses) and print the achieved TFLOP/s next to the "
-        "table peak the MFU figures divide by",
-    )
     parser.add_argument(
         "--kernel-table",
         action="store_true",
@@ -185,7 +134,9 @@ def main():
         state = state.get("policy_state_dict", state)
         pufferl.uncompiled_policy.load_state_dict(P.clean_policy_state_dict(state))
 
-    forward_flops, train_flops = model_flops_per_transition(pufferl.uncompiled_policy)
+    forward_flops = pufferl.forward_flops_per_transition
+    train_flops = pufferl.update_flops_per_transition
+    peak_tflops = pufferl.peak_flops_per_second / P.FLOPS_PER_TFLOP
     counters = defaultdict(int)
     original_ppo_loss = pufferl._ppo_loss
 
@@ -197,20 +148,12 @@ def main():
     pufferl._ppo_loss = counting_ppo_loss
     properties = torch.cuda.get_device_properties(0)
     capability = torch.cuda.get_device_capability(0)
-    peak_tflops = peak_bf16_tflops(properties.name)
-    if args.measure_peak:
-        measured = measure_bf16_peak()
-        print(
-            f"measured bf16 matmul peak (fp32 accumulate, {8192}^3 cuBLAS): {measured:.0f} TFLOP/s "
-            f"(table value {peak_tflops}); MFU below is relative to the measured peak",
-            flush=True,
-        )
-        peak_tflops = round(measured)
     agent_steps = train_config["batch_size"]
     print(
         f"{properties.name} capability {capability}, {args.num_envs} envs, {vecenv.num_agents} agents, "
         f"minibatch {pufferl.minibatch_size}, fused_slot_encoder={args.fused}, "
-        f"model FLOP per transition: forward {forward_flops / 1e6:.2f} MFLOP, update {train_flops / 1e6:.2f} MFLOP, dense bf16 peak {peak_tflops} TFLOP/s",
+        f"model FLOP per transition: forward {forward_flops / 1e6:.2f} MFLOP, update {train_flops / 1e6:.2f} MFLOP, "
+        f"measured tensor-core peak {peak_tflops:.1f} TFLOP/s",
         flush=True,
     )
 
@@ -290,14 +233,13 @@ def main():
     for phase, (flops, seconds) in phases.items():
         result[f"{phase}_seconds"] = seconds
         result[f"{phase}_tflops"] = flops / seconds / 1e12
-        if peak_tflops:
-            result[f"{phase}_mfu"] = 100.0 * flops / seconds / (peak_tflops * 1e12)
+        result[f"{phase}_mfu"] = 100.0 * flops / seconds / (peak_tflops * 1e12)
     print("MFU_RESULT " + json.dumps(result))
     label = "fused" if args.fused else "reference"
     for phase in phases:
-        mfu = f", MFU {result[f'{phase}_mfu']:.1f}%" if peak_tflops else ""
         print(
-            f"{label} {phase:9s}: {result[f'{phase}_seconds']:6.2f} s/epoch, {result[f'{phase}_tflops']:6.1f} TFLOP/s{mfu}"
+            f"{label} {phase:9s}: {result[f'{phase}_seconds']:6.2f} s/epoch, {result[f'{phase}_tflops']:6.1f} TFLOP/s, "
+            f"MFU {result[f'{phase}_mfu']:.1f}%"
         )
     print(f"{label} SPS {result['sps'] / 1e3:.0f}k agent-steps/s, peak GPU memory {result['max_memory_gb']:.1f} GB")
 

@@ -91,8 +91,9 @@ def test_filtered_ppo_accumulation_matches_optimizer_batches(retained_count, mic
             reference_optimizer.zero_grad()
 
     torch.manual_seed(random_seed)
-    trainer._train_ppo_transition(defaultdict(float), Mock(), epoch=1)
+    trained_transition_count = trainer._train_ppo_transition(defaultdict(float), Mock(), epoch=1)
 
+    assert trained_transition_count == trainer.config["update_epochs"] * retained_count
     expected_updates = trainer.config["update_epochs"] * math.ceil(retained_count / optimizer_batch_size)
     assert len(gradients) == expected_updates
     for gradient, reference_gradient in zip(gradients, reference_gradients, strict=True):

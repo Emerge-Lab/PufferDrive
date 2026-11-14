@@ -15,6 +15,12 @@ except ModuleNotFoundError as import_error:  # triton ships only with CUDA torch
     fused_encode_and_pool = fused_encoder_active = validate_fused_encoder = None
 
 ACTIVATIONS = {"relu": nn.ReLU, "tanh": nn.Tanh, "gelu": nn.GELU}
+SLOT_COUNT_ATTRIBUTE_BY_ENCODER = {
+    "lane_encoder": "obs_slots_lane_kept",
+    "boundary_encoder": "obs_slots_boundary_kept",
+    "partner_encoder": "obs_slots_partners_n",
+    "traffic_control_encoder": "obs_slots_traffic_controls_n",
+}
 
 
 class DriveBackbone(nn.Module):
@@ -445,6 +451,29 @@ class Drive(nn.Module):
 
     def forward_eval(self, x):
         return self.forward(x)
+
+    def matmul_flops_per_transition(self):
+        """Matmul FLOPs of one observation row through actor and critic: (forward, forward + backward)."""
+        forward_flops = 0.0
+        backward_flops = 0.0
+        for name, module in self.named_modules():
+            if not isinstance(module, nn.Linear):
+                continue
+            network_name, _, layer_path = name.partition(".")
+            encoder_name = layer_path.partition(".")[0]
+            rows_per_transition = 1
+            if encoder_name in SLOT_COUNT_ATTRIBUTE_BY_ENCODER:
+                network = getattr(self, network_name)
+                rows_per_transition = getattr(network, SLOT_COUNT_ATTRIBUTE_BY_ENCODER[encoder_name])
+            weight_count = module.in_features * module.out_features
+            layer_flops = pufferlib.pytorch.FLOPS_PER_MULTIPLY_ADD * rows_per_transition * weight_count
+            # observations need no gradient, so an encoder's first layer only computes its weight gradient
+            reads_observations = encoder_name.endswith("_encoder") and layer_path.endswith(".0")
+            weight_gradient_flops = layer_flops
+            input_gradient_flops = 0.0 if reads_observations else layer_flops
+            forward_flops += layer_flops
+            backward_flops += weight_gradient_flops + input_gradient_flops
+        return forward_flops, forward_flops + backward_flops
 
     def pool_slot_counts(self, observations):
         return self.actor_backbone.pool_slot_counts(observations, self.ego_dim)

@@ -88,6 +88,7 @@ HIDDEN_DASHBOARD_METRICS = {
 }
 # sums over one logging window: their size follows the logging cadence, so they are not charted
 UNCHARTED_WINDOW_SUM_METRICS = {"n", "total_distance_travelled", "total_infractions"}
+FLOPS_PER_TFLOP = 1e12
 
 
 def torch_device(device):
@@ -246,6 +247,25 @@ class PuffeRL:
         if logger is None:
             self.logger = NoLogger(config)
 
+        self.forward_flops_per_transition, self.update_flops_per_transition = (
+            unwrapped_policy.matmul_flops_per_transition()
+        )
+        self.peak_flops_per_second = None
+        if use_cuda:
+            from pufferlib.tensor_core_peak import measure_tensor_core_peak_flops_per_second
+
+            self.peak_flops_per_second = measure_tensor_core_peak_flops_per_second(device)
+            distributed = torch.distributed.is_initialized()
+            rank = torch.distributed.get_rank() if distributed else 0
+            world_size = torch.distributed.get_world_size() if distributed else 1
+            peak_tflops = self.peak_flops_per_second / FLOPS_PER_TFLOP
+            gpu_name = torch.cuda.get_device_name(device)
+            print(f"rank {rank}: {gpu_name} tensor-core peak {peak_tflops:.1f} TFLOP/s (bf16, fp32 accumulation)")
+            self.logger.log_config({"peak_tensor_core_tflops": dist_sum(peak_tflops, device) / world_size})
+        self.rollout_seconds = 0.0
+        self.update_seconds = 0.0
+        self.trained_transition_count = 0
+
         # Learning rate scheduler
         epochs = config["total_timesteps"] // config["batch_size"]
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
@@ -318,6 +338,7 @@ class PuffeRL:
         return (self.global_step - self.last_log_step) / (time.time() - self.last_log_time)
 
     def evaluate(self):
+        rollout_start_time = time.perf_counter()
         profile = self.profile
         epoch = self.epoch
         profile("eval", epoch)
@@ -408,23 +429,28 @@ class PuffeRL:
         self.ep_indices = torch.arange(self.total_agents, dtype=torch.int32)
         self.ep_lengths.zero_()
         profile.end()
+        # no synchronize needed: the last action copy to the CPU already waited for the GPU
+        self.rollout_seconds += time.perf_counter() - rollout_start_time
         return pufferlib.utils.finalize_environment_metrics(self.env_metric_sums)
 
     @record
     def train(self):
+        update_start_time = time.perf_counter()
         profile = self.profile
         epoch = self.epoch
         config = self.config
         profile("train", epoch)
         profile("train_misc", epoch, nest=True)
         losses = defaultdict(float)
-        self._train_ppo_transition(losses, profile, epoch)
+        self.trained_transition_count += self._train_ppo_transition(losses, profile, epoch)
 
         profile("train_misc", epoch)
         if config["anneal_lr"]:
             self.scheduler.step()
 
         profile.end()
+        # no synchronize needed: the explained-variance read already waited for the GPU
+        self.update_seconds += time.perf_counter() - update_start_time
         logs = None
         self.epoch += 1
         done_training = self.global_step >= config["total_timesteps"]
@@ -441,6 +467,9 @@ class PuffeRL:
             self.env_metric_sums = {}
             self.last_log_time = time.time()
             self.last_log_step = self.global_step
+            self.rollout_seconds = 0.0
+            self.update_seconds = 0.0
+            self.trained_transition_count = 0
             profile.clear()
 
         if self.epoch % config["checkpoint_interval"] == 0 or done_training:
@@ -686,18 +715,34 @@ class PuffeRL:
         losses["explained_variance"] = (
             float("nan") if var_y == 0 else (1 - (y_true - y_pred).var(unbiased=False) / var_y).item()
         )
+        return config["update_epochs"] * retained_transition_count
+
+    def flop_window(self):
+        """This rank's (model FLOPs, FLOPs at its measured peak rate) since the last log, per logged MFU key."""
+        if self.peak_flops_per_second is None or self.global_step == self.last_log_step:
+            return {}
+        rollout_flops = (self.global_step - self.last_log_step) * self.forward_flops_per_transition
+        update_flops = self.trained_transition_count * self.update_flops_per_transition
+        window_seconds = time.time() - self.last_log_time
+        return {
+            "MFU": (rollout_flops + update_flops, self.peak_flops_per_second * window_seconds),
+            "MFU_rollout": (rollout_flops, self.peak_flops_per_second * self.rollout_seconds),
+            "MFU_train": (update_flops, self.peak_flops_per_second * self.update_seconds),
+        }
 
     def mean_and_log(self):
         config = self.config
         env_metric_sums = self.env_metric_sums
         losses = {k: float(v) for k, v in self.losses.items()}
+        flop_windows = [self.flop_window()]
         if torch.distributed.is_initialized():
             world_size = torch.distributed.get_world_size()
             rank_payloads = [None] * world_size
-            torch.distributed.all_gather_object(rank_payloads, (env_metric_sums, losses))
+            torch.distributed.all_gather_object(rank_payloads, (env_metric_sums, losses, flop_windows[0]))
+            flop_windows = [rank_flop_window for _, _, rank_flop_window in rank_payloads]
             merged_env_sums = {}
             loss_sums = {}
-            for rank_env_sums, rank_losses in rank_payloads:
+            for rank_env_sums, rank_losses, _ in rank_payloads:
                 for key, (value_sum, value_count) in rank_env_sums.items():
                     entry = merged_env_sums.setdefault(key, [0.0, 0])
                     entry[0] += value_sum
@@ -718,6 +763,7 @@ class PuffeRL:
         logs = {
             "SPS": dist_sum(self.sps, device),
             "learning_rate": self.optimizer.param_groups[0]["lr"],
+            **pooled_flop_utilization_percent(flop_windows),
             **{f"environment/{k}": v for k, v in self.stats.items() if k not in UNCHARTED_WINDOW_SUM_METRICS},
             **{f"losses/{k}": v for k, v in losses.items()},
         }
@@ -1096,6 +1142,9 @@ class NoLogger:
     def log(self, logs, step):
         pass
 
+    def log_config(self, values):
+        pass
+
     def close(self, model_path):
         pass
 
@@ -1124,6 +1173,9 @@ class WandbLogger:
 
     def log(self, logs, step):
         self.wandb.log(logs, step=step)
+
+    def log_config(self, values):
+        self.wandb.config.update(values, allow_val_change=True)
 
     def upload_model(self, model_path):
         artifact = self.wandb.Artifact(self.run_id, type="model")
@@ -1163,6 +1215,9 @@ class TensorBoardLogger:
         for key, value in logs.items():
             if isinstance(value, (int, float)):
                 self.local_writer.add_scalar(key, value, step)
+
+    def log_config(self, values):
+        pass
 
     def close(self, model_path):
         self.local_writer.close()
@@ -1263,6 +1318,16 @@ def apply_matmul_env_flags():
     if os.environ.get("PUFFER_BF16_REDUCED_REDUCTION") == "1":
         torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
         print("cuBLAS bf16 reduced-precision reductions enabled")
+
+
+def pooled_flop_utilization_percent(flop_windows):
+    """MFU per phase over all ranks: summed model FLOPs over the summed FLOPs each rank's GPU does at its peak rate."""
+    utilization_percent = {}
+    for key in flop_windows[0]:
+        model_flops = sum(window[key][0] for window in flop_windows)
+        peak_rate_flops = sum(window[key][1] for window in flop_windows)
+        utilization_percent[key] = 100.0 * model_flops / peak_rate_flops
+    return utilization_percent
 
 
 def bind_process_to_gpu_numa_node(device_index):
@@ -1503,10 +1568,10 @@ def eval(
     benchmark_names=None,
 ):
     """Run configured benchmarks or replay failures from an existing CSV."""
-    cli_overrides = list(sys.argv[1:]) if args is None else []
+    cli_overrides = known_cli_overrides(env_name) if args is None else []
     if any(override.split("=", 1)[0] == "env.num_agents" for override in cli_overrides):
         raise pufferlib.APIUsageError("Use eval.num_agents to configure evaluation agent count")
-    args = args or load_config(env_name)
+    args = args or load_config(env_name, overrides=cli_overrides)
     eval_config = args["eval"]
     benchmark_config_path = eval_config["benchmark_config"]
     selected_benchmarks = benchmark_names if benchmark_names is not None else eval_config["benchmarks"]
@@ -2053,19 +2118,43 @@ def load_policy(args, vecenv, env_name=""):
     return policy
 
 
-def load_config(env_name, config_dir=None):
-    if config_dir is None:
-        puffer_dir = os.path.dirname(os.path.realpath(__file__))
-        config_dir = os.path.join(puffer_dir, "config")
+CONFIG_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "config")
 
-    # Everything left in argv after main() pops mode/env_name is a Hydra
-    # override: train.learning_rate=1e-4, env.num_agents=512, wandb=true
+
+def config_has_setting(config, setting_path):
+    node = config
+    for name in setting_path.split("."):
+        if not isinstance(node, dict) or name not in node:
+            return False
+        node = node[name]
+    return True
+
+
+def known_cli_overrides(env_name, config_dir=CONFIG_DIR):
+    """Hydra overrides from argv; one that names a setting the config lacks is dropped with a warning."""
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        settings = OmegaConf.to_container(compose(config_name=env_name))
     overrides = []
     for arg in sys.argv[1:]:
         if arg.startswith("--"):
             hint = arg.lstrip("-").replace("-", "_").split("=")[0]
             raise pufferlib.APIUsageError(f"'{arg}' uses the old flag syntax. Use Hydra overrides: {hint}=<value>")
+        setting_path, assignment, _ = arg.partition("=")
+        is_plain_setting = bool(assignment) and all(name.isidentifier() for name in setting_path.split("."))
+        if is_plain_setting and not config_has_setting(settings, setting_path):
+            print(
+                f"WARNING: ignoring override '{arg}': the {env_name} config has no setting '{setting_path}' "
+                "(removed or misspelled)",
+                file=sys.stderr,
+            )
+            continue
         overrides.append(arg)
+    return overrides
+
+
+def load_config(env_name, config_dir=CONFIG_DIR, overrides=None):
+    if overrides is None:
+        overrides = known_cli_overrides(env_name, config_dir)
 
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(config_name=env_name, overrides=overrides)

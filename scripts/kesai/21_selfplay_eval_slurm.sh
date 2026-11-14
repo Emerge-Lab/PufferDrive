@@ -50,7 +50,6 @@ PUFFER_SLOT_ENCODER_BACKEND=${SLOT_ENCODER_BACKEND:-cuda} .venv/bin/python scrip
     eval.max_goal_spacing=200 \
     env.disable_red_light_infractions=1 \
     env.disable_stop_sign_infractions=1 \
-    env.traffic_light_junction_phases=0 \
     env.eval_standstill_jerk_deadband_mps3=1.5 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \

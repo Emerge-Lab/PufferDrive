@@ -20,6 +20,7 @@ numpy_to_torch_dtype_dict = {
 ACTION_SELECT_SAMPLE = "sample"
 ACTION_SELECT_MODE = "mode"  # argmax
 ACTION_SELECT_MEAN = "mean"  # probability-weighted continuous mean
+FLOPS_PER_MULTIPLY_ADD = 2.0
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):

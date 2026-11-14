@@ -25,15 +25,6 @@ TRAIN_FLOP_PER_TRANSITION = 112145920.0
 ROLLOUT_FLOP_PER_TRANSITION = 37654113.0
 CALIBRATE_N = 8192
 CALIBRATE_FLOPS = 2.0 * CALIBRATE_N**3
-# dense bf16 tensor peak with fp32 accumulation, by device-name prefix; the compute capability does not
-# identify the GPU: (12, 0) is the RTX 5090 (GeForce, half rate with fp32 accumulation) and the RTX PRO 6000
-PEAK_BF16_TFLOPS_BY_DEVICE_NAME = {
-    "NVIDIA GeForce RTX 5090": 209.5,
-    "NVIDIA RTX PRO 6000 Blackwell Server Edition": 471.0,
-    "NVIDIA H100 80GB HBM3": 989.0,
-    "NVIDIA B200": 2250.0,
-    "NVIDIA B300": 2250.0,
-}
 ROLLOUT_ROWS = 16384
 WARMUP_STEPS = 4
 TIMED_STEPS = 5
@@ -52,12 +43,11 @@ TRAIN_OVERRIDES = [
 ]
 
 
-def peak_bf16_tflops(device_name):
-    for name_prefix, peak in PEAK_BF16_TFLOPS_BY_DEVICE_NAME.items():
-        if device_name.startswith(name_prefix):
-            return peak
-    print(f"no bf16 peak known for {device_name}, MFU not reported; add it to PEAK_BF16_TFLOPS_BY_DEVICE_NAME")
-    return None
+def measured_peak_bf16_tflops():
+    import pufferlib.pufferl as P
+    from pufferlib.tensor_core_peak import measure_tensor_core_peak_flops_per_second
+
+    return measure_tensor_core_peak_flops_per_second("cuda") / P.FLOPS_PER_TFLOP
 
 
 def build_policy_and_obs(rows, fused):
@@ -148,10 +138,10 @@ def run_phases(rows, fused):
     print(
         f"unprofiled wall time (median of {TIMED_STEPS}): update {wall_ms['update']:.2f} ms, rollout {wall_ms['rollout']:.2f} ms"
     )
-    peak = peak_bf16_tflops(torch.cuda.get_device_name(0))
+    peak = measured_peak_bf16_tflops()
     update_rate = rows * TRAIN_FLOP_PER_TRANSITION / (wall_ms["update"] * 1e-3) / 1e12
     rollout_rate = ROLLOUT_ROWS * ROLLOUT_FLOP_PER_TRANSITION / (wall_ms["rollout"] * 1e-3) / 1e12
-    mfu = f" update_mfu={100 * update_rate / peak:.1f}% rollout_mfu={100 * rollout_rate / peak:.1f}%" if peak else ""
+    mfu = f" update_mfu={100 * update_rate / peak:.1f}% rollout_mfu={100 * rollout_rate / peak:.1f}%"
     print(
         f"RESULT fused={int(fused)} rows={rows} update_ms={wall_ms['update']:.2f} rollout_ms={wall_ms['rollout']:.2f}"
         f" update_tflops={update_rate:.1f} rollout_tflops={rollout_rate:.1f}{mfu} config={fse_config_name()}"
@@ -223,7 +213,7 @@ def parse(path, rows):
         "calibrate": CALIBRATE_FLOPS,
     }
     model_fp32 = {"update": rows * HEAD_FLOP_PER_TRANSITION, "rollout": ROLLOUT_ROWS * ROLLOUT_HEAD_FLOP_PER_TRANSITION}
-    peak = peak_bf16_tflops(torch.cuda.get_device_name(0)) if torch.cuda.is_available() else None
+    peak = measured_peak_bf16_tflops() if torch.cuda.is_available() else None
     for phase, m in sums.items():
         seconds = m["time"] * 1e-9
         tensor = m["bf16"] + m.get("fp16", 0.0) + m.get("tf32", 0.0)

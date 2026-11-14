@@ -686,7 +686,6 @@ static int load_traffic_phase_section(FILE *file, Drive *drive) {
     if (tag_bytes_read == 0) {
         for (int i = 0; i < drive->num_traffic_elements; i++) {
             drive->traffic_elements[i].junction_id = -1;
-            drive->traffic_elements[i].phase_idx = -1;
         }
         return 0;
     }
@@ -699,18 +698,19 @@ static int load_traffic_phase_section(FILE *file, Drive *drive) {
     }
     for (int i = 0; i < drive->num_traffic_elements; i++) {
         TrafficControlElement *tc = &drive->traffic_elements[i];
-        if (fread(&tc->junction_id, sizeof(int), 1, file) != 1 || fread(&tc->phase_idx, sizeof(int), 1, file) != 1) {
+        int phase_idx;
+        if (fread(&tc->junction_id, sizeof(int), 1, file) != 1 || fread(&phase_idx, sizeof(int), 1, file) != 1) {
             printf("[ERROR] -> Truncated %s section.\n", TRAFFIC_PHASE_SECTION_TAG);
             return -1;
         }
         int has_junction = tc->junction_id >= 0;
-        int has_phase = tc->phase_idx >= 0 && tc->phase_idx < drive->num_traffic_elements;
-        if (tc->junction_id < -1 || tc->phase_idx < -1 || has_junction != has_phase) {
+        int has_phase = phase_idx >= 0 && phase_idx < drive->num_traffic_elements;
+        if (tc->junction_id < -1 || phase_idx < -1 || has_junction != has_phase) {
             printf(
                 "[ERROR] -> Traffic element %d has invalid junction_id %d / phase_idx %d.\n",
                 i,
                 tc->junction_id,
-                tc->phase_idx);
+                phase_idx);
             return -1;
         }
     }

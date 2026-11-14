@@ -1,17 +1,16 @@
 #include "include/drive_fixture.h"
 #include "include/test.h"
 
-// Three lights of one junction (phases 0..2) plus one standalone light; eval cycle 10/3/2 s at dt 0.1.
+// Three lights of one junction plus one standalone light; eval cycle 10/3/2 s at dt 0.1.
 #define LIGHT_COUNT 4
 #define STATE_COUNT 900
-#define SLOT_STEPS 150
+#define CYCLE_STEPS 150
 
 static int light_states[LIGHT_COUNT][STATE_COUNT];
 
 static Drive drive_test_lights_env(TrafficControlElement *lights, int eval_mode) {
     Drive env = {0};
     env.eval_mode = eval_mode;
-    env.traffic_light_junction_phases = 1;
     env.dt = 0.1f;
     env.scenario_length = STATE_COUNT;
     env.num_traffic_elements = LIGHT_COUNT;
@@ -23,7 +22,6 @@ static Drive drive_test_lights_env(TrafficControlElement *lights, int eval_mode)
         lights[i].state_size = STATE_COUNT;
         lights[i].states = light_states[i];
         lights[i].junction_id = i < 3 ? 42 : -1;
-        lights[i].phase_idx = i < 3 ? i : -1;
     }
     return env;
 }
@@ -36,95 +34,27 @@ static int count_state(const int *states, int state) {
     return count;
 }
 
-static int test_junction_lights_never_green_together(void) {
+static int test_every_light_runs_its_own_cycle(void) {
     TrafficControlElement lights[LIGHT_COUNT];
     Drive env = drive_test_lights_env(lights, 1);
-    generate_traffic_light_states(&env);
-    for (int t = 0; t < STATE_COUNT; t++) {
-        int non_red = 0;
-        for (int i = 0; i < 3; i++) {
-            non_red += lights[i].states[t] != TRAFFIC_CONTROL_STATE_RED;
-        }
-        EXPECT_TRUE(non_red <= 1);
-    }
-    return 0;
-}
-
-static int test_junction_lights_share_cycle_and_take_turns(void) {
-    TrafficControlElement lights[LIGHT_COUNT];
-    Drive env = drive_test_lights_env(lights, 1);
-    generate_traffic_light_states(&env);
-    for (int i = 0; i < 3; i++) {
-        EXPECT_EQ_INT(count_state(lights[i].states, TRAFFIC_CONTROL_STATE_GREEN), 200);
-        EXPECT_EQ_INT(count_state(lights[i].states, TRAFFIC_CONTROL_STATE_YELLOW), 60);
-        EXPECT_EQ_INT(count_state(lights[i].states, TRAFFIC_CONTROL_STATE_RED), 640);
-    }
-    for (int t = 0; t < STATE_COUNT - SLOT_STEPS; t++) {
-        // Green slot of phase k is followed one slot later by the green slot of phase (k+1) % 3.
-        for (int i = 0; i < 3; i++) {
-            if (lights[i].states[t] != TRAFFIC_CONTROL_STATE_GREEN) {
-                continue;
-            }
-            EXPECT_EQ_INT(lights[(i + 1) % 3].states[t + SLOT_STEPS], TRAFFIC_CONTROL_STATE_GREEN);
-        }
-    }
-    return 0;
-}
-
-static int test_standalone_light_keeps_single_phase_cycle(void) {
-    TrafficControlElement lights[LIGHT_COUNT];
-    Drive env = drive_test_lights_env(lights, 1);
-    generate_traffic_light_states(&env);
-    EXPECT_EQ_INT(count_state(lights[3].states, TRAFFIC_CONTROL_STATE_GREEN), 600);
-    EXPECT_EQ_INT(count_state(lights[3].states, TRAFFIC_CONTROL_STATE_YELLOW), 180);
-    EXPECT_EQ_INT(count_state(lights[3].states, TRAFFIC_CONTROL_STATE_RED), 120);
-    for (int t = 0; t < STATE_COUNT - SLOT_STEPS; t++) {
-        EXPECT_EQ_INT(lights[3].states[t + SLOT_STEPS], lights[3].states[t]);
-    }
-    return 0;
-}
-
-static int test_junction_phases_disabled_makes_every_light_standalone(void) {
-    TrafficControlElement lights[LIGHT_COUNT];
-    Drive env = drive_test_lights_env(lights, 1);
-    env.traffic_light_junction_phases = 0;
     generate_traffic_light_states(&env);
     for (int i = 0; i < LIGHT_COUNT; i++) {
         EXPECT_EQ_INT(count_state(lights[i].states, TRAFFIC_CONTROL_STATE_GREEN), 600);
         EXPECT_EQ_INT(count_state(lights[i].states, TRAFFIC_CONTROL_STATE_YELLOW), 180);
         EXPECT_EQ_INT(count_state(lights[i].states, TRAFFIC_CONTROL_STATE_RED), 120);
-    }
-    return 0;
-}
-
-static int test_training_lights_stay_exclusive_unless_removed(void) {
-    TrafficControlElement lights[LIGHT_COUNT];
-    int exclusive_violations = 0;
-    for (int seed = 0; seed < 20; seed++) {
-        Drive env = drive_test_lights_env(lights, 0);
-        rng_seed(&env.rng_state, (uint64_t) seed);
-        generate_traffic_light_states(&env);
-        for (int t = 0; t < STATE_COUNT; t++) {
-            int cycling_non_red = 0;
-            for (int i = 0; i < 3; i++) {
-                int state = lights[i].states[t];
-                int is_cycling = count_state(lights[i].states, TRAFFIC_CONTROL_STATE_RED) > 0;
-                cycling_non_red += is_cycling && state != TRAFFIC_CONTROL_STATE_RED;
-            }
-            exclusive_violations += cycling_non_red > 1;
+        for (int t = 0; t < STATE_COUNT - CYCLE_STEPS; t++) {
+            EXPECT_EQ_INT(lights[i].states[t + CYCLE_STEPS], lights[i].states[t]);
         }
     }
-    EXPECT_EQ_INT(exclusive_violations, 0);
     return 0;
 }
 
 // Junction fully off while the standalone light is not: individual removal alone needs three 20% draws to line up.
-static int count_junction_only_off_episodes(int junction_phases, int seed_count) {
+static int count_junction_only_off_episodes(int seed_count) {
     TrafficControlElement lights[LIGHT_COUNT];
     int junction_only_off_count = 0;
     for (int seed = 0; seed < seed_count; seed++) {
         Drive env = drive_test_lights_env(lights, 0);
-        env.traffic_light_junction_phases = junction_phases;
         rng_seed(&env.rng_state, (uint64_t) seed);
         generate_traffic_light_states(&env);
         int off_lights = 0;
@@ -139,11 +69,9 @@ static int count_junction_only_off_episodes(int junction_phases, int seed_count)
 
 // Expected rate per episode: 0.8 (no episode disable) * ~0.206 (group removed) * 0.8 (standalone kept) ~= 13%.
 static int test_training_group_removal_turns_off_whole_junction(void) {
-    for (int junction_phases = 0; junction_phases <= 1; junction_phases++) {
-        int junction_only_off_count = count_junction_only_off_episodes(junction_phases, 500);
-        EXPECT_TRUE(junction_only_off_count >= 40);
-        EXPECT_TRUE(junction_only_off_count <= 100);
-    }
+    int junction_only_off_count = count_junction_only_off_episodes(500);
+    EXPECT_TRUE(junction_only_off_count >= 40);
+    EXPECT_TRUE(junction_only_off_count <= 100);
     return 0;
 }
 
@@ -250,11 +178,7 @@ static int test_yellow_remaining_obs_counts_down_and_saturates(void) {
 
 int main(void) {
     int failures = 0;
-    RUN_TEST(test_junction_lights_never_green_together);
-    RUN_TEST(test_junction_lights_share_cycle_and_take_turns);
-    RUN_TEST(test_standalone_light_keeps_single_phase_cycle);
-    RUN_TEST(test_junction_phases_disabled_makes_every_light_standalone);
-    RUN_TEST(test_training_lights_stay_exclusive_unless_removed);
+    RUN_TEST(test_every_light_runs_its_own_cycle);
     RUN_TEST(test_training_group_removal_turns_off_whole_junction);
     RUN_TEST(test_eval_never_removes_lights);
     RUN_TEST(test_schedule_covers_terminal_observation);
