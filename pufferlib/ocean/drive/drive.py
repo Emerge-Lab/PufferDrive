@@ -43,6 +43,7 @@ class Drive(pufferlib.PufferEnv):
         adversarial_target_adversary_forced_reward=1.0,
         adversarial_target_unavoidable_reward=-0.1,
         adversarial_target_at_fault_reward=0.0,
+        counterfactual_reaction_time_seconds=1.0,
         use_at_fault_ablation=False,
         terminate_hitter_on_collision=False,
         min_goal_spacing=20.0,
@@ -198,6 +199,7 @@ class Drive(pufferlib.PufferEnv):
         self.adversarial_target_adversary_forced_reward = adversarial_target_adversary_forced_reward
         self.adversarial_target_unavoidable_reward = adversarial_target_unavoidable_reward
         self.adversarial_target_at_fault_reward = adversarial_target_at_fault_reward
+        self.counterfactual_reaction_time_seconds = float(counterfactual_reaction_time_seconds)
         self.use_at_fault_ablation = use_at_fault_ablation
         self.terminate_hitter_on_collision = terminate_hitter_on_collision
         self.goal_radius = goal_radius
@@ -517,6 +519,7 @@ class Drive(pufferlib.PufferEnv):
             "adversarial_target_adversary_forced_reward": self.adversarial_target_adversary_forced_reward,
             "adversarial_target_unavoidable_reward": self.adversarial_target_unavoidable_reward,
             "adversarial_target_at_fault_reward": self.adversarial_target_at_fault_reward,
+            "counterfactual_reaction_time_seconds": self.counterfactual_reaction_time_seconds,
             "use_at_fault_ablation": self.use_at_fault_ablation,
             "terminate_hitter_on_collision": self.terminate_hitter_on_collision,
             "collision_behavior": self.collision_behavior,

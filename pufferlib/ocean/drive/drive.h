@@ -497,6 +497,7 @@ struct Drive {
     float adversarial_target_adversary_forced_reward;
     float adversarial_target_unavoidable_reward;
     float adversarial_target_at_fault_reward;
+    float counterfactual_reaction_time_seconds;
     int target_hit_this_step;
     int target_hit_hitter_idx_this_step;
     float target_hit_responsibility_this_step;
@@ -3387,6 +3388,7 @@ static void record_relabel_diagnostics(Drive *env, int target_idx, int hitter_id
     }
     for (int variant_idx = 0; variant_idx < RELABEL_VARIANT_COUNT; variant_idx++) {
         CounterfactualParams params = DEFAULT_COUNTERFACTUAL_PARAMS;
+        params.reaction_time_seconds = env->counterfactual_reaction_time_seconds;
         switch (variant_idx) {
         case RELABEL_JERK:
             params.use_jerk_ramp
@@ -3424,11 +3426,13 @@ static void record_target_collision_analysis(Drive *env, int target_agent_idx, i
 
     env->target_collision_analyzed_episode = 1;
     env->target_collision_responsibility_episode = env->target_hit_responsibility_this_step;
+    CounterfactualParams counterfactual_params = DEFAULT_COUNTERFACTUAL_PARAMS;
+    counterfactual_params.reaction_time_seconds = env->counterfactual_reaction_time_seconds;
     env->target_last_avoidable_braking_seconds_before_collision = last_avoidable_braking_seconds_before_collision(
         env,
         target_agent_idx,
         collision_adversary_idx,
-        &DEFAULT_COUNTERFACTUAL_PARAMS,
+        &counterfactual_params,
         env->avoidability_debug,
         NULL);
     env->target_reaction_window_danger_episode = danger_exists_in_reaction_window(
@@ -3436,7 +3440,7 @@ static void record_target_collision_analysis(Drive *env, int target_agent_idx, i
         target_agent_idx,
         collision_adversary_idx,
         env->target_last_avoidable_braking_seconds_before_collision,
-        &DEFAULT_COUNTERFACTUAL_PARAMS,
+        &counterfactual_params,
         env->avoidability_debug,
         NULL);
     record_relabel_diagnostics(env, target_agent_idx, collision_adversary_idx);

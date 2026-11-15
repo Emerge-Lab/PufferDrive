@@ -364,6 +364,7 @@ class DriveEnvConfig:
     adversarial_target_adversary_forced_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     adversarial_target_unavoidable_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     adversarial_target_at_fault_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    counterfactual_reaction_time_seconds: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT, default=1.0)
     use_at_fault_ablation: bool = False
     terminate_hitter_on_collision: bool = False
     map_dir: str = MISSING

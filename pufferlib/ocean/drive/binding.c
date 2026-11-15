@@ -2065,6 +2065,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         = (float) unpack(kwargs, "adversarial_target_adversary_forced_reward");
     env->adversarial_target_unavoidable_reward = (float) unpack(kwargs, "adversarial_target_unavoidable_reward");
     env->adversarial_target_at_fault_reward = (float) unpack(kwargs, "adversarial_target_at_fault_reward");
+    env->counterfactual_reaction_time_seconds = (float) unpack(kwargs, "counterfactual_reaction_time_seconds");
+    if (env->counterfactual_reaction_time_seconds < 0.0f) {
+        PyErr_SetString(PyExc_ValueError, "counterfactual_reaction_time_seconds must be non-negative");
+        return -1;
+    }
     env->use_at_fault_ablation = (bool) unpack(kwargs, "use_at_fault_ablation");
     env->terminate_hitter_on_collision = (bool) unpack(kwargs, "terminate_hitter_on_collision");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");

@@ -169,6 +169,8 @@ env:
   adversarial_target_adversary_forced_reward: 2.0
   adversarial_target_unavoidable_reward: -0.1
   adversarial_target_at_fault_reward: 0.0
+  # Counterfactual reaction time (rho) used to classify target collisions
+  counterfactual_reaction_time_seconds: 1.0
   use_at_fault_ablation: false
   terminate_hitter_on_collision: false
   # --- Map ---
