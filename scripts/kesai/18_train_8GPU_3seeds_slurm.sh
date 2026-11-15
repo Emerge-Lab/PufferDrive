@@ -9,7 +9,7 @@
 #SBATCH --output experiments/logs/train_3seeds_%a_%A.out
 #SBATCH --error experiments/logs/train_3seeds_%a_%A.err
 #SBATCH --partition dev
-#SBATCH --array=0-3
+#SBATCH --array=0
 
 source scripts/kesai/cluster_env.sh || exit 1
 
@@ -24,9 +24,9 @@ echo "Total nodes: ${WORLD_SIZE}"
 start=$(date +%s)
 
 SEEDS=(1000 2000 3000 4000)
-RUN_PREFIX=k_scaled_0081
-WORKER_COUNT=64
-ROLLOUT_STEP_COUNT=64
+RUN_PREFIX=k_scaled_0082
+WORKER_COUNT=128
+ROLLOUT_STEP_COUNT=128
 MINIBATCH_SIZE=393216
 
 export SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
@@ -60,6 +60,7 @@ source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # 0073 / 0074 = the 0072 config (3_train_64GPU_multinode_slurm.sh) on one node per training, minibatch 262144 / 393216, seeds 1000 and 2000.
 # 0081 = the 0074 config (minibatch 393216, lr 5e-4) on the current code with a quarter of the rollout per iteration, 29.8k iterations instead of 7451: 64 workers per rank (0074: 128) and 64 steps per rollout (0074: 128). Seeds 1000-4000, one array task each.
+# 0082 = the 0074 config again (128 workers per rank, 128 steps per rollout, minibatch 393216, lr 5e-4) on the current code, seed 1000 only (array task 0; task 1 = seed 2000).
 # Execute torchrun across all nodes using srun
 srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
