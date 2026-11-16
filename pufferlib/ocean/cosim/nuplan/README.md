@@ -115,16 +115,16 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
 
 ```
 JOBID=13838103
-export CKPT=/scratch/yw4142/runs/2026-07-07_multi_agent_nightly_best_seed2_run_name2026-07-07_seed2_499f818/puffer_drive_nlemvgc0/models/model_puffer_drive_000954.pt
+export CKPT=/path/to/experiments/<run>/models/model_opengigaflow_xxxxxx.pt
 export LIMIT_TOTAL_SCENARIOS=10
 
 srun --jobid=$JOBID --overlap \
-  bash /scratch/yw4142/PufferDrive_nightly/pufferlib/ocean/cosim/nuplan/run_nuplan_planner.sh
+  bash pufferlib/ocean/cosim/nuplan/run_nuplan_planner.sh
 ```
 
 ## Lane graph / GPS goal features
 
-The deployed city bins (`/scratch/yw4142/datasets/ad/nuplan/maps/nuplan__*.bin`,
+The deployed city bins (`nuplan__*.bin` in `city_bin_dir`,
 converted 2026-07-09) DO carry lane graphs — built by 123Drive's bin_factory
 (`src/bin_factory/transforms/graph.py`: directed scipy Dijkstra over lane
 entry/exit connectivity; the n×n distance matrix dominates bin size, e.g.
@@ -133,12 +133,12 @@ GPS lane-distance goal columns are therefore live
 here, same as the CARLA side.
 
 To (re)generate city bins WITH lane graphs, use the 123Drive converter (from
-`/scratch/ev2237/123Drive`):
+a 123Drive checkout):
 
 ```bash
 uv run convert --preset nuplan --map_only \
-  --py123d_path /scratch/ev2237/data/nuplan/py123d_output \
-  --output /scratch/yw4142/datasets/ad/nuplan/maps
+  --py123d_path /path/to/nuplan/py123d_output \
+  --output /path/to/nuplan/maps
 ```
 
 ## Features not obtainable from nuPlan
@@ -152,7 +152,3 @@ uv run convert --preset nuplan --map_only \
   (shadow slots change owner whenever a track appears or ends). It starts from
   the planner's history buffer, about 2 s before the scenario; a track that
   leaves the detections starts over.
-
-## Remaining TODOs
-
-- [ ] Double check static variables

@@ -947,7 +947,7 @@ class Drive(pufferlib.VecEnv):
         """Get ground truth trajectories for all active agents.
 
         Returns:
-            dict with keys 'x', 'y', 'z', 'heading', 'valid', 'id', 'scenario_id' containing numpy arrays.
+            dict with keys 'x', 'y', 'z', 'heading', 'valid', 'id' containing numpy arrays.
         """
         num_agents = self.num_agents
 
@@ -958,7 +958,6 @@ class Drive(pufferlib.VecEnv):
             "heading": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.float32),
             "valid": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.int32),
             "id": np.zeros(num_agents, dtype=np.int32),
-            "scenario_id": np.zeros(num_agents, dtype=np.int32),
         }
 
         binding.vec_get_global_ground_truth_trajectories(
@@ -969,7 +968,6 @@ class Drive(pufferlib.VecEnv):
             trajectories["heading"],
             trajectories["valid"],
             trajectories["id"],
-            trajectories["scenario_id"],
         )
 
         for key in trajectories:

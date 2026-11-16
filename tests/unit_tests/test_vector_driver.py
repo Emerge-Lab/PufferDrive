@@ -16,7 +16,7 @@ import pufferlib.vector
 from pufferlib import VecEnv
 
 OBSERVATION_SIZE = 4
-ACTION_COUNT = 2
+ACTION_SIZE = 2
 FRACTIONAL_OBSERVATION = np.float32(1.0 / 3.0)
 STEP_OBSERVATION_SCALE = np.float32(1.7)
 SIBLING_CPU_OFFSET = 1000
@@ -29,7 +29,7 @@ class MinimalEnv(VecEnv):
         self.single_observation_space = gymnasium.spaces.Box(
             low=-1.0, high=1.0, shape=(OBSERVATION_SIZE,), dtype=np.float32
         )
-        self.single_action_space = gymnasium.spaces.Discrete(ACTION_COUNT)
+        self.single_action_space = gymnasium.spaces.Box(low=-1.0, high=1.0, shape=(ACTION_SIZE,), dtype=np.float32)
         self.num_agents = 1
         self.close_count = 0
         super().__init__(buf=buf)
@@ -106,7 +106,7 @@ def test_driver_env_is_released_but_stays_readable():
         assert vecenv.agents_per_batch == worker_count
         obs, _ = vecenv.reset()
         assert obs.shape == (worker_count, OBSERVATION_SIZE)
-        vecenv.step(np.zeros(vecenv.action_space.shape, dtype=np.int32))
+        vecenv.step(np.zeros(vecenv.action_space.shape, dtype=np.float32))
     finally:
         vecenv.close()
     # close() must not close it a second time; on a native env that double frees.
@@ -144,7 +144,7 @@ def test_reset_drains_pending_workers_and_steps_again():
     try:
         obs, _ = vecenv.reset(seed=1)
         assert obs.shape == (2, OBSERVATION_SIZE)
-        actions = np.zeros(vecenv.action_space.shape, dtype=np.int32)
+        actions = np.zeros(vecenv.action_space.shape, dtype=np.float32)
         vecenv.send(actions)
         vecenv.recv()
         obs, _ = vecenv.reset(seed=2)
@@ -180,7 +180,7 @@ def test_dead_worker_raises_instead_of_hanging(monkeypatch):
     )
     try:
         vecenv.reset(seed=1)
-        vecenv.send(np.zeros(vecenv.action_space.shape, dtype=np.int32))
+        vecenv.send(np.zeros(vecenv.action_space.shape, dtype=np.float32))
         vecenv.processes[1].kill()
         vecenv.processes[1].join()
         with pytest.raises((RuntimeError, EOFError)):
@@ -214,7 +214,7 @@ def test_float16_transport_delivers_the_rounded_env_observations():
         try:
             reset_observations, _ = vecenv.reset(seed=1)
             reset_observations = reset_observations.copy()
-            step_observations, *_ = vecenv.step(np.zeros(vecenv.action_space.shape, dtype=np.int32))
+            step_observations, *_ = vecenv.step(np.zeros(vecenv.action_space.shape, dtype=np.float32))
             delivered[transport_dtype] = (reset_observations, step_observations.copy())
         finally:
             vecenv.close()

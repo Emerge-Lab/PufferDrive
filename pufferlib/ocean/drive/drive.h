@@ -4639,13 +4639,11 @@ void c_get_global_ground_truth_trajectories(
     float *z_out,
     float *heading_out,
     int *valid_out,
-    int *id_out,
-    int *scenario_id_out) {
+    int *id_out) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
         id_out[i] = get_track_id_or_placeholder(env, agent_idx);
-        scenario_id_out[i] = 0; // TODO: FIXME
 
         for (int step_idx = 0; step_idx < num_timesteps; step_idx++) {
             int t = env->init_step + step_idx;

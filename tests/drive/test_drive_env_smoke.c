@@ -65,7 +65,7 @@ static int test_ground_truth_trajectories_fit_the_buffer_width(void) {
         int cell_count = agent_count * num_timesteps;
         float *xyz_heading = (float *) calloc(4 * cell_count, sizeof(float));
         int *valid = (int *) malloc(cell_count * sizeof(int));
-        int *ids = (int *) calloc(2 * agent_count, sizeof(int));
+        int *ids = (int *) calloc(agent_count, sizeof(int));
         for (int k = 0; k < cell_count; k++) {
             valid[k] = -1;
         }
@@ -77,8 +77,7 @@ static int test_ground_truth_trajectories_fit_the_buffer_width(void) {
             xyz_heading + 2 * cell_count,
             xyz_heading + 3 * cell_count,
             valid,
-            ids,
-            ids + agent_count);
+            ids);
         for (int t = 0; t < num_timesteps; t++) {
             int expected_valid = t < agent->trajectory_size ? agent->log_valid[t] : 0;
             EXPECT_EQ_INT(valid[t], expected_valid);

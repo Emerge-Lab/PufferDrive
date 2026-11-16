@@ -20,8 +20,7 @@
 #                  streamed to disk frame-by-frame so it's safe for long
 #                  routes). Default: "$(dirname "$OUT")/carla_view".
 #                  Set COSIM_DEBUG_CARLA_VIEW= (empty) to disable.
-#   COSIM_DEVICE / COSIM_DT / COSIM_NUM_AGENTS
-#                  forwarded to leaderboard_agent.py as-is if already exported.
+#   COSIM_DEVICE   forwarded to leaderboard_agent.py as-is if already exported.
 if [ -z "$INSIDE_PUFFER_CONTAINER" ]; then
     source /share/apps/images/slurm-ib-bind-apptainer.sh
     export APPTAINERENV_PREPEND_PATH=/share/apps/apptainer/bin:$APPTAINERENV_PREPEND_PATH

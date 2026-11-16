@@ -24,7 +24,6 @@ count/radius, reward conditioning) are adopted from the checkpoint's sibling `co
 
 CARLA needs the GPU/Vulkan container
 `carl` conda env (cp310 — CARLA 0.9.15 ships no cp312 wheel)
-  - look into compatability with our env
 
 `run_leaderboard.sh` exports `SCENARIO_RUNNER_ROOT` itself. When invoking the
 evaluator manually you MUST export it (route scenarios silently fail to load
@@ -32,15 +31,15 @@ without it; `leaderboard_agent.py` refuses to start when it is unset):
 
 ```bash
 JOBID=14401249
-export CKPT=/scratch/yw4142/PufferDrive_nightly/experiments/<run>/final_model.pt
-export SCENARIO_RUNNER_ROOT=/scratch/yw4142/CaRL/CARLA/original_leaderboard/scenario_runner
+export CKPT=/path/to/experiments/<run>/final_model.pt
+export SCENARIO_RUNNER_ROOT=/path/to/CaRL/CARLA/original_leaderboard/scenario_runner
 
 srun --jobid=$JOBID --overlap \
   bash pufferlib/ocean/cosim/carla/run_leaderboard.sh
 ```
 
 Optional env vars (see `leaderboard_agent.py` docstring): `COSIM_DEVICE`,
-`COSIM_DYNAMICS_SOURCE`, `COSIM_NUM_AGENTS`, `COSIM_MAX_SPEED_MPS` (ego speed cap via
+`COSIM_DYNAMICS_SOURCE`, `COSIM_MAX_SPEED_MPS` (ego speed cap via
 C_vel; default = the checkpoint's `base_max_speed_mps`, must stay inside the trained range),
 `COSIM_ZERO_PARTNER_STOPPED_TIME` (1 = vehicle partners' `seconds_stopped` obs feature held at 0, ego
 and walkers untouched; ablation for the parked-car / red-light-queue avoidance), `COSIM_VRU_SIZE_PAD_M`
@@ -146,11 +145,11 @@ CARLA server, runs the evaluator, and writes `result.json` + videos under
 `$RUNDIR`. Single route (e.g. longest6 route 5, the shortest at ~686 m):
 
 ```bash
-PD=/scratch/yw4142/PufferDrive_cosim
+PD=/path/to/OpenGigaFlow
 CKPT=$PD/experiments/<run>/final_model.pt
-RUNDIR=/scratch/yw4142/runs/cosim_lb_$(date +%Y%m%d_%H%M%S)
+RUNDIR=/path/to/runs/cosim_lb_$(date +%Y%m%d_%H%M%S)
 mkdir -p "$RUNDIR"
-sbatch -A torch_pr_355_tandon_advanced -p l40s_public --gres=gpu:1 -c 8 --mem=64G -t 02:00:00 \
+sbatch -A <account> -p <partition> --gres=gpu:1 -c 8 --mem=64G -t 02:00:00 \
   --job-name=cosim_r5 --output="$RUNDIR/slurm.out" --error="$RUNDIR/slurm.out" \
   --wrap "CKPT=$CKPT ROUTES_SUBSET=5 OUT=$RUNDIR/result.json \
 bash $PD/pufferlib/ocean/cosim/carla/run_leaderboard.sh"
@@ -163,13 +162,13 @@ one CARLA server per job, aggregate at the end). Distinct `CARLA_PORT`s guard
 against two jobs landing on the same node:
 
 ```bash
-PD=/scratch/yw4142/PufferDrive_cosim
+PD=/path/to/OpenGigaFlow
 CKPT=$PD/experiments/<run>/final_model.pt
-SPLIT=/scratch/yw4142/CaRL/CARLA/custom_leaderboard/leaderboard/data/longest6_split
-BASE=/scratch/yw4142/runs/cosim_lb_parallel_$(date +%Y%m%d_%H%M%S)
+SPLIT=/path/to/CaRL/CARLA/custom_leaderboard/leaderboard/data/longest6_split
+BASE=/path/to/runs/cosim_lb_parallel_$(date +%Y%m%d_%H%M%S)
 for i in $(seq -w 0 35); do
   RUNDIR=$BASE/route_$i; mkdir -p "$RUNDIR"
-  sbatch -A torch_pr_355_tandon_advanced -p l40s_public --gres=gpu:1 -c 8 --mem=64G -t 04:00:00 \
+  sbatch -A <account> -p <partition> --gres=gpu:1 -c 8 --mem=64G -t 04:00:00 \
     --job-name=cosim_r$i --output="$RUNDIR/slurm.out" --error="$RUNDIR/slurm.out" \
     --wrap "CKPT=$CKPT ROUTES=$SPLIT/longest6_$i.xml ROUTES_SUBSET= \
 CARLA_PORT=$((2000 + 10#$i * 4)) OUT=$RUNDIR/result.json \

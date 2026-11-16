@@ -18,10 +18,7 @@ def set_buffers(env, buf=None):
         env.masks = np.ones(env.num_agents, dtype=bool)
 
         atn_space = pufferlib.spaces.joint_space(env.single_action_space, env.num_agents)
-        if isinstance(env.single_action_space, pufferlib.spaces.Box):
-            env.actions = np.zeros(atn_space.shape, dtype=atn_space.dtype)
-        else:
-            env.actions = np.zeros(atn_space.shape, dtype=np.int32)
+        env.actions = np.zeros(atn_space.shape, dtype=atn_space.dtype)
     else:
         env.observations = buf["observations"]
         env.rewards = buf["rewards"]
@@ -48,12 +45,8 @@ class VecEnv:
             raise APIUsageError("VecEnvs must define single_action_space, not action_space")
         if not isinstance(self.single_observation_space, pufferlib.spaces.Box):
             raise APIUsageError("Native observation_space must be a Box")
-        if (
-            not isinstance(self.single_action_space, pufferlib.spaces.Discrete)
-            and not isinstance(self.single_action_space, pufferlib.spaces.MultiDiscrete)
-            and not isinstance(self.single_action_space, pufferlib.spaces.Box)
-        ):
-            raise APIUsageError("Native action_space must be a Discrete, MultiDiscrete, or Box")
+        if not isinstance(self.single_action_space, pufferlib.spaces.Box):
+            raise APIUsageError("Native action_space must be a Box")
 
         set_buffers(self, buf)
 

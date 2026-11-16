@@ -41,18 +41,12 @@ class _ContinuousPolicy:
     is_continuous = True
 
 
-def _discrete_logits(rows):
-    # Drive's discrete policy returns a tuple of one [batch, num_classes]
-    # tensor (torch.split output); mirror that so we exercise the real path.
-    return (torch.tensor(rows),)
-
-
 # --------------------------------------------------------------------------
 # Discrete policy on a continuous env
 # --------------------------------------------------------------------------
 def test_mode_selects_argmax_and_is_deterministic():
     # Row 0 argmax = class 2, row 1 argmax = class 0.
-    logits = _discrete_logits([[0.0, 0.0, 10.0], [10.0, 0.0, 0.0]])
+    logits = torch.tensor([[0.0, 0.0, 10.0], [10.0, 0.0, 0.0]])
     policy = _DiscretePolicy()
 
     action1, _, _, cont1 = P.sample_logits(
@@ -73,7 +67,7 @@ def test_mode_selects_argmax_and_is_deterministic():
 
 def test_mean_is_probability_weighted_and_differs_from_mode():
     # Uniform distribution over the 3 classes.
-    logits = _discrete_logits([[0.0, 0.0, 0.0]])
+    logits = torch.tensor([[0.0, 0.0, 0.0]])
     policy = _DiscretePolicy()
 
     action_mean, _, _, cont_mean = P.sample_logits(
@@ -93,7 +87,7 @@ def test_mean_is_probability_weighted_and_differs_from_mode():
 
 def test_sample_is_stochastic_and_stays_in_support():
     # Flat distribution so multinomial explores every class.
-    logits = _discrete_logits([[0.0, 0.0, 0.0]])
+    logits = torch.tensor([[0.0, 0.0, 0.0]])
     policy = _DiscretePolicy()
 
     torch.manual_seed(0)
@@ -150,7 +144,7 @@ def test_mean_rejects_continuous_policy():
 
 
 def test_mean_rejects_discrete_env():
-    logits = _discrete_logits([[0.0, 0.0, 0.0]])
+    logits = torch.tensor([[0.0, 0.0, 0.0]])
     with pytest.raises(ValueError):
         P.sample_logits(logits, action_selection=P.ACTION_SELECT_MEAN, env_continuous=False, policy=_DiscretePolicy())
 

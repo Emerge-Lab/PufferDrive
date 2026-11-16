@@ -64,7 +64,6 @@ def entropy(logits):
 
 
 def sample_logits(logits, action=None, action_selection=ACTION_SELECT_SAMPLE, env_continuous=None, policy=None):
-    is_discrete = isinstance(logits, torch.Tensor)
     if action_selection == ACTION_SELECT_MEAN and not (env_continuous and not policy.is_continuous):
         raise ValueError("action_selection='mean' requires a discrete policy on a continuous env")
     if isinstance(logits, torch.distributions.Normal):
@@ -77,12 +76,8 @@ def sample_logits(logits, action=None, action_selection=ACTION_SELECT_SAMPLE, en
         log_probs = logits.log_prob(action.view(batch, -1)).sum(1)
         logits_entropy = logits.entropy().view(batch, -1).sum(1)
         return action, log_probs, logits_entropy, None
-    elif is_discrete:
-        logits = logits.unsqueeze(0)
-    else:  # multi-discrete
-        logits = torch.nn.utils.rnn.pad_sequence(
-            [l.transpose(0, 1) for l in logits], batch_first=False, padding_value=-torch.inf
-        ).permute(1, 2, 0)
+
+    logits = logits.unsqueeze(0)
 
     # This can fail on nans etc
     normalized_logits = logits - logits.logsumexp(dim=-1, keepdim=True)
@@ -108,11 +103,6 @@ def sample_logits(logits, action=None, action_selection=ACTION_SELECT_SAMPLE, en
             cont_actions = policy.discrete_probs_to_continuous_mean(probs)
         else:  # Mode and sample we already have an action from the code above.
             cont_actions = policy.discrete_actions_to_continuous(action)
-        if is_discrete:
-            return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0), cont_actions.squeeze(0)
-        return action.T, logprob.sum(0), logits_entropy, cont_actions
+        return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0), cont_actions.squeeze(0)
 
-    if is_discrete:
-        return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0), None
-
-    return action.T, logprob.sum(0), logits_entropy, None
+    return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0), None

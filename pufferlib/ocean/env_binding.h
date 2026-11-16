@@ -1005,8 +1005,8 @@ static PyObject *vec_set_agent_goals(PyObject *self, PyObject *args) {
 }
 
 static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 8) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_global_ground_truth_trajectories requires 8 arguments");
+    if (PyTuple_Size(args) != 7) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_global_ground_truth_trajectories requires 7 arguments");
         return NULL;
     }
 
@@ -1022,10 +1022,9 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
     PyObject *heading_arr = PyTuple_GetItem(args, 4);
     PyObject *valid_arr = PyTuple_GetItem(args, 5);
     PyObject *id_arr = PyTuple_GetItem(args, 6);
-    PyObject *scenario_id_arr = PyTuple_GetItem(args, 7);
 
     if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(z_arr) || !PyArray_Check(heading_arr)
-        || !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(scenario_id_arr)) {
+        || !PyArray_Check(valid_arr) || !PyArray_Check(id_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -1036,7 +1035,6 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
     PyArrayObject *heading_array = (PyArrayObject *) heading_arr;
     PyArrayObject *valid_array = (PyArrayObject *) valid_arr;
     PyArrayObject *id_array = (PyArrayObject *) id_arr;
-    PyArrayObject *scenario_id_array = (PyArrayObject *) scenario_id_arr;
 
     // Get base pointers to the arrays
     float *x_base = (float *) PyArray_DATA(x_array);
@@ -1045,7 +1043,6 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
     float *heading_base = (float *) PyArray_DATA(heading_array);
     int *valid_base = (int *) PyArray_DATA(valid_array);
     int *id_base = (int *) PyArray_DATA(id_array);
-    int *scenario_id_base = (int *) PyArray_DATA(scenario_id_array);
 
     PyArrayObject *trajectory_arrays[5] = {x_array, y_array, z_array, heading_array, valid_array};
     npy_intp total_agent_count = 0;
@@ -1063,7 +1060,7 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
     int num_timesteps = (int) PyArray_DIM(x_array, 1);
 
     // Iterate through environments and write to correct offsets
-    int agent_offset = 0; // Offset for 1D arrays (id, scenario_id)
+    int agent_offset = 0; // Offset for the 1D id array
     int traj_offset = 0;  // Offset for 2D arrays (x, y, z, heading, valid)
 
     for (int i = 0; i < vec->num_envs; i++) {
@@ -1077,8 +1074,7 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
             &z_base[traj_offset],
             &heading_base[traj_offset],
             &valid_base[traj_offset],
-            &id_base[agent_offset],
-            &scenario_id_base[agent_offset]);
+            &id_base[agent_offset]);
 
         // Move offsets forward
         agent_offset += drive->active_agent_count;

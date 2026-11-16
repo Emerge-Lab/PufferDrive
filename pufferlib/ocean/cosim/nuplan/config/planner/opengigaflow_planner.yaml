@@ -8,8 +8,8 @@ opengigaflow_planner:
   city_bin_dir: ???
   device: "cpu"
   map_radius: 400.0
-  goal_spacing: 20.0 # TODO: load from config
-  num_agents: 64 # TODO: load from config
+  goal_spacing: 20.0
+  num_agents: 64
   horizon_seconds: 8.0 # nuplan default
   deterministic: true
   # Ablations (defaults = off). sliding_goal_window: refill the goal window after every consumed goal so
