@@ -2,7 +2,6 @@ import math
 import pickle
 import zlib
 import numpy as np
-import gymnasium
 import os
 import opengigaflow
 from opengigaflow.ocean.drive import binding
@@ -397,7 +396,7 @@ class Drive(opengigaflow.VecEnv):
             + self.obs_valid_count_features
         )
 
-        self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
+        self.single_observation_space = opengigaflow.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
         self.init_step = init_step
         # shortest first episode when stagger_first_episode is on
@@ -450,7 +449,7 @@ class Drive(opengigaflow.VecEnv):
             "create_controllable_types": binding.INIT_MODE_CREATE_CONTROLLABLE_TYPES,
         }[self.init_mode_str]
 
-        self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
+        self.single_action_space = opengigaflow.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
         self.starting_map_counter = starting_map
         self.starting_map_counter_init = starting_map
 

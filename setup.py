@@ -201,7 +201,6 @@ for key, value in cfg_vars.items():
 install_requires = [
     "setuptools<81",
     "numpy",
-    "gymnasium==0.29.1",
     "pyyaml",
 ]
 

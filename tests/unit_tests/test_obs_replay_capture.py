@@ -41,7 +41,7 @@ def test_capture_writes_goal_reward_coef_chunks(tmp_path):
     obs, _ = env.reset()
     capture = ObsReplayCapture(env, None, tmp_path / "route", max_steps=STEP_COUNT)
     for _ in range(STEP_COUNT):
-        actions = env.action_space.sample()
+        actions = np.zeros(env.action_space.shape, dtype=env.action_space.dtype)
         capture.capture(obs, actions, {}, None)
         obs, *_ = env.step(actions)
     sdc_idx = env.get_state()[0]["active_agent_indices"][0]

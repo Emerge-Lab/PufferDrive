@@ -8,7 +8,6 @@ import multiprocessing
 import os
 import time
 
-import gymnasium
 import numpy as np
 import pytest
 
@@ -26,10 +25,10 @@ PRELOADED = False
 
 class MinimalEnv(VecEnv):
     def __init__(self, buf=None, seed=0):
-        self.single_observation_space = gymnasium.spaces.Box(
+        self.single_observation_space = opengigaflow.spaces.Box(
             low=-1.0, high=1.0, shape=(OBSERVATION_SIZE,), dtype=np.float32
         )
-        self.single_action_space = gymnasium.spaces.Box(low=-1.0, high=1.0, shape=(ACTION_SIZE,), dtype=np.float32)
+        self.single_action_space = opengigaflow.spaces.Box(low=-1.0, high=1.0, shape=(ACTION_SIZE,), dtype=np.float32)
         self.num_agents = 1
         self.close_count = 0
         super().__init__(buf=buf)
