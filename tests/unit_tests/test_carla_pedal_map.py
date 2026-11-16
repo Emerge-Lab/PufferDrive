@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from pufferlib.ocean.cosim.carla.controller import (
+from opengigaflow.ocean.cosim.carla.controller import (
     PEDAL_GAINS_BY_BLUEPRINT,
     REVERSE_GEAR,
     PedalMap,

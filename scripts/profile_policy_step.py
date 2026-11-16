@@ -43,15 +43,15 @@ TRAIN_OVERRIDES = [
 
 
 def measured_peak_bf16_tflops():
-    import pufferlib.rl as P
-    from pufferlib.tensor_core_peak import measure_tensor_core_peak_flops_per_second
+    import opengigaflow.rl as P
+    from opengigaflow.tensor_core_peak import measure_tensor_core_peak_flops_per_second
 
     return measure_tensor_core_peak_flops_per_second("cuda") / P.FLOPS_PER_TFLOP
 
 
 def build_policy_and_obs(rows, fused):
     sys.argv = ["profile_policy_step"] + TRAIN_OVERRIDES
-    import pufferlib.rl as P
+    import opengigaflow.rl as P
 
     args = P.load_config("opengigaflow")
     args = P.normalize_opengigaflow_config(args, "training")
@@ -74,14 +74,14 @@ def build_policy_and_obs(rows, fused):
 
 
 def run_phases(rows, fused):
-    import pufferlib.pytorch
+    import opengigaflow.pytorch
 
     torch.set_float32_matmul_precision("highest")
     torch.backends.cuda.matmul.allow_tf32 = False
     policy, obs = build_policy_and_obs(rows, fused)
     compiled = torch.compile(policy)
     compiled_eval = torch.compile(policy.forward_eval)
-    sample_logits = torch.compile(pufferlib.pytorch.sample_logits)
+    sample_logits = torch.compile(opengigaflow.pytorch.sample_logits)
     optimizer = torch.optim.AdamW(policy.parameters(), lr=1e-4, weight_decay=0.01)
     update_obs = obs[:rows]
     actions = torch.randint(0, policy.action_dim, (rows,), device="cuda", dtype=torch.int32)

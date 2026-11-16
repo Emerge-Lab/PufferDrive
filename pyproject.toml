@@ -1,5 +1,5 @@
 [project]
-name = "pufferlib"
+name = "opengigaflow"
 version = "3.0.0"
 description = "Fast and sane reinforcement learning"
 requires-python = ">=3.9"
@@ -24,7 +24,7 @@ test = [
 ]
 
 [project.scripts]
-puffer = "pufferlib.rl:main"
+puffer = "opengigaflow.rl:main"
 
 [project.urls]
 Homepage = "https://puffer.ai"

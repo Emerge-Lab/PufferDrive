@@ -9,7 +9,7 @@ import pytest
 import torch
 from torch import nn
 
-import pufferlib.pytorch
+import opengigaflow.pytorch
 
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="fused slot encoder needs CUDA")
@@ -22,10 +22,10 @@ BF16_ULP_AT_FOUR = 2.0**-6
 
 def make_encoder(in_features, width):
     layers = [
-        pufferlib.pytorch.layer_init(nn.Linear(in_features, width)),
+        opengigaflow.pytorch.layer_init(nn.Linear(in_features, width)),
         nn.LayerNorm(width),
         nn.ReLU(),
-        pufferlib.pytorch.layer_init(nn.Linear(width, width)),
+        opengigaflow.pytorch.layer_init(nn.Linear(width, width)),
     ]
     return nn.Sequential(*layers).cuda()
 
@@ -56,7 +56,7 @@ def make_inputs(slots, features, width, seed):
 
 
 def run(encoder, objects, counts, grad_pooled, path):
-    from pufferlib.ocean.fused_slot_encoder import fused_encode_and_pool
+    from opengigaflow.ocean.fused_slot_encoder import fused_encode_and_pool
 
     for parameter in encoder.parameters():
         parameter.grad = None
@@ -103,7 +103,7 @@ def test_fused_matches_autocast_reference(slots, features, width):
 
 @pytest.mark.parametrize("slots,features,width", ENCODER_SHAPES[:1])
 def test_fused_inference_matches_training_forward(slots, features, width):
-    from pufferlib.ocean.fused_slot_encoder import fused_encode_and_pool
+    from opengigaflow.ocean.fused_slot_encoder import fused_encode_and_pool
 
     torch.manual_seed(0)
     encoder = make_encoder(features, width)
@@ -119,7 +119,7 @@ def test_fused_inference_matches_training_forward(slots, features, width):
 @pytest.mark.parametrize("slots,features,width", [ENCODER_SHAPES[0], ENCODER_SHAPES[3], (3, 5, 64)])
 def test_second_layer_weight_gradient_matches_dense_reference(slots, features, width):
     """The arg-max-only kernel must equal grad_encoded^T @ normed_relu computed densely in float64."""
-    from pufferlib.ocean.cuda_slot_encoder import cuda_slot_encoder_w2_grad
+    from opengigaflow.ocean.cuda_slot_encoder import cuda_slot_encoder_w2_grad
 
     generator = torch.Generator(device="cuda").manual_seed(slots)
     batch = BATCH + slots  # off the kernel's row-block size
@@ -140,12 +140,12 @@ def test_second_layer_weight_gradient_matches_dense_reference(slots, features, w
 
 def test_fused_handles_strided_upstream_gradient():
     """The cat backward hands the encoder a strided slice of the feature gradient."""
-    from pufferlib.ocean.fused_slot_encoder import fused_encode_and_pool
+    from opengigaflow.ocean.fused_slot_encoder import fused_encode_and_pool
 
     torch.manual_seed(0)
     slots, features, width = ENCODER_SHAPES[0]
     encoder = make_encoder(features, width)
-    head = pufferlib.pytorch.layer_init(nn.Linear(2 * width, 8)).cuda()
+    head = opengigaflow.pytorch.layer_init(nn.Linear(2 * width, 8)).cuda()
     objects, counts, _ = make_inputs(slots, features, width, seed=11)
     other_features = torch.randn(BATCH, width, device="cuda")
     grads = {}

@@ -7,8 +7,8 @@ PYTHON := .venv/bin/python
 # The compiled C extension the Python tests import. It depends on the sim
 # sources, so `make test` rebuilds it only when a .c/.h file actually changed.
 EXT_SUFFIX := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))" 2>/dev/null)
-BINDING := pufferlib/ocean/drive/binding$(EXT_SUFFIX)
-DRIVE_SOURCES := $(wildcard pufferlib/ocean/drive/*.c) $(wildcard pufferlib/ocean/drive/*.h) pufferlib/ocean/env_binding.h setup.py
+BINDING := opengigaflow/ocean/drive/binding$(EXT_SUFFIX)
+DRIVE_SOURCES := $(wildcard opengigaflow/ocean/drive/*.c) $(wildcard opengigaflow/ocean/drive/*.h) opengigaflow/ocean/env_binding.h setup.py
 
 .PHONY: help test rebuild test-unit test-eval test-c test-docker-smoke
 

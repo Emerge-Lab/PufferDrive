@@ -12,10 +12,10 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import data_utils.mirror_map_bin as mbin
-from pufferlib.ocean.cosim import carla_bridge as cb
+from opengigaflow.ocean.cosim import carla_bridge as cb
 
 
-TOWN_BIN = Path(__file__).resolve().parents[2] / "pufferlib/resources/drive/binaries/carla/opendrive__Town01.bin"
+TOWN_BIN = Path(__file__).resolve().parents[2] / "opengigaflow/resources/drive/binaries/carla/opendrive__Town01.bin"
 
 
 def _line_mid(element):

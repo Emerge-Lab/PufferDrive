@@ -38,7 +38,7 @@ export NUPLAN_MAPS_ROOT=$SHARED_DATA/nuplan/maps
 # the runner's default would mkdir a /scratch path of the old cluster (harmless, but a Permission denied line in every kesai log)
 export NUPLAN_EXP_ROOT=${NUPLAN_EXP_ROOT:-$HOME/nuplan_exp}
 # PD first, and drop inherited entries from other OpenGigaFlow checkouts (the login shell still exports
-# $HOME/cosim_Puffer): Python would otherwise import that checkout's pufferlib package.
+# $HOME/cosim_Puffer): Python would otherwise import that checkout's opengigaflow package.
 INHERITED_PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
 export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${INHERITED_PYTHONPATH:+:$INHERITED_PYTHONPATH}
 cd "$PD" || exit 1
@@ -113,17 +113,17 @@ export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}${ABLATION_TAG}_$(date +%
 NO_TRAIN=1 PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
 
 # The planner must come from this checkout (needs the freshly built C extension above).
-IMPORTED_PLANNER=$("$PY" -c "import pufferlib.ocean.cosim.nuplan.planner as p; print(p.__file__)") || { echo "ERROR: planner import failed (see traceback above)"; exit 1; }
+IMPORTED_PLANNER=$("$PY" -c "import opengigaflow.ocean.cosim.nuplan.planner as p; print(p.__file__)") || { echo "ERROR: planner import failed (see traceback above)"; exit 1; }
 case "$IMPORTED_PLANNER" in
     "$PD"/*) echo "planner: $IMPORTED_PLANNER" ;;
     *) echo "ERROR: planner imported from '$IMPORTED_PLANNER', expected $PD"; exit 1 ;;
 esac
 
-bash "$PD/pufferlib/ocean/cosim/nuplan/run_nuplan_planner.sh"
+bash "$PD/opengigaflow/ocean/cosim/nuplan/run_nuplan_planner.sh"
 RUNNER_STATUS=$?
-# the repo .venv holds wandb; the script reads overview.csv and never imports pufferlib
+# the repo .venv holds wandb; the script reads overview.csv and never imports opengigaflow
 if [ "$WANDB_REPORT" = "1" ] && [ $RUNNER_STATUS -eq 0 ]; then
-    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/pufferlib/ocean/evaluation_utils/eval_wandb_report.py" \
+    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/opengigaflow/ocean/evaluation_utils/eval_wandb_report.py" \
         "$WANDB_EVAL_TYPE" "$GROUP/overview.csv" --run-dir "$RUN_DIR" --expected-episode-count "$VAL14_SCENARIO_COUNT" \
         || echo "wandb report failed (results above are unaffected)"
 fi

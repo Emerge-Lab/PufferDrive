@@ -12,13 +12,13 @@ import pytest
 import torch
 import yaml
 
-import pufferlib
-from pufferlib import rl
-from pufferlib.config_schema import validate_opengigaflow_config
-from pufferlib.ocean.drive import binding
-from pufferlib.ocean.drive.drive import Drive
-from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
-from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
+import opengigaflow
+from opengigaflow import rl
+from opengigaflow.config_schema import validate_opengigaflow_config
+from opengigaflow.ocean.drive import binding
+from opengigaflow.ocean.drive.drive import Drive
+from opengigaflow.ocean.evaluation_utils import evaluation_utils as drive_benchmark
+from opengigaflow.ocean.evaluation_utils import eval_replay as drive_eval_replay
 
 
 SEED = 42
@@ -32,8 +32,8 @@ WANDB_PROJECT = "nightly-multi-long"
 WANDB_TRAINING_SUMMARY = {"environment/collision_rate": 0.0123}
 WANDB_TRAINING_LAST_STEP = 1000190509056
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CARLA_MAP_DIR = REPO_ROOT / "pufferlib/resources/drive/binaries/carla"
-REPLAY_MAP_DIR = REPO_ROOT / "pufferlib/resources/drive/binaries/sdc_replay_test"
+CARLA_MAP_DIR = REPO_ROOT / "opengigaflow/resources/drive/binaries/carla"
+REPLAY_MAP_DIR = REPO_ROOT / "opengigaflow/resources/drive/binaries/sdc_replay_test"
 
 
 class ZeroPolicy(torch.nn.Module):
@@ -201,14 +201,14 @@ def carla_evaluation(tmp_path_factory):
     args = _standalone_eval_args(benchmark_config_path)
     _write_checkpoint_run_dir(output_root / "checkpoint", args)
     multiprocessing_calls = []
-    original_vector_make = pufferlib.vector.make
+    original_vector_make = opengigaflow.vector.make
 
     def record_vector_make(*make_args, **make_kwargs):
         if make_kwargs.get("backend") == "Multiprocessing":
             multiprocessing_calls.append(dict(make_kwargs))
         return original_vector_make(*make_args, **make_kwargs)
 
-    pufferlib.vector.make = record_vector_make
+    opengigaflow.vector.make = record_vector_make
     try:
         benchmark_results = rl.eval(
             env_name="opengigaflow",
@@ -219,7 +219,7 @@ def carla_evaluation(tmp_path_factory):
             benchmark_names="carla_test",
         )
     finally:
-        pufferlib.vector.make = original_vector_make
+        opengigaflow.vector.make = original_vector_make
 
     benchmark_output_dir = output_root / "carla_test" / "standard"
     return {
@@ -529,13 +529,13 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
         scenario_length=64,
     )
     multiprocessing_calls = []
-    original_vector_make = pufferlib.vector.make
+    original_vector_make = opengigaflow.vector.make
 
     def record_vector_make(*make_args, **make_kwargs):
         multiprocessing_calls.append(dict(make_kwargs))
         return original_vector_make(*make_args, **make_kwargs)
 
-    monkeypatch.setattr(pufferlib.vector, "make", record_vector_make)
+    monkeypatch.setattr(opengigaflow.vector, "make", record_vector_make)
     replay_output_dir = tmp_path / drive_eval_replay.ZLIB_REPLAY_DIR_NAME
     summaries = rl._run_eval_rollout(
         args,
@@ -739,7 +739,7 @@ def test_batch_cap_bounds_resident_envs(sdc_replay_map_dir):
 def test_batch_cap_rejects_non_positive_values():
     args = _load_config()
     args["env"]["max_scenarios_per_batch"] = 0
-    with pytest.raises(pufferlib.APIUsageError, match="max_scenarios_per_batch"):
+    with pytest.raises(opengigaflow.APIUsageError, match="max_scenarios_per_batch"):
         validate_opengigaflow_config(args, "test")
 
 
@@ -793,7 +793,7 @@ def test_policy_builds_from_the_released_driver_env(sdc_replay_map_dir):
         "max_scenarios_per_batch": SDC_BATCH_CAP,
     }
     args["env"].update(env_kwargs)
-    vecenv = pufferlib.vector.make(
+    vecenv = opengigaflow.vector.make(
         [Drive] * SDC_WORKER_COUNT,
         env_args=[[]] * SDC_WORKER_COUNT,
         env_kwargs=[env_kwargs] * SDC_WORKER_COUNT,

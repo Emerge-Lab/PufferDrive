@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from pufferlib.ocean.cosim import nuplan_bridge as nb
+from opengigaflow.ocean.cosim import nuplan_bridge as nb
 
 
 def test_pad_grows_pedestrian_and_bicycle_boxes_only():

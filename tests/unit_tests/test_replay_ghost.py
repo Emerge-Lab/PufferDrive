@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from pufferlib import viz
-from pufferlib.ocean.cosim import nuplan_bridge as nb
+from opengigaflow import viz
+from opengigaflow.ocean.cosim import nuplan_bridge as nb
 
 FRAMES, AGENT_CAP, TRAFFIC_CAP = 6, 3, 2
 

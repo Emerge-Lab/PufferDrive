@@ -12,8 +12,8 @@ import gymnasium
 import numpy as np
 import pytest
 
-import pufferlib.vector
-from pufferlib import VecEnv
+import opengigaflow.vector
+from opengigaflow import VecEnv
 
 OBSERVATION_SIZE = 4
 ACTION_SIZE = 2
@@ -70,7 +70,7 @@ def _make_minimal_env(**kwargs):
 
 
 def _run_preload_from_forkserver(queue):
-    vecenv = pufferlib.vector.make(
+    vecenv = opengigaflow.vector.make(
         PreloadEnv,
         backend="Multiprocessing",
         num_envs=1,
@@ -90,7 +90,7 @@ def test_driver_env_is_released_but_stays_readable():
     environments for the run. It is closed once during construction, and stays
     bound because callers read config attributes off vecenv.driver_env."""
     worker_count = 2
-    vecenv = pufferlib.vector.make(
+    vecenv = opengigaflow.vector.make(
         [_make_minimal_env] * worker_count,
         env_args=[[]] * worker_count,
         env_kwargs=[{}] * worker_count,
@@ -125,7 +125,7 @@ def test_preloaded_resources_are_inherited_when_default_is_forkserver():
 
 
 def _make_multiprocessing(worker_count, batch_size):
-    return pufferlib.vector.make(
+    return opengigaflow.vector.make(
         [_make_minimal_env] * worker_count,
         env_args=[[]] * worker_count,
         env_kwargs=[{}] * worker_count,
@@ -168,8 +168,8 @@ def _make_slow_step_env(**kwargs):
 
 
 def test_dead_worker_raises_instead_of_hanging(monkeypatch):
-    monkeypatch.setattr(pufferlib.vector, "WORKER_POLL_TIMEOUT_SECONDS", 0.2)
-    vecenv = pufferlib.vector.make(
+    monkeypatch.setattr(opengigaflow.vector, "WORKER_POLL_TIMEOUT_SECONDS", 0.2)
+    vecenv = opengigaflow.vector.make(
         [_make_minimal_env, _make_slow_step_env],
         env_args=[[]] * 2,
         env_kwargs=[{}] * 2,
@@ -203,7 +203,7 @@ class FractionalObservationEnv(MinimalEnv):
 def test_float16_transport_delivers_the_rounded_env_observations():
     delivered = {}
     for transport_dtype in (None, "float16"):
-        vecenv = pufferlib.vector.make(
+        vecenv = opengigaflow.vector.make(
             FractionalObservationEnv,
             backend="Multiprocessing",
             num_envs=2,
@@ -227,8 +227,8 @@ def test_float16_transport_delivers_the_rounded_env_observations():
 
 
 def test_unsupported_transport_dtype_is_rejected():
-    with pytest.raises(pufferlib.APIUsageError, match="Cannot transport"):
-        pufferlib.vector.make(
+    with pytest.raises(opengigaflow.APIUsageError, match="Cannot transport"):
+        opengigaflow.vector.make(
             MinimalEnv,
             backend="Multiprocessing",
             num_envs=1,
@@ -252,7 +252,7 @@ def _cache_domain_counts(worker_cpus):
 
 
 def test_pinning_gives_each_buffer_one_worker_per_core():
-    worker_cpus = pufferlib.vector.plan_worker_cpus(_synthetic_cores(32), 64)
+    worker_cpus = opengigaflow.vector.plan_worker_cpus(_synthetic_cores(32), 64)
     assert len(set(worker_cpus)) == 64
     first_buffer, second_buffer = worker_cpus[:32], worker_cpus[32:]
     assert sorted(first_buffer) == list(range(32))
@@ -260,7 +260,7 @@ def test_pinning_gives_each_buffer_one_worker_per_core():
 
 
 def test_pinning_spreads_small_buffers_evenly_over_cache_domains():
-    worker_cpus = pufferlib.vector.plan_worker_cpus(_synthetic_cores(32), 64)
+    worker_cpus = opengigaflow.vector.plan_worker_cpus(_synthetic_cores(32), 64)
     for buffer_start in range(0, 64, 16):
         assert _cache_domain_counts(worker_cpus[buffer_start : buffer_start + 16]) == [4, 4, 4, 4]
     assert not {cpu % SIBLING_CPU_OFFSET for cpu in worker_cpus[:16]} & {
@@ -269,7 +269,7 @@ def test_pinning_spreads_small_buffers_evenly_over_cache_domains():
 
 
 def test_pinning_with_fewer_cores_than_workers_per_buffer_shares_threads_across_buffers():
-    worker_cpus = pufferlib.vector.plan_worker_cpus(_synthetic_cores(28), 64)
+    worker_cpus = opengigaflow.vector.plan_worker_cpus(_synthetic_cores(28), 64)
     assert len(set(worker_cpus)) == 56
     first_buffer, second_buffer = worker_cpus[:32], worker_cpus[32:]
     assert len(set(first_buffer)) == 32
@@ -280,7 +280,7 @@ def test_pinning_with_fewer_cores_than_workers_per_buffer_shares_threads_across_
 
 def test_cache_domain_shares_partition_a_resource_in_proportion_to_workers():
     worker_cache_domains = ["a", "b", "a", "c", "b", "a", "a", "c"]
-    shares = pufferlib.vector.cache_domain_shares(worker_cache_domains)
+    shares = opengigaflow.vector.cache_domain_shares(worker_cache_domains)
     assert shares[0] == shares[2] == shares[5] == shares[6] == (0.0, 0.5)
     assert shares[1] == shares[4] == (0.5, 0.75)
     assert shares[3] == shares[7] == (0.75, 1.0)
@@ -301,7 +301,7 @@ class AffinityReportingEnv(MinimalEnv):
 
 @pytest.mark.skipif(not hasattr(os, "sched_setaffinity"), reason="CPU affinity is Linux-only")
 def test_pinned_workers_run_on_their_planned_cpu():
-    vecenv = pufferlib.vector.make(
+    vecenv = opengigaflow.vector.make(
         AffinityReportingEnv, backend="Multiprocessing", num_envs=2, num_workers=2, batch_size=2, pin_workers=True
     )
     process_cpus = os.sched_getaffinity(0)
@@ -331,7 +331,7 @@ class SeedRecordingEnv(MinimalEnv):
 def test_make_forwards_seed_to_backend():
     constructor_seeds = {}
     for vec_seed in (1, 2):
-        vecenv = pufferlib.vector.make(SeedRecordingEnv, backend="Serial", num_envs=2, seed=vec_seed)
+        vecenv = opengigaflow.vector.make(SeedRecordingEnv, backend="Serial", num_envs=2, seed=vec_seed)
         constructor_seeds[vec_seed] = [env.constructor_seed for env in vecenv.envs]
         vecenv.close()
     assert constructor_seeds[1] != constructor_seeds[2]

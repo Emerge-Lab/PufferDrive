@@ -2,8 +2,8 @@ import pytest
 import torch
 from torch import nn
 
-from pufferlib.ocean.fused_slot_encoder import validate_fused_encoder
-from pufferlib.ocean.torch import DriveBackbone
+from opengigaflow.ocean.fused_slot_encoder import validate_fused_encoder
+from opengigaflow.ocean.torch import DriveBackbone
 
 
 def slot_encoder(in_features, width):

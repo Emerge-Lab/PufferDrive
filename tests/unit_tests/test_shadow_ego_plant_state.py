@@ -1,8 +1,8 @@
 import math
 from types import SimpleNamespace
 
-from pufferlib.ocean.cosim.carla.controller import pedal_gains_for
-from pufferlib.ocean.cosim.carla.shadow_ego import DRIVE_WHEELBASE_PER_LENGTH, ShadowEgo
+from opengigaflow.ocean.cosim.carla.controller import pedal_gains_for
+from opengigaflow.ocean.cosim.carla.shadow_ego import DRIVE_WHEELBASE_PER_LENGTH, ShadowEgo
 
 
 GAINS = pedal_gains_for("vehicle.lincoln.mkz2017")

@@ -14,10 +14,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pufferlib.config_schema import validate_opengigaflow_config
-from pufferlib.ocean.drive import binding
-from pufferlib.ocean.drive.drive import Drive
-from pufferlib.rl import known_cli_overrides, load_config, pufferlib
+from opengigaflow.config_schema import validate_opengigaflow_config
+from opengigaflow.ocean.drive import binding
+from opengigaflow.ocean.drive.drive import Drive
+from opengigaflow.rl import known_cli_overrides, load_config, opengigaflow
 
 VERBOSITY = 0
 
@@ -31,7 +31,7 @@ class TestDriveConfig(unittest.TestCase):
         arguments.
         """
         try:
-            # The ENV_NAME 'opengigaflow' loads pufferlib/config/opengigaflow.yaml
+            # The ENV_NAME 'opengigaflow' loads opengigaflow/config/opengigaflow.yaml
             args = load_config("opengigaflow")
 
             # load_config should return a populated config dict without raising.
@@ -50,11 +50,11 @@ class TestDriveConfig(unittest.TestCase):
         with patch.object(sys, "argv", ["rl.py"]):
             args = load_config("opengigaflow")
         args["env"]["obs_lane_stride"] = 0
-        with self.assertRaisesRegex(pufferlib.APIUsageError, "obs_lane_stride"):
+        with self.assertRaisesRegex(opengigaflow.APIUsageError, "obs_lane_stride"):
             validate_opengigaflow_config(args, "test")
         args["env"]["obs_lane_stride"] = 1
         args["env"]["obs_boundary_stride"] = 0
-        with self.assertRaisesRegex(pufferlib.APIUsageError, "obs_boundary_stride"):
+        with self.assertRaisesRegex(opengigaflow.APIUsageError, "obs_boundary_stride"):
             validate_opengigaflow_config(args, "test")
 
     def test_speed_limit_randomization_validation(self):
@@ -101,7 +101,7 @@ class TestDriveConfig(unittest.TestCase):
     @patch("sys.argv", ["rl.py", "--train.learning-rate=0.5"])
     def test_old_flag_syntax_rejected_with_hint(self):
         """Pre-Hydra dashed flags must fail loudly with a migration hint."""
-        with self.assertRaisesRegex(pufferlib.APIUsageError, "train.learning_rate=<value>"):
+        with self.assertRaisesRegex(opengigaflow.APIUsageError, "train.learning_rate=<value>"):
             load_config("opengigaflow")
 
     @patch("sys.argv", ["rl.py", "train.learning_rat=0.5", "train.learning_rate=0.25"])

@@ -10,8 +10,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 nuplan = pytest.importorskip("nuplan")
 pytest.importorskip("carl_nuplan")
 
-from pufferlib.ocean.cosim.nuplan.planner import startup_jerk_action_bounds
-from pufferlib.ocean.drive import binding
+from opengigaflow.ocean.cosim.nuplan.planner import startup_jerk_action_bounds
+from opengigaflow.ocean.drive import binding
 
 
 def test_caps_scale_by_the_env_jerk_range():

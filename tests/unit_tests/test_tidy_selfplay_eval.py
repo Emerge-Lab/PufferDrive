@@ -11,9 +11,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pufferlib
-from pufferlib import viz
-from pufferlib.ocean.evaluation_utils import eval_replay
+import opengigaflow
+from opengigaflow import viz
+from opengigaflow.ocean.evaluation_utils import eval_replay
 
 
 sys.path.insert(
@@ -201,5 +201,5 @@ def test_all_mode_keeps_every_agents_observations(tmp_path):
 
 
 def test_unknown_observation_agents_mode_is_refused(tmp_path):
-    with pytest.raises(pufferlib.APIUsageError, match="capture_observations_agents"):
+    with pytest.raises(opengigaflow.APIUsageError, match="capture_observations_agents"):
         _capture(tmp_path, "nobody")

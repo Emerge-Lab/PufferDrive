@@ -4,9 +4,9 @@ short gigaflow rollout in which walkers appear as static partners and get logged
 import numpy as np
 import pytest
 
-from pufferlib.ocean.drive.drive import Drive
+from opengigaflow.ocean.drive.drive import Drive
 
-MAP_DIR = "pufferlib/resources/drive/binaries/carla"
+MAP_DIR = "opengigaflow/resources/drive/binaries/carla"
 AGENTS_PER_ENV = 32
 CAR_SPEED_MPS = 5.0
 

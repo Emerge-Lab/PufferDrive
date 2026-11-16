@@ -33,9 +33,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pufferlib
-from pufferlib.ocean.drive import binding
-from pufferlib.rl import load_config, load_env
+import opengigaflow
+from opengigaflow.ocean.drive import binding
+from opengigaflow.rl import load_config, load_env
 
 SEED = 42
 EPOCHS = 5
@@ -77,7 +77,7 @@ def _build_config():
             "max_agents_per_env": 16,
             "num_maps": 2,
             "use_map_cache": True,
-            "map_dir": "pufferlib/resources/drive/binaries/carla",
+            "map_dir": "opengigaflow/resources/drive/binaries/carla",
             "scenario_length": BPTT_HORIZON,
             "stagger_first_episode": False,  # golden expects full-length first episodes
             "seed": SEED,
@@ -114,7 +114,7 @@ def _capture_env_means(vecenv, rng):
         for _ in range(BPTT_HORIZON):
             _, _, _, _, infos = vecenv.step(_random_actions(vecenv, rng, action_table))
             for info in infos:
-                for k, v in pufferlib.unroll_nested_dict(info):
+                for k, v in opengigaflow.unroll_nested_dict(info):
                     if isinstance(v, np.ndarray):
                         v = v.tolist()
                     if isinstance(v, (list, tuple)):

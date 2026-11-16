@@ -39,8 +39,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import carla_run_layout as layout
 from carla_run_layout import COLLISION_KEYS, FLAG_INFRACTIONS, REPLAY_SUFFIX, infraction_messages, route_index_rep
 
-from pufferlib import viz
-from pufferlib.ocean.cosim.carla_bridge import TOWN_OFFSETS
+from opengigaflow import viz
+from opengigaflow.ocean.cosim.carla_bridge import TOWN_OFFSETS
 
 
 SELECT_MODES = ("failures", "all")

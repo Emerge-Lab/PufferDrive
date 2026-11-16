@@ -1,19 +1,19 @@
 #ifndef DRIVE_FIXTURE_H
 #define DRIVE_FIXTURE_H
 
-#include "pufferlib/ocean/drive/drive.h"
+#include "opengigaflow/ocean/drive/drive.h"
 
 #ifndef DRIVE_TEST_REPO_ROOT
 #define DRIVE_TEST_REPO_ROOT "."
 #endif
 
 static inline const char *drive_carla_map(void) {
-    return DRIVE_TEST_REPO_ROOT "/pufferlib/resources/drive/binaries/carla/opendrive__Town01.bin";
+    return DRIVE_TEST_REPO_ROOT "/opengigaflow/resources/drive/binaries/carla/opendrive__Town01.bin";
 }
 
 static inline const char *drive_nuplan_map(void) {
     return DRIVE_TEST_REPO_ROOT
-        "/pufferlib/resources/drive/binaries/nuplan/nuplan__00018a38-0063-54d1-a3c1-1ab931a4a1e5.bin";
+        "/opengigaflow/resources/drive/binaries/nuplan/nuplan__00018a38-0063-54d1-a3c1-1ab931a4a1e5.bin";
 }
 
 static inline char *drive_test_strdup(const char *src) {

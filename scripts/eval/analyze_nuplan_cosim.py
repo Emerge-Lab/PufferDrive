@@ -1,5 +1,5 @@
 """Failure analysis + visualizations for a nuPlan closed-loop run of the OpenGigaFlow planner
-(pufferlib/ocean/cosim/nuplan). Needs the nuPlan devkit env (same interpreter as the simulation).
+(opengigaflow/ocean/cosim/nuplan). Needs the nuPlan devkit env (same interpreter as the simulation).
 
 usage: python scripts/eval/analyze_nuplan_cosim.py <group_dir> <report_dir> [--workers N] [--max-inline N] [--no-video]
 
@@ -34,7 +34,7 @@ import nuplan_run_layout  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-from pufferlib.ocean.cosim.mp4 import write_mp4  # noqa: E402
+from opengigaflow.ocean.cosim.mp4 import write_mp4  # noqa: E402
 
 SCORE_COLS = [
     "score",

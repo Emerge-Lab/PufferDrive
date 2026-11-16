@@ -7,7 +7,7 @@ import sys
 import numpy as np
 import pytest
 
-from pufferlib.ocean.drive.drive import Drive
+from opengigaflow.ocean.drive.drive import Drive
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO_ROOT, "data_utils"))
@@ -15,7 +15,7 @@ from mirror_map_bin import _is_lane, read_bin, write_bin  # noqa: E402
 
 SOURCE_BIN = os.path.join(
     REPO_ROOT,
-    "pufferlib",
+    "opengigaflow",
     "resources",
     "drive",
     "binaries",

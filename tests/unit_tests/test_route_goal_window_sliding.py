@@ -7,7 +7,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from pufferlib.ocean.cosim.goals import RouteGoalWindow, route_goals_from_target_points, route_goals_from_xy
+from opengigaflow.ocean.cosim.goals import RouteGoalWindow, route_goals_from_target_points, route_goals_from_xy
 
 NUM_GOALS = 3
 GOAL_RADIUS_M = 10.0

@@ -30,7 +30,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tidy_alpasim_run import remove_empty_dirs
 
-from pufferlib import viz
+from opengigaflow import viz
 
 
 OBS_HTML_DIR = "obs_html"

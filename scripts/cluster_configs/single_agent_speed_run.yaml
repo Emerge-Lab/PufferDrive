@@ -2,7 +2,7 @@
 # One controlled agent per environment on a single CARLA map (Town10), with many
 # parallel environments sharing one cached copy of the map geometry. Traffic
 # lights are fully disabled (no observation, no metric, no reward penalty). Keys
-# here override pufferlib/config/opengigaflow.yaml; submit_cluster.py converts
+# here override opengigaflow/config/opengigaflow.yaml; submit_cluster.py converts
 # underscores in each key to dashes for the CLI.
 #
 # Launch (3 seeds via the colon sweep):
@@ -17,7 +17,7 @@
 
 # Environment: single agent per env, Town10HD only (map_dir points directly
 # at one .bin), shorter episodes than the multi-agent default.
-env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
+env.map_dir: opengigaflow/resources/drive/binaries/carla/opendrive__Town10HD.bin
 env.num_maps: 1
 env.max_agents_per_env: 1
 env.num_agents: 2048

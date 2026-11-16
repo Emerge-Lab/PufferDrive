@@ -9,12 +9,12 @@ Failure selection, replay capture, and HTML rendering are all handled by
 
 ## Configuration
 
-The evaluation files live outside `pufferlib/ocean` because they configure the
+The evaluation files live outside `opengigaflow/ocean` because they configure the
 evaluation application, not the simulator:
 
-- `pufferlib/config/evaluation/benchmark.yaml` defines the shared deterministic
+- `opengigaflow/config/evaluation/benchmark.yaml` defines the shared deterministic
   environment and named benchmarks.
-- `pufferlib/config/opengigaflow.yaml` selects that file and configures the
+- `opengigaflow/config/opengigaflow.yaml` selects that file and configures the
   evaluator under `eval`.
 
 Each configured benchmark contains:

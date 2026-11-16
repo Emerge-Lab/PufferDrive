@@ -30,10 +30,10 @@ import os
 
 import numpy as np
 
-from pufferlib.ocean.drive.drive import Drive
+from opengigaflow.ocean.drive.drive import Drive
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MAP_DIR = os.path.join(REPO_ROOT, "pufferlib", "resources", "drive", "binaries", "sdc_replay_test")
+MAP_DIR = os.path.join(REPO_ROOT, "opengigaflow", "resources", "drive", "binaries", "sdc_replay_test")
 
 SCENARIO_LENGTH = 400
 NUM_GOALS = 3

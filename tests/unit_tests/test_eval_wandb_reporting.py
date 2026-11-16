@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from pufferlib import rl
-from pufferlib.ocean.evaluation_utils import eval_wandb_report
+from opengigaflow import rl
+from opengigaflow.ocean.evaluation_utils import eval_wandb_report
 
 
 RUN_IDENTITY = {"run_name": "k_exp_0002_1000", "wandb_project": "nightly-multi-long"}
@@ -86,7 +86,7 @@ class Api:
         pass
 
     def run(self, run_path):
-        assert "pufferlib" not in sys.modules
+        assert "opengigaflow" not in sys.modules
         return _Run()
 
 
@@ -510,7 +510,7 @@ def test_blank_run_identity_is_rejected(tmp_path):
         eval_wandb_report.load_run_identity(str(tmp_path / "config.yaml"))
 
 
-def test_command_line_reports_without_importing_pufferlib(tmp_path, run_dir):
+def test_command_line_reports_without_importing_opengigaflow(tmp_path, run_dir):
     """The eval jobs run the file by path in interpreters that must not pay for, or break on, the training stack."""
     stub_package_dir = tmp_path / "stub_site"
     stub_package_dir.mkdir()

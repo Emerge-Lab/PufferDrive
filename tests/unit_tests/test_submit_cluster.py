@@ -18,17 +18,17 @@ _spec.loader.exec_module(submit_cluster)
 def make_project(root: Path) -> Path:
     """Minimal project tree with the entries isolate_code treats specially."""
     project = root / "project"
-    (project / "pufferlib" / "ocean").mkdir(parents=True)
-    (project / "pufferlib" / "__init__.py").write_text("")
-    (project / "pufferlib" / "resources" / "drive").mkdir(parents=True)
-    (project / "pufferlib" / "resources" / "drive" / "map.bin").write_text("data")
+    (project / "opengigaflow" / "ocean").mkdir(parents=True)
+    (project / "opengigaflow" / "__init__.py").write_text("")
+    (project / "opengigaflow" / "resources" / "drive").mkdir(parents=True)
+    (project / "opengigaflow" / "resources" / "drive" / "map.bin").write_text("data")
     (project / "data").mkdir()
     (project / "scripts").mkdir()
     (project / "setup.py").write_text("")
     return project
 
 
-def test_symlinks_top_level_and_hard_copies_pufferlib(tmp_path):
+def test_symlinks_top_level_and_hard_copies_opengigaflow(tmp_path):
     project = make_project(tmp_path)
     save_dir = tmp_path / "runs" / "run1"
     save_dir.mkdir(parents=True)
@@ -40,14 +40,14 @@ def test_symlinks_top_level_and_hard_copies_pufferlib(tmp_path):
     assert (isolated / "data").is_symlink()
     assert (isolated / "setup.py").is_symlink()
     assert (isolated / "data").resolve() == (project / "data").resolve()
-    # pufferlib is a hard copy, not a link
-    assert (isolated / "pufferlib").is_dir()
-    assert not (isolated / "pufferlib").is_symlink()
-    assert (isolated / "pufferlib" / "__init__.py").is_file()
-    assert not (isolated / "pufferlib" / "__init__.py").is_symlink()
+    # opengigaflow is a hard copy, not a link
+    assert (isolated / "opengigaflow").is_dir()
+    assert not (isolated / "opengigaflow").is_symlink()
+    assert (isolated / "opengigaflow" / "__init__.py").is_file()
+    assert not (isolated / "opengigaflow" / "__init__.py").is_symlink()
     # ...except resources/, which is symlinked back to the shared data
-    assert (isolated / "pufferlib" / "resources").is_symlink()
-    assert (isolated / "pufferlib" / "resources" / "drive" / "map.bin").read_text() == "data"
+    assert (isolated / "opengigaflow" / "resources").is_symlink()
+    assert (isolated / "opengigaflow" / "resources" / "drive" / "map.bin").read_text() == "data"
 
 
 def test_save_dir_inside_project_creates_no_symlink_cycle(tmp_path):
@@ -88,4 +88,4 @@ def test_second_snapshot_gets_versioned_dir(tmp_path):
 
     assert first == save_dir / "code"
     assert second == save_dir / "code_v1"
-    assert (second / "pufferlib" / "__init__.py").is_file()
+    assert (second / "opengigaflow" / "__init__.py").is_file()

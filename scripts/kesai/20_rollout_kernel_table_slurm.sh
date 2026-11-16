@@ -31,7 +31,7 @@ MINIBATCH=${MINIBATCH:-131072}
 EXTRA_ARGS=${EXTRA_ARGS:-}
 RESULT_FILE=$PD/experiments/logs/rollout_kernels_${SLURM_JOB_ID}_result.txt
 echo "=== rollout kernel table, fused encoder, ${NUM_ENVS} envs, git $(git rev-parse --short HEAD) ===" | tee ${RESULT_FILE}
-python -c "from pufferlib.ocean.cuda_slot_encoder import _compile; print('fwd no-store kernel on this GPU: regs/local', _compile(256, 16, False, 0)[3:5])" 2>&1 | tail -1 | tee -a ${RESULT_FILE}
+python -c "from opengigaflow.ocean.cuda_slot_encoder import _compile; print('fwd no-store kernel on this GPU: regs/local', _compile(256, 16, False, 0)[3:5])" 2>&1 | tail -1 | tee -a ${RESULT_FILE}
 python scripts/mfu_bench.py --num-envs ${NUM_ENVS} --minibatch ${MINIBATCH} --fused \
     --rollout-only --kernel-table --warmup 1 --epochs 1 ${EXTRA_ARGS} 2>&1 \
     | grep -v "^MFU_RESULT" | grep "capability\|kernel table, rollout\|^ *share\|^ *[0-9][0-9.]*%\|ROLLOUT_RESULT\|^epoch\|Error" | tee -a ${RESULT_FILE}

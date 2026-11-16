@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from pufferlib import viz
+from opengigaflow import viz
 
 
 sys.path.insert(

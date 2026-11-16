@@ -9,7 +9,7 @@
 #     symlinks `bin/python` into the /scratch miniforge3, which makes
 #     `source venv/activate` work on the login node directly without
 #     needing to enter the container.
-#   - All Python packages (torch, pufferlib, etc.) live in the venv on /scratch
+#   - All Python packages (torch, opengigaflow, etc.) live in the venv on /scratch
 #     too — fuse2fs is not on the write path for any install step.
 #   - The singularity image still supplies CUDA + cuDNN at job runtime. The
 #     overlay is preserved for the rare case where you need to install
@@ -206,7 +206,7 @@ install_deps() {
 
     echo "=== Setup complete ==="
     python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
-    python -c "from pufferlib.ocean.drive import binding; print('C binding loaded successfully')"
+    python -c "from opengigaflow.ocean.drive import binding; print('C binding loaded successfully')"
 }
 
 rebuild_extension() {
@@ -218,7 +218,7 @@ rebuild_extension() {
     cd "$PROJECT_ROOT"
     python setup.py build_ext --inplace --force
     echo "=== Rebuild complete ==="
-    python -c "from pufferlib.ocean.drive import binding; print('C binding loaded successfully')"
+    python -c "from opengigaflow.ocean.drive import binding; print('C binding loaded successfully')"
 }
 
 run_in_container() {

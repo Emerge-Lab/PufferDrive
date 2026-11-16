@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 nuplan = pytest.importorskip("nuplan")
 
-from pufferlib.ocean.cosim import nuplan_bridge as nb
+from opengigaflow.ocean.cosim import nuplan_bridge as nb
 
 SOUTH = -np.pi / 2
 IDENTITY = nb.NuPlanTransform(0.0, 0.0)

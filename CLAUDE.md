@@ -3,8 +3,8 @@ C simulation engine + Python/PyTorch training loop.
 Activate venv before `python`/`puffer`: `source .venv/bin/activate`
 
 ## Structure
-- `pufferlib/ocean/drive/`: `drive.h` (sim core), `binding.c` (C-ext), `drive.py` (Gym wrapper)
-- `pufferlib/ocean/`: `env_binding.h` (C env utils), `torch.py` (NN)
+- `opengigaflow/ocean/drive/`: `drive.h` (sim core), `binding.c` (C-ext), `drive.py` (Gym wrapper)
+- `opengigaflow/ocean/`: `env_binding.h` (C env utils), `torch.py` (NN)
 - Root: `rl.py` (PPO loop), `models.py` (policies)
 - `config/`: monolithic Hydra YAML — `opengigaflow.yaml` (OpenGigaFlow)
 

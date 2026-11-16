@@ -1,5 +1,5 @@
 """Failure analysis + visualizations for CARLA leaderboard runs of the OpenGigaFlow co-sim agent
-(pufferlib/ocean/cosim/carla/leaderboard_agent.py run with COSIM_WORLD_LOG and COSIM_TELEMETRY set).
+(opengigaflow/ocean/cosim/carla/leaderboard_agent.py run with COSIM_WORLD_LOG and COSIM_TELEMETRY set).
 Same report shape as analyze_nuplan_cosim.py: score table worst first, failure-category counts,
 per-route diagnosis, six-frame top-down strip + speed plot + chase-cam video. The matplotlib top-down mp4
 is opt-in (--video): it costs about a minute per 1000 logged steps, the obs replay pages cover the same ground.
@@ -40,8 +40,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from render_carla_obs_html import page_name
 
 import data_utils.mirror_map_bin as mbin
-import pufferlib
-from pufferlib.ocean.cosim.mp4 import write_mp4
+import opengigaflow
+from opengigaflow.ocean.cosim.mp4 import write_mp4
 
 
 LIGHT_COLOR = {1: "red", 2: "orange", 3: "limegreen", 4: "0.5", 0: "0.7"}
@@ -103,7 +103,12 @@ class RouteLog:
         town_bin = Path(self.meta["town_bin"])
         if not town_bin.exists():  # log written on another machine: this checkout's copy of the same town bin
             town_bin = (
-                Path(pufferlib.__file__).resolve().parent / "resources" / "drive" / "binaries" / "carla" / town_bin.name
+                Path(opengigaflow.__file__).resolve().parent
+                / "resources"
+                / "drive"
+                / "binaries"
+                / "carla"
+                / town_bin.name
             )
         bin_data = mbin.read_bin(town_bin)
         lo = self.ego[:, 1:3].min(axis=0) - MAP_CROP_MARGIN_M

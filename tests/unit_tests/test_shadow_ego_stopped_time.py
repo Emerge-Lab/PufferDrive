@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from pufferlib.ocean.cosim.carla.shadow_ego import (
+from opengigaflow.ocean.cosim.carla.shadow_ego import (
     PARTNER_ACTOR_ID,
     PARTNER_IS_WALKER,
     PARTNER_ROW_COLUMNS,

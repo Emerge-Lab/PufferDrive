@@ -139,21 +139,21 @@ class BuildExt(build_ext):
 
 class CBuildExt(build_ext):
     def run(self, *args, **kwargs):
-        self.extensions = [e for e in self.extensions if e.name != "pufferlib._C"]
+        self.extensions = [e for e in self.extensions if e.name != "opengigaflow._C"]
         super().run(*args, **kwargs)
 
 
 class TorchBuildExt(cpp_extension.BuildExtension):
     def run(self):
-        self.extensions = [e for e in self.extensions if e.name == "pufferlib._C"]
+        self.extensions = [e for e in self.extensions if e.name == "opengigaflow._C"]
         super().run()
 
 
-c_extension_paths = ["pufferlib/ocean/drive"]
+c_extension_paths = ["opengigaflow/ocean/drive"]
 c_extensions = [
     Extension(
-        "pufferlib.ocean.drive.binding",
-        sources=["pufferlib/ocean/drive/binding.c"],
+        "opengigaflow.ocean.drive.binding",
+        sources=["opengigaflow/ocean/drive/binding.c"],
         include_dirs=[numpy.get_include()],
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
@@ -165,17 +165,17 @@ c_extensions = [
 torch_extensions = []
 if not NO_TRAIN:
     torch_sources = [
-        "pufferlib/extensions/pufferlib.cpp",
+        "opengigaflow/extensions/opengigaflow.cpp",
     ]
     if BUILD_CUDA_EXT:
         extension = CUDAExtension
-        torch_sources.append("pufferlib/extensions/cuda/pufferlib.cu")
+        torch_sources.append("opengigaflow/extensions/cuda/opengigaflow.cu")
     else:
         extension = CppExtension
 
     torch_extensions = [
         extension(
-            "pufferlib._C",
+            "opengigaflow._C",
             torch_sources,
             extra_compile_args={
                 "cxx": cxx_args,
@@ -223,11 +223,11 @@ if not NO_TRAIN:
 
 setup(
     version="3.0.0",
-    # Scope discovery to pufferlib, does not follow symlinks
-    packages=["pufferlib"]
-    + ["pufferlib." + pkg for pkg in find_namespace_packages(where="pufferlib")]
+    # Scope discovery to opengigaflow, does not follow symlinks
+    packages=["opengigaflow"]
+    + ["opengigaflow." + pkg for pkg in find_namespace_packages(where="opengigaflow")]
     + c_extension_paths
-    + ["pufferlib/extensions"],
+    + ["opengigaflow/extensions"],
     include_package_data=True,
     install_requires=install_requires,
     ext_modules=c_extensions + torch_extensions,

@@ -6,8 +6,8 @@ import sys
 import numpy as np
 import pandas as pd
 
-from pufferlib import viz
-from pufferlib.ocean.cosim.carla.shadow_ego import TELEMETRY_HEADER
+from opengigaflow import viz
+from opengigaflow.ocean.cosim.carla.shadow_ego import TELEMETRY_HEADER
 
 
 sys.path.insert(

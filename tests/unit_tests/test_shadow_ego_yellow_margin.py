@@ -1,8 +1,8 @@
 import math
 from types import SimpleNamespace
 
-from pufferlib.ocean.cosim import carla_bridge as cb
-from pufferlib.ocean.cosim.carla.shadow_ego import ShadowEgo
+from opengigaflow.ocean.cosim import carla_bridge as cb
+from opengigaflow.ocean.cosim.carla.shadow_ego import ShadowEgo
 
 
 YELLOW_LIGHT_ID = 7

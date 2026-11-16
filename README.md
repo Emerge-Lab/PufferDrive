@@ -42,9 +42,9 @@ For the NYU cluster, OpenGigaFlow recommends a **mixed Singularity + venv** layo
 
 - **Singularity image** (read-only, system-wide): supplies CUDA + cuDNN.
 - **ext3 overlay** (writable via `--fakeroot`, host the miniforge3 base interpreter at `/ext3/miniforge3` only).
-- **Venv on `/scratch`** (regular ext4, fast): everything else — `torch`, `pufferlib`, the compiled `_C.so`.
+- **Venv on `/scratch`** (regular ext4, fast): everything else — `torch`, `opengigaflow`, the compiled `_C.so`.
 
-The venv lives outside the overlay because fuse2fs is single-threaded (~10 MB/s); putting torch/pufferlib in `/scratch` makes installs and rebuilds ~50× faster.
+The venv lives outside the overlay because fuse2fs is single-threaded (~10 MB/s); putting torch/opengigaflow in `/scratch` makes installs and rebuilds ~50× faster.
 
 `scripts/setup_container.sh` is the entrypoint. It auto-detects whether it's running inside the container and re-`singularity exec`s itself accordingly, so you can call it from the login node directly.
 
@@ -100,7 +100,7 @@ python scripts/submit_cluster.py \
 
 ## Data
 
-Place binaries under `pufferlib/resources/drive/binaries/`.
+Place binaries under `opengigaflow/resources/drive/binaries/`.
 
 ## Train
 
@@ -117,7 +117,7 @@ puffer train opengigaflow train.device=cpu vec.backend=Serial env.num_agents=64 
     train.total_timesteps=20480 train.batch_size=10240 train.minibatch_size=2560 train.bptt_horizon=16
 
 # Multi-GPU
-torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.rl train opengigaflow
+torchrun --standalone --nnodes=1 --nproc-per-node=6 -m opengigaflow.rl train opengigaflow
 ```
 
 ## Eval
@@ -203,7 +203,7 @@ To add a metric to the report: add its key to `TREND_METRICS` /
 `FINALS_METRICS` / `CURVE_METRICS` in `scripts/nightly_report.py`, then run
 `update` followed by `report`.
 
-## Key Configuration (`pufferlib/config/opengigaflow.yaml`)
+## Key Configuration (`opengigaflow/config/opengigaflow.yaml`)
 
 ### `env` — Simulation
 
@@ -268,7 +268,7 @@ DEBUG=1 python setup.py build_ext --inplace --force
 NO_TRAIN=1 python setup.py build_ext --inplace --force
 
 # Debug train
-CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m pufferlib.rl train opengigaflow train.device=cpu vec.backend=Serial
+CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m opengigaflow.rl train opengigaflow train.device=cpu vec.backend=Serial
 # or
-gdb --args python -m pufferlib.rl train opengigaflow train.device=cpu vec.backend=Serial
+gdb --args python -m opengigaflow.rl train opengigaflow train.device=cpu vec.backend=Serial
 ```

@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 
-from pufferlib.ocean.drive import binding
-from pufferlib.ocean.drive.drive import Drive
+from opengigaflow.ocean.drive import binding
+from opengigaflow.ocean.drive.drive import Drive
 
-MAP_DIR = "pufferlib/resources/drive/binaries/carla"
+MAP_DIR = "opengigaflow/resources/drive/binaries/carla"
 YELLOW = binding.TRAFFIC_CONTROL_STATE_YELLOW
 RED = binding.TRAFFIC_CONTROL_STATE_RED
 YELLOW_MAX_S = 3.0

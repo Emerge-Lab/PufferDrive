@@ -136,17 +136,17 @@ else
 fi
 echo "Evaluating checkpoint: $CKPT"
 
-# drop inherited entries from other OpenGigaFlow checkouts: the teacher would import their pufferlib instead of $PD's
+# drop inherited entries from other OpenGigaFlow checkouts: the teacher would import their opengigaflow instead of $PD's
 export PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
 export PUFFERDRIVE_ROOT=$PD
 mkdir -p "$PD/experiments/logs"  # the build helper keeps its source hash there
 # cp312 binding for the alpasim-training venv; NO_TRAIN skips the training-only CUDA extension
 NO_TRAIN=1 PATH="$ALPAGYM_ROOT/.venv/bin:$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
-IMPORTED_PUFFERLIB=$("$ALPAGYM_PY" -c "import alpagym_distill.teacher, pufferlib; from pufferlib.ocean.drive import binding; print(pufferlib.__file__)") \
+IMPORTED_OPENGIGAFLOW=$("$ALPAGYM_PY" -c "import alpagym_distill.teacher, opengigaflow; from opengigaflow.ocean.drive import binding; print(opengigaflow.__file__)") \
     || { echo "ERROR: teacher import failed (see traceback above)"; exit 1; }
-case "$IMPORTED_PUFFERLIB" in
-    "$PD"/*) echo "pufferlib: $IMPORTED_PUFFERLIB" ;;
-    *) echo "ERROR: pufferlib imported from '$IMPORTED_PUFFERLIB', expected $PD"; exit 1 ;;
+case "$IMPORTED_OPENGIGAFLOW" in
+    "$PD"/*) echo "opengigaflow: $IMPORTED_OPENGIGAFLOW" ;;
+    *) echo "ERROR: opengigaflow imported from '$IMPORTED_OPENGIGAFLOW', expected $PD"; exit 1 ;;
 esac
 
 mapfile -t SCENES < <("$ALPAGYM_PY" - "$BINS/scene_manifest.jsonl" "$N_SCENES" "$SCENE_LIST" <<'EOF'
@@ -348,9 +348,9 @@ Path(sys.argv[3]).write_text(text)
 sys.stdout.write("\n" + text)
 EOF
 fi
-# the repo .venv holds wandb; the script reads results.txt and never imports pufferlib. A subset (N_SCENES) or a run with failed scenes is not reported.
+# the repo .venv holds wandb; the script reads results.txt and never imports opengigaflow. A subset (N_SCENES) or a run with failed scenes is not reported.
 if [ "$WANDB_REPORT" = "1" ] && [ $EVAL_STATUS -eq 0 ] && [ "$N_SCENES" = "0" ]; then
-    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/pufferlib/ocean/evaluation_utils/eval_wandb_report.py" \
+    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/opengigaflow/ocean/evaluation_utils/eval_wandb_report.py" \
         alpasim "$OUT/results.txt" --run-dir "$RUN_DIR" --expected-episode-count ${#SCENES[@]} \
         || echo "wandb report failed (results above are unaffected)"
 fi

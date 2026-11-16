@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Config contract for the co-simulation integrations (pufferlib/ocean/cosim).
+"""Config contract for the co-simulation integrations (opengigaflow/ocean/cosim).
 
 The CARLA leaderboard agent and the nuPlan planner both rebuild the
 checkpoint's shadow Drive env FROM ITS config.yaml
-(saved next to the checkpoint from pufferlib/config/opengigaflow.yaml) via
+(saved next to the checkpoint from opengigaflow/config/opengigaflow.yaml) via
 cosim/arch.py's shadow_env_kwargs: every Drive-accepted env key is adopted,
 then CLEAN_EVAL_OVERRIDES is applied, then the co-sim's structural keys win.
 A key silently dropped (renamed in Drive.__init__ or removed from the yaml)
@@ -26,10 +26,10 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from pufferlib.ocean.drive.drive import Drive
+from opengigaflow.ocean.drive.drive import Drive
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = REPO_ROOT / "pufferlib" / "config" / "opengigaflow.yaml"
+CONFIG_PATH = REPO_ROOT / "opengigaflow" / "config" / "opengigaflow.yaml"
 
 # Env keys the co-sim reads DIRECTLY from the checkpoint config (KeyError if
 # missing): leaderboard_agent.setup() for the policy-step interval, the shadow
@@ -71,7 +71,7 @@ class TestCosimConfigContract(unittest.TestCase):
                 key,
                 env,
                 f"env.{key} was removed from opengigaflow.yaml; the co-sim shadow env "
-                f"(pufferlib/ocean/cosim) reads it from checkpoint configs and would "
+                f"(opengigaflow/ocean/cosim) reads it from checkpoint configs and would "
                 f"either crash or silently fall back to a Drive default, breaking "
                 f"parity with the trained policy.",
             )
@@ -103,10 +103,10 @@ class TestShadowEnvKwargs(unittest.TestCase):
     def test_clean_eval_matches_benchmark_profile(self):
         """cosim/arch.py duplicates the benchmark profile's noise/light keys so
         the co-sim venvs never import the training stack; each mirrored key
-        must match pufferlib/config/evaluation/benchmark.yaml."""
-        from pufferlib.ocean.cosim.arch import CLEAN_EVAL_OVERRIDES as cosim_overrides
+        must match opengigaflow/config/evaluation/benchmark.yaml."""
+        from opengigaflow.ocean.cosim.arch import CLEAN_EVAL_OVERRIDES as cosim_overrides
 
-        benchmark_yaml = REPO_ROOT / "pufferlib" / "config" / "evaluation" / "benchmark.yaml"
+        benchmark_yaml = REPO_ROOT / "opengigaflow" / "config" / "evaluation" / "benchmark.yaml"
         bench_env = yaml.safe_load(benchmark_yaml.read_text())["env"]
         for key, value in cosim_overrides.items():
             self.assertEqual(
@@ -122,9 +122,9 @@ class TestShadowEnvKwargs(unittest.TestCase):
         co-sim mirror too, or the shadow env silently adopts the checkpoint's training value (or
         aborts: speed_limit_random_prob > 0 rejects maps without speed zones, e.g. nuPlan/CARLA
         co-sim bins)."""
-        from pufferlib.ocean.cosim.arch import CLEAN_EVAL_OVERRIDES as cosim_overrides
+        from opengigaflow.ocean.cosim.arch import CLEAN_EVAL_OVERRIDES as cosim_overrides
 
-        benchmark_yaml = REPO_ROOT / "pufferlib" / "config" / "evaluation" / "benchmark.yaml"
+        benchmark_yaml = REPO_ROOT / "opengigaflow" / "config" / "evaluation" / "benchmark.yaml"
         bench_env = yaml.safe_load(benchmark_yaml.read_text())["env"]
         randomization_markers = ("random", "noise", "dropout", "blindness", "phantom", "spawn_")
         for key in bench_env:
@@ -140,7 +140,7 @@ class TestShadowEnvKwargs(unittest.TestCase):
     def test_clean_eval_overrides_beat_checkpoint_config(self):
         """A checkpoint trained WITH observation noise must still evaluate
         clean: every CLEAN_EVAL_OVERRIDES key wins over the config's value."""
-        from pufferlib.ocean.cosim.arch import CLEAN_EVAL_OVERRIDES, shadow_env_kwargs
+        from opengigaflow.ocean.cosim.arch import CLEAN_EVAL_OVERRIDES, shadow_env_kwargs
 
         cfg = {"env": {key: 0.9 for key in CLEAN_EVAL_OVERRIDES if key != "traffic_light_behavior"}}
         cfg["env"]["traffic_light_behavior"] = "remove"
@@ -156,14 +156,14 @@ class TestShadowEnvKwargs(unittest.TestCase):
         """Saved checkpoint configs may carry resolved enum ints for the
         infraction behaviors (collision_behavior: 1);
         Drive.__init__ only accepts the strings."""
-        from pufferlib.ocean.cosim.arch import shadow_env_kwargs
+        from opengigaflow.ocean.cosim.arch import shadow_env_kwargs
 
         kwargs = shadow_env_kwargs({"env": {"collision_behavior": 1, "offroad_behavior": 0}})
         self.assertEqual(kwargs["collision_behavior"], "stop")
         self.assertEqual(kwargs["offroad_behavior"], "ignore")
 
     def test_adopts_every_drive_accepted_key_and_filters_the_rest(self):
-        from pufferlib.ocean.cosim.arch import shadow_env_kwargs
+        from opengigaflow.ocean.cosim.arch import shadow_env_kwargs
 
         cfg = {"env": {"obs_slots_partners_n": 63, "min_goal_spacing": 11.0, "not_a_drive_kwarg": 1}}
         kwargs = shadow_env_kwargs(cfg)
@@ -174,7 +174,7 @@ class TestShadowEnvKwargs(unittest.TestCase):
     def test_structural_overrides_beat_everything(self):
         """The co-sim's structural keys (map/pool wiring) must win over the
         training config, which points at training maps and multi-env pools."""
-        from pufferlib.ocean.cosim.arch import shadow_env_kwargs
+        from opengigaflow.ocean.cosim.arch import shadow_env_kwargs
 
         cfg = {"env": {"num_agents": 512, "num_maps": 100, "resample_frequency": 91}}
         kwargs = shadow_env_kwargs(

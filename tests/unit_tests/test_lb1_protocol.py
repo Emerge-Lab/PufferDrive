@@ -1,4 +1,4 @@
-"""Leaderboard 1.0 co-sim client: wire protocol round trips, and the client stays Python 3.7 / pufferlib-free
+"""Leaderboard 1.0 co-sim client: wire protocol round trips, and the client stays Python 3.7 / opengigaflow-free
 (it runs inside carla_garage's `garage` conda env, the only Python the CARLA 0.9.10 egg supports)."""
 
 import ast
@@ -13,10 +13,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from pufferlib.ocean.cosim.carla.lb1 import lb1_protocol
+from opengigaflow.ocean.cosim.carla.lb1 import lb1_protocol
 
 
-LB1_DIR = Path(__file__).resolve().parents[2] / "pufferlib" / "ocean" / "cosim" / "carla" / "lb1"
+LB1_DIR = Path(__file__).resolve().parents[2] / "opengigaflow" / "ocean" / "cosim" / "carla" / "lb1"
 CLIENT_SIDE_FILES = ("leaderboard_agent.py", "lb1_protocol.py", "run_evaluator.py")
 CLIENT_PYTHON_FEATURE_VERSION = (3, 7)
 GARAGE_PYTHON = Path.home() / "miniconda3" / "envs" / "garage" / "bin" / "python"
@@ -61,7 +61,7 @@ def test_closed_peer_reads_as_none():
 
 
 @pytest.mark.parametrize("filename", CLIENT_SIDE_FILES)
-def test_client_side_files_parse_as_python_37_without_pufferlib(filename):
+def test_client_side_files_parse_as_python_37_without_opengigaflow(filename):
     source = (LB1_DIR / filename).read_text()
     tree = ast.parse(source, filename=filename, feature_version=CLIENT_PYTHON_FEATURE_VERSION)
     imported = []
@@ -70,7 +70,7 @@ def test_client_side_files_parse_as_python_37_without_pufferlib(filename):
             imported += [alias.name for alias in node.names]
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.append(node.module)
-    assert not [name for name in imported if name.split(".")[0] in ("pufferlib", "data_utils", "torch")], imported
+    assert not [name for name in imported if name.split(".")[0] in ("opengigaflow", "data_utils", "torch")], imported
 
 
 @pytest.mark.skipif(not GARAGE_PYTHON.is_file(), reason="garage conda env not installed on this machine")

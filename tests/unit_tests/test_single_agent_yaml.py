@@ -17,8 +17,8 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from pufferlib.config_schema import validate_opengigaflow_config  # noqa: E402
-from pufferlib.rl import load_config  # noqa: E402
+from opengigaflow.config_schema import validate_opengigaflow_config  # noqa: E402
+from opengigaflow.rl import load_config  # noqa: E402
 
 YAML_PATH = REPO_ROOT / "scripts/cluster_configs/single_agent_speed_run.yaml"
 

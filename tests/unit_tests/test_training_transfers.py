@@ -8,8 +8,8 @@ import pytest
 import torch
 from torch.utils._python_dispatch import TorchDispatchMode
 
-from pufferlib.rl import PuffeRL, rank_core_share
-from pufferlib.vector import Multiprocessing
+from opengigaflow.rl import PuffeRL, rank_core_share
+from opengigaflow.vector import Multiprocessing
 
 
 @pytest.fixture

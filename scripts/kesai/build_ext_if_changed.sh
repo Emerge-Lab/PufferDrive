@@ -10,7 +10,7 @@ mkdir -p "$(dirname "${BUILD_HASH_FILE}")"
 exec 9> "${BUILD_HASH_FILE}.lock"
 flock 9
 
-SOURCE_HASH=$({ find ${REPO_DIR}/pufferlib \( -name '*.c' -o -name '*.h' \) -type f; echo ${REPO_DIR}/setup.py; } | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
+SOURCE_HASH=$({ find ${REPO_DIR}/opengigaflow \( -name '*.c' -o -name '*.h' \) -type f; echo ${REPO_DIR}/setup.py; } | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
 
 if [ -f ${BUILD_HASH_FILE} ] && [ "$(cat ${BUILD_HASH_FILE})" = "${SOURCE_HASH}" ]; then
     echo "C sources unchanged (${SOURCE_HASH:0:12}); skipping rebuild."

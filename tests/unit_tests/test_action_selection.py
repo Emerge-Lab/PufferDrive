@@ -7,7 +7,7 @@ The feature lets a user pick how eval turns policy logits into actions on a
   - mode:   argmax / Gaussian mean (deterministic "best guess")
   - mean:   probability-weighted continuous mean (discrete policy only)
 
-The logic lives in `pufferlib.pytorch.sample_logits`; the mode is chosen by
+The logic lives in `opengigaflow.pytorch.sample_logits`; the mode is chosen by
 `Evaluator.action_selection` (config -> validated -> passed to sample_logits).
 Both are covered here without an env/C-sim/GPU.
 """
@@ -17,8 +17,8 @@ import sys
 import pytest
 import torch
 
-import pufferlib
-import pufferlib.pytorch as P
+import opengigaflow
+import opengigaflow.pytorch as P
 
 # 3 discrete classes -> fixed 2D continuous embedding, mirroring Drive's
 # action_table[num_classes, 2] (discrete action index -> (long, lat)).
@@ -158,7 +158,7 @@ VALID_ACTION_SELECTIONS = (P.ACTION_SELECT_SAMPLE, P.ACTION_SELECT_MODE, P.ACTIO
 def test_shipped_config_declares_a_valid_action_selection(monkeypatch):
     # Guards the key itself: a config refactor that drops or renames
     # eval.action_selection must fail here, not at the first eval run.
-    import pufferlib.rl as rl
+    import opengigaflow.rl as rl
 
     # load_config treats everything left in argv as a Hydra override.
     monkeypatch.setattr(sys, "argv", ["puffer"])
@@ -167,10 +167,10 @@ def test_shipped_config_declares_a_valid_action_selection(monkeypatch):
 
 
 def test_config_rejects_invalid_action_selection(monkeypatch):
-    import pufferlib.rl as rl
+    import opengigaflow.rl as rl
 
     monkeypatch.setattr(sys, "argv", ["puffer", "eval.action_selection=banana"])
-    with pytest.raises(pufferlib.APIUsageError):
+    with pytest.raises(opengigaflow.APIUsageError):
         rl.load_config("opengigaflow")
 
 
@@ -178,16 +178,16 @@ def test_config_rejects_invalid_action_selection(monkeypatch):
 # Drive's mean must be exact in physical units despite the piecewise decode
 # --------------------------------------------------------------------------
 def test_drive_mean_action_is_exact_in_physical_units(monkeypatch):
-    import pufferlib.ocean.torch as ocean_torch
-    import pufferlib.rl as rl
-    from pufferlib.ocean.drive import binding
-    from pufferlib.ocean.drive.drive import Drive as DriveEnv
+    import opengigaflow.ocean.torch as ocean_torch
+    import opengigaflow.rl as rl
+    from opengigaflow.ocean.drive import binding
+    from opengigaflow.ocean.drive.drive import Drive as DriveEnv
 
     monkeypatch.setattr(sys, "argv", ["puffer"])
     args = rl.load_config("opengigaflow")
     env = DriveEnv(
         num_agents=64,
-        map_dir="pufferlib/resources/drive/binaries/carla",
+        map_dir="opengigaflow/resources/drive/binaries/carla",
         num_maps=1,
         allow_map_subset=True,
         scenario_length=200,

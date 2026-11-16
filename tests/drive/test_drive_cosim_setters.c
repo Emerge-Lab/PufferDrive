@@ -2,7 +2,7 @@
 #include "include/test.h"
 
 // Defensive coverage for the co-sim external-state setters (drive.h "Co-simulation external-state
-// setters" section). These are called from Python (pufferlib/ocean/cosim/*) every tick to overwrite
+// setters" section). These are called from Python (opengigaflow/ocean/cosim/*) every tick to overwrite
 // agent state from CARLA/nuplan
 
 // ---------------------------------------------------------------------------

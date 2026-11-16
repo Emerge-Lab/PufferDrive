@@ -132,7 +132,7 @@ def main():
     report_wandb = str(override_value(overrides, "wandb")).lower() in ("true", "1")
     shard_overrides = [o for o in overrides if o.partition("=")[0] != "wandb"] + ["wandb=False"]
 
-    from pufferlib.ocean.evaluation_utils import eval_wandb_report, evaluation_utils
+    from opengigaflow.ocean.evaluation_utils import eval_wandb_report, evaluation_utils
 
     if report_wandb and arguments.benchmark != eval_wandb_report.SELFPLAY_BENCHMARK_NAME:
         raise SystemExit(
@@ -157,7 +157,7 @@ def main():
         command = [
             sys.executable,
             "-m",
-            "pufferlib.rl",
+            "opengigaflow.rl",
             "eval",
             arguments.env_name,
             arguments.benchmark,

@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-import pufferlib.ocean.torch as ocean_torch
-from pufferlib import rl
-from pufferlib.rl import PuffeRL
+import opengigaflow.ocean.torch as ocean_torch
+from opengigaflow import rl
+from opengigaflow.rl import PuffeRL
 
 
 EGO_FEATURES = 4
@@ -82,7 +82,7 @@ def test_policy_flops_count_every_slot_and_skip_observation_gradients():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required to run the tensor-core kernel")
 def test_tensor_core_peak_is_measured_without_touching_the_training_rng():
-    from pufferlib.tensor_core_peak import measure_tensor_core_peak_flops_per_second
+    from opengigaflow.tensor_core_peak import measure_tensor_core_peak_flops_per_second
 
     torch.manual_seed(7)
     rng_state_before = torch.cuda.get_rng_state()

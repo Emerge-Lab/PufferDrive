@@ -11,9 +11,9 @@
 #SBATCH --open-mode=append               # a requeued job keeps the log of the instance it resumes
 #SBATCH --partition dev
 # CARLA longest6 v1 evaluation of an OpenGigaFlow checkpoint through carla_garage's unmodified Leaderboard 1.0
-# (CARLA 0.9.10.1, pufferlib/ocean/cosim/carla/lb1/leaderboard_agent.py), the Leaderboard 1.0 counterpart of
+# (CARLA 0.9.10.1, opengigaflow/ocean/cosim/carla/lb1/leaderboard_agent.py), the Leaderboard 1.0 counterpart of
 # 11_carla_longest6_v2.sh. The garage evaluator runs in the `garage` conda env (Python 3.7, the CARLA 0.9.10 egg);
-# the agent starts pufferlib/ocean/cosim/carla/lb1/policy_server.py in an OpenGigaFlow python ($SERVER_PY) per route.
+# the agent starts opengigaflow/ocean/cosim/carla/lb1/policy_server.py in an OpenGigaFlow python ($SERVER_PY) per route.
 #
 # WORKERS parallel workers (default 32), each one CARLA server + one evaluator at a time, spread round-robin over the
 # GPUs of the allocation (1-8, e.g. `sbatch --gres gpu:2`): a server needs ~2 cores and no GPU once the agent has
@@ -145,7 +145,7 @@ export COSIM_PEDAL_REVERSE=${COSIM_PEDAL_REVERSE:-0} COSIM_PEDAL_YELLOW_MARGIN=$
 [[ "$COSIM_PEDAL_REVERSE" =~ ^[01]$ && "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_REVERSE=\"$COSIM_PEDAL_REVERSE\" and COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }
 EVALUATOR=$GARAGE_WORK_DIR/leaderboard/leaderboard/leaderboard_evaluator_local.py
 CARLA_EGG=$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
-AGENT=$PD/pufferlib/ocean/cosim/carla/lb1/leaderboard_agent.py
+AGENT=$PD/opengigaflow/ocean/cosim/carla/lb1/leaderboard_agent.py
 for path in "$CKPT" "$GARAGE_PY" "$SERVER_PY" "$CARLA_ROOT/CarlaUE4.sh" "$CARLA_EGG" "$EVALUATOR" "$ROUTE_DIR" "$ROUTES_XML" \
             "$SCENARIO_FILE" "$AGENT" "$GARAGE_WORK_DIR/tools/result_parser.py"; do
     [ -e "$path" ] || { echo "missing $path"; exit 1; }
@@ -251,7 +251,7 @@ export COSIM_OBS_HTML_RENDER=0  # routes save the compact replay only; render_ca
 
 mkdir -p "$PD/experiments/logs"  # the build helper keeps its source hash there
 PATH="$(dirname "$SERVER_PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
-IMPORTED_CORE=$(env -u PYTHONPATH PYTHONPATH="$PD" "$SERVER_PY" -c "import pufferlib.ocean.cosim.carla.shadow_ego as s; print(s.__file__)") \
+IMPORTED_CORE=$(env -u PYTHONPATH PYTHONPATH="$PD" "$SERVER_PY" -c "import opengigaflow.ocean.cosim.carla.shadow_ego as s; print(s.__file__)") \
     || { echo "ERROR: shadow env import failed in $SERVER_PY (see traceback above)"; exit 1; }
 case "$IMPORTED_CORE" in
     "$PD"/*) echo "shadow env: $IMPORTED_CORE" ;;
@@ -498,9 +498,9 @@ if rows:
         print(f"over seeds: DS {statistics.mean(ds.values()):.2f} +- {statistics.pstdev(ds.values()):.2f}  "
               f"RC {statistics.mean(rc.values()):.2f} +- {statistics.pstdev(rc.values()):.2f}  (population std over {len(by_seed)} seeds, as in results.csv)")
 EOF
-# the repo .venv holds wandb; the script reads results.csv and the route records and never imports pufferlib
+# the repo .venv holds wandb; the script reads results.csv and the route records and never imports opengigaflow
 if [ "$WANDB_REPORT" = "1" ] && [ "$SCENARIOS" = "1" ]; then
-    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/pufferlib/ocean/evaluation_utils/eval_wandb_report.py" \
+    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/opengigaflow/ocean/evaluation_utils/eval_wandb_report.py" \
         longest6_v1 "$OUT/aggregate/results.csv" --run-dir "$(dirname "$CKPT")" --expected-episode-count $((TOTAL_UNITS * REPETITIONS)) \
         || echo "wandb report failed (results above are unaffected)"
 fi

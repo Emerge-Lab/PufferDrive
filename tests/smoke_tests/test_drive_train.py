@@ -56,8 +56,8 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pufferlib.rl import PuffeRL, load_config, load_env, load_policy
-from pufferlib.utils import finalize_environment_metrics
+from opengigaflow.rl import PuffeRL, load_config, load_env, load_policy
+from opengigaflow.utils import finalize_environment_metrics
 
 SEED = 42
 EPOCHS = 2  # small: CI emulates the CPU under QEMU where torch is ~30x slower
@@ -141,7 +141,7 @@ def _build_config():
             "max_agents_per_env": 16,
             "num_maps": 2,  # few maps -> fast load
             "use_map_cache": True,  # share map geometry across envs in a worker
-            "map_dir": "pufferlib/resources/drive/binaries/carla",
+            "map_dir": "opengigaflow/resources/drive/binaries/carla",
             "scenario_length": BPTT_HORIZON,  # short -> episodes complete each epoch
             "stagger_first_episode": False,  # golden expects full-length first episodes
             "seed": SEED,

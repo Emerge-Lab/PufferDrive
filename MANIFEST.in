@@ -2,8 +2,8 @@ global-include *.h
 global-include *.cpp
 global-include *.cu
 global-include *.py
-recursive-include pufferlib/config *.ini *.yaml
-recursive-include pufferlib/resources *
+recursive-include opengigaflow/config *.ini *.yaml
+recursive-include opengigaflow/resources *
 recursive-exclude experiments *
 recursive-exclude wandb *
 recursive-exclude tests *

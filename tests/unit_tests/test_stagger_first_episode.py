@@ -5,10 +5,10 @@ running their episodes in lockstep; every later episode keeps the full scenario_
 import numpy as np
 import pytest
 
-from pufferlib.ocean.drive.drive import Drive
+from opengigaflow.ocean.drive.drive import Drive
 
 
-MAP_DIR = "pufferlib/resources/drive/binaries/carla"
+MAP_DIR = "opengigaflow/resources/drive/binaries/carla"
 SCENARIO_LENGTH = 120
 MIN_HORIZON = 20
 # Single-agent sub-envs: one independent first-episode draw per agent.

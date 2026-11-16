@@ -9,7 +9,7 @@ import pytest
 
 nuplan = pytest.importorskip("nuplan")
 
-from pufferlib.ocean.cosim import nuplan_bridge as nb
+from opengigaflow.ocean.cosim import nuplan_bridge as nb
 
 
 class _BlockMap:

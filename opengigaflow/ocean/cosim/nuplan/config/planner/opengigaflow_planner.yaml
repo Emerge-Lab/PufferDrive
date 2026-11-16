@@ -1,0 +1,44 @@
+opengigaflow_planner:
+  _target_: opengigaflow.ocean.cosim.nuplan.planner.OpenGigaFlowPlanner
+  _convert_: 'all'
+
+  checkpoint_path: ???
+  bin_cache_dir: ${oc.env:NUPLAN_EXP_ROOT}/pufferdrive_bin_cache
+  # Whole-city map-only bins -- the only map source, no fallback.
+  city_bin_dir: ???
+  device: "cpu"
+  map_radius: 400.0
+  goal_spacing: 20.0
+  num_agents: 64
+  horizon_seconds: 8.0 # nuplan default
+  deterministic: true
+  # Ablations (defaults = off). sliding_goal_window: refill the goal window after every consumed goal so
+  # the policy never sees a window-final (speed-gated) goal before the route end. Start-up jerk caps
+  # [m/s^3, 0 = off] bound the ego's longitudinal jerk for the first startup_jerk_cap_seconds: nuPlan's
+  # ego_lon_jerk extrapolates at the trajectory edges, ~2x the raw jerk of a ramp that starts at t=0.
+  sliding_goal_window: false
+  startup_jerk_cap_seconds: 1.5
+  startup_accel_jerk_cap_mps3: 0.0
+  startup_brake_jerk_cap_mps3: 0.0
+  # eval hack: grow pedestrian and bicycle partner boxes by this much [m] in length and width in the policy's obs (training min 0.8 x 0.8); 0 = off
+  vru_size_pad_m: 0.0
+  # Ego plant: nuPlan's KinematicBicycleModel (the simulation presets pin ego_controller=one_stage_controller); the
+  # shadow ego takes nuPlan's pose/speed/yaw rate every step, keeps its own jerk-integrated accel/steering, and its
+  # post-step accel/steering are the model's commands. bicycle_min_speed_mps: speed floor enforced on the command
+  # (0 = CaRL's no-reverse driving, -2 = Drive's MAX_BACKWARD_SPEED). The time constants must match the motion
+  # model (devkit 0.2 / 0.05).
+  bicycle_min_speed_mps: 0.0
+  bicycle_accel_time_constant_s: 0.2
+  bicycle_steering_time_constant_s: 0.05
+  # bicycle_center_accel_cap (CaRL's clip_angular_adjustment): nuPlan scores the center accel, which the devkit
+  # computes as rear accel + d*yaw_rate^2 + d*yaw_accel; the plant's accel is reduced while turning to keep it under
+  # the ego accel cap (0.96 x nuPlan's 2.40 comfort bound, also the policy's c_acc conditioning).
+  bicycle_center_accel_cap: false
+  bicycle_center_accel_cap_margin: 1.0 # factor on the ego accel cap for the center cap (savgol overshoot headroom)
+  env_overrides:
+    obs_slots_partners_n: 40 # GIGAFLOW eval value (Table A4); slots are max-pooled, so any checkpoint transfers
+    stop_signs_enabled: false # nuPlan city bins export TURN_STOP zones as stop signs; keep them out of the obs
+  # Write the interactive opengigaflow.viz observation replay (exact policy input/outputs) per scenario
+  obs_html_dir: null
+  obs_html_max_steps: 800
+  obs_html_render: true  # false: save .replay.zlib only, render later (scripts/eval/render_obs_html.py)

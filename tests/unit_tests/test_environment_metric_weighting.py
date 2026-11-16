@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from pufferlib.utils import accumulate_environment_metric, finalize_environment_metrics
+from opengigaflow.utils import accumulate_environment_metric, finalize_environment_metrics
 
 
 def _accumulate(logs):

@@ -89,7 +89,7 @@ def parse_args():
     parser.add_argument("--max_pjob", type=int, default=None, help="Max parallel jobs")
 
     # Program settings
-    parser.add_argument("--main", type=str, default="-m pufferlib.rl train opengigaflow", help="Main command to run")
+    parser.add_argument("--main", type=str, default="-m opengigaflow.rl train opengigaflow", help="Main command to run")
     parser.add_argument(
         "--args", type=str, nargs="+", default=None, help="Args to override/sweep (e.g., learning_rate=1e-4:3e-4)"
     )
@@ -276,20 +276,20 @@ def isolate_code(project_root: str, save_dir: str) -> str:
             else:
                 os.remove(dst)
         os.symlink(src, dst)
-    pufferlib_dst = os.path.join(isolated_root, "pufferlib")
-    if os.path.islink(pufferlib_dst):
-        os.remove(pufferlib_dst)
-    elif os.path.isdir(pufferlib_dst):
-        shutil.rmtree(pufferlib_dst)
-    pufferlib_src = os.path.join(project_root, "pufferlib")
+    opengigaflow_dst = os.path.join(isolated_root, "opengigaflow")
+    if os.path.islink(opengigaflow_dst):
+        os.remove(opengigaflow_dst)
+    elif os.path.isdir(opengigaflow_dst):
+        shutil.rmtree(opengigaflow_dst)
+    opengigaflow_src = os.path.join(project_root, "opengigaflow")
     shutil.copytree(
-        pufferlib_src,
-        pufferlib_dst,
+        opengigaflow_src,
+        opengigaflow_dst,
         symlinks=False,
         ignore=shutil.ignore_patterns("resources"),
     )
-    resources_src = os.path.join(pufferlib_src, "resources")
-    resources_dst = os.path.join(pufferlib_dst, "resources")
+    resources_src = os.path.join(opengigaflow_src, "resources")
+    resources_dst = os.path.join(opengigaflow_dst, "resources")
     if os.path.isdir(resources_src):
         os.symlink(resources_src, resources_dst)
     return isolated_root

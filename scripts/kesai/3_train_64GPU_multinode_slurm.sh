@@ -84,12 +84,12 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --rdzv_endpoint="${MASTER_ADDR}:${MASTER_PORT}" \
     --max_restarts=0 \
     --start-method spawn \
-    -m pufferlib.rl train opengigaflow \
+    -m opengigaflow.rl train opengigaflow \
     wandb=True \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=$PD/pufferlib/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v20 \
+    env.map_dir=$PD/opengigaflow/resources/drive/binaries/carla_128_affine_zones_stop_ndshoulders_v20 \
     env.num_maps=128 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
@@ -131,7 +131,7 @@ echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
     --total-scenarios 80000 \
     --num-nodes 4 \
     --shards-per-node 8 \
-    env.map_dir=$PD/pufferlib/resources/drive/binaries/carla \
+    env.map_dir=$PD/opengigaflow/resources/drive/binaries/carla \
     vec.num_envs=60 \
     eval.reward_comfort=0.05 \
     eval.reward_lane_center=0.0038 \

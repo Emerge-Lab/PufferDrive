@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 pytest.importorskip("nuplan")
 pytest.importorskip("carl_nuplan")
 
-from pufferlib.ocean.cosim.nuplan.planner import LOG_EXCLUDED_STATE, OpenGigaFlowPlanner
+from opengigaflow.ocean.cosim.nuplan.planner import LOG_EXCLUDED_STATE, OpenGigaFlowPlanner
 
 WEIGHT_BYTES = 1 << 20
 

@@ -10,7 +10,7 @@
 #SBATCH --error experiments/logs/carla_longest6_v2_%j.err
 #SBATCH --partition dev
 # CARLA longest6 evaluation of an OpenGigaFlow checkpoint through CaRL's unmodified original_leaderboard
-# (pufferlib/ocean/cosim/carla/leaderboard_agent.py), the CARLA counterpart of 9_nuPlan.sh.
+# (opengigaflow/ocean/cosim/carla/leaderboard_agent.py), the CARLA counterpart of 9_nuPlan.sh.
 #
 # WORKERS parallel workers (default 16), each one CARLA server + one evaluator at a time, spread round-robin over the
 # GPUs of the allocation (1-8, e.g. `sbatch --gres gpu:2`): under -nullrhi a server needs ~2 cores and no GPU, so
@@ -23,7 +23,7 @@
 # .world_log.npz of the failed ones) and details/ (timing.csv, workers.log, evaluators.log). Speed: wall and game
 # time of every route go to timing.csv, the run totals to run_info.txt and stdout.
 #
-# Overridable env: RUN_DIR, ROUTES, SCENARIOS (0 = pufferlib's scenario-free longest6), SEEDS ("0 1 2" by default:
+# Overridable env: RUN_DIR, ROUTES, SCENARIOS (0 = opengigaflow's scenario-free longest6), SEEDS ("0 1 2" by default:
 # traffic-manager seeds, one full pass over the routes per seed, the protocol of CaRL's and carla_garage's
 # evaluate_routes_slurm.py with --num_repetitions 3; results.csv then carries mean and std over the seeds per route and
 # per town, the stdout summary the DS of every seed and mean +- std over the seeds; "0" = one pass with the evaluator's
@@ -62,7 +62,7 @@ SCENARIOS=${SCENARIOS:-1}
 if [ "$SCENARIOS" = "1" ]; then
     ROUTES=${ROUTES:-$CARL_WORK_DIR/custom_leaderboard/leaderboard/data/longest6.xml}
 else
-    ROUTES=${ROUTES:-$PD/pufferlib/ocean/cosim/carla/routes/longest6_no_scenarios.xml}
+    ROUTES=${ROUTES:-$PD/opengigaflow/ocean/cosim/carla/routes/longest6_no_scenarios.xml}
 fi
 REPETITIONS=${REPETITIONS:-1}
 SEEDS=${SEEDS:-0 1 2}   # traffic-manager seeds, one pass over the routes each (the CaRL / carla_garage protocol)
@@ -157,7 +157,7 @@ echo "Results -> $OUT"
 
 mkdir -p "$PD/experiments/logs"  # the build helper keeps its source hash there
 PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
-IMPORTED_AGENT=$("$PY" -c "import pufferlib.ocean.cosim.carla.leaderboard_agent as a; print(a.__file__)") || { echo "ERROR: agent import failed (see traceback above)"; exit 1; }
+IMPORTED_AGENT=$("$PY" -c "import opengigaflow.ocean.cosim.carla.leaderboard_agent as a; print(a.__file__)") || { echo "ERROR: agent import failed (see traceback above)"; exit 1; }
 case "$IMPORTED_AGENT" in
     "$PD"/*) echo "agent: $IMPORTED_AGENT" ;;
     *) echo "ERROR: agent imported from '$IMPORTED_AGENT', expected $PD"; exit 1 ;;
@@ -262,7 +262,7 @@ except Exception:
     fi
     $pin env CUDA_VISIBLE_DEVICES="$gpu" "${log_env[@]}" \
         "$PY" -u "$EVALUATOR" --routes "$ROUTES" --routes-subset "$route_id" --repetitions "$REPETITIONS" \
-        --agent "$PD/pufferlib/ocean/cosim/carla/leaderboard_agent.py" --agent-config "$CKPT" \
+        --agent "$PD/opengigaflow/ocean/cosim/carla/leaderboard_agent.py" --agent-config "$CKPT" \
         --checkpoint "$route_dir/result.json" --track MAP --port "$port" --traffic-manager-port "$tm_port" \
         --traffic-manager-seed "$seed" \
         > "$evaluator_log" 2>&1
@@ -354,9 +354,9 @@ if rows:
         print(f"over seeds: DS {statistics.mean(ds.values()):.2f} +- {statistics.pstdev(ds.values()):.2f}  "
               f"RC {statistics.mean(rc.values()):.2f} +- {statistics.pstdev(rc.values()):.2f}  (population std over {len(by_seed)} seeds, as in results.csv)")
 EOF
-# the repo .venv holds wandb; the script reads results.csv and the route records and never imports pufferlib
+# the repo .venv holds wandb; the script reads results.csv and the route records and never imports opengigaflow
 if [ "$WANDB_REPORT" = "1" ] && [ "$SCENARIOS" = "1" ]; then
-    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/pufferlib/ocean/evaluation_utils/eval_wandb_report.py" \
+    env -u PYTHONPATH "$PD/.venv/bin/python" "$PD/opengigaflow/ocean/evaluation_utils/eval_wandb_report.py" \
         longest6_v2 "$OUT/aggregate/results.csv" --run-dir "$RUN_DIR" --expected-episode-count $((TOTAL_UNITS * REPETITIONS)) \
         || echo "wandb report failed (results above are unaffected)"
 fi

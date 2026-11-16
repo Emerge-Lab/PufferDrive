@@ -19,7 +19,7 @@ No env/C-sim/GPU needed.
 
 import pytest
 
-from pufferlib.rl import derive_rank_seeds
+from opengigaflow.rl import derive_rank_seeds
 
 VEC_SEED = 42
 TRAIN_SEED = 42

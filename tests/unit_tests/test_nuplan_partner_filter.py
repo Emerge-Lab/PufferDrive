@@ -9,7 +9,7 @@ import pytest
 nuplan = pytest.importorskip("nuplan")  # noqa: F841  (partner_tracked_objects imports nuPlan datatypes)
 from shapely.geometry import LineString, box  # noqa: E402
 
-from pufferlib.ocean.cosim import nuplan_bridge as nb  # noqa: E402
+from opengigaflow.ocean.cosim import nuplan_bridge as nb  # noqa: E402
 
 
 class FakeType(Enum):

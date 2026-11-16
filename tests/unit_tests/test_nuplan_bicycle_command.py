@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from pufferlib.ocean.cosim.nuplan_bicycle import (
+from opengigaflow.ocean.cosim.nuplan_bicycle import (
     BicycleCommandConfig,
     bicycle_commands,
     bicycle_response,
