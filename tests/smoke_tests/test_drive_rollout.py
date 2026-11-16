@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pufferlib
 from pufferlib.ocean.drive import binding
-from pufferlib.pufferl import load_config, load_env
+from pufferlib.rl import load_config, load_env
 
 SEED = 42
 EPOCHS = 5

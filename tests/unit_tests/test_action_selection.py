@@ -164,20 +164,20 @@ VALID_ACTION_SELECTIONS = (P.ACTION_SELECT_SAMPLE, P.ACTION_SELECT_MODE, P.ACTIO
 def test_shipped_config_declares_a_valid_action_selection(monkeypatch):
     # Guards the key itself: a config refactor that drops or renames
     # eval.action_selection must fail here, not at the first eval run.
-    import pufferlib.pufferl as pufferl
+    import pufferlib.rl as rl
 
     # load_config treats everything left in argv as a Hydra override.
     monkeypatch.setattr(sys, "argv", ["puffer"])
-    args = pufferl.load_config("opengigaflow")
+    args = rl.load_config("opengigaflow")
     assert args["eval"]["action_selection"] in VALID_ACTION_SELECTIONS
 
 
 def test_config_rejects_invalid_action_selection(monkeypatch):
-    import pufferlib.pufferl as pufferl
+    import pufferlib.rl as rl
 
     monkeypatch.setattr(sys, "argv", ["puffer", "eval.action_selection=banana"])
     with pytest.raises(pufferlib.APIUsageError):
-        pufferl.load_config("opengigaflow")
+        rl.load_config("opengigaflow")
 
 
 # --------------------------------------------------------------------------
@@ -185,12 +185,12 @@ def test_config_rejects_invalid_action_selection(monkeypatch):
 # --------------------------------------------------------------------------
 def test_drive_mean_action_is_exact_in_physical_units(monkeypatch):
     import pufferlib.ocean.torch as ocean_torch
-    import pufferlib.pufferl as pufferl
+    import pufferlib.rl as rl
     from pufferlib.ocean.drive import binding
     from pufferlib.ocean.drive.drive import Drive as DriveEnv
 
     monkeypatch.setattr(sys, "argv", ["puffer"])
-    args = pufferl.load_config("opengigaflow")
+    args = rl.load_config("opengigaflow")
     env = DriveEnv(
         num_agents=64,
         map_dir="pufferlib/resources/drive/binaries/carla",

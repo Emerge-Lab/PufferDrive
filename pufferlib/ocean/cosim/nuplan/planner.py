@@ -631,7 +631,7 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         import pufferlib.spaces
 
         # A discrete policy head on a continuous env needs the bin->continuous
-        # mapping (pufferl.py feeds cont_action to the env, never the bin indices).
+        # mapping (rl.py feeds cont_action to the env, never the bin indices).
         env_continuous = isinstance(self._env.single_action_space, pufferlib.spaces.Box)
         if self._deterministic:
             action_selection = (

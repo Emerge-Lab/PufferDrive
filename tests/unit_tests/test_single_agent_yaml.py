@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from pufferlib.config_schema import validate_opengigaflow_config  # noqa: E402
-from pufferlib.pufferl import load_config  # noqa: E402
+from pufferlib.rl import load_config  # noqa: E402
 
 YAML_PATH = REPO_ROOT / "scripts/cluster_configs/single_agent_speed_run.yaml"
 
@@ -27,7 +27,7 @@ def yaml_to_argv(yaml_path: Path) -> list:
     """Convert a program_config yaml into Hydra overrides, mirroring the
     key=value formatting in submit_cluster.py."""
     cfg = yaml.safe_load(yaml_path.read_text())
-    argv = ["pufferl.py"]
+    argv = ["rl.py"]
     for key, val in cfg.items():
         if isinstance(val, bool):
             val = str(val).lower()

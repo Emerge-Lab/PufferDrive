@@ -84,7 +84,7 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --rdzv_endpoint="${MASTER_ADDR}:${MASTER_PORT}" \
     --max_restarts=0 \
     --start-method spawn \
-    -m pufferlib.pufferl train opengigaflow \
+    -m pufferlib.rl train opengigaflow \
     wandb=True \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \

@@ -41,7 +41,6 @@ def _replay(ego_xy, collision_frames=()):
         "agent_f32": np.zeros((FRAMES, AGENT_CAP, 13), np.float32),
         "agent_i32": np.zeros((FRAMES, AGENT_CAP, 10), np.int32),
         "metrics_f32": np.zeros((FRAMES, AGENT_CAP, len(viz.METRIC_LABELS)), np.float32),
-        "puffer_f32": np.zeros((FRAMES, AGENT_CAP, 4), np.float32),
         "traffic_i16": np.zeros((FRAMES, 1, 3), np.int16),
         "raw_action": np.ones((FRAMES, 1, 2), np.float32),
         "clipped_action": np.ones((FRAMES, 1, 2), np.float32),

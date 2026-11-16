@@ -66,7 +66,7 @@ Now create a file called **`launch.json`** with the following content:
       "name": "Python: Debug puffer train opengigaflow",
       "type": "python",
       "request": "launch",
-      "module": "pufferlib.pufferl",
+      "module": "pufferlib.rl",
       "args": ["train", "opengigaflow"],
       "cwd": "${workspaceFolder}",
       "python": "/home/ricky/git/PufferDrive/.venv/bin/python", // <- TODO: point to your python interpreter
@@ -82,7 +82,7 @@ Now create a file called **`launch.json`** with the following content:
       "type": "cppdbg",
       "request": "launch",
       "program": "/home/ricky/git/PufferDrive/.venv/bin/python", // <- TODO: point to your python interpreter
-      "args": ["-m", "pufferlib.pufferl", "train", "opengigaflow"],
+      "args": ["-m", "pufferlib.rl", "train", "opengigaflow"],
       "cwd": "${workspaceFolder}",
       "MIMode": "gdb",
 

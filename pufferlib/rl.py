@@ -1,6 +1,6 @@
 ## puffer [train | eval] [env_name] [optional args] -- See https://puffer.ai for full detail0
-# This is the same as python -m pufferlib.pufferl [train | eval] [env_name] [optional args]
-# Distributed example: torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train puffer_nmmo3
+# This is the same as python -m pufferlib.rl [train | eval] [env_name] [optional args]
+# Distributed example: torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.rl train puffer_nmmo3
 
 import contextlib
 import copy
@@ -816,7 +816,7 @@ class PuffeRL:
             if old_model_path != model_path:
                 os.remove(old_model_path)
 
-        current_score = self.last_stats.get("puffer_score", self.last_stats.get("score", -float("inf")))
+        current_score = self.last_stats.get("score", -float("inf"))
         new_best = current_score > self.best_score
         if new_best:
             self.best_score = current_score
@@ -848,7 +848,7 @@ class PuffeRL:
             for old_best_path in glob.glob(os.path.join(path, "best_models", "best_trainer_state_*.pt")):
                 if old_best_path != best_state_file:
                     os.remove(old_best_path)
-            print(f"New best model saved at epoch {self.epoch} with puffer_score {self.best_score:.4f}")
+            print(f"New best model saved at epoch {self.epoch} with score {self.best_score:.4f}")
 
         return model_path
 

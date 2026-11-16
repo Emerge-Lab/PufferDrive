@@ -114,7 +114,7 @@ def main():
         "tb=False",
         *args.overrides,
     ]
-    import pufferlib.pufferl as P
+    import pufferlib.rl as P
 
     config = P.load_config(ENV_NAME)
     config = P.normalize_opengigaflow_config(config, "training")

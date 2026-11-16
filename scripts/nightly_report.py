@@ -114,7 +114,7 @@ def night_of(run):
 
 
 def mean_sps(run):
-    # Skips the zeros pufferl logs whenever no steps elapsed since the previous log.
+    # Skips the zeros the trainer logs whenever no steps elapsed since the previous log.
     rows = run.history(keys=["SPS"], pandas=False, samples=SPS_SAMPLES)
     values = [row["SPS"] for row in rows if row.get("SPS")]
     if not values:

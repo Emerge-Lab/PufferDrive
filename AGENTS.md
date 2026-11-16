@@ -5,7 +5,7 @@ Activate venv before `python`/`puffer`: `source .venv/bin/activate`
 ## Structure
 - `pufferlib/ocean/drive/`: `drive.h` (sim core), `binding.c` (C-ext), `drive.py` (Gym wrapper)
 - `pufferlib/ocean/`: `env_binding.h` (C env utils), `torch.py` (NN)
-- Root: `pufferl.py` (PPO loop), `models.py` (policies)
+- Root: `rl.py` (PPO loop), `models.py` (policies)
 - `config/`: monolithic Hydra YAML — `opengigaflow.yaml` (OpenGigaFlow)
 
 ## Commands

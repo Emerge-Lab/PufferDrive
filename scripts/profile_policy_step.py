@@ -43,7 +43,7 @@ TRAIN_OVERRIDES = [
 
 
 def measured_peak_bf16_tflops():
-    import pufferlib.pufferl as P
+    import pufferlib.rl as P
     from pufferlib.tensor_core_peak import measure_tensor_core_peak_flops_per_second
 
     return measure_tensor_core_peak_flops_per_second("cuda") / P.FLOPS_PER_TFLOP
@@ -51,7 +51,7 @@ def measured_peak_bf16_tflops():
 
 def build_policy_and_obs(rows, fused):
     sys.argv = ["profile_policy_step"] + TRAIN_OVERRIDES
-    import pufferlib.pufferl as P
+    import pufferlib.rl as P
 
     args = P.load_config("opengigaflow")
     args = P.normalize_opengigaflow_config(args, "training")

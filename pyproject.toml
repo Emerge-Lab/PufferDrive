@@ -24,7 +24,7 @@ test = [
 ]
 
 [project.scripts]
-puffer = "pufferlib.pufferl:main"
+puffer = "pufferlib.rl:main"
 
 [project.urls]
 Homepage = "https://puffer.ai"

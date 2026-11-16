@@ -44,32 +44,18 @@ struct Log {
     float lane_center_rate;
     float dnf_rate;
     float avg_speed_per_agent;
-    // Puffer score components
     float at_fault_collision_rate;
-    float ttc_within_bound_rate;
     float driving_direction_score;
     float speed_limit_compliance;
     float making_progress_rate;
     float progress_ratio;
     float comfort_score;
-    float puffer_score;
-    // Puffer score intermediate accumulators (for aggregation)
     float wrong_way_distance;
     float speed_violation_sum;
-    float ttc_violations;
-    float ttc_samples;
     float multi_lane_time;
     float multi_lane_score;
     float total_distance_travelled;
     float total_infractions;
-    // Agent-only puffer display fields (for serialization)
-    float no_at_fault;
-    float no_offroad;
-    float no_red_light;
-    float making_progress;
-    float ttc_puffer_rate;
-    float multiplier;
-    float weighted_average;
     float reward_collision;
     float reward_offroad;
     float reward_red_light;
@@ -2282,8 +2268,6 @@ static void compute_agent_ttc(Drive *env, int agent_idx) {
     }
 }
 
-// Puffer score computation
-// Uses hybrid weighted average: multiplier weights (binary gates) + average weights (continuous)
 static float calculate_duration_scaled_violation_score(float violation_timestep_count, float duration_steps, float dt) {
     float duration_s = fmaxf(duration_steps * dt, dt);
     float windows = ceilf(duration_s / METRIC_SCORE_WINDOW_SECONDS);
@@ -2291,62 +2275,6 @@ static float calculate_duration_scaled_violation_score(float violation_timestep_
     float score = 1.0f - (violation_timestep_count / safe_windows);
 
     return fmaxf(0.0f, fminf(1.0f, score));
-}
-
-static float calculate_puffer_score(Log *agent_log, float duration_steps, float dt) {
-    if (!agent_log) {
-        return 0.0f;
-    }
-
-    float safe_duration_steps = fmaxf(duration_steps, 1.0f);
-    float episode_duration_s = fmaxf(safe_duration_steps * dt, dt);
-
-    float no_at_fault = (agent_log->at_fault_collision_rate > 0) ? 0.0f : 1.0f;
-    float no_offroad = (agent_log->offroad_rate > 0) ? 0.0f : 1.0f;
-    float no_red_light = (agent_log->red_light_violation_rate > 0) ? 0.0f : 1.0f;
-    float making_progress = (agent_log->progress_ratio > 0.2f) ? 1.0f : 0.0f;
-
-    // Driving direction: 1.0 if <=2m, 0.5 if 2-6m, 0 if >6m wrong-way distance
-    float wrong_dist = agent_log->wrong_way_distance;
-    float direction_compliance = (wrong_dist <= 2.0f) ? 1.0f : (wrong_dist <= 6.0f) ? 0.5f : 0.0f;
-
-    float multiplier = no_at_fault * no_offroad * no_red_light * making_progress * direction_compliance;
-
-    // TTC within bound (>0.95s): weight 5
-    float ttc_score = agent_log->ttc_within_bound_rate; // Already 0-1
-
-    // Progress ratio (capped at 1): weight 5
-    float progress_score = fminf(agent_log->progress_ratio, 1.0f);
-
-    // Speed compliance (nuPlan formula): max(0, 1 - sum(violation * dt) / T): weight 4
-    float speed_threshold = fmaxf(episode_duration_s, 1e-3f);
-    float speed_score = fmaxf(0.0f, 1.0f - agent_log->speed_violation_sum / speed_threshold);
-
-    // Comfort (duration-scaled 10s windows): weight 2
-    float comfort_score = agent_log->comfort_score; // 0-1
-
-    // Multi-lane (weight 3): tiered score based on accumulated time
-    float multi_lane_score = agent_log->multi_lane_score;
-
-    // Weighted average
-    float weighted_sum
-        = 5 * ttc_score + 5 * progress_score + 4 * speed_score + 3 * multi_lane_score + 2 * comfort_score;
-    float total_weight = 5 + 5 + 4 + 3 + 2; // = 19
-    float weighted_avg = weighted_sum / total_weight;
-
-    // Store agent-only display fields
-    agent_log->no_at_fault = no_at_fault;
-    agent_log->no_offroad = no_offroad;
-    agent_log->no_red_light = no_red_light;
-    agent_log->making_progress = making_progress;
-    agent_log->driving_direction_score = direction_compliance;
-    agent_log->ttc_puffer_rate = ttc_score;
-    agent_log->speed_limit_compliance = speed_score;
-    agent_log->multiplier = multiplier;
-    agent_log->weighted_average = weighted_avg;
-    agent_log->puffer_score = multiplier * weighted_avg;
-
-    return agent_log->puffer_score;
 }
 
 // True when the first collisions of logged policy agent i and its partner are with each other.
@@ -2437,15 +2365,11 @@ static void add_log(Drive *env) {
                 env->logs[i].comfort_violation_window_count,
                 env->logs[i].episode_length,
                 env->dt);
-            calculate_puffer_score(&env->logs[i], env->logs[i].episode_length, env->dt);
             episode_log.at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
-            episode_log.ttc_within_bound_rate += env->logs[i].ttc_within_bound_rate;
             episode_log.wrong_way_distance += env->logs[i].wrong_way_distance;
             episode_log.speed_violation_sum += env->logs[i].speed_violation_sum;
             episode_log.progress_ratio += env->logs[i].progress_ratio;
             episode_log.comfort_score += env->logs[i].comfort_score;
-            episode_log.ttc_violations += env->logs[i].ttc_violations;
-            episode_log.ttc_samples += env->logs[i].ttc_samples;
             episode_log.multi_lane_time += env->logs[i].multi_lane_time;
             episode_log.multi_lane_score += env->logs[i].multi_lane_score;
 
@@ -2460,7 +2384,6 @@ static void add_log(Drive *env) {
 
             float making_progress = (env->logs[i].progress_ratio > 0.2f) ? 1.0f : 0.0f;
             episode_log.making_progress_rate += making_progress;
-            episode_log.puffer_score += env->logs[i].puffer_score;
         }
         episode_log.n += 1;
     }
@@ -5065,17 +4988,6 @@ static void compute_rewards(Drive *env, int i) {
             agent->metrics_array[TTC_IDX] = 0.0f;
             agent->metrics_array[DISTANCE_TO_COLLISION_IDX] = 0.0f;
         }
-        float min_vehicle_ttc = agent->metrics_array[TTC_IDX];
-        agent_log->ttc_samples += 1.0f;
-        if (min_vehicle_ttc < TTC_VIOLATION_THRESHOLD) {
-            agent_log->ttc_violations += 1.0f;
-        }
-
-        if (agent_log->ttc_samples > 0.0f) {
-            agent_log->ttc_within_bound_rate = 1.0f - (agent_log->ttc_violations / agent_log->ttc_samples);
-        } else {
-            agent_log->ttc_within_bound_rate = 1.0f;
-        }
 
         if (agent->metrics_array[COMFORT_VIOLATION_IDX] > 0.0f) {
             int comfort_window_idx = (int) (agent_log->episode_length * env->dt / METRIC_SCORE_WINDOW_SECONDS);
@@ -5084,10 +4996,6 @@ static void compute_rewards(Drive *env, int i) {
                 agent_log->comfort_violation_window_count += 1.0f;
             }
         }
-        agent_log->comfort_score = calculate_duration_scaled_violation_score(
-            agent_log->comfort_violation_window_count,
-            agent_log->episode_length,
-            env->dt);
     } else {
         agent->metrics_array[TTC_IDX] = DEFAULT_TTC;
         agent->metrics_array[DISTANCE_TO_COLLISION_IDX] = DEFAULT_DTC;
@@ -5095,14 +5003,6 @@ static void compute_rewards(Drive *env, int i) {
         agent->metrics_array[MULTI_LANE_SCORE_IDX] = 0.0f;
         agent->metrics_array[AT_FAULT_COLLISION_IDX] = 0.0f;
     }
-
-    // Update progress_ratio and puffer display fields during the episode
-    float episode_duration_s = agent_log->episode_length * env->dt;
-    float reference_progress_distance = PUFFER_PROGRESS_REFERENCE_SPEED * episode_duration_s;
-    reference_progress_distance = fmaxf(reference_progress_distance, 1.0f);
-    agent_log->progress_ratio = agent->distance_since_spawn / reference_progress_distance;
-
-    calculate_puffer_score(agent_log, agent_log->episode_length, env->dt);
 }
 
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {

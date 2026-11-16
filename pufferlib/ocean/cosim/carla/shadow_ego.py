@@ -741,7 +741,7 @@ class ShadowEgo:
 
         obs = self._adapt_obs_for_policy(obs)
         # A discrete policy head on a continuous env needs the bin->continuous
-        # mapping (pufferl.py feeds cont_action to the env, never the bin indices).
+        # mapping (rl.py feeds cont_action to the env, never the bin indices).
         env_continuous = isinstance(self.env.single_action_space, pufferlib.spaces.Box)
         action_selection = (
             pufferlib.pytorch.ACTION_SELECT_MEAN

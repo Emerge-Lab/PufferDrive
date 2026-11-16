@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 import torch
 
-from pufferlib.pufferl import PuffeRL
+from pufferlib.rl import PuffeRL
 
 
 class ValuePolicy(torch.nn.Module):

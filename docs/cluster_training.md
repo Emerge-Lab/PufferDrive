@@ -55,7 +55,7 @@ singularity exec --nv \
 
 `scripts/submit_cluster.py` is the canonical submission path. It composes:
 - a `compute_config` YAML (SLURM settings)
-- a `program_config` YAML (pufferl training args)
+- a `program_config` YAML (`pufferlib.rl` training args)
 - `--args` CLI overrides
 - wraps the inner train command in `singularity exec` when `--container` is set
 - optionally injects the GPU heartbeat when `--heartbeat` is set. WARNING: this is specifically for the torch cluster to prevent our jobs being killed. No one else should use this.

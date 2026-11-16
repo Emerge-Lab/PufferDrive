@@ -56,7 +56,7 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pufferlib.pufferl import PuffeRL, load_config, load_env, load_policy
+from pufferlib.rl import PuffeRL, load_config, load_env, load_policy
 from pufferlib.utils import finalize_environment_metrics
 
 SEED = 42

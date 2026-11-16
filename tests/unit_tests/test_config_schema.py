@@ -26,7 +26,7 @@ from pufferlib.config_schema import (
     validate_opengigaflow_config,
 )
 from pufferlib.ocean.drive import binding
-from pufferlib.pufferl import load_config
+from pufferlib.rl import load_config
 
 
 def _screaming_snake(name):
@@ -50,7 +50,7 @@ _DRIFT_CHECKED_ENUMS = [
 
 
 class TestConfigSchema(unittest.TestCase):
-    @patch("sys.argv", ["pufferl.py"])
+    @patch("sys.argv", ["rl.py"])
     def test_valid_config_loads_with_plain_strings(self):
         """Final validation must not change the plain-dict contract: enum
         fields come back as their string names, not Enum members."""
@@ -67,13 +67,13 @@ class TestConfigSchema(unittest.TestCase):
         ):
             self.assertIsInstance(args["env"][field_name], bool)
 
-    @patch("sys.argv", ["pufferl.py", "env.use_map_cache=false"])
+    @patch("sys.argv", ["rl.py", "env.use_map_cache=false"])
     def test_boolean_cli_overrides_load(self):
         args = load_config("opengigaflow")
 
         self.assertIs(args["env"]["use_map_cache"], False)
 
-    @patch("sys.argv", ["pufferl.py"])
+    @patch("sys.argv", ["rl.py"])
     def test_legacy_zero_or_one_values_normalize_to_booleans(self):
         args = load_config("opengigaflow")
         args["env"].update(
@@ -92,7 +92,7 @@ class TestConfigSchema(unittest.TestCase):
         self.assertIs(normalized["env"]["use_neighbor_cache"], False)
         self.assertIs(normalized["env"]["termination_mode"], True)
 
-    @patch("sys.argv", ["pufferl.py", "env.collision_behavior=sotp"])
+    @patch("sys.argv", ["rl.py", "env.collision_behavior=sotp"])
     def test_enum_typo_fails_at_load(self):
         with self.assertRaisesRegex(
             pufferlib.APIUsageError,
@@ -100,7 +100,7 @@ class TestConfigSchema(unittest.TestCase):
         ):
             load_config("opengigaflow")
 
-    @patch("sys.argv", ["pufferl.py", "env.num_agents=lots"])
+    @patch("sys.argv", ["rl.py", "env.num_agents=lots"])
     def test_wrong_type_fails_at_load(self):
         with self.assertRaisesRegex(
             pufferlib.APIUsageError,
@@ -108,7 +108,7 @@ class TestConfigSchema(unittest.TestCase):
         ):
             load_config("opengigaflow")
 
-    @patch("sys.argv", ["pufferl.py", "+env.collission_behavior=stop"])
+    @patch("sys.argv", ["rl.py", "+env.collission_behavior=stop"])
     def test_unknown_env_key_fails_at_load(self):
         """Keys force-added with + that the schema doesn't declare are
         rejected as soon as Hydra composition finishes."""
@@ -118,7 +118,7 @@ class TestConfigSchema(unittest.TestCase):
         ):
             load_config("opengigaflow")
 
-    @patch("sys.argv", ["pufferl.py", "env.collision_behavior=1"])
+    @patch("sys.argv", ["rl.py", "env.collision_behavior=1"])
     def test_enum_accepts_c_int_value(self):
         args = load_config("opengigaflow")
         self.assertEqual(args["env"]["collision_behavior"], "stop")
@@ -156,7 +156,7 @@ class TestConfigSchema(unittest.TestCase):
             const_name = f"CONTROLLER_{member.name.upper()}"
             self.assertEqual(getattr(binding, const_name), member.value)
 
-    @patch("sys.argv", ["pufferl.py"])
+    @patch("sys.argv", ["rl.py"])
     def test_training_batch_relationships_are_checked(self):
         args = load_config("opengigaflow")
 
@@ -217,7 +217,7 @@ class TestConfigSchema(unittest.TestCase):
         with self.assertRaisesRegex(pufferlib.APIUsageError, "total agents .* must be <= segments"):
             validate_opengigaflow_config(invalid, "test")
 
-    @patch("sys.argv", ["pufferl.py"])
+    @patch("sys.argv", ["rl.py"])
     def test_semantic_error_separates_field_path_from_context(self):
         args = load_config("opengigaflow")
         args["env"]["obs_lane_stride"] = 0
@@ -228,7 +228,7 @@ class TestConfigSchema(unittest.TestCase):
         ):
             validate_opengigaflow_config(args, "training")
 
-    @patch("sys.argv", ["pufferl.py"])
+    @patch("sys.argv", ["rl.py"])
     def test_failure_replay_rejects_scenario_rendering(self):
         args = load_config("opengigaflow")
         args["eval"]["failure_replay_csv"] = "failures.csv"
@@ -238,7 +238,7 @@ class TestConfigSchema(unittest.TestCase):
         with self.assertRaisesRegex(pufferlib.APIUsageError, "scenario rendering"):
             validate_opengigaflow_config(args, "test")
 
-    @patch("sys.argv", ["pufferl.py"])
+    @patch("sys.argv", ["rl.py"])
     def test_remote_load_id_requires_tracker(self):
         args = load_config("opengigaflow")
         args["load_id"] = "remote-run"
@@ -246,7 +246,7 @@ class TestConfigSchema(unittest.TestCase):
         with self.assertRaisesRegex(pufferlib.APIUsageError, "load_id"):
             validate_opengigaflow_config(args, "test")
 
-    @patch("sys.argv", ["pufferl.py"])
+    @patch("sys.argv", ["rl.py"])
     def test_preload_map_cache_requires_use_map_cache(self):
         args = load_config("opengigaflow")
         args["env"]["preload_map_cache"] = True
@@ -255,7 +255,7 @@ class TestConfigSchema(unittest.TestCase):
         with self.assertRaisesRegex(pufferlib.APIUsageError, "preload_map_cache"):
             validate_opengigaflow_config(args, "test")
 
-    @patch("sys.argv", ["pufferl.py"])
+    @patch("sys.argv", ["rl.py"])
     def test_partner_blindness_prob_min_must_not_exceed_max(self):
         args = load_config("opengigaflow")
         args["env"]["partner_blindness_prob_min"] = 0.5

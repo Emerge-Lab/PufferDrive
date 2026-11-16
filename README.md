@@ -117,7 +117,7 @@ puffer train opengigaflow train.device=cpu vec.backend=Serial env.num_agents=64 
     train.total_timesteps=20480 train.batch_size=10240 train.minibatch_size=2560 train.bptt_horizon=16
 
 # Multi-GPU
-torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train opengigaflow
+torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.rl train opengigaflow
 ```
 
 ## Eval
@@ -268,7 +268,7 @@ DEBUG=1 python setup.py build_ext --inplace --force
 NO_TRAIN=1 python setup.py build_ext --inplace --force
 
 # Debug train
-CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m pufferlib.pufferl train opengigaflow train.device=cpu vec.backend=Serial
+CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m pufferlib.rl train opengigaflow train.device=cpu vec.backend=Serial
 # or
-gdb --args python -m pufferlib.pufferl train opengigaflow train.device=cpu vec.backend=Serial
+gdb --args python -m pufferlib.rl train opengigaflow train.device=cpu vec.backend=Serial
 ```

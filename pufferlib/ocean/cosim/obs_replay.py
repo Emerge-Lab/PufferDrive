@@ -36,7 +36,6 @@ class ObsReplayCapture:
                 "agent_f32",
                 "agent_i32",
                 "metrics_f32",
-                "puffer_f32",
                 "traffic_i16",
                 "goals_f32",
                 "rewards_f32",
@@ -79,19 +78,15 @@ class ObsReplayCapture:
         agent_f32 = np.zeros((1, cap, binding.AGENT_F32_FIELDS), np.float32)
         agent_i32 = np.zeros((1, cap, binding.AGENT_I32_FIELDS), np.int32)
         metrics_f32 = np.zeros((1, cap, binding.METRICS_F32_FIELDS), np.float32)
-        puffer_f32 = np.zeros((1, cap, binding.SCORE_F32_FIELDS), np.float32)
         traffic_i16 = np.zeros((1, tcap, binding.TRAFFIC_I16_FIELDS), np.int16)
         goals_f32 = np.zeros((1, cap, int(self.env.num_goals) * binding.GOAL_XY_FIELDS), np.float32)
         rewards_f32 = np.zeros((1, cap, binding.REWARD_F32_FIELDS), np.float32)
         coefs_f32 = np.zeros((1, cap, binding.NUM_REWARD_COEFS), np.float32)
-        self.env.get_obs_html_frame(
-            agent_f32, agent_i32, metrics_f32, puffer_f32, traffic_i16, goals_f32, rewards_f32, coefs_f32
-        )
+        self.env.get_obs_html_frame(agent_f32, agent_i32, metrics_f32, traffic_i16, goals_f32, rewards_f32, coefs_f32)
         frames = self.frames
         frames["agent_f32"].append(agent_f32[0])
         frames["agent_i32"].append(agent_i32[0])
         frames["metrics_f32"].append(metrics_f32[0])
-        frames["puffer_f32"].append(puffer_f32[0])
         frames["traffic_i16"].append(traffic_i16[0])
         frames["goals_f32"].append(goals_f32[0])
         frames["rewards_f32"].append(rewards_f32[0])
@@ -196,7 +191,6 @@ class ObsReplayCapture:
             "agent_f32": agent_f32,
             "agent_i32": np.stack(frames["agent_i32"]),
             "metrics_f32": np.stack(frames["metrics_f32"]),
-            "puffer_f32": np.stack(frames["puffer_f32"]),
             "traffic_i16": np.stack(frames["traffic_i16"]),
             "goals_f32": np.stack(frames["goals_f32"]),
             "rewards_f32": np.stack(frames["rewards_f32"]),

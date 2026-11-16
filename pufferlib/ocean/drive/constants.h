@@ -369,8 +369,7 @@ static const int ROAD_OFFSETS[25][2]
 #define MULTI_LANE_SCORE_IDX 17
 
 // Time to collision
-#define DEFAULT_TTC 5.0f              // when no vehicle ahead
-#define TTC_VIOLATION_THRESHOLD 0.95f // "within bound" rate
+#define DEFAULT_TTC 5.0f // when no vehicle ahead
 
 // Distance to collision
 #define DTC_FRONT_CONE_COS_THRESHOLD -0.90f       // 340 degree cone centered on ego heading
@@ -402,7 +401,6 @@ static const int ROAD_OFFSETS[25][2]
     10 // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx, blindness_active, braking_active
 #define GOAL_XY_FIELDS 2               // goal x, y per goal slot; reached slots stay zeroed
 #define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
-#define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
 #define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
 #define REWARD_F32_EPISODE_RETURN_IDX 0
 #define REWARD_F32_COLLISION_IDX 1

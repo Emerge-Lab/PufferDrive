@@ -24,9 +24,9 @@ echo "Total nodes: ${WORLD_SIZE}"
 start=$(date +%s)
 
 SEEDS=(1000 2000 3000 4000)
-RUN_PREFIX=k_scaled_0083
-WORKER_COUNT=128
-ROLLOUT_STEP_COUNT=128
+RUN_PREFIX=k_scaled_0084
+WORKER_COUNT=64
+ROLLOUT_STEP_COUNT=64
 MINIBATCH_SIZE=393216
 DISCARD_PARTIAL_MINIBATCH=true
 
@@ -63,6 +63,7 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # 0081 = the 0074 config (minibatch 393216, lr 5e-4) on the current code with a quarter of the rollout per iteration, 29.8k iterations instead of 7451: 64 workers per rank (0074: 128) and 64 steps per rollout (0074: 128). Seeds 1000-4000, one array task each.
 # 0082 = the 0074 config again (128 workers per rank, 128 steps per rollout, minibatch 393216, lr 5e-4) on the current code, seed 1000 only (array task 0; task 1 = seed 2000).
 # 0083 = 0082 with train.discard_partial_minibatch=true (each PPO epoch skips its leftover minibatch), seed 1000 only (array task 0).
+# 0084 = the 0081 config (64 workers per rank, 64 steps per rollout, minibatch 393216, lr 5e-4) with train.discard_partial_minibatch=true, seed 1000 only (array task 0).
 # Execute torchrun across all nodes using srun
 srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -72,7 +73,7 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --rdzv_endpoint="${MASTER_ADDR}:${MASTER_PORT}" \
     --max_restarts=0 \
     --start-method spawn \
-    -m pufferlib.pufferl train opengigaflow \
+    -m pufferlib.rl train opengigaflow \
     wandb=True \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \

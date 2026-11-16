@@ -25,7 +25,6 @@ def _replay(ghost=None):
         "agent_f32": np.zeros((FRAMES, AGENT_CAP, 12), np.float32),
         "agent_i32": np.zeros((FRAMES, AGENT_CAP, 10), np.int32),
         "metrics_f32": np.zeros((FRAMES, AGENT_CAP, 4), np.float32),
-        "puffer_f32": np.zeros((FRAMES, AGENT_CAP, 4), np.float32),
         "traffic_i16": np.zeros((FRAMES, TRAFFIC_CAP, 3), np.int16),
         "raw_action": np.ones((FRAMES, 1, 2), np.float32),
         "clipped_action": np.ones((FRAMES, 1, 2), np.float32),

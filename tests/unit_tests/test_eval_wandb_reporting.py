@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from pufferlib import pufferl
+from pufferlib import rl
 from pufferlib.ocean.evaluation_utils import eval_wandb_report
 
 
@@ -585,7 +585,7 @@ def test_training_logger_opens_the_run_with_its_config(monkeypatch):
     monkeypatch.setitem(sys.modules, "wandb", stub)
     args = defaultdict(dict, {**RUN_IDENTITY, "wandb_group": "emerge_", "tag": None})
 
-    logger = pufferl.WandbLogger(args)
+    logger = rl.WandbLogger(args)
 
     assert logger.run_id == "stub_run_id"
     assert stub.init_kwargs["id"] == RUN_IDENTITY["run_name"]

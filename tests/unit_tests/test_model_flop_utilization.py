@@ -7,8 +7,8 @@ import pytest
 import torch
 
 import pufferlib.ocean.torch as ocean_torch
-from pufferlib import pufferl
-from pufferlib.pufferl import PuffeRL
+from pufferlib import rl
+from pufferlib.rl import PuffeRL
 
 
 EGO_FEATURES = 4
@@ -105,14 +105,14 @@ def test_flop_windows_pool_over_ranks_by_peak_rate(monkeypatch):
     trainer.rollout_seconds = 1.0
     trainer.update_seconds = 0.5
     trainer.last_log_time = 1000.0
-    monkeypatch.setattr(pufferl.time, "time", lambda: 1002.0)
+    monkeypatch.setattr(rl.time, "time", lambda: 1002.0)
 
     window = trainer.flop_window()
 
     assert window == {"MFU": (70.0, 200.0), "MFU_rollout": (40.0, 100.0), "MFU_train": (30.0, 50.0)}
     # a second rank that did the same work on a GPU that spent longer in its rollout
     slower_rank_window = {"MFU": (70.0, 200.0), "MFU_rollout": (40.0, 150.0), "MFU_train": (30.0, 50.0)}
-    assert pufferl.pooled_flop_utilization_percent([window, slower_rank_window]) == {
+    assert rl.pooled_flop_utilization_percent([window, slower_rank_window]) == {
         "MFU": 35.0,
         "MFU_rollout": 32.0,
         "MFU_train": 60.0,
@@ -128,4 +128,4 @@ def test_no_flop_window_without_a_gpu_peak_or_new_agent_steps():
     trainer.global_step = 30
     trainer.last_log_step = 30
     assert trainer.flop_window() == {}
-    assert pufferl.pooled_flop_utilization_percent([{}]) == {}
+    assert rl.pooled_flop_utilization_percent([{}]) == {}

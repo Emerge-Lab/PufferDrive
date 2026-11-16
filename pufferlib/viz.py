@@ -207,7 +207,6 @@ def encode_interactive_replay(scenario, replay):
         "agent_f32": replay["agent_f32"].astype(np.float32, copy=False),
         "agent_i32": replay["agent_i32"].astype(np.int32, copy=False),
         "metrics_f32": replay["metrics_f32"].astype(np.float32, copy=False),
-        "puffer_f32": replay["puffer_f32"].astype(np.float32, copy=False),
         "traffic_i16": replay["traffic_i16"].astype(np.int16, copy=False),
         "raw_action": replay["raw_action"].astype(np.float32, copy=False),
         "clipped_action": replay["clipped_action"].astype(np.float32, copy=False),
@@ -393,7 +392,6 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         .item { display:flex; justify-content:space-between; align-items:baseline; gap:6px; padding:5px 8px; border:1px solid var(--border); border-radius:6px; background:var(--field); }
         .name { color:var(--muted); font-size:9.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .num { font-family:var(--mono); font-size:11.5px; font-variant-numeric:tabular-nums; }
-        .score-num { margin-top:6px; font-family:var(--mono); font-size:22px; font-weight:600; font-variant-numeric:tabular-nums; }
         .toggle-header { width:100%; margin-top:12px; padding:6px 0; display:flex; justify-content:space-between; align-items:center; background:transparent; color:var(--muted); border:0; border-bottom:1px solid var(--border); border-radius:0; font-size:10px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; text-align:left; cursor:pointer; }
         .toggle-header:hover { color:var(--text); }
         .toggle-header span:last-child { transition:transform .15s ease; }
@@ -457,10 +455,6 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <div id="cond-obs-grid" class="grid toggle-body"></div>
             <button type="button" id="coef-header" class="toggle-header is-collapsed" data-target="coef-grid"><span>Conditioning</span><span>&#9662;</span></button>
             <div id="coef-grid" class="grid toggle-body is-collapsed"></div>
-            <button type="button" class="toggle-header" data-target="puffer-score-body"><span>Puffer score</span><span>&#9662;</span></button>
-            <div id="puffer-score-body" class="toggle-body"><div id="tel-ps" class="score-num">0.000</div></div>
-            <button type="button" class="toggle-header" data-target="puffer-grid"><span>Puffer metrics</span><span>&#9662;</span></button>
-            <div id="puffer-grid" class="grid toggle-body"></div>
             <button type="button" class="toggle-header" data-target="metrics-grid"><span>Metrics</span><span>&#9662;</span></button>
             <div id="metrics-grid" class="grid toggle-body"></div>
         </div>
@@ -485,8 +479,6 @@ __PAYLOAD_CHUNKS__
     <script>
         const METRIC_LABELS = __METRIC_LABELS__;
         const VEHICLE_COLORS = __VEHICLE_COLORS__;
-        // Order must match the Log fields written in env_binding.h vec_get_obs_html_frame (15 values).
-        const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];
         // Order must match the REWARD_COEF_* indices in constants.h.
         const COEF_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","throttle","steer","acc","speed"];
         const REWARD_LABELS = ["collision","offroad","red light","stop sign","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed"];
@@ -617,7 +609,7 @@ self.onmessage = async event => {
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
             if (C.obs && !C.obs_scale) C.obs_scale = new Float32Array(H.obs_dim).fill(H.obs_scale === undefined ? 1 : H.obs_scale); // pre-per-dim replays
             if (C.obs && H.obs_layout === "agent_dim_frame_delta") { const T = H.frames, o = C.obs; for (let row = 0; row < o.length; row += T) for (let t = row + 1; t < row + T; t++) o[t] += o[t-1]; }
-            F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2], gf:H.chunks.goals_f32 ? H.chunks.goals_f32.shape[2] : 0, rf:H.chunks.rewards_f32 ? H.chunks.rewards_f32.shape[2] : 0, cf:H.chunks.coefs_f32 ? H.chunks.coefs_f32.shape[2] : 0};
+            F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], tf:H.chunks.traffic_i16.shape[2], gf:H.chunks.goals_f32 ? H.chunks.goals_f32.shape[2] : 0, rf:H.chunks.rewards_f32 ? H.chunks.rewards_f32.shape[2] : 0, cf:H.chunks.coefs_f32 ? H.chunks.coefs_f32.shape[2] : 0};
             expertAgentIndices = new Set(H.expert_indices);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
@@ -750,7 +742,7 @@ self.onmessage = async event => {
             }
         }
         function agentAt(frame, idx) {
-            // Light decode (no metric copies) — called for every agent every frame; metrics/puffer read on demand.
+            // Light decode (no metric copies) — called for every agent every frame; metrics read on demand.
             const ib = (frame * H.agent_cap + idx) * F.ai;
             if (!C.agent_i32[ib+2]) return null;
             const fb = (frame * H.agent_cap + idx) * F.af;
@@ -960,8 +952,6 @@ self.onmessage = async event => {
             panelKey = key;
             const mg = document.getElementById('metrics-grid');
             mg.innerHTML = METRIC_LABELS.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('');
-            const pg = document.getElementById('puffer-grid');
-            pg.innerHTML = PUFFER_LABELS.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('');
             const rg = document.getElementById('reward-grid');
             const rewardLabels = ["return (cum)","total (step)"].concat(REWARD_LABELS.slice(0, Math.max(0, F.rf - 1)));
             rg.innerHTML = C.rewards_f32 ? rewardLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
@@ -1004,7 +994,6 @@ self.onmessage = async event => {
             pol.innerHTML = html;
             refs = {
                 metric: [...mg.querySelectorAll('.num')],
-                puffer: [...pg.querySelectorAll('.num')],
                 rewardCells: [...rg.querySelectorAll('.num')],
                 coefCells: [...kg.querySelectorAll('.num')],
                 polV: pol.querySelector('[data-pol=v]'), polE: pol.querySelector('[data-pol=e]'),
@@ -1062,10 +1051,9 @@ self.onmessage = async event => {
             if (followedId === null || !agent) { hud.style.display='none'; obsBox.style.display='none'; return; }
             hud.style.display='block'; document.getElementById('camMode').textContent = isEgoCam ? 'ego cam' : 'world cam';
             ensurePanels();
-            const mb = (f * H.agent_cap + agent.idx) * F.mf, pb = (f * H.agent_cap + agent.idx) * F.pf;
-            for (const [id,val] of [["tel-id",agent.id],["tel-speed",(agent.s*3.6).toFixed(1)],["tel-st",(agent.st*180/Math.PI).toFixed(1)],["tel-al",agent.al.toFixed(2)],["tel-alat",agent.alat.toFixed(2)],["tel-jl",agent.jl.toFixed(2)],["tel-jlat",agent.jlat.toFixed(2)],["tel-x",agent.x.toFixed(1)],["tel-y",agent.y.toFixed(1)],["tel-h",agent.h.toFixed(3)],["tel-lane",agent.cl],["tel-ps",C.puffer_f32[pb].toFixed(3)]]) document.getElementById(id).textContent = val;
+            const mb = (f * H.agent_cap + agent.idx) * F.mf;
+            for (const [id,val] of [["tel-id",agent.id],["tel-speed",(agent.s*3.6).toFixed(1)],["tel-st",(agent.st*180/Math.PI).toFixed(1)],["tel-al",agent.al.toFixed(2)],["tel-alat",agent.alat.toFixed(2)],["tel-jl",agent.jl.toFixed(2)],["tel-jlat",agent.jlat.toFixed(2)],["tel-x",agent.x.toFixed(1)],["tel-y",agent.y.toFixed(1)],["tel-h",agent.h.toFixed(3)],["tel-lane",agent.cl]]) document.getElementById(id).textContent = val;
             for (let i=0;i<refs.metric.length;i++) refs.metric[i].textContent = C.metrics_f32[mb+i].toFixed(2);
-            for (let i=0;i<refs.puffer.length;i++) refs.puffer[i].textContent = C.puffer_f32[pb+i].toFixed(3);
             if (refs.rewardCells.length) {
                 // rewards_f32 rows are cumulative Log sums; step value = difference to the previous frame.
                 const rb = (f * H.agent_cap + agent.idx) * F.rf, rbPrev = ((f-1) * H.agent_cap + agent.idx) * F.rf;

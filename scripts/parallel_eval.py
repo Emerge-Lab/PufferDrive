@@ -157,7 +157,7 @@ def main():
         command = [
             sys.executable,
             "-m",
-            "pufferlib.pufferl",
+            "pufferlib.rl",
             "eval",
             arguments.env_name,
             arguments.benchmark,

@@ -8,7 +8,7 @@ import pytest
 import torch
 from torch.utils._python_dispatch import TorchDispatchMode
 
-from pufferlib.pufferl import PuffeRL, rank_core_share
+from pufferlib.rl import PuffeRL, rank_core_share
 from pufferlib.vector import Multiprocessing
 
 

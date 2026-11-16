@@ -459,8 +459,8 @@ static PyObject *vec_get(PyObject *self, PyObject *args) {
 }
 
 static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 9) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_obs_html_frame requires 9 arguments");
+    if (PyTuple_Size(args) != 8) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_obs_html_frame requires 8 arguments");
         return NULL;
     }
 
@@ -472,15 +472,14 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     PyArrayObject *agent_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 1);
     PyArrayObject *agent_i32_array = (PyArrayObject *) PyTuple_GetItem(args, 2);
     PyArrayObject *metrics_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 3);
-    PyArrayObject *puffer_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 4);
-    PyArrayObject *traffic_i16_array = (PyArrayObject *) PyTuple_GetItem(args, 5);
-    PyArrayObject *goals_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 6);
-    PyArrayObject *rewards_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 7);
-    PyArrayObject *coefs_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 8);
+    PyArrayObject *traffic_i16_array = (PyArrayObject *) PyTuple_GetItem(args, 4);
+    PyArrayObject *goals_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 5);
+    PyArrayObject *rewards_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 6);
+    PyArrayObject *coefs_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 7);
 
     if (!PyArray_Check(agent_f32_array) || !PyArray_Check(agent_i32_array) || !PyArray_Check(metrics_f32_array)
-        || !PyArray_Check(puffer_f32_array) || !PyArray_Check(traffic_i16_array) || !PyArray_Check(goals_f32_array)
-        || !PyArray_Check(rewards_f32_array) || !PyArray_Check(coefs_f32_array)) {
+        || !PyArray_Check(traffic_i16_array) || !PyArray_Check(goals_f32_array) || !PyArray_Check(rewards_f32_array)
+        || !PyArray_Check(coefs_f32_array)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -488,7 +487,6 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     memset(PyArray_DATA(agent_f32_array), 0, PyArray_NBYTES(agent_f32_array));
     memset(PyArray_DATA(agent_i32_array), 0, PyArray_NBYTES(agent_i32_array));
     memset(PyArray_DATA(metrics_f32_array), 0, PyArray_NBYTES(metrics_f32_array));
-    memset(PyArray_DATA(puffer_f32_array), 0, PyArray_NBYTES(puffer_f32_array));
     memset(PyArray_DATA(traffic_i16_array), 0, PyArray_NBYTES(traffic_i16_array));
     memset(PyArray_DATA(goals_f32_array), 0, PyArray_NBYTES(goals_f32_array));
     memset(PyArray_DATA(rewards_f32_array), 0, PyArray_NBYTES(rewards_f32_array));
@@ -497,7 +495,6 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     float *agent_f32 = (float *) PyArray_DATA(agent_f32_array);
     int *agent_i32 = (int *) PyArray_DATA(agent_i32_array);
     float *metrics_f32 = (float *) PyArray_DATA(metrics_f32_array);
-    float *puffer_f32 = (float *) PyArray_DATA(puffer_f32_array);
     short *traffic_i16 = (short *) PyArray_DATA(traffic_i16_array);
     float *goals_f32 = (float *) PyArray_DATA(goals_f32_array);
     float *rewards_f32 = (float *) PyArray_DATA(rewards_f32_array);
@@ -509,7 +506,6 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     int agent_f32_fields = (int) PyArray_DIM(agent_f32_array, 2);
     int agent_i32_fields = (int) PyArray_DIM(agent_i32_array, 2);
     int metric_fields = (int) PyArray_DIM(metrics_f32_array, 2);
-    int puffer_fields = (int) PyArray_DIM(puffer_f32_array, 2);
     int traffic_cap = (int) PyArray_DIM(traffic_i16_array, 1);
     int traffic_fields = (int) PyArray_DIM(traffic_i16_array, 2);
     int goal_fields = (int) PyArray_DIM(goals_f32_array, 2);
@@ -569,7 +565,6 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
                     continue;
                 }
                 int i32_base = (e * agent_cap + agent_idx) * agent_i32_fields;
-                int puffer_base = (e * agent_cap + agent_idx) * puffer_fields;
                 int reward_base = (e * agent_cap + agent_idx) * reward_fields;
                 agent_i32[i32_base + 7] = j;
 
@@ -585,22 +580,6 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
                     continue;
                 }
                 Log *log = &drive->logs[j];
-                puffer_f32[puffer_base + 0] = log->puffer_score;
-                puffer_f32[puffer_base + 1] = log->no_at_fault;
-                puffer_f32[puffer_base + 2] = log->no_offroad;
-                puffer_f32[puffer_base + 3] = log->no_red_light;
-                puffer_f32[puffer_base + 4] = log->making_progress;
-                puffer_f32[puffer_base + 5] = log->driving_direction_score;
-                puffer_f32[puffer_base + 6] = log->ttc_puffer_rate;
-                puffer_f32[puffer_base + 7] = log->progress_ratio;
-                puffer_f32[puffer_base + 8] = log->speed_limit_compliance;
-                puffer_f32[puffer_base + 9] = log->comfort_score;
-                puffer_f32[puffer_base + 10] = log->multi_lane_score;
-                puffer_f32[puffer_base + 11] = log->wrong_way_distance;
-                puffer_f32[puffer_base + 12] = log->speed_violation_sum;
-                puffer_f32[puffer_base + 13] = log->multiplier;
-                puffer_f32[puffer_base + 14] = log->weighted_average;
-
                 rewards_f32[reward_base + REWARD_F32_EPISODE_RETURN_IDX] = log->episode_return;
                 rewards_f32[reward_base + REWARD_F32_COLLISION_IDX] = log->reward_collision;
                 rewards_f32[reward_base + REWARD_F32_OFFROAD_IDX] = log->reward_offroad;
@@ -1285,7 +1264,6 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "AGENT_I32_FIELDS", AGENT_I32_FIELDS);
     PyModule_AddIntConstant(m, "GOAL_XY_FIELDS", GOAL_XY_FIELDS);
     PyModule_AddIntConstant(m, "METRICS_F32_FIELDS", METRICS_F32_FIELDS);
-    PyModule_AddIntConstant(m, "SCORE_F32_FIELDS", SCORE_F32_FIELDS);
     PyModule_AddIntConstant(m, "REWARD_F32_FIELDS", REWARD_F32_FIELDS);
     PyModule_AddIntConstant(m, "TRAFFIC_I16_FIELDS", TRAFFIC_I16_FIELDS);
     PyModule_AddIntConstant(m, "NUM_REWARD_COEFS", NUM_REWARD_COEFS);

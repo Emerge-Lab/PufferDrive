@@ -3,7 +3,7 @@
 Under DDP every rank holds identical policy weights; if ranks also shared
 identical torch and env seeds they would collect (near-)duplicate experience
 and multi-node training would degenerate to single-node. train() derives
-per-rank seeds via `pufferl.derive_rank_seeds(vec_seed, train_seed,
+per-rank seeds via `rl.derive_rank_seeds(vec_seed, train_seed,
 world_size, global_rank)`; these tests pin its contract:
 
   - every GPU (rank) gets a distinct torch seed and env seed
@@ -19,7 +19,7 @@ No env/C-sim/GPU needed.
 
 import pytest
 
-from pufferlib.pufferl import derive_rank_seeds
+from pufferlib.rl import derive_rank_seeds
 
 VEC_SEED = 42
 TRAIN_SEED = 42
