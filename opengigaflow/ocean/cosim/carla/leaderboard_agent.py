@@ -49,7 +49,7 @@ ROAD_RAY_HALF_SPAN_M = (
 )
 ROAD_RAY_LABELS = (carla.CityObjectLabel.Roads, carla.CityObjectLabel.RoadLines, carla.CityObjectLabel.Bridge)
 
-CARLA_VIEW_SENSOR_ID = "puffer_chase_cam"
+CARLA_VIEW_SENSOR_ID = "opengigaflow_chase_cam"
 CARLA_VIEW_WIDTH, CARLA_VIEW_HEIGHT, CARLA_VIEW_FOV = 960, 540, 90
 # Behind + above the ego, looking forward and down: the leaderboard
 # enforces sqrt(x^2+y^2+z^2) <= agent_wrapper.MAX_ALLOWED_RADIUS_SENSOR (3.0 m)

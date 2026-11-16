@@ -1,6 +1,6 @@
 """Model FLOP utilization of the real PPO loop: rollout, update and whole epoch, plus agent steps per second.
 
-Builds the trainer exactly as `puffer train opengigaflow` does, runs warm-up epochs (torch.compile), then measures
+Builds the trainer exactly as `opengigaflow train` does, runs warm-up epochs (torch.compile), then measures
 steady-state epochs. The model FLOPs per transition and the tensor-core peak of this GPU are the trainer's own
 (the values behind the MFU it logs), so no profiler touches the compiled policy (a TorchDispatchMode around it
 makes dynamo skip the frame for the rest of the process).
@@ -127,31 +127,31 @@ def main():
     vecenv = P.load_env(config, seed=env_seed, pin_workers=cpus_bound)
     policy = P.load_policy(config, vecenv, ENV_NAME)
     train_config = dict(**config["train"], env=ENV_NAME, eval=config.get("eval", {}), run_name=config["run_name"])
-    pufferl = P.PuffeRL(train_config, vecenv, policy)
-    pufferl.profile.frequency = 1 if args.profile else 10**9
+    trainer = P.PPOTrainer(train_config, vecenv, policy)
+    trainer.profile.frequency = 1 if args.profile else 10**9
     if args.load_model:
         state = torch.load(args.load_model, map_location=config["train"]["device"], weights_only=False)
         state = state.get("policy_state_dict", state)
-        pufferl.uncompiled_policy.load_state_dict(P.clean_policy_state_dict(state))
+        trainer.uncompiled_policy.load_state_dict(P.clean_policy_state_dict(state))
 
-    forward_flops = pufferl.forward_flops_per_transition
-    train_flops = pufferl.update_flops_per_transition
-    peak_tflops = pufferl.peak_flops_per_second / P.FLOPS_PER_TFLOP
+    forward_flops = trainer.forward_flops_per_transition
+    train_flops = trainer.update_flops_per_transition
+    peak_tflops = trainer.peak_flops_per_second / P.FLOPS_PER_TFLOP
     counters = defaultdict(int)
-    original_ppo_loss = pufferl._ppo_loss
+    original_ppo_loss = trainer._ppo_loss
 
     def counting_ppo_loss(mb_obs, *rest, **kwargs):
         counters["samples"] += mb_obs.shape[0]
         counters["minibatches"] += 1
         return original_ppo_loss(mb_obs, *rest, **kwargs)
 
-    pufferl._ppo_loss = counting_ppo_loss
+    trainer._ppo_loss = counting_ppo_loss
     properties = torch.cuda.get_device_properties(0)
     capability = torch.cuda.get_device_capability(0)
     agent_steps = train_config["batch_size"]
     print(
         f"{properties.name} capability {capability}, {args.num_envs} envs, {vecenv.num_agents} agents, "
-        f"minibatch {pufferl.minibatch_size}, fused_slot_encoder={args.fused}, "
+        f"minibatch {trainer.minibatch_size}, fused_slot_encoder={args.fused}, "
         f"model FLOP per transition: forward {forward_flops / 1e6:.2f} MFLOP, update {train_flops / 1e6:.2f} MFLOP, "
         f"measured tensor-core peak {peak_tflops:.1f} TFLOP/s",
         flush=True,
@@ -161,28 +161,28 @@ def main():
 
         def update_or_skip():
             if args.rollout_only:
-                pufferl.epoch += 1  # keep the trainer's epoch bookkeeping moving without an update
+                trainer.epoch += 1  # keep the trainer's epoch bookkeeping moving without an update
                 return 0.0, None
-            return timed(pufferl.train)
+            return timed(trainer.train)
 
         for epoch in range(args.warmup):
-            rollout_seconds, _ = timed(pufferl.evaluate)
+            rollout_seconds, _ = timed(trainer.evaluate)
             update_seconds, _ = update_or_skip()
             print(f"warmup epoch {epoch}: rollout {rollout_seconds:.2f} s, update {update_seconds:.2f} s", flush=True)
         frames = dict(torch._dynamo.utils.counters["frames"])
         if args.kernel_table:
             from torch.profiler import ProfilerActivity, profile
 
-            for label, fn in (("rollout", pufferl.evaluate), ("update", update_or_skip)):
+            for label, fn in (("rollout", trainer.evaluate), ("update", update_or_skip)):
                 with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
                     wall_seconds, _ = timed(fn)
                 print_kernel_table(prof, label, wall_seconds)
                 print_gemm_shape_table(prof, label)
-        profile_baseline = {name: pufferl.profile.profiles[name]["elapsed"] for name in PROFILE_SECTIONS}
+        profile_baseline = {name: trainer.profile.profiles[name]["elapsed"] for name in PROFILE_SECTIONS}
         epochs = []
         for epoch in range(args.epochs):
             counters.clear()
-            rollout_seconds, _ = timed(pufferl.evaluate)
+            rollout_seconds, _ = timed(trainer.evaluate)
             update_seconds, _ = update_or_skip()
             epochs.append((rollout_seconds, update_seconds, counters["samples"]))
             print(
@@ -191,13 +191,13 @@ def main():
                 flush=True,
             )
     finally:
-        pufferl.utilization.stop()
+        trainer.utilization.stop()
         vecenv.close()
 
     if args.profile:
         print("section split per epoch (trainer profiler, CUDA-synchronized at every boundary):")
         for name in PROFILE_SECTIONS:
-            seconds = (pufferl.profile.profiles[name]["elapsed"] - profile_baseline[name]) / len(epochs)
+            seconds = (trainer.profile.profiles[name]["elapsed"] - profile_baseline[name]) / len(epochs)
             if seconds > 0:
                 print(f"  {name:14s} {seconds:6.2f} s")
     if args.rollout_only:
@@ -221,7 +221,7 @@ def main():
         "capability": list(capability),
         "fused": args.fused,
         "num_envs": args.num_envs,
-        "minibatch": pufferl.minibatch_size,
+        "minibatch": trainer.minibatch_size,
         "steady_epochs": len(steady),
         "kept_transitions_per_epoch": kept,
         "agent_steps_per_epoch": agent_steps,

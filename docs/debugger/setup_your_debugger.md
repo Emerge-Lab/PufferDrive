@@ -1,4 +1,4 @@
-# Setting Up a C/Python Debugger for PufferAI
+# Setting Up a C/Python Debugger for OpenGigaFlow
 
 Debuggers are extremely useful tools. They let you step through code
 instruction by instruction and observe how variables change over time.
@@ -22,7 +22,7 @@ beginner-friendly [vscode debugger tutorial video](https://www.youtube.com/watch
 Setting up a Python debugger is straightforward, and plenty of guides
 exist online.\
 However, debugging a Python application that spawns **multiple C/C++
-threads**, such as PufferAI environments, requires a bit more care.
+threads**, such as OpenGigaFlow environments, requires a bit more care.
 
 This guide is for **Unix-based systems (e.g., Ubuntu)** using
 **VSCode**, which seems to be the default in the lab.
@@ -50,10 +50,10 @@ gdb --version
 
 ## 2. Configure VSCode
 
-Inside your **PufferDrive** directory, create a `.vscode` folder:
+Inside your checkout, create a `.vscode` folder:
 
 ``` bash
-mkdir PufferDrive/.vscode
+mkdir .vscode
 ```
 
 Now create a file called **`launch.json`** with the following content:
@@ -63,13 +63,13 @@ Now create a file called **`launch.json`** with the following content:
   "configurations": [
     // --- Python debugger only ---
     {
-      "name": "Python: Debug puffer train opengigaflow",
+      "name": "Python: Debug opengigaflow train",
       "type": "python",
       "request": "launch",
       "module": "opengigaflow.rl",
-      "args": ["train", "opengigaflow"],
+      "args": ["train"],
       "cwd": "${workspaceFolder}",
-      "python": "/home/ricky/git/PufferDrive/.venv/bin/python", // <- TODO: point to your python interpreter
+      "python": "${workspaceFolder}/.venv/bin/python", // <- TODO: point to your python interpreter
       "justMyCode": false,
       "env": {
         "PYTHONPATH": "${workspaceFolder}"
@@ -81,8 +81,8 @@ Now create a file called **`launch.json`** with the following content:
       "name": "C (gdb): Debug C inside opengigaflow",
       "type": "cppdbg",
       "request": "launch",
-      "program": "/home/ricky/git/PufferDrive/.venv/bin/python", // <- TODO: point to your python interpreter
-      "args": ["-m", "opengigaflow.rl", "train", "opengigaflow"],
+      "program": "${workspaceFolder}/.venv/bin/python", // <- TODO: point to your python interpreter
+      "args": ["-m", "opengigaflow.rl", "train"],
       "cwd": "${workspaceFolder}",
       "MIMode": "gdb",
 
@@ -106,7 +106,7 @@ Now create a file called **`launch.json`** with the following content:
 -  The first configuration is the standard Python debugger.
 -  The second runs Python **inside `gdb`**, enabling C/C++
     breakpoints.
--  The `"follow-fork-mode child"` line is crucial---PufferAI
+-  The `"follow-fork-mode child"` line is crucial---OpenGigaFlow
     environments spawn child processes that must be traced.
 
 ------------------------------------------------------------------------

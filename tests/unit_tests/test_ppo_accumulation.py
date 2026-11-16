@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 import torch
 
-from opengigaflow.rl import PuffeRL
+from opengigaflow.rl import PPOTrainer
 
 
 class ValuePolicy(torch.nn.Module):
@@ -43,7 +43,7 @@ class ValuePolicy(torch.nn.Module):
 def test_filtered_ppo_accumulation_matches_optimizer_batches(
     retained_count, microbatch_size, accumulation_count, discard_partial_minibatch, trained_count_per_epoch
 ):
-    trainer = PuffeRL.__new__(PuffeRL)
+    trainer = PPOTrainer.__new__(PPOTrainer)
     trainer.policy = ValuePolicy()
     trainer.config = {
         "device": "cpu",

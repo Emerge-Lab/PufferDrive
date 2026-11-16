@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name train_puffer
+#SBATCH --job-name train_opengigaflow
 #SBATCH --nodes 4                        # Number of nodes requested
 #SBATCH --ntasks-per-node 1              # Run 1 srun task per node (which fires up torchrun)
 #SBATCH --gres gpu:8                     # GPUs per node
@@ -84,12 +84,11 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --rdzv_endpoint="${MASTER_ADDR}:${MASTER_PORT}" \
     --max_restarts=0 \
     --start-method spawn \
-    -m opengigaflow.rl train opengigaflow \
+    -m opengigaflow.rl train \
     wandb=True \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
-    train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
     vec.num_envs=128 \

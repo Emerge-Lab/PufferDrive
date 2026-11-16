@@ -8,7 +8,7 @@ import torch
 
 import opengigaflow.ocean.torch as ocean_torch
 from opengigaflow import rl
-from opengigaflow.rl import PuffeRL
+from opengigaflow.rl import PPOTrainer
 
 
 EGO_FEATURES = 4
@@ -95,7 +95,7 @@ def test_tensor_core_peak_is_measured_without_touching_the_training_rng():
 
 
 def test_flop_windows_pool_over_ranks_by_peak_rate(monkeypatch):
-    trainer = PuffeRL.__new__(PuffeRL)
+    trainer = PPOTrainer.__new__(PPOTrainer)
     trainer.peak_flops_per_second = 100.0
     trainer.forward_flops_per_transition = 2.0
     trainer.update_flops_per_transition = 6.0
@@ -120,7 +120,7 @@ def test_flop_windows_pool_over_ranks_by_peak_rate(monkeypatch):
 
 
 def test_no_flop_window_without_a_gpu_peak_or_new_agent_steps():
-    trainer = PuffeRL.__new__(PuffeRL)
+    trainer = PPOTrainer.__new__(PPOTrainer)
     trainer.peak_flops_per_second = None
     assert trainer.flop_window() == {}
 

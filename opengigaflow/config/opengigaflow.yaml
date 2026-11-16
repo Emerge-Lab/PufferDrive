@@ -2,7 +2,7 @@ load_model_path: null
 load_id: null
 num_scenarios: 3
 wandb: false
-wandb_project: pufferlib
+wandb_project: opengigaflow
 wandb_group: debug
 # Unique run identifier. Doubles as the logger run id, so relaunching with the
 # same run_name and train.data_dir resumes that run instead of starting a new one.
@@ -258,8 +258,6 @@ policy:
   fused_slot_encoder: true
   action_type: discrete
 train:
-  name: pufferai
-  project: ablations
   seed: 42
   # Filename of the final model copy written into train.data_dir when training ends.
   final_model_name: final_model.pt

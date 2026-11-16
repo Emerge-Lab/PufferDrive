@@ -52,7 +52,7 @@ SERVER_ENV_DROPPED = ("LD_LIBRARY_PATH", "PYTHONPATH", "PYTHONHOME")  # the gara
 PROTOCOL_TIMEOUT_S = 600.0  # one reply per tick; the evaluator's own agent watchdog is --timeout (600 s)
 SERVER_EXIT_TIMEOUT_S = 60.0
 
-CARLA_VIEW_SENSOR_ID = "puffer_chase_cam"
+CARLA_VIEW_SENSOR_ID = "opengigaflow_chase_cam"
 CARLA_VIEW_WIDTH, CARLA_VIEW_HEIGHT, CARLA_VIEW_FOV = 960, 540, 90
 CARLA_VIEW_TRANSFORM = dict(x=-2.0, y=0.0, z=2.1, roll=0.0, pitch=-15.0, yaw=0.0)  # within the 3 m sensor radius
 MP4_FOURCC = "mp4v"

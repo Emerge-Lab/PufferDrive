@@ -387,7 +387,7 @@ static const int ROAD_OFFSETS[25][2]
 #define MAX_STOPPED_SECONDS 60.0f
 
 #define METRIC_SCORE_WINDOW_SECONDS 10.0f
-#define PUFFER_PROGRESS_REFERENCE_SPEED 10.0f
+#define PROGRESS_REFERENCE_SPEED_MPS 10.0f
 
 // =====================================================================================
 // 11. TELEMETRY

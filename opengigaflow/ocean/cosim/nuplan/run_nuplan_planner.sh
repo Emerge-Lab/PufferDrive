@@ -66,13 +66,13 @@
 #             details/ (metrics, the aggregator table, hydra config, runner report; the selected scenarios'
 #             videos as .mp4 when carl_visualization_callback ran). TIDY=0 leaves nuPlan's
 #             simulation/<challenge>/<run_ts> tree with every log (2300 files in 2000 folders per Val14 run).
-if [ -z "$INSIDE_PUFFER_CONTAINER" ] && [ -f /share/apps/images/slurm-ib-bind-apptainer.sh ]; then
+if [ -z "$INSIDE_OPENGIGAFLOW_CONTAINER" ] && [ -f /share/apps/images/slurm-ib-bind-apptainer.sh ]; then
     source /share/apps/images/slurm-ib-bind-apptainer.sh
     export APPTAINERENV_PREPEND_PATH=/share/apps/apptainer/bin:$APPTAINERENV_PREPEND_PATH
     exec singularity exec \
       --bind /scratch/yw4142:/scratch/yw4142 \
       /share/apps/images/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif \
-      env INSIDE_PUFFER_CONTAINER=1 bash "$0"
+      env INSIDE_OPENGIGAFLOW_CONTAINER=1 bash "$0"
 fi
 set -u
 

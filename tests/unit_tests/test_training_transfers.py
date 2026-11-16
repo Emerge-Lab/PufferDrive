@@ -8,7 +8,7 @@ import pytest
 import torch
 from torch.utils._python_dispatch import TorchDispatchMode
 
-from opengigaflow.rl import PuffeRL, rank_core_share
+from opengigaflow.rl import PPOTrainer, rank_core_share
 from opengigaflow.vector import Multiprocessing
 
 
@@ -103,7 +103,7 @@ class RejectScalarReadback(TorchDispatchMode):
     ["cpu", pytest.param("cuda", marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable"))],
 )
 def test_gradient_norms_stay_on_device_without_changing_updates(separate, device):
-    trainer = PuffeRL.__new__(PuffeRL)
+    trainer = PPOTrainer.__new__(PPOTrainer)
     trainer.config = {"max_grad_norm": 0.5}
     trainer.policy = torch.nn.ParameterList(
         [

@@ -106,18 +106,18 @@ Place binaries under `opengigaflow/resources/`.
 
 ```bash
 # Single node
-puffer train opengigaflow
+opengigaflow train
 
 # Override config on the fly (Hydra syntax: dotted.key=value). An override for a setting the config
 # does not have is ignored with a WARNING on stderr, so check the log for typos.
-puffer train opengigaflow train.learning_rate=0.001 env.num_agents=512
+opengigaflow train train.learning_rate=0.001 env.num_agents=512
 
 # Local smoke test on a machine without CUDA
-puffer train opengigaflow train.device=cpu vec.backend=Serial env.num_agents=64 \
+opengigaflow train train.device=cpu vec.backend=Serial env.num_agents=64 \
     train.total_timesteps=20480 train.batch_size=10240 train.minibatch_size=2560 train.bptt_horizon=16
 
 # Multi-GPU
-torchrun --standalone --nnodes=1 --nproc-per-node=6 -m opengigaflow.rl train opengigaflow
+torchrun --standalone --nnodes=1 --nproc-per-node=6 -m opengigaflow.rl train
 ```
 
 ## Eval
@@ -129,7 +129,7 @@ without it add `train.device=cpu`.
 
 ```bash
 # Run the CARLA YAML benchmark and render every evaluated scenario
-puffer eval opengigaflow carla \
+opengigaflow eval carla \
   load_model_path=experiments/opengigaflow_xxxx/models/model_opengigaflow_000500.pt \
   eval.render_scenarios=true \
   eval.capture_observations=false
@@ -141,7 +141,7 @@ deleted afterwards unless `eval.keep_zlib_replays=true`. To render only episodes
 where `offroad_rate > 0` instead:
 
 ```bash
-puffer eval opengigaflow carla \
+opengigaflow eval carla \
   load_model_path=experiments/opengigaflow_xxxx/models/model_opengigaflow_000500.pt \
   eval.render_filter=offroad_rate \
   eval.max_rendered_failures=10 \
@@ -268,7 +268,7 @@ DEBUG=1 python setup.py build_ext --inplace --force
 NO_TRAIN=1 python setup.py build_ext --inplace --force
 
 # Debug train
-CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m opengigaflow.rl train opengigaflow train.device=cpu vec.backend=Serial
+CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m opengigaflow.rl train train.device=cpu vec.backend=Serial
 # or
-gdb --args python -m opengigaflow.rl train opengigaflow train.device=cpu vec.backend=Serial
+gdb --args python -m opengigaflow.rl train train.device=cpu vec.backend=Serial
 ```

@@ -161,7 +161,7 @@ def test_shipped_config_declares_a_valid_action_selection(monkeypatch):
     import opengigaflow.rl as rl
 
     # load_config treats everything left in argv as a Hydra override.
-    monkeypatch.setattr(sys, "argv", ["puffer"])
+    monkeypatch.setattr(sys, "argv", ["opengigaflow"])
     args = rl.load_config("opengigaflow")
     assert args["eval"]["action_selection"] in VALID_ACTION_SELECTIONS
 
@@ -169,7 +169,7 @@ def test_shipped_config_declares_a_valid_action_selection(monkeypatch):
 def test_config_rejects_invalid_action_selection(monkeypatch):
     import opengigaflow.rl as rl
 
-    monkeypatch.setattr(sys, "argv", ["puffer", "eval.action_selection=banana"])
+    monkeypatch.setattr(sys, "argv", ["opengigaflow", "eval.action_selection=banana"])
     with pytest.raises(opengigaflow.APIUsageError):
         rl.load_config("opengigaflow")
 
@@ -183,7 +183,7 @@ def test_drive_mean_action_is_exact_in_physical_units(monkeypatch):
     from opengigaflow.ocean.drive import binding
     from opengigaflow.ocean.drive.drive import Drive as DriveEnv
 
-    monkeypatch.setattr(sys, "argv", ["puffer"])
+    monkeypatch.setattr(sys, "argv", ["opengigaflow"])
     args = rl.load_config("opengigaflow")
     env = DriveEnv(
         num_agents=64,

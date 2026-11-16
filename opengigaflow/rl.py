@@ -1,6 +1,6 @@
-## puffer [train | eval] [env_name] [optional args] -- See https://puffer.ai for full detail0
-# This is the same as python -m opengigaflow.rl [train | eval] [env_name] [optional args]
-# Distributed example: torchrun --standalone --nnodes=1 --nproc-per-node=6 -m opengigaflow.rl train puffer_nmmo3
+## opengigaflow [train | eval <benchmark>] [optional args]
+# This is the same as python -m opengigaflow.rl [train | eval <benchmark>] [optional args]
+# Distributed example: torchrun --standalone --nnodes=1 --nproc-per-node=6 -m opengigaflow.rl train
 
 import contextlib
 import copy
@@ -89,6 +89,7 @@ HIDDEN_DASHBOARD_METRICS = {
 # sums over one logging window: their size follows the logging cadence, so they are not charted
 UNCHARTED_WINDOW_SUM_METRICS = {"n", "total_distance_travelled", "total_infractions"}
 FLOPS_PER_TFLOP = 1e12
+ENV_NAME = "opengigaflow"
 
 
 def torch_device(device):
@@ -114,7 +115,7 @@ def logits_to_float(logits):
     return logits.float()
 
 
-class PuffeRL:
+class PPOTrainer:
     def __init__(self, config, vecenv, policy, logger=None):
         # Backend perf optimization; tf32=False forces true float32 matmuls/convs
         allow_tf32 = config.get("tf32", True)
@@ -845,9 +846,7 @@ class PuffeRL:
 
         return model_path
 
-    def print_dashboard(
-        self, clear=False, idx=[0], c1="[cyan]", c2="[dim default]", b1="[bright_cyan]", b2="[default]"
-    ):
+    def print_dashboard(self, clear=False, c1="[cyan]", c2="[dim default]", b1="[bright_cyan]", b2="[default]"):
         config = self.config
         sps = dist_sum(self.sps, config["device"])
         agent_steps = dist_sum(self.global_step, config["device"])
@@ -867,13 +866,12 @@ class PuffeRL:
         table.add_column(justify="right", width=13)
 
         table.add_row(
-            f"{b1}PufferLib {b2}3.0 {idx[0] * ' '}:blowfish:",
+            f"{b1}OpenGigaFlow",
             f"{c1}CPU: {b2}{np.mean(self.utilization.cpu_util):.1f}{c2}%",
             f"{c1}GPU: {b2}{np.mean(self.utilization.gpu_util):.1f}{c2}%",
             f"{c1}DRAM: {b2}{np.mean(self.utilization.cpu_mem):.1f}{c2}%",
             f"{c1}VRAM: {b2}{np.mean(self.utilization.gpu_mem):.1f}{c2}%",
         )
-        idx[0] = (idx[0] - 1) % 10
 
         s = Table(box=None, expand=True)
         remaining = f"{b2}A hair past a freckle{c2}"
@@ -959,8 +957,8 @@ class PuffeRL:
 
 def compute_puff_advantage(values, rewards, terminals, advantages, gamma, gae_lambda):
     """CUDA kernel for puffer advantage with automatic CPU fallback. You need
-    nvcc (in cuda-dev-tools or in a cuda-dev docker base) for PufferLib to
-    compile the fast version."""
+    nvcc (in cuda-dev-tools or in a cuda-dev docker base) to compile the fast
+    version."""
 
     device = values.device
     if not ADVANTAGE_CUDA:
@@ -1286,9 +1284,9 @@ def _save_experiment_config(args, path):
         yaml.dump(config, f)
 
 
-def _global_agent_steps(pufferl):
+def _global_agent_steps(trainer):
     world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
-    return int(pufferl.global_step * world_size)
+    return int(trainer.global_step * world_size)
 
 
 def derive_rank_seeds(vec_seed, train_seed, world_size, global_rank):
@@ -1313,8 +1311,8 @@ def parse_cpulist(cpulist):
 
 
 def apply_matmul_env_flags():
-    """PUFFER_BF16_REDUCED_REDUCTION=1 lets cuBLAS pick split-K kernels whose partial sums reduce in bf16."""
-    if os.environ.get("PUFFER_BF16_REDUCED_REDUCTION") == "1":
+    """OPENGIGAFLOW_BF16_REDUCED_REDUCTION=1 lets cuBLAS pick split-K kernels whose partial sums reduce in bf16."""
+    if os.environ.get("OPENGIGAFLOW_BF16_REDUCED_REDUCTION") == "1":
         torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
         print("cuBLAS bf16 reduced-precision reductions enabled")
 
@@ -1351,7 +1349,7 @@ def bind_process_to_gpu_numa_node(device_index, local_devices=None):
 
     Ranks in `local_devices` whose GPUs share the node split its cores evenly. No-op without NUMA or sysfs.
     """
-    if os.environ.get("PUFFER_NUMA_BIND", "1") == "0" or not torch.cuda.is_available():
+    if os.environ.get("OPENGIGAFLOW_NUMA_BIND", "1") == "0" or not torch.cuda.is_available():
         return False
     numa_node = gpu_numa_node(device_index)
     if numa_node is None:
@@ -1473,7 +1471,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     args["git"] = _get_git_metadata()
 
     # Under DDP only rank 0 owns the run logger; other ranks keep logger=None,
-    # which PuffeRL wraps in a NoLogger. Without this gate every rank calls
+    # which PPOTrainer wraps in a NoLogger. Without this gate every rank calls
     # wandb.init() and you get world_size duplicate runs.
     is_rank0 = (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0
     if is_rank0:
@@ -1489,7 +1487,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
     if torch.distributed.is_initialized():
         train_config["total_timesteps"] //= torch.distributed.get_world_size()
-    pufferl = PuffeRL(train_config, vecenv, policy, logger)
+    trainer = PPOTrainer(train_config, vecenv, policy, logger)
 
     # A run is identified by its name, and its directory is train.data_dir. Relaunching
     # the same run therefore finds its own trainer_state.pt and continues from it rather
@@ -1503,11 +1501,11 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
             resume_state_path = run_state_path
 
     if resume_state_path:
-        pufferl.load_training_state(resume_state_path)
+        trainer.load_training_state(resume_state_path)
         # The checkpoint carries rank 0's RNG streams (save_checkpoint is rank-0 only);
         # re-decorrelate the other ranks or post-resume action sampling re-synchronizes.
         if global_rank != 0:
-            torch.manual_seed(int(np.random.SeedSequence([torch_seed, pufferl.epoch]).generate_state(1)[0]))
+            torch.manual_seed(int(np.random.SeedSequence([torch_seed, trainer.epoch]).generate_state(1)[0]))
 
     # Restore optimizer state + step counters when resuming from a checkpoint.
     # save_checkpoint writes models/model_<env>_<epoch>.pt and trainer_state.pt
@@ -1519,17 +1517,17 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
             # weights_only=False as in load_training_state: the state carries the
             # numpy scalars of the saved RNG state, not just tensors.
             tstate = torch.load(trainer_state_path, map_location=train_config["device"], weights_only=False)
-            pufferl.optimizer.load_state_dict(tstate["optimizer_state_dict"])
+            trainer.optimizer.load_state_dict(tstate["optimizer_state_dict"])
             # The saved groups carry the old run's annealed lr; train.learning_rate is this run's base.
-            for param_group in pufferl.optimizer.param_groups:
+            for param_group in trainer.optimizer.param_groups:
                 param_group["lr"] = train_config["learning_rate"]
                 param_group["initial_lr"] = train_config["learning_rate"]
-            pufferl.global_step = tstate.get("global_step", pufferl.global_step)
-            pufferl.epoch = tstate.get("update", pufferl.epoch)
+            trainer.global_step = tstate.get("global_step", trainer.global_step)
+            trainer.epoch = tstate.get("update", trainer.epoch)
             # Fast-forward the LR scheduler to the resumed epoch so the cosine
             # schedule continues where it left off.
-            for _ in range(pufferl.epoch):
-                pufferl.scheduler.step()
+            for _ in range(trainer.epoch):
+                trainer.scheduler.step()
         else:
             print(f"No trainer_state.pt next to {args['load_model_path']}; starting optimizer fresh.")
 
@@ -1538,54 +1536,45 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         _save_experiment_config(args, path)
 
     stop_after_epochs = args["train"]["stop_after_epochs"]
-    stop_epoch = float("inf") if stop_after_epochs is None else pufferl.epoch + stop_after_epochs
+    stop_epoch = float("inf") if stop_after_epochs is None else trainer.epoch + stop_after_epochs
 
-    while pufferl.global_step < train_config["total_timesteps"] and pufferl.epoch < stop_epoch:
+    while trainer.global_step < train_config["total_timesteps"] and trainer.epoch < stop_epoch:
         if is_cuda_device(train_config["device"]):
             torch.compiler.cudagraph_mark_step_begin()
         try:
-            pufferl.evaluate()
+            trainer.evaluate()
         except Exception:
-            pufferl.vecenv.close()
-            pufferl.utilization.stop()
+            trainer.vecenv.close()
+            trainer.utilization.stop()
             if torch.distributed.is_initialized():
                 torch.distributed.destroy_process_group()
             raise
         if is_cuda_device(train_config["device"]):
             torch.compiler.cudagraph_mark_step_begin()
         try:
-            pufferl.train()
+            trainer.train()
         except Exception:
-            pufferl.vecenv.close()
-            pufferl.utilization.stop()
+            trainer.vecenv.close()
+            trainer.utilization.stop()
             if torch.distributed.is_initialized():
                 torch.distributed.destroy_process_group()
             raise
 
-        if is_rank0 and args["train"]["render"] and pufferl.epoch % args["train"]["render_interval"] == 0:
+        if is_rank0 and args["train"]["render"] and trainer.epoch % args["train"]["render_interval"] == 0:
             render_training_replays(
                 env_name=env_name,
                 args=args,
-                policy=pufferl.uncompiled_policy,
-                epoch=pufferl.epoch,
-                global_step=_global_agent_steps(pufferl),
+                policy=trainer.uncompiled_policy,
+                epoch=trainer.epoch,
+                global_step=_global_agent_steps(trainer),
                 run_dir=path,
             )
 
-    # Final eval. You can reset the env here, but depending on
-    # your env, this can skew data (i.e. you only collect the shortest
-    # rollouts within a fixed number of epochs)
-    # i = 0
-    # stats = {}
-    # while i < 32 or not stats:
-    #     stats = pufferl.evaluate()
-    #     i += 1
-
-    pufferl.mean_and_log()
-    pufferl.print_dashboard()
-    model_path = pufferl.close()
+    trainer.mean_and_log()
+    trainer.print_dashboard()
+    model_path = trainer.close()
     shutdown_distributed()
-    pufferl.logger.close(model_path)
+    trainer.logger.close(model_path)
 
 
 def eval(
@@ -2132,9 +2121,6 @@ def load_policy(args, vecenv, env_name=""):
     if load_path is not None:
         checkpoint = torch.load(load_path, map_location=device)
         policy = opengigaflow.pytorch.load_policy_weights(policy, checkpoint)
-        # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
-        # optim_state = torch.load(state_path)['optimizer_state_dict']
-        # pufferl.optimizer.load_state_dict(optim_state)
 
     return policy
 
@@ -2185,19 +2171,18 @@ def load_config(env_name, config_dir=CONFIG_DIR, overrides=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval] [env_name] [optional args]. --help for more info"
-    if len(sys.argv) < 3:
+    err = "Usage: opengigaflow [train | eval <benchmark>] [optional args]"
+    if len(sys.argv) < 2:
         raise opengigaflow.APIUsageError(err)
 
     mode = sys.argv.pop(1)
-    env_name = sys.argv.pop(1)
     if mode == "train":
-        train(env_name=env_name)
+        train(env_name=ENV_NAME)
     elif mode == "eval":
         if len(sys.argv) < 2:
-            raise opengigaflow.APIUsageError("Usage: puffer eval [env_name] [benchmark_name] [optional args]")
+            raise opengigaflow.APIUsageError("Usage: opengigaflow eval <benchmark> [optional args]")
         benchmark_name = sys.argv.pop(1)
-        eval(env_name=env_name, benchmark_names=benchmark_name)
+        eval(env_name=ENV_NAME, benchmark_names=benchmark_name)
     else:
         raise opengigaflow.APIUsageError(err)
 

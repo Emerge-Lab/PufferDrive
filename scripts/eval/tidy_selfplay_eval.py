@@ -1,4 +1,4 @@
-"""Tidy a CARLA self-play eval (scripts/parallel_eval.py, or one `puffer eval` run) down to what is read after it:
+"""Tidy a CARLA self-play eval (scripts/parallel_eval.py, or one `opengigaflow eval` run) down to what is read after it:
 
   evaluation_summary.json   the metric averages over every scenario (eval_wandb_report.py reads them)
   obs_html/                 the rendered replay pages of every shard's failures + one index.html
@@ -10,7 +10,7 @@ usage: python scripts/eval/tidy_selfplay_eval.py <aggregate dir>
 
 <aggregate dir> is <run>/eval/carla_<name>/<stamp> as parallel_eval.py leaves it, its shards next to it as
 <stamp>_shard<NN>/ (resolved_benchmark.yaml, episode_metrics.csv, evaluation_summary.json, failures/{...,
-rendered_replays/}); a single-process `puffer eval` dir holds the same files itself. The shard folders are deleted:
+rendered_replays/}); a single-process `opengigaflow eval` dir holds the same files itself. The shard folders are deleted:
 their episode_metrics.csv rows are the aggregate's, their summaries are per-shard means, the per-shard gallery
 indexes make way for one. resolved_benchmark.yaml is the first shard's (the others differ in their scenario window
 only). A .replay.zlib kept by eval.keep_zlib_replays is deleted once its page exists. An already tidied dir is
@@ -81,7 +81,7 @@ def append_log(src, target, header):
 
 def shard_dirs(run_dir):
     """-> the <stamp>_shard<NN> folders next to a parallel_eval.py aggregate dir, then the dir itself when it holds
-    a run's own failures/ or resolved_benchmark.yaml (a single-process `puffer eval`)."""
+    a run's own failures/ or resolved_benchmark.yaml (a single-process `opengigaflow eval`)."""
     shards = sorted(path for path in run_dir.parent.glob(f"{run_dir.name}_shard*") if path.is_dir())
     if (run_dir / FAILURES_DIR).is_dir() or (run_dir / RESOLVED_BENCHMARK_YAML).is_file():
         shards.append(run_dir)
@@ -174,7 +174,7 @@ def append_frames(frames, target):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("run_dir", help="parallel_eval.py aggregate dir (its shards next to it), or a `puffer eval` dir")
+    ap.add_argument("run_dir", help="parallel_eval.py aggregate dir (shards next to it), or an `opengigaflow eval` dir")
     args = ap.parse_args()
     run_dir = Path(args.run_dir).resolve()
     if not (run_dir / SUMMARY_JSON).is_file():

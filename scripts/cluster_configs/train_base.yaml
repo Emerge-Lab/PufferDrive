@@ -1,5 +1,5 @@
 # Base training configuration for OpenGigaFlow cluster jobs (turbostream).
-# These args are passed to `puffer train opengigaflow` as --key=value flags.
+# These args are passed to `opengigaflow train` as --key=value flags.
 #
 # Only keys listed here override the defaults in opengigaflow/config/opengigaflow.yaml.
 # Vec settings (num_envs, num_workers, batch_size), env.map_dir, env.num_maps,

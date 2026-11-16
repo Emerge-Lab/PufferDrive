@@ -1,11 +1,9 @@
 [project]
 name = "opengigaflow"
 version = "3.0.0"
-description = "Fast and sane reinforcement learning"
 requires-python = ">=3.9"
 readme = {file = "README.md", content-type = "text/markdown"}
 license = "MIT"
-authors = [{ name = "Joseph Suarez", email = "jsuarez@puffer.ai" }]
 classifiers=[
     "Intended Audience :: Science/Research",
     "Intended Audience :: Developers",
@@ -24,10 +22,7 @@ test = [
 ]
 
 [project.scripts]
-puffer = "opengigaflow.rl:main"
-
-[project.urls]
-Homepage = "https://puffer.ai"
+opengigaflow = "opengigaflow.rl:main"
 
 [build-system]
 requires = ["setuptools", "wheel", "numpy<2.0", "torch"]

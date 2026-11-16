@@ -2,7 +2,7 @@
 """
 Deterministic CPU smoke test for the OpenGigaFlow training pipeline.
 
-Runs the real pipeline (load_config -> load_env -> load_policy -> PuffeRL) for
+Runs the real pipeline (load_config -> load_env -> load_policy -> PPOTrainer) for
 2 epochs on CPU (synchronous Serial backend), then compares the captured training
 metrics (PPO losses) and environment metrics (collision/offroad/goal/return)
 against a committed golden file. Kept deliberately small because CI runs it under
@@ -56,7 +56,7 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from opengigaflow.rl import PuffeRL, load_config, load_env, load_policy
+from opengigaflow.rl import PPOTrainer, load_config, load_env, load_policy
 from opengigaflow.utils import finalize_environment_metrics
 
 SEED = 42
@@ -83,7 +83,7 @@ SANITY_KEYS = ("collision_rate", "offroad_rate")
 
 
 class _DummyLogger:
-    """PuffeRL calls self.logger.log() inside mean_and_log(); no-op it."""
+    """PPOTrainer calls self.logger.log() inside mean_and_log(); no-op it."""
 
     run_id = "smoke"
 
@@ -192,21 +192,21 @@ def _finalize_train_config(args, total_agents):
     return dict(**args["train"], env="opengigaflow", eval=args.get("eval", {}))
 
 
-def _capture_metrics(pufferl):
+def _capture_metrics(trainer):
     env_acc = {}
     for _ in range(EPOCHS):
-        pufferl.evaluate()
+        trainer.evaluate()
         # Snapshot env stats BEFORE train()'s mean_and_log() resets them.
-        for k, (value_sum, weight_sum) in pufferl.env_metric_sums.items():
+        for k, (value_sum, weight_sum) in trainer.env_metric_sums.items():
             entry = env_acc.setdefault(k, [0.0, 0.0])
             entry[0] += value_sum
             entry[1] += weight_sum
         # Force logging this epoch so self.losses is set deterministically
         # (otherwise it only updates on a wall-clock interval -> flaky).
-        pufferl.last_log_time = 0.0
-        pufferl.train()
+        trainer.last_log_time = 0.0
+        trainer.train()
 
-    losses = {k: float(v) for k, v in pufferl.losses.items() if _is_number(v)}
+    losses = {k: float(v) for k, v in trainer.losses.items() if _is_number(v)}
 
     env_means = finalize_environment_metrics(env_acc)
 
@@ -256,7 +256,7 @@ def test_drive_smoke():
     args = _build_config()
 
     vecenv = None
-    pufferl = None
+    trainer = None
     with _Watchdog():
         try:
             vecenv = load_env(args)
@@ -266,12 +266,12 @@ def test_drive_smoke():
             _seed_everything()  # re-seed right before weight init
             policy = load_policy(args, vecenv, "opengigaflow")
 
-            pufferl = PuffeRL(train_config, vecenv, policy, logger=_DummyLogger())
-            losses, env_means = _capture_metrics(pufferl)
+            trainer = PPOTrainer(train_config, vecenv, policy, logger=_DummyLogger())
+            losses, env_means = _capture_metrics(trainer)
         finally:
-            if pufferl is not None and hasattr(pufferl, "utilization"):
+            if trainer is not None and hasattr(trainer, "utilization"):
                 try:
-                    pufferl.utilization.stop()
+                    trainer.utilization.stop()
                 except Exception:
                     pass
             if vecenv is not None:

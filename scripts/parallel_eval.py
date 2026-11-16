@@ -1,6 +1,6 @@
 """Shard one OpenGigaFlow eval benchmark across GPUs or nodes and aggregate the results.
 
-Each shard runs an independent `puffer eval` process over a disjoint scenario
+Each shard runs an independent `opengigaflow eval` process over a disjoint scenario
 window (eval.scenario_offset), then the per-shard episode_metrics.csv files are
 merged into a single report; wandb=True logs its km/infraction to the training
 wandb run (self-play benchmark only). scripts/eval/tidy_selfplay_eval.py
@@ -32,7 +32,6 @@ FAILED_LOG_TAIL_LINES = 30
 def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("benchmark", help="Benchmark name from the benchmark config, e.g. carla")
-    parser.add_argument("--env-name", default="opengigaflow")
     parser.add_argument("--total-scenarios", type=int, required=True)
     shard_group = parser.add_mutually_exclusive_group(required=True)
     shard_group.add_argument("--num-gpus", type=int, help="Run one shard per local GPU")
@@ -159,7 +158,6 @@ def main():
             "-m",
             "opengigaflow.rl",
             "eval",
-            arguments.env_name,
             arguments.benchmark,
             *shard_overrides,
             f"num_scenarios={shard_scenario_count}",
@@ -181,7 +179,7 @@ def main():
             shard_env = dict(os.environ)
             if arguments.shards_per_node > 1:
                 # the --exact CPU slice is the placement; a socket bind inside it could leave fewer CPUs than workers
-                shard_env.setdefault("PUFFER_NUMA_BIND", "0")
+                shard_env.setdefault("OPENGIGAFLOW_NUMA_BIND", "0")
             placement = f"srun step, 1 GPU, {cpus_per_shard} CPUs"
         else:
             shard_env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu_ids[shard_idx])

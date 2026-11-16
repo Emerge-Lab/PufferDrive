@@ -21,7 +21,7 @@
 #                  routes). Default: "$(dirname "$OUT")/carla_view".
 #                  Set COSIM_DEBUG_CARLA_VIEW= (empty) to disable.
 #   COSIM_DEVICE   forwarded to leaderboard_agent.py as-is if already exported.
-if [ -z "$INSIDE_PUFFER_CONTAINER" ]; then
+if [ -z "$INSIDE_OPENGIGAFLOW_CONTAINER" ]; then
     source /share/apps/images/slurm-ib-bind-apptainer.sh
     export APPTAINERENV_PREPEND_PATH=/share/apps/apptainer/bin:$APPTAINERENV_PREPEND_PATH
     exec singularity exec --nv \
@@ -35,7 +35,7 @@ if [ -z "$INSIDE_PUFFER_CONTAINER" ]; then
       --bind /usr/lib64/libGLX_nvidia.so.0:/usr/lib64/libGLX_nvidia.so.0 \
       --bind /usr/sbin/fuser:/usr/sbin/fuser \
       /share/apps/images/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif \
-      env INSIDE_PUFFER_CONTAINER=1 bash "$0"
+      env INSIDE_OPENGIGAFLOW_CONTAINER=1 bash "$0"
 fi
 set -u
 

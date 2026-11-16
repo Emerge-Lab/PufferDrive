@@ -1,6 +1,6 @@
 # OpenGigaFlow: MARL RL Env
 C simulation engine + Python/PyTorch training loop.
-Activate venv before `python`/`puffer`: `source .venv/bin/activate`
+Activate venv before `python`/`opengigaflow`: `source .venv/bin/activate`
 
 ## Structure
 - `opengigaflow/ocean/drive/`: `drive.h` (sim core), `binding.c` (C-ext), `drive.py` (Gym wrapper)
@@ -10,7 +10,7 @@ Activate venv before `python`/`puffer`: `source .venv/bin/activate`
 
 ## Commands
 - **Rebuild C (mandatory after .c/.h change):** `python setup.py build_ext --inplace --force`
-- **Train:** `puffer train opengigaflow [train.learning_rate=0.001 env.num_agents=512]`
+- **Train:** `opengigaflow train [train.learning_rate=0.001 env.num_agents=512]`
 
 ## Coding Standards
 - **Naming:** explicit (`active_agent_count`, `closest_lane_idx`); never `n/tmp/val/foo` except tiny local math. Keep units in names: `_seconds/_meters/_mps/_idx/_count`.

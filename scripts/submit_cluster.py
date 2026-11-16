@@ -89,7 +89,7 @@ def parse_args():
     parser.add_argument("--max_pjob", type=int, default=None, help="Max parallel jobs")
 
     # Program settings
-    parser.add_argument("--main", type=str, default="-m opengigaflow.rl train opengigaflow", help="Main command to run")
+    parser.add_argument("--main", type=str, default="-m opengigaflow.rl train", help="Main command to run")
     parser.add_argument(
         "--args", type=str, nargs="+", default=None, help="Args to override/sweep (e.g., learning_rate=1e-4:3e-4)"
     )

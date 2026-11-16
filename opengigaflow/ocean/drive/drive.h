@@ -2306,7 +2306,7 @@ static void add_log(Drive *env) {
             continue;
         }
         float episode_duration_s = env->logs[i].episode_length * env->dt;
-        float reference_progress_distance = PUFFER_PROGRESS_REFERENCE_SPEED * episode_duration_s;
+        float reference_progress_distance = PROGRESS_REFERENCE_SPEED_MPS * episode_duration_s;
         reference_progress_distance = fmaxf(reference_progress_distance, 1.0f);
         env->logs[i].progress_ratio = agent->distance_since_spawn / reference_progress_distance;
 

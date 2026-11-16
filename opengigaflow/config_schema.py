@@ -346,8 +346,6 @@ class DrivePolicyConfig:
 
 @dataclass
 class TrainingConfig:
-    name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
-    project: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     seed: int | None = MISSING
     final_model_name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     torch_deterministic: bool = MISSING
