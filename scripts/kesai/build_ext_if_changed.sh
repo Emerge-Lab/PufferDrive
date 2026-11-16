@@ -10,7 +10,12 @@ mkdir -p "$(dirname "${BUILD_HASH_FILE}")"
 exec 9> "${BUILD_HASH_FILE}.lock"
 flock 9
 
-SOURCE_HASH=$({ find ${REPO_DIR}/opengigaflow \( -name '*.c' -o -name '*.h' \) -type f; echo ${REPO_DIR}/setup.py; } | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
+SOURCE_NAME_PATTERNS=(-name '*.c' -o -name '*.h')
+# NO_TRAIN builds skip the torch extension, so only full builds track its C++/CUDA sources
+if [ "${NO_TRAIN:-0}" != "1" ]; then
+    SOURCE_NAME_PATTERNS+=(-o -name '*.cpp' -o -name '*.cu')
+fi
+SOURCE_HASH=$({ find ${REPO_DIR}/opengigaflow \( "${SOURCE_NAME_PATTERNS[@]}" \) -type f; echo ${REPO_DIR}/setup.py; } | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
 
 if [ -f ${BUILD_HASH_FILE} ] && [ "$(cat ${BUILD_HASH_FILE})" = "${SOURCE_HASH}" ]; then
     echo "C sources unchanged (${SOURCE_HASH:0:12}); skipping rebuild."
