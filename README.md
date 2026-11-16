@@ -1,6 +1,6 @@
 # OpenGigaFlow
 
-MARL autonomous driving RL environment. C simulation engine (GigaFlow/Waymo replay) + Python/PyTorch PPO training loop with V-trace and priority sampling.
+MARL autonomous driving RL environment. C simulation engine (GigaFlow/Waymo replay) + Python/PyTorch PPO training loop with advantage filtering.
 
 ## Install (local)
 

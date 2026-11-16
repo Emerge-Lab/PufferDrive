@@ -575,7 +575,7 @@ class PuffeRL:
         else:
             losses["grad_norm"] = torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_grad_norm).detach()
 
-    def _compute_advantages(self, ratio, rho_clip, c_clip):
+    def _compute_advantages(self):
         config = self.config
         device = config["device"]
 
@@ -585,12 +585,9 @@ class PuffeRL:
             self.values,
             self.rewards,
             terminals,
-            ratio,
             torch.zeros_like(self.values, device=device),
             config["gamma"],
             config["gae_lambda"],
-            rho_clip,
-            c_clip,
         )
         advantages = advantages.masked_fill(~masks, 0.0)
         return advantages, advantages + self.values, masks
@@ -599,11 +596,7 @@ class PuffeRL:
         config = self.config
         device = config["device"]
 
-        advantages, returns, masks = self._compute_advantages(
-            torch.ones_like(self.values, device=device),
-            1.0,
-            1.0,
-        )
+        advantages, returns, masks = self._compute_advantages()
 
         obs_shape = self.vecenv.single_observation_space.shape
         flat_obs = self.observations.reshape(-1, *obs_shape)
@@ -964,9 +957,7 @@ class PuffeRL:
         print("\033[0;0H" + capture.get())
 
 
-def compute_puff_advantage(
-    values, rewards, terminals, ratio, advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip
-):
+def compute_puff_advantage(values, rewards, terminals, advantages, gamma, gae_lambda):
     """CUDA kernel for puffer advantage with automatic CPU fallback. You need
     nvcc (in cuda-dev-tools or in a cuda-dev docker base) for PufferLib to
     compile the fast version."""
@@ -976,12 +967,9 @@ def compute_puff_advantage(
         values = values.cpu()
         rewards = rewards.cpu()
         terminals = terminals.cpu()
-        ratio = ratio.cpu()
         advantages = advantages.cpu()
 
-    torch.ops.opengigaflow.compute_puff_advantage(
-        values, rewards, terminals, ratio, advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip
-    )
+    torch.ops.opengigaflow.compute_puff_advantage(values, rewards, terminals, advantages, gamma, gae_lambda)
 
     if not ADVANTAGE_CUDA:
         return advantages.to(device)

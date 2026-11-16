@@ -29,7 +29,7 @@ extra_link_args = ["-fwrapv"]
 cxx_args = [
     "-fdiagnostics-color=always",
     # See note above: no FMA contraction -> reproducible float rounding for the
-    # advantage/V-trace kernel across CPUs.
+    # advantage kernel across CPUs.
     "-ffp-contract=off",
 ]
 nvcc_args = []
@@ -60,11 +60,11 @@ if DEBUG and not PROFILE:
     ]
 else:
     extra_compile_args += [
-        "-O2",
+        "-O3",
         "-flto=auto",
     ]
     extra_link_args += [
-        "-O2",
+        "-O3",
         "-flto=auto",
     ]
     cxx_args += [
@@ -165,11 +165,11 @@ c_extensions = [
 torch_extensions = []
 if not NO_TRAIN:
     torch_sources = [
-        "opengigaflow/extensions/opengigaflow.cpp",
+        "opengigaflow/extensions/custom_gae.cpp",
     ]
     if BUILD_CUDA_EXT:
         extension = CUDAExtension
-        torch_sources.append("opengigaflow/extensions/cuda/opengigaflow.cu")
+        torch_sources.append("opengigaflow/extensions/cuda/custom_gae.cu")
     else:
         extension = CppExtension
 
