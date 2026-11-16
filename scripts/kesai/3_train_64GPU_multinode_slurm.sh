@@ -74,7 +74,7 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # 0078 = 0077 after the rest of the purge (13_bernhard_purge, 2026-11-12): same configuration and seed; discrete env actions, the classic dynamics model, the shared backbone, the WOSAC evaluator, the pre-0044 observation switches and the unused rewards, randomizations and co-sim eval arms are deleted, and the eval folders are named without their standard settings. It has to reproduce 0077's metrics and SPS.
 # 0079 = 0078 with train.learning_rate 1.5e-3 (5e-4 in every run before) at the default minibatch (131072); 0080 pairs it with the 0075 minibatch (393216) at the same rate.
 # 0080 = 0079 with 0075's per-rank minibatch (393216, 12.6M rows per optimizer step): a third of 0079's optimizer steps at the same 1.5e-3 rate.
-# Other overrides are run identity, logging, maps and hardware.
+# Other overrides are run identity, logging and hardware.
 # Execute torchrun across all nodes using srun
 srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -89,8 +89,6 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=$PD/opengigaflow/resources/carla_128_affine_zones_stop_ndshoulders_v20 \
-    env.num_maps=128 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \

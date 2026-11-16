@@ -153,9 +153,9 @@ env:
   reward_overspeed: 0.005
   # --- Map ---
   # Path to map used for training
-  map_dir: opengigaflow/resources/carla
+  map_dir: opengigaflow/resources/carla_128_affine_aug
   # Number of maps to load from map_dir
-  num_maps: 8
+  num_maps: 128
   # Training fails if num_maps < files in map_dir unless this is set (sorted order would silently pick a subset)
   allow_map_subset: false
   # --- Observation slot counts ---

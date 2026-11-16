@@ -166,6 +166,9 @@ opengigaflow/resources/carla/.DS_Store
 # SDC-replay fixture map used by tests/unit_tests/test_waypoint_burn_through.py
 !opengigaflow/resources/sdc_replay_test/
 !opengigaflow/resources/sdc_replay_test/**
+# Training map set: the default env.map_dir
+!opengigaflow/resources/carla_128_affine_aug/
+!opengigaflow/resources/carla_128_affine_aug/**
 
 # Compiled drive binary in root
 /drive
