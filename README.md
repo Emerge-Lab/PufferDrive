@@ -100,7 +100,7 @@ python scripts/submit_cluster.py \
 
 ## Data
 
-Place binaries under `opengigaflow/resources/drive/binaries/`.
+Place binaries under `opengigaflow/resources/`.
 
 ## Train
 

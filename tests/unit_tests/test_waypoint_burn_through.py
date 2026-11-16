@@ -33,7 +33,7 @@ import numpy as np
 from opengigaflow.ocean.drive.drive import Drive
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MAP_DIR = os.path.join(REPO_ROOT, "opengigaflow", "resources", "drive", "binaries", "sdc_replay_test")
+MAP_DIR = os.path.join(REPO_ROOT, "opengigaflow", "resources", "sdc_replay_test")
 
 SCENARIO_LENGTH = 400
 NUM_GOALS = 3

@@ -4,7 +4,7 @@ import pytest
 
 from opengigaflow.ocean.drive.drive import Drive
 
-SOURCE_BIN = "opengigaflow/resources/drive/binaries/carla/opendrive__Town01.bin"
+SOURCE_BIN = "opengigaflow/resources/carla/opendrive__Town01.bin"
 AGENTS_PER_ENV = 8
 
 

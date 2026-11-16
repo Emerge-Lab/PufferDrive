@@ -40,7 +40,7 @@ export OMP_NUM_THREADS=1
     --total-scenarios ${TOTAL_SCENARIOS} \
     --num-nodes ${SLURM_JOB_NUM_NODES} \
     --shards-per-node 8 \
-    env.map_dir=$PD/opengigaflow/resources/drive/binaries/carla \
+    env.map_dir=$PD/opengigaflow/resources/carla \
     vec.num_envs=60 \
     eval.reward_comfort=0.05 \
     eval.reward_lane_center=0.0038 \

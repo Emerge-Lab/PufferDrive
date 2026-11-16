@@ -155,17 +155,17 @@ box2d*/
 
 # Ignore data files
 data/
-opengigaflow/resources/drive/binaries/*/
-!opengigaflow/resources/drive/binaries/carla/
-!opengigaflow/resources/drive/binaries/carla/**
+opengigaflow/resources/*/
+!opengigaflow/resources/carla/
+!opengigaflow/resources/carla/**
 # Re-ignore .DS_Store inside carla binaries
-opengigaflow/resources/drive/binaries/carla/.DS_Store
+opengigaflow/resources/carla/.DS_Store
 # Single-bin fixtures used by tests/test_drive_map_types.py
-!opengigaflow/resources/drive/binaries/nuplan/
-!opengigaflow/resources/drive/binaries/nuplan/**
+!opengigaflow/resources/nuplan/
+!opengigaflow/resources/nuplan/**
 # SDC-replay fixture map used by tests/unit_tests/test_waypoint_burn_through.py
-!opengigaflow/resources/drive/binaries/sdc_replay_test/
-!opengigaflow/resources/drive/binaries/sdc_replay_test/**
+!opengigaflow/resources/sdc_replay_test/
+!opengigaflow/resources/sdc_replay_test/**
 
 # Compiled drive binary in root
 /drive

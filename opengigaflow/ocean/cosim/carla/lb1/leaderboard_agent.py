@@ -77,7 +77,7 @@ MESH_OFFSET_MAX_STEP_M = 0.3
 
 
 def get_entry_point():
-    return "PufferAgentLB1"
+    return "OpenGigaFlowAgentLB1"
 
 
 def wrap_deg_180(d):
@@ -361,10 +361,10 @@ class PolicyServerLink:
             self.process.wait(timeout=SERVER_EXIT_TIMEOUT_S)
         except subprocess.TimeoutExpired:
             self.process.kill()
-            print("[puffer_agent_lb1] policy_server.py did not exit; killed", flush=True)
+            print("[opengigaflow_agent_lb1] policy_server.py did not exit; killed", flush=True)
 
 
-class PufferAgentLB1(autonomous_agent.AutonomousAgent):
+class OpenGigaFlowAgentLB1(autonomous_agent.AutonomousAgent):
     def setup(self, path_to_conf_file, route_index=None):
         if "SCENARIO_RUNNER_ROOT" not in os.environ:
             raise RuntimeError("SCENARIO_RUNNER_ROOT is not set; export carla_garage's scenario_runner checkout")
@@ -462,7 +462,7 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
             self._collision_sensor = self.world.spawn_actor(blueprint, carla.Transform(), attach_to=self.vehicle)
             self._collision_sensor.listen(self._on_collision)
         print(
-            f"[puffer_agent_lb1] town={town} tick_dt={self.tick_dt:.3f} lights={len(self.lights)} "
+            f"[opengigaflow_agent_lb1] town={town} tick_dt={self.tick_dt:.3f} lights={len(self.lights)} "
             f"stop_signs={len(route['stop_signs'])} target_points={len(route['sparse_plan'])} "
             f"dense={len(route['dense_plan'])}",
             flush=True,
@@ -601,11 +601,11 @@ class PufferAgentLB1(autonomous_agent.AutonomousAgent):
         if self.initialized:
             reply = self.server.request({"type": "finish"})
             if reply.get("type") != "done":
-                print(f"[puffer_agent_lb1] unexpected finish reply {reply!r}", flush=True)
+                print(f"[opengigaflow_agent_lb1] unexpected finish reply {reply!r}", flush=True)
         self.server.close()
         if self.carla_view_writer is not None:
             self.carla_view_writer.close()
-            print(f"[puffer_agent_lb1] wrote CARLA chase-cam video for route {self.route_tag}", flush=True)
+            print(f"[opengigaflow_agent_lb1] wrote CARLA chase-cam video for route {self.route_tag}", flush=True)
         if self.road_probe is not None:
             self.road_probe.destroy()
             self.road_probe = None

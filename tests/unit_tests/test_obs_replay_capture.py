@@ -10,7 +10,7 @@ from opengigaflow.ocean.drive import binding
 from opengigaflow.ocean.drive.drive import Drive
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MAP_DIR = os.path.join(REPO_ROOT, "opengigaflow", "resources", "drive", "binaries", "sdc_replay_test")
+MAP_DIR = os.path.join(REPO_ROOT, "opengigaflow", "resources", "sdc_replay_test")
 NUM_GOALS = 3
 STEP_COUNT = 5
 

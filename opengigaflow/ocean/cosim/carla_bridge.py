@@ -51,7 +51,7 @@ TOWN_OFFSETS = {
     "Town10HD": (8.13, 32.98),
 }
 
-_BIN_DIR = Path(__file__).resolve().parents[2] / "resources" / "drive" / "binaries" / "carla"
+_BIN_DIR = Path(__file__).resolve().parents[2] / "resources" / "carla"
 
 
 def bin_path_for_town(town: str) -> str:

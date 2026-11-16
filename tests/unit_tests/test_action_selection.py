@@ -187,7 +187,7 @@ def test_drive_mean_action_is_exact_in_physical_units(monkeypatch):
     args = rl.load_config("opengigaflow")
     env = DriveEnv(
         num_agents=64,
-        map_dir="opengigaflow/resources/drive/binaries/carla",
+        map_dir="opengigaflow/resources/carla",
         num_maps=1,
         allow_map_subset=True,
         scenario_length=200,

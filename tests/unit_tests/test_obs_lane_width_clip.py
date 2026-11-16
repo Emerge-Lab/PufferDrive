@@ -17,8 +17,6 @@ SOURCE_BIN = os.path.join(
     REPO_ROOT,
     "opengigaflow",
     "resources",
-    "drive",
-    "binaries",
     "sdc_replay_test",
     "nuplan__c2a99be0-5b3e-5e67-88e6-6fd0f22e5419.bin",
 )

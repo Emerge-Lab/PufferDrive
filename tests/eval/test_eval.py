@@ -32,8 +32,8 @@ WANDB_PROJECT = "nightly-multi-long"
 WANDB_TRAINING_SUMMARY = {"environment/collision_rate": 0.0123}
 WANDB_TRAINING_LAST_STEP = 1000190509056
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CARLA_MAP_DIR = REPO_ROOT / "opengigaflow/resources/drive/binaries/carla"
-REPLAY_MAP_DIR = REPO_ROOT / "opengigaflow/resources/drive/binaries/sdc_replay_test"
+CARLA_MAP_DIR = REPO_ROOT / "opengigaflow/resources/carla"
+REPLAY_MAP_DIR = REPO_ROOT / "opengigaflow/resources/sdc_replay_test"
 
 
 class ZeroPolicy(torch.nn.Module):

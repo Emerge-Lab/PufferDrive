@@ -57,7 +57,7 @@ CARLA_VIEW_TRANSFORM = dict(x=-2.0, y=0.0, z=2.1, roll=0.0, pitch=-15.0, yaw=0.0
 
 
 def get_entry_point():
-    return "PufferAgent"
+    return "OpenGigaFlowAgent"
 
 
 def road_mesh_z(world, x, y, reference_z):
@@ -113,7 +113,7 @@ def partner_row(actor):
     ]
 
 
-class PufferAgent(autonomous_agent.AutonomousAgent):
+class OpenGigaFlowAgent(autonomous_agent.AutonomousAgent):
     def setup(self, path_to_conf_file, route_index=None):
         if "SCENARIO_RUNNER_ROOT" not in os.environ:
             raise RuntimeError(
@@ -407,7 +407,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         self.shadow.finish()
         if self.carla_view_writer is not None:
             self.carla_view_writer.close()
-            print(f"[puffer_agent] wrote CARLA chase-cam video for route {self.video_tag}")
+            print(f"[opengigaflow_agent] wrote CARLA chase-cam video for route {self.video_tag}")
         if self._carla_collision is not None:
             self._carla_collision.clean()  # stop+destroy the spawned collision sensor actor
         self.initialized = False

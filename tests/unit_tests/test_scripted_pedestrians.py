@@ -6,7 +6,7 @@ import pytest
 
 from opengigaflow.ocean.drive.drive import Drive
 
-MAP_DIR = "opengigaflow/resources/drive/binaries/carla"
+MAP_DIR = "opengigaflow/resources/carla"
 AGENTS_PER_ENV = 32
 CAR_SPEED_MPS = 5.0
 

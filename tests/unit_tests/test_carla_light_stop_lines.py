@@ -15,7 +15,7 @@ import data_utils.mirror_map_bin as mbin
 from opengigaflow.ocean.cosim import carla_bridge as cb
 
 
-TOWN_BIN = Path(__file__).resolve().parents[2] / "opengigaflow/resources/drive/binaries/carla/opendrive__Town01.bin"
+TOWN_BIN = Path(__file__).resolve().parents[2] / "opengigaflow/resources/carla/opendrive__Town01.bin"
 
 
 def _line_mid(element):

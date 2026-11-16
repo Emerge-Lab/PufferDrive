@@ -77,7 +77,7 @@ def _build_config():
             "max_agents_per_env": 16,
             "num_maps": 2,
             "use_map_cache": True,
-            "map_dir": "opengigaflow/resources/drive/binaries/carla",
+            "map_dir": "opengigaflow/resources/carla",
             "scenario_length": BPTT_HORIZON,
             "stagger_first_episode": False,  # golden expects full-length first episodes
             "seed": SEED,

@@ -17,7 +17,7 @@
 
 # Environment: single agent per env, Town10HD only (map_dir points directly
 # at one .bin), shorter episodes than the multi-agent default.
-env.map_dir: opengigaflow/resources/drive/binaries/carla/opendrive__Town10HD.bin
+env.map_dir: opengigaflow/resources/carla/opendrive__Town10HD.bin
 env.num_maps: 1
 env.max_agents_per_env: 1
 env.num_agents: 2048

@@ -13,13 +13,13 @@ Round-trips byte-exactly when mirror is applied twice.
 Usage:
     # Mirror a whole directory of bins:
     python data_utils/mirror_map_bin.py \\
-        --input  opengigaflow/resources/drive/binaries/carla \\
-        --output opengigaflow/resources/drive/binaries/carla_lhs
+        --input  opengigaflow/resources/carla \\
+        --output opengigaflow/resources/carla_lhs
 
     # Mirror a single file:
     python data_utils/mirror_map_bin.py \\
-        --input  opengigaflow/resources/drive/binaries/carla/opendrive__Town01.bin \\
-        --output opengigaflow/resources/drive/binaries/carla_lhs/opendrive__Town01.bin
+        --input  opengigaflow/resources/carla/opendrive__Town01.bin \\
+        --output opengigaflow/resources/carla_lhs/opendrive__Town01.bin
 """
 
 import argparse

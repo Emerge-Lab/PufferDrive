@@ -301,7 +301,7 @@ class ShadowEgo:
             env_for_policy = copy.copy(self.env)
             env_for_policy.boundary_features = self._boundary_feat_ckpt
             print(
-                f"[puffer_agent] checkpoint uses {self._boundary_feat_ckpt} boundary features "
+                f"[opengigaflow_agent] checkpoint uses {self._boundary_feat_ckpt} boundary features "
                 f"(env emits {self.env.boundary_features}); stripping zero-padded columns"
             )
 
@@ -310,7 +310,8 @@ class ShadowEgo:
         self.policy = load_policy_weights(policy, checkpoint)
         self.policy.eval()
         print(
-            f"[puffer_agent] loaded policy from {self.checkpoint} (obs partner slots {self.env.obs_slots_partners_n})"
+            f"[opengigaflow_agent] loaded policy from {self.checkpoint} "
+            f"(obs partner slots {self.env.obs_slots_partners_n})"
         )
 
     def init_route(self, route):
@@ -331,7 +332,7 @@ class ShadowEgo:
             route["driving_waypoints"], self.transform, self.town_bin
         )
         print(
-            f"[puffer_agent] bin offset calibrated against CARLA lanes: shift "
+            f"[opengigaflow_agent] bin offset calibrated against CARLA lanes: shift "
             f"({offset[0] - self.transform.tx:+.2f}, {offset[1] - self.transform.ty:+.2f}) m, z {z_offset:+.2f} m, "
             f"median lane residual {residual_before:.2f} -> {residual_after:.2f} m"
         )
@@ -379,14 +380,14 @@ class ShadowEgo:
             self.env.set_traffic_light_lines(light_line_indices, light_lines)
             self.stop_line_centers[light_line_indices] = moved_centers
             print(
-                f"[puffer_agent] light stop lines: {len(light_line_indices)} on the route moved onto the leaderboard's "
-                f"red-light lines (max {max_shift_m:.1f} m)"
+                f"[opengigaflow_agent] light stop lines: {len(light_line_indices)} on the route moved onto the "
+                f"leaderboard's red-light lines (max {max_shift_m:.1f} m)"
             )
         # the shadow env runs on CARLA's trigger volumes: the bin's exported stop lines sit up to 9 m off and miss a few
         self._stop_sign_lines, stop_sign_headings = cb.stop_sign_lines(route["stop_signs"], self.transform)
         self.num_traffic = self.env.set_stop_signs(self._stop_sign_lines, stop_sign_headings)
         print(
-            f"[puffer_agent] stop signs: {len(stop_sign_headings)} CARLA trigger volumes replace the bin's "
+            f"[opengigaflow_agent] stop signs: {len(stop_sign_headings)} CARLA trigger volumes replace the bin's "
             f"(traffic elements {bin_num_traffic} -> {self.num_traffic})"
         )
         # One id -> bin-indices table, reused by both passes in
@@ -418,7 +419,7 @@ class ShadowEgo:
             self.telemetry_file.write(TELEMETRY_HEADER)
 
         print(
-            f"[puffer_agent] town={town} tick_dt={self.tick_dt} dt={self.dt} route_goals={len(self.route_goals)} "
+            f"[opengigaflow_agent] town={town} tick_dt={self.tick_dt} dt={self.dt} route_goals={len(self.route_goals)} "
             f"max_speed_mps={self.env.max_speed_mps:.1f} (C_vel={self.env.max_speed_mps / self.env.base_max_speed_mps:.2f}) "
             f"zero_partner_stopped_time={int(self.zero_partner_stopped_time)} "
             f"vru_size_pad_m={self.vru_size_pad_m:g}"
@@ -850,14 +851,14 @@ class ShadowEgo:
             return
         pedal_stats = {} if self.controller is None else self.controller.stats()
         print(
-            f"[puffer_agent] route done: goals {self.goal_window.current_index + 1}/{len(self.route_goals)}, "
+            f"[opengigaflow_agent] route done: goals {self.goal_window.current_index + 1}/{len(self.route_goals)}, "
             f"tracking {pedal_stats}"
         )
         if self.telemetry_file is not None:
             self.telemetry_file.close()
         if self._obs_html is not None:
             written = self._obs_html.write(render_html=self.obs_html_render)
-            print(f"[puffer_agent] wrote obs replay ({len(self._obs_html)} frames) -> {written}")
+            print(f"[opengigaflow_agent] wrote obs replay ({len(self._obs_html)} frames) -> {written}")
         if self.world_log_dir and self._world_log["ego"]:
             self._write_world_log()
         self.env.close()

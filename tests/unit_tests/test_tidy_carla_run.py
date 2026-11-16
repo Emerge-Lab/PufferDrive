@@ -97,7 +97,7 @@ def _write_run(root):
         route_dir = run / "routes" / route_run
         route_dir.mkdir(parents=True)
         _write_attempt(route_dir, "20261109_120100_000001")
-        (route_dir / "evaluator_attempt1.log").write_text(f"[puffer_agent] route done {route_run}\n")
+        (route_dir / "evaluator_attempt1.log").write_text(f"[opengigaflow_agent] route done {route_run}\n")
         (route_dir / "carla_server_attempt1.log").write_text("4.24.3 UE4\n")
         (route_dir / "result.json").write_text(json.dumps({"_checkpoint": {"records": [_record(route_run)]}}))
     # the crashed route was retried: a first attempt without a replay, server and evaluator logs of both

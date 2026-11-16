@@ -8,7 +8,7 @@ import pytest
 from opengigaflow.ocean.drive.drive import Drive
 
 
-MAP_DIR = "opengigaflow/resources/drive/binaries/carla"
+MAP_DIR = "opengigaflow/resources/carla"
 SCENARIO_LENGTH = 120
 MIN_HORIZON = 20
 # Single-agent sub-envs: one independent first-episode draw per agent.

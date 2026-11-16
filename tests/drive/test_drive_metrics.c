@@ -2,8 +2,7 @@
 #include "include/test.h"
 
 // Town03 stop sign 43: eastbound stop line at x 101.6 m, y in [-68.3, -64.9] m, controlling lane 117.
-static const char *TOWN03_MAP
-    = DRIVE_TEST_REPO_ROOT "/opengigaflow/resources/drive/binaries/carla/opendrive__Town03.bin";
+static const char *TOWN03_MAP = DRIVE_TEST_REPO_ROOT "/opengigaflow/resources/carla/opendrive__Town03.bin";
 static const float TOWN03_STOP_SIGN_LANE_Y = -66.6f;
 static const float TOWN03_STOP_SIGN_LANE_Z = -0.77f;
 static const int TOWN03_STOP_SIGN_IDX = 43;

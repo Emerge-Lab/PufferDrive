@@ -6,7 +6,7 @@ import pytest
 from opengigaflow.ocean.drive import binding
 from opengigaflow.ocean.drive.drive import Drive
 
-MAP_DIR = "opengigaflow/resources/drive/binaries/carla"
+MAP_DIR = "opengigaflow/resources/carla"
 YELLOW = binding.TRAFFIC_CONTROL_STATE_YELLOW
 RED = binding.TRAFFIC_CONTROL_STATE_RED
 YELLOW_MAX_S = 3.0

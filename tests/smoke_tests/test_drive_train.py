@@ -141,7 +141,7 @@ def _build_config():
             "max_agents_per_env": 16,
             "num_maps": 2,  # few maps -> fast load
             "use_map_cache": True,  # share map geometry across envs in a worker
-            "map_dir": "opengigaflow/resources/drive/binaries/carla",
+            "map_dir": "opengigaflow/resources/carla",
             "scenario_length": BPTT_HORIZON,  # short -> episodes complete each epoch
             "stagger_first_episode": False,  # golden expects full-length first episodes
             "seed": SEED,

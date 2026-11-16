@@ -21,7 +21,7 @@ integration is therefore a client/server pair around the shared core:
   leaderboard's target points into route goals, and per tick overwrites ALL shadow agents from the
   snapshot, runs the policy and integrates one dt. All inputs/outputs are CARLA-frame plain data.
 - `leaderboard_agent.py` (this directory) — the `AutonomousAgent` for the garage evaluator (entry point
-  `PufferAgentLB1`), Python 3.7, imports nothing from `opengigaflow`. On the first tick it reads the town, the
+  `OpenGigaFlowAgentLB1`), Python 3.7, imports nothing from `opengigaflow`. On the first tick it reads the town, the
   ego's box, the route (`set_global_plan` sparse target points + the dense 1 m route), the driving
   waypoints, every traffic light's stop waypoints (from the trigger volume: 0.9.10 has no
   `get_stop_waypoints`) and every `traffic.stop` trigger volume, and sends them to the server. Every tick

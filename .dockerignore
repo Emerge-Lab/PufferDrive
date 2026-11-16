@@ -20,11 +20,11 @@ checkpoints/
 /artifacts/
 external/
 
-opengigaflow/resources/drive/binaries/*/
-!opengigaflow/resources/drive/binaries/carla/
-!opengigaflow/resources/drive/binaries/carla/**
-!opengigaflow/resources/drive/binaries/nuplan/
-!opengigaflow/resources/drive/binaries/nuplan/**
+opengigaflow/resources/*/
+!opengigaflow/resources/carla/
+!opengigaflow/resources/carla/**
+!opengigaflow/resources/nuplan/
+!opengigaflow/resources/nuplan/**
 
 opengigaflow/resources/drive/output*.gif
 *.mp4
