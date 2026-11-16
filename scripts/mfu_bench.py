@@ -124,7 +124,7 @@ def main():
     torch.manual_seed(torch_seed)
     P.apply_matmul_env_flags()
     cpus_bound = P.bind_process_to_gpu_numa_node(0)
-    vecenv = P.load_env(ENV_NAME, config, seed=env_seed, pin_workers=cpus_bound)
+    vecenv = P.load_env(config, seed=env_seed, pin_workers=cpus_bound)
     policy = P.load_policy(config, vecenv, ENV_NAME)
     train_config = dict(**config["train"], env=ENV_NAME, eval=config.get("eval", {}), run_name=config["run_name"])
     pufferl = P.PuffeRL(train_config, vecenv, policy)

@@ -19,7 +19,6 @@ import time
 import random
 import shutil
 import subprocess
-import importlib
 from datetime import datetime
 from threading import Thread
 from collections import defaultdict, deque
@@ -35,7 +34,9 @@ import torch.distributed
 from torch.distributed.elastic.multiprocessing.errors import record
 
 import pufferlib
+from pufferlib.ocean import torch as drive_torch
 from pufferlib.ocean.cosim import arch as drive_arch
+from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
 from pufferlib.ocean.evaluation_utils import eval_wandb_report as drive_eval_report
@@ -1469,7 +1470,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 
     torch_seed, env_seed = derive_rank_seeds(args["vec"]["seed"], train_seed, world_size, global_rank)
     torch.manual_seed(torch_seed)
-    vecenv = vecenv or load_env(env_name, args, seed=env_seed, pin_workers=cpus_bound)
+    vecenv = vecenv or load_env(args, seed=env_seed, pin_workers=cpus_bound)
     policy = policy or load_policy(args, vecenv, env_name)
 
     if "LOCAL_RANK" in os.environ:
@@ -1801,12 +1802,8 @@ def _run_eval_rollout(
 ):
     """Roll out a deterministic policy over the workers and gather evaluation episode summaries."""
     num_workers = len(worker_env_kwargs)
-    package = args["package"]
-    module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
-    env_module = importlib.import_module(module_name)
-    make_env = env_module.env_creator(env_name)
     vecenv = pufferlib.vector.make(
-        [make_env] * num_workers,
+        [Drive] * num_workers,
         env_args=[[]] * num_workers,
         env_kwargs=worker_env_kwargs,
         backend="Multiprocessing",
@@ -2116,11 +2113,7 @@ def _render_eval_failures(
     }
 
 
-def load_env(env_name, args, seed=None, pin_workers=False):
-    package = args["package"]
-    module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
-    env_module = importlib.import_module(module_name)
-    make_env = env_module.env_creator(env_name)
+def load_env(args, seed=None, pin_workers=False):
     vec_kwargs = dict(args["vec"])
     if seed is not None:
         vec_kwargs["seed"] = seed
@@ -2128,16 +2121,12 @@ def load_env(env_name, args, seed=None, pin_workers=False):
         vec_kwargs["pin_workers"] = pin_workers
         if args["train"].get("rollout_dtype") == "float16":
             vec_kwargs["observation_transport_dtype"] = "float16"
-    return pufferlib.vector.make(make_env, env_kwargs=args["env"], **vec_kwargs)
+    return pufferlib.vector.make(Drive, env_kwargs=args["env"], **vec_kwargs)
 
 
 def load_policy(args, vecenv, env_name=""):
-    package = args["package"]
-    module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
-    env_module = importlib.import_module(module_name)
-
     device = torch_device(args["train"]["device"])
-    policy_cls = getattr(env_module.torch, args["policy_name"])
+    policy_cls = getattr(drive_torch, args["policy_name"])
     policy = policy_cls(vecenv.driver_env, **args["policy"])
 
     policy = policy.to(device)

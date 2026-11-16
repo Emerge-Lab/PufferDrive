@@ -145,7 +145,7 @@ def test_drive_rollout():
     args = _build_config()
     rng = np.random.default_rng(SEED)
 
-    vecenv = load_env("opengigaflow", args)
+    vecenv = load_env(args)
     try:
         env_means = _capture_env_means(vecenv, rng)
     finally:

@@ -58,7 +58,7 @@ def build_policy_and_obs(rows, fused):
     P.validate_opengigaflow_config(args, "training")
     args = copy.deepcopy(args)
     args["policy"]["fused_slot_encoder"] = fused
-    vecenv = P.load_env("opengigaflow", args, seed=3)
+    vecenv = P.load_env(args, seed=3)
     torch.manual_seed(0)
     policy = P.load_policy(args, vecenv, "opengigaflow")
     vecenv.async_reset(3)

@@ -156,10 +156,6 @@ class GoalSource(Enum):
     gt_map = 4
 
 
-class PackageName(Enum):
-    ocean = 0
-
-
 class EnvironmentName(Enum):
     opengigaflow = 0
 
@@ -452,7 +448,6 @@ class OpenGigaFlowConfig:
     run_name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     tb: bool = MISSING
     tag: str | None = MISSING
-    package: PackageName = MISSING
     env_name: EnvironmentName = MISSING
     policy_name: PolicyName = MISSING
     vec: VectorConfig = MISSING

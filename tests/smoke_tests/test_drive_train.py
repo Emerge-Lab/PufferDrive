@@ -259,7 +259,7 @@ def test_drive_smoke():
     pufferl = None
     with _Watchdog():
         try:
-            vecenv = load_env("opengigaflow", args)
+            vecenv = load_env(args)
             total_agents = vecenv.num_agents
             train_config = _finalize_train_config(args, total_agents)
 

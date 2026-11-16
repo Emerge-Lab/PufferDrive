@@ -9,7 +9,6 @@ wandb_group: debug
 run_name: default_run
 tb: false
 tag: null
-package: ocean
 env_name: opengigaflow
 policy_name: Drive
 vec:

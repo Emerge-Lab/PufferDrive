@@ -74,6 +74,7 @@ def checkpoint_config_path(checkpoint):
 
 # Settings of removed features: a config saved before the removal may carry them, but only with this value.
 RETIRED_SETTINGS = {
+    ("package",): "ocean",
     ("rnn_name",): None,
     ("env", "action_type"): "continuous",
     ("env", "dynamics_model"): "jerk",
