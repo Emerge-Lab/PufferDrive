@@ -63,9 +63,7 @@ def entropy(logits):
     return -p_log_p.sum(-1)
 
 
-def sample_logits(
-    logits, action=None, action_selection=ACTION_SELECT_SAMPLE, env_continuous=None, policy=None
-):  # TODO discrete continuous
+def sample_logits(logits, action=None, action_selection=ACTION_SELECT_SAMPLE, env_continuous=None, policy=None):
     is_discrete = isinstance(logits, torch.Tensor)
     if action_selection == ACTION_SELECT_MEAN and not (env_continuous and not policy.is_continuous):
         raise ValueError("action_selection='mean' requires a discrete policy on a continuous env")
@@ -81,7 +79,6 @@ def sample_logits(
         return action, log_probs, logits_entropy, None
     elif is_discrete:
         logits = logits.unsqueeze(0)
-    # TODO: Double check this
     else:  # multi-discrete
         logits = torch.nn.utils.rnn.pad_sequence(
             [l.transpose(0, 1) for l in logits], batch_first=False, padding_value=-torch.inf

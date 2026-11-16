@@ -7,7 +7,7 @@ opengigaflow_planner:
   # Whole-city map-only bins -- the only map source, no fallback.
   city_bin_dir: ???
   device: "cpu"
-  map_radius: 400.0 # TODO: load from config
+  map_radius: 400.0
   goal_spacing: 20.0 # TODO: load from config
   num_agents: 64 # TODO: load from config
   horizon_seconds: 8.0 # nuplan default

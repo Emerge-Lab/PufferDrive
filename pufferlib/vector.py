@@ -1,6 +1,3 @@
-# TODO: Check actions passed to envs are right shape? On first call at least
-
-
 import inspect
 import itertools
 import os
@@ -653,7 +650,6 @@ class Multiprocessing:
 
     def send(self, actions):
         actions = send_precheck(self, actions).reshape(self.atn_batch_shape)
-        # TODO: What shape?
 
         self.actions[self.w_slice] = actions
         for worker in self.batch_workers:
@@ -768,7 +764,6 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=VecEnv
         if kwargs["num_workers"] == "auto":
             kwargs["num_workers"] = num_envs
 
-        # TODO: None?
         envs_per_worker = num_envs / kwargs["num_workers"]
         if envs_per_worker != int(envs_per_worker):
             raise pufferlib.APIUsageError("num_envs must be divisible by num_workers")
@@ -819,15 +814,10 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=VecEnv
     if backend is Serial and "batch_size" in kwargs:
         num_envs = kwargs["batch_size"]
 
-    # TODO: Check num workers is not greater than num envs. This results in
-    # different Serial vs Multiprocessing behavior
-
     # Sanity check args
     for k in kwargs:
         if k not in VECTOR_OPTIONS:
             raise pufferlib.APIUsageError(f"Invalid argument: {k}")
-
-    # TODO: First step action space check
 
     return backend(env_creators, env_args, env_kwargs, num_envs, seed=seed, **kwargs)
 

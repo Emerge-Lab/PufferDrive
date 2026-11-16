@@ -191,10 +191,3 @@ porting if crash rates matter.
   (`get_angular_velocity`/`get_acceleration`); they feed the ego's steering
   and acceleration observation features only for the ego itself — partner
   observations never read them, so nothing is lost there.
-
-## Remaining TODOs
-
-- [ ] Double check Town 6 offset
-- [ ] handle 2 kinds of goal, different kind of goals
-- [ ] per tick smoothness
-- [ ] some town might have routing issue, off road error

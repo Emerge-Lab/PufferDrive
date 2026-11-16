@@ -155,6 +155,4 @@ uv run convert --preset nuplan --map_only \
 
 ## Remaining TODOs
 
-- [ ] The full Val14 split (both challenges) has never been run to
-  completion, so total wall time are unmeasured.
 - [ ] Double check static variables
