@@ -387,6 +387,7 @@ class TrainingConfig:
     min_batch_size: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     minibatch_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     max_minibatch_size: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    discard_partial_minibatch: bool = MISSING
     bptt_horizon: int | str = MISSING
     compile: bool = MISSING
     compile_mode: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)

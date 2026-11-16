@@ -671,6 +671,8 @@ class PuffeRL:
         if retained_transition_count % self.minibatch_size == 1:
             retained_transition_count -= 1
         optimizer_batch_size = self.minibatch_size * self.accumulate_minibatches
+        if config["discard_partial_minibatch"] and retained_transition_count > optimizer_batch_size:
+            retained_transition_count -= retained_transition_count % optimizer_batch_size
 
         for _ in range(config["update_epochs"]):
             permutation = keep_idx[torch.randperm(keep_idx.numel(), device=keep_idx.device)]

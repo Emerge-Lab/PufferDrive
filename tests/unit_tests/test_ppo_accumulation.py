@@ -23,10 +23,26 @@ class ValuePolicy(torch.nn.Module):
 
 
 @pytest.mark.parametrize(
-    "retained_count, microbatch_size, accumulation_count",
-    [(6, 8, 4), (6, 4, 2), (10, 4, 2), (8, 4, 2), (10, 4, 1), (0, 4, 2)],
+    "retained_count, microbatch_size, accumulation_count, discard_partial_minibatch, trained_count_per_epoch",
+    [
+        (6, 8, 4, False, 6),
+        (6, 4, 2, False, 6),
+        (10, 4, 2, False, 10),
+        (8, 4, 2, False, 8),
+        (10, 4, 1, False, 10),
+        (0, 4, 2, False, 0),
+        (10, 4, 1, True, 8),
+        (10, 4, 2, True, 8),
+        (20, 4, 2, True, 16),
+        (8, 4, 2, True, 8),
+        (6, 4, 2, True, 6),
+        (3, 4, 1, True, 3),
+        (0, 4, 2, True, 0),
+    ],
 )
-def test_filtered_ppo_accumulation_matches_optimizer_batches(retained_count, microbatch_size, accumulation_count):
+def test_filtered_ppo_accumulation_matches_optimizer_batches(
+    retained_count, microbatch_size, accumulation_count, discard_partial_minibatch, trained_count_per_epoch
+):
     trainer = PuffeRL.__new__(PuffeRL)
     trainer.policy = ValuePolicy()
     trainer.config = {
@@ -37,6 +53,7 @@ def test_filtered_ppo_accumulation_matches_optimizer_batches(retained_count, mic
         "adv_filter_threshold_scale": 0.01,
         "adv_filter_leak_fraction": 0.0,
         "min_batch_size": None,
+        "discard_partial_minibatch": discard_partial_minibatch,
         "clip_coef": 0.2,
         "vf_clip_coef": None,
         "vf_coef": 1.0,
@@ -72,7 +89,7 @@ def test_filtered_ppo_accumulation_matches_optimizer_batches(retained_count, mic
         lambda *_: gradients.append(trainer.policy.value.weight.grad.detach().clone())
     )
 
-    # Compare against ordinary SGD on each full optimizer batch, including its partial tail.
+    # Compare against ordinary SGD on each optimizer batch, including its partial tail unless that is discarded.
     optimizer_batch_size = microbatch_size * accumulation_count
     reference_policy = ValuePolicy()
     reference_optimizer = torch.optim.SGD(reference_policy.parameters(), lr=0.1)
@@ -81,7 +98,7 @@ def test_filtered_ppo_accumulation_matches_optimizer_batches(retained_count, mic
     torch.manual_seed(random_seed)
     for _ in range(trainer.config["update_epochs"]):
         permutation = torch.randperm(retained_count)
-        for start in range(0, retained_count, optimizer_batch_size):
+        for start in range(0, trained_count_per_epoch, optimizer_batch_size):
             indices = permutation[start : start + optimizer_batch_size]
             predictions = reference_policy.value(observations[0, indices]).squeeze(-1)
             loss = 0.5 * (predictions - returns[0, indices]).square().mean()
@@ -93,8 +110,8 @@ def test_filtered_ppo_accumulation_matches_optimizer_batches(retained_count, mic
     torch.manual_seed(random_seed)
     trained_transition_count = trainer._train_ppo_transition(defaultdict(float), Mock(), epoch=1)
 
-    assert trained_transition_count == trainer.config["update_epochs"] * retained_count
-    expected_updates = trainer.config["update_epochs"] * math.ceil(retained_count / optimizer_batch_size)
+    assert trained_transition_count == trainer.config["update_epochs"] * trained_count_per_epoch
+    expected_updates = trainer.config["update_epochs"] * math.ceil(trained_count_per_epoch / optimizer_batch_size)
     assert len(gradients) == expected_updates
     for gradient, reference_gradient in zip(gradients, reference_gradients, strict=True):
         torch.testing.assert_close(gradient, reference_gradient)
