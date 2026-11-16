@@ -24,17 +24,18 @@ echo "Total nodes: ${WORLD_SIZE}"
 start=$(date +%s)
 
 SEEDS=(1000 2000 3000 4000)
-RUN_PREFIX=k_scaled_0082
+RUN_PREFIX=k_scaled_0083
 WORKER_COUNT=128
 ROLLOUT_STEP_COUNT=128
 MINIBATCH_SIZE=393216
+DISCARD_PARTIAL_MINIBATCH=true
 
 export SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 if [ -z "${SEED}" ]; then
     echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} has no run configured; aborting."
     exit 1
 fi
-echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} workers=${WORKER_COUNT} rollout_steps=${ROLLOUT_STEP_COUNT} minibatch=${MINIBATCH_SIZE}"
+echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} workers=${WORKER_COUNT} rollout_steps=${ROLLOUT_STEP_COUNT} minibatch=${MINIBATCH_SIZE} discard_partial_minibatch=${DISCARD_PARTIAL_MINIBATCH}"
 
 export RUN_NAME=${RUN_PREFIX}_${SEED}
 echo ${RUN_NAME}
@@ -61,6 +62,7 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # 0073 / 0074 = the 0072 config (3_train_64GPU_multinode_slurm.sh) on one node per training, minibatch 262144 / 393216, seeds 1000 and 2000.
 # 0081 = the 0074 config (minibatch 393216, lr 5e-4) on the current code with a quarter of the rollout per iteration, 29.8k iterations instead of 7451: 64 workers per rank (0074: 128) and 64 steps per rollout (0074: 128). Seeds 1000-4000, one array task each.
 # 0082 = the 0074 config again (128 workers per rank, 128 steps per rollout, minibatch 393216, lr 5e-4) on the current code, seed 1000 only (array task 0; task 1 = seed 2000).
+# 0083 = 0082 with train.discard_partial_minibatch=true (each PPO epoch skips its leftover minibatch), seed 1000 only (array task 0).
 # Execute torchrun across all nodes using srun
 srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
@@ -84,6 +86,7 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     train.bptt_horizon=${ROLLOUT_STEP_COUNT} \
     train.max_minibatch_size=${MINIBATCH_SIZE} \
     train.minibatch_size=${MINIBATCH_SIZE} \
+    train.discard_partial_minibatch=${DISCARD_PARTIAL_MINIBATCH} \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
