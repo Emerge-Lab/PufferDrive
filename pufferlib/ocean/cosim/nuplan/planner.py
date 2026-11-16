@@ -379,8 +379,8 @@ class OpenGigaFlowPlanner(AbstractPlanner):
     def _build(self, ego_state: EgoState) -> None:
         import torch
 
-        import pufferlib.ensemble
         import pufferlib.ocean.torch as drive_torch
+        import pufferlib.pytorch
 
         init = self._initialization
         ex, ey = float(ego_state.center.x), float(ego_state.center.y)
@@ -448,7 +448,7 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         if checkpoint is None:
             checkpoint = torch.load(self._checkpoint_path, map_location=self._device, weights_only=False)
             _checkpoint_cache[str(self._checkpoint_path)] = checkpoint
-        self._policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint).to(self._device).eval()
+        self._policy = pufferlib.pytorch.load_policy_weights(policy, checkpoint).to(self._device).eval()
 
         # the lane-graph route through the CaRL-corrected route roadblocks decides the shared stop-line elements
         from carl_nuplan.planning.simulation.planner.pdm_planner.utils.route_utils import (

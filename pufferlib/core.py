@@ -32,7 +32,7 @@ def set_buffers(env, buf=None):
         env.actions = buf["actions"]
 
 
-class PufferEnv:
+class VecEnv:
     def __init__(self, buf=None):
         if not hasattr(self, "single_observation_space"):
             raise APIUsageError(ENV_ERROR.format("single_observation_space"))
@@ -44,9 +44,9 @@ class PufferEnv:
             raise APIUsageError("num_agents must be >= 1")
 
         if hasattr(self, "observation_space"):
-            raise APIUsageError("PufferEnvs must define single_observation_space, not observation_space")
+            raise APIUsageError("VecEnvs must define single_observation_space, not observation_space")
         if hasattr(self, "action_space"):
-            raise APIUsageError("PufferEnvs must define single_action_space, not action_space")
+            raise APIUsageError("VecEnvs must define single_action_space, not action_space")
         if not isinstance(self.single_observation_space, pufferlib.spaces.Box):
             raise APIUsageError("Native observation_space must be a Box")
         if (
@@ -88,11 +88,11 @@ class PufferEnv:
 
     def async_reset(self, seed=None):
         _, self.infos = self.reset(seed)
-        assert isinstance(self.infos, list), "PufferEnvs must return info as a list of dicts"
+        assert isinstance(self.infos, list), "VecEnvs must return info as a list of dicts"
 
     def send(self, actions):
         _, _, _, _, self.infos = self.step(actions)
-        assert isinstance(self.infos, list), "PufferEnvs must return info as a list of dicts"
+        assert isinstance(self.infos, list), "VecEnvs must return info as a list of dicts"
 
     def recv(self):
         return (

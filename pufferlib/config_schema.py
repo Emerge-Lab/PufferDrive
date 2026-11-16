@@ -185,7 +185,7 @@ class RolloutDtype(Enum):
 
 
 class VectorBackend(Enum):
-    PufferEnv = 0
+    VecEnv = 0
     Serial = 1
     Multiprocessing = 2
 

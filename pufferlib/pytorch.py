@@ -41,6 +41,12 @@ def clean_policy_state_dict(state_dict):
     return {clean_state_key(k): v for k, v in state_dict.items()}
 
 
+def load_policy_weights(policy, checkpoint):
+    """Load a torch.load()ed checkpoint into a freshly built policy and return that policy."""
+    policy.load_state_dict(clean_policy_state_dict(checkpoint))
+    return policy
+
+
 # taken from torch.distributions.Categorical
 def log_prob(logits, value):
     value = value.long().unsqueeze(-1)

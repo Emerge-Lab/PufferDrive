@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 import pufferlib.vector
-from pufferlib import PufferEnv
+from pufferlib import VecEnv
 
 OBSERVATION_SIZE = 4
 ACTION_COUNT = 2
@@ -24,7 +24,7 @@ CACHE_DOMAIN_CORE_COUNT = 8
 PRELOADED = False
 
 
-class MinimalEnv(PufferEnv):
+class MinimalEnv(VecEnv):
     def __init__(self, buf=None, seed=0):
         self.single_observation_space = gymnasium.spaces.Box(
             low=-1.0, high=1.0, shape=(OBSERVATION_SIZE,), dtype=np.float32

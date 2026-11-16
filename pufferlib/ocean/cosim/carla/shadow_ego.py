@@ -284,9 +284,8 @@ class ShadowEgo:
 
         import torch
 
-        import pufferlib.ensemble
         import pufferlib.ocean.torch as drive_torch
-        from pufferlib.pytorch import clean_policy_state_dict
+        from pufferlib.pytorch import clean_policy_state_dict, load_policy_weights
 
         checkpoint = torch.load(self.checkpoint, map_location=self.device, weights_only=False)
         policy_state_dict = clean_policy_state_dict(checkpoint)
@@ -308,7 +307,7 @@ class ShadowEgo:
 
         policy_cls = getattr(drive_torch, self.cfg.get("policy_name", "Drive"))
         policy = policy_cls(env_for_policy, **self.cfg["policy"]).to(self.device)
-        self.policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint)
+        self.policy = load_policy_weights(policy, checkpoint)
         self.policy.eval()
         print(
             f"[puffer_agent] loaded policy from {self.checkpoint} (obs partner slots {self.env.obs_slots_partners_n})"

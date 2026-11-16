@@ -8,7 +8,7 @@ import numpy as np
 from multiprocessing import get_all_start_methods, get_context
 from multiprocessing.connection import wait
 
-from pufferlib import PufferEnv, set_buffers
+from pufferlib import VecEnv, set_buffers
 import pufferlib.spaces
 
 VECTOR_OPTIONS = (
@@ -413,7 +413,7 @@ class Multiprocessing:
         # forked processes. So for now, RawArray is much more reliable.
         # You can't send a RawArray through a pipe.
         self.driver_env = driver_env = make_config_env(env_creators[0], env_args[0], env_kwargs[0])
-        is_native = isinstance(driver_env, PufferEnv)
+        is_native = isinstance(driver_env, VecEnv)
         self.emulated = False if is_native else driver_env.emulated
         self.num_agents = num_agents = driver_env.num_agents * num_envs
         self.agents_per_batch = driver_env.num_agents * batch_size
@@ -737,7 +737,7 @@ class Multiprocessing:
         self.processes = None
 
 
-def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=PufferEnv, num_envs=1, seed=0, **kwargs):
+def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=VecEnv, num_envs=1, seed=0, **kwargs):
     if num_envs < 1:
         raise pufferlib.APIUsageError("num_envs must be at least 1")
     if num_envs != int(num_envs):
@@ -749,17 +749,17 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
         except:
             raise pufferlib.APIUsageError(f"Invalid backend: {backend}")
 
-    if backend == PufferEnv:
+    if backend == VecEnv:
         env_args = env_args or []
         env_kwargs = env_kwargs or {}
         vecenv = env_creator_or_creators(*env_args, **env_kwargs)
-        if not isinstance(vecenv, PufferEnv):
+        if not isinstance(vecenv, VecEnv):
             raise pufferlib.APIUsageError(
-                "Native vectorization requires a native PufferEnv. Use Serial or Multiprocessing instead."
+                "Native vectorization requires a native VecEnv. Use Serial or Multiprocessing instead."
             )
         if num_envs != 1:
             raise pufferlib.APIUsageError(
-                "Native vectorization is for PufferEnvs that handle all per-process vectorization internally. If you want to run multiple separate Python instances on a single process, use Serial or Multiprocessing instead"
+                "Native vectorization is for VecEnvs that handle all per-process vectorization internally. If you want to run multiple separate Python instances on a single process, use Serial or Multiprocessing instead"
             )
 
         return vecenv
@@ -833,14 +833,14 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
 
 
 def check_envs(envs, driver):
-    if not isinstance(driver, PufferEnv):
-        raise pufferlib.APIUsageError("env_creator must be PufferEnv")
+    if not isinstance(driver, VecEnv):
+        raise pufferlib.APIUsageError("env_creator must be VecEnv")
 
     driver_obs = driver.single_observation_space
     driver_atn = driver.single_action_space
     for env in envs:
-        if not isinstance(env, PufferEnv):
-            raise pufferlib.APIUsageError("env_creators must be PufferEnv")
+        if not isinstance(env, VecEnv):
+            raise pufferlib.APIUsageError("env_creators must be VecEnv")
         obs_space = env.single_observation_space
         if obs_space != driver_obs:
             raise pufferlib.APIUsageError(f"\n{obs_space}\n{driver_obs} obs space mismatch")

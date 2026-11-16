@@ -26,7 +26,7 @@ def cache_domain_map_files(map_files, cache_domain_share):
     return [map_files[map_idx] for map_idx in sorted(spread_order[first:last])]
 
 
-class Drive(pufferlib.PufferEnv):
+class Drive(pufferlib.VecEnv):
     def __init__(
         self,
         report_interval=1,

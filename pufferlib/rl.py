@@ -42,7 +42,6 @@ from pufferlib.ocean.evaluation_utils import eval_wandb_report as drive_eval_rep
 import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
-import pufferlib.ensemble
 from pufferlib.pytorch import clean_policy_state_dict
 from pufferlib.config_schema import (
     MAX_C_SEED,
@@ -2147,7 +2146,7 @@ def load_policy(args, vecenv, env_name=""):
     if load_id is not None:
         path = WandbLogger(args, load_id).download()
         checkpoint = torch.load(path, map_location=device)
-        policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint)
+        policy = pufferlib.pytorch.load_policy_weights(policy, checkpoint)
 
     load_path = args["load_model_path"]
     if load_path == "latest":
@@ -2155,7 +2154,7 @@ def load_policy(args, vecenv, env_name=""):
 
     if load_path is not None:
         checkpoint = torch.load(load_path, map_location=device)
-        policy = pufferlib.ensemble.load_policy_weights(policy, checkpoint)
+        policy = pufferlib.pytorch.load_policy_weights(policy, checkpoint)
         # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
         # optim_state = torch.load(state_path)['optimizer_state_dict']
         # pufferl.optimizer.load_state_dict(optim_state)
