@@ -1,11 +1,11 @@
-"""PufferDrive policy as a CARLA Leaderboard 1.0 agent (carla_garage's leaderboard_evaluator_local.py,
+"""OpenGigaFlow policy as a CARLA Leaderboard 1.0 agent (carla_garage's leaderboard_evaluator_local.py,
 CARLA 0.9.10.1, longest6 v1).
 
 The leaderboard runs in carla_garage's `garage` conda env: Python 3.7, the only Python the CARLA 0.9.10
-egg supports, and one that cannot import PufferDrive (Python >= 3.9). This file is therefore the CARLA
+egg supports, and one that cannot import OpenGigaFlow (Python >= 3.9). This file is therefore the CARLA
 side only -- the counterpart of ../leaderboard_agent.py's CARLA code: it reads ground truth (ego, nearby
 actors, lights, stop signs, the route), ships it over a socket to lb1/policy_server.py (started here in
-the PufferDrive venv, one process per route, shadow_ego.ShadowEgo inside) and moves the ego the way the
+the OpenGigaFlow venv, one process per route, shadow_ego.ShadowEgo inside) and moves the ego the way the
 reply says. Nothing from `pufferlib` is imported here; lb1_protocol.py is a sibling module.
 
 Usage (BENCHMARK=longest6 and ROUTES=<xml> exported, see run_leaderboard.sh / 14_carla_longest6_v1.sh):
@@ -20,7 +20,7 @@ Usage (BENCHMARK=longest6 and ROUTES=<xml> exported, see run_leaderboard.sh / 14
 Environment variables (this process; the shadow env's COSIM_DEVICE ... COSIM_WORLD_LOG are read by
 policy_server.py from the inherited environment, see shadow_ego.py):
   SCENARIO_RUNNER_ROOT         REQUIRED: carla_garage's scenario_runner checkout
-  COSIM_SERVER_PYTHON          python of the PufferDrive venv that runs policy_server.py
+  COSIM_SERVER_PYTHON          python of the OpenGigaFlow venv that runs policy_server.py
                                (default: <repo>/.venv/bin/python)
   COSIM_DEBUG_CARLA_VIEW=/dir  write a CARLA chase-camera mp4 per route (native tick rate)
 
@@ -315,12 +315,12 @@ class RoadProbe:
 
 
 class PolicyServerLink:
-    """policy_server.py as a child process in the PufferDrive venv, one request/reply per message."""
+    """policy_server.py as a child process in the OpenGigaFlow venv, one request/reply per message."""
 
     def __init__(self, checkpoint, route_tag):
         python = os.environ.get("COSIM_SERVER_PYTHON", str(DEFAULT_SERVER_PYTHON))
         if not Path(python).is_file():
-            raise FileNotFoundError(f"COSIM_SERVER_PYTHON={python} does not exist (the PufferDrive venv python)")
+            raise FileNotFoundError(f"COSIM_SERVER_PYTHON={python} does not exist (the OpenGigaFlow venv python)")
         self.sock, child_sock = socket.socketpair()
         self.sock.settimeout(PROTOCOL_TIMEOUT_S)
         env = {k: v for k, v in os.environ.items() if k not in SERVER_ENV_DROPPED}

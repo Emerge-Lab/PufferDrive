@@ -3,11 +3,11 @@
 # original_leaderboard evaluator. See README.md "How to run".
 #
 # Usage (from a GPU allocation's job id — squeue -u $USER to find it):
-#   CKPT=/path/to/model_puffer_drive_xxxxxx.pt \
+#   CKPT=/path/to/model_opengigaflow_xxxxxx.pt \
 #     srun --jobid=<gpu job> --overlap bash run_leaderboard.sh
 #
 # Required env:
-#   CKPT           PufferDrive checkpoint .pt (experiment dir or models/*.pt file)
+#   CKPT           OpenGigaFlow checkpoint .pt (experiment dir or models/*.pt file)
 # Optional env:
 #   ROUTES         routes xml. Default: one longest6 split route (Town01).
 #   ROUTES_SUBSET  route id within ROUTES. Default: 0. Set to empty

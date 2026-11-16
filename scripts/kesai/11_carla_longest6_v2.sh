@@ -9,7 +9,7 @@
 #SBATCH --output experiments/logs/carla_longest6_v2_%j.out
 #SBATCH --error experiments/logs/carla_longest6_v2_%j.err
 #SBATCH --partition dev
-# CARLA longest6 evaluation of a PufferDrive checkpoint through CaRL's unmodified original_leaderboard
+# CARLA longest6 evaluation of an OpenGigaFlow checkpoint through CaRL's unmodified original_leaderboard
 # (pufferlib/ocean/cosim/carla/leaderboard_agent.py), the CARLA counterpart of 9_nuPlan.sh.
 #
 # WORKERS parallel workers (default 16), each one CARLA server + one evaluator at a time, spread round-robin over the
@@ -46,7 +46,7 @@
 # ablations, so the run keeps the number of its standard eval; never reported: a run with missing route records and the
 # scenario-free variant).
 # COSIM_DYNAMICS_SOURCE (carla_pedals, default: CARLA's physics moves the ego, driven only by the VehicleControl the agent
-# returns; pufferdrive: the ego is teleported along PufferDrive's own dynamics, tags the folder _pufferdrive).
+# returns; opengigaflow: the ego is teleported along OpenGigaFlow's own dynamics, tags the folder _opengigaflow).
 # Ablations of carla_pedals: COSIM_PEDAL_REVERSE (0, default: the car never backs up; 1 = it reverses, tags the folder _reverse) and
 # COSIM_PEDAL_YELLOW_MARGIN (1, default; 0 = the policy sees CARLA's remaining yellow, tags the folder _noyellowmargin).
 set -u
@@ -116,7 +116,7 @@ pick_port_base() {
 PORT_BASE=$(pick_port_base "$PORT_BASE" 12000 22000) || { echo "no free port range for $WORKERS workers (ss -ltun)"; exit 1; }
 echo "port base $PORT_BASE: rpc $PORT_BASE+50w, TM $((PORT_BASE + 6000))+50w"
 
-# PD first, and drop inherited entries from other PufferDrive checkouts (see 9_nuPlan.sh)
+# PD first, and drop inherited entries from other OpenGigaFlow checkouts (see 9_nuPlan.sh)
 INHERITED_PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
 export PYTHONPATH="$PD:$CARL_WORK_DIR/original_leaderboard/leaderboard:$CARL_WORK_DIR/original_leaderboard/scenario_runner:$CARLA_ROOT/PythonAPI/carla${INHERITED_PYTHONPATH:+:$INHERITED_PYTHONPATH}"
 export SCENARIO_RUNNER_ROOT=$CARL_WORK_DIR/original_leaderboard/scenario_runner
@@ -125,7 +125,7 @@ OMP_THREADS=${OMP_NUM_THREADS:-$([ "$WORKERS" -ge 16 ] && echo 2 || echo 4)}
 export OMP_NUM_THREADS=$OMP_THREADS MKL_NUM_THREADS=$OMP_THREADS OPENBLAS_NUM_THREADS=$OMP_THREADS NUMEXPR_NUM_THREADS=$OMP_THREADS
 export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
 export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-carla_pedals}   # carla_pedals: CARLA's physics moves the ego, see shadow_ego.py
-[[ "$COSIM_DYNAMICS_SOURCE" =~ ^(pufferdrive|carla_pedals)$ ]] || { echo "COSIM_DYNAMICS_SOURCE=\"$COSIM_DYNAMICS_SOURCE\" must be pufferdrive or carla_pedals"; exit 1; }
+[[ "$COSIM_DYNAMICS_SOURCE" =~ ^(opengigaflow|carla_pedals)$ ]] || { echo "COSIM_DYNAMICS_SOURCE=\"$COSIM_DYNAMICS_SOURCE\" must be opengigaflow or carla_pedals"; exit 1; }
 export COSIM_PEDAL_REVERSE=${COSIM_PEDAL_REVERSE:-0} COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}   # carla_pedals ablations, see shadow_ego.py
 [[ "$COSIM_PEDAL_REVERSE" =~ ^[01]$ && "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_REVERSE=\"$COSIM_PEDAL_REVERSE\" and COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }
 export COSIM_MAX_SPEED_MPS=${COSIM_MAX_SPEED_MPS:-30}
@@ -142,7 +142,7 @@ TAG=$TAG$([ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ] || echo "_$COSIM_DYNAMIC
 if [ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ]; then
     TAG=$TAG$([ "$COSIM_PEDAL_REVERSE" = "0" ] || echo "_reverse")$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
 fi
-# results live in the model's own eval folder, next to the PufferDrive benchmark evals
+# results live in the model's own eval folder, next to the OpenGigaFlow benchmark evals
 OUT=$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
 {

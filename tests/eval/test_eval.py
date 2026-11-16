@@ -14,7 +14,7 @@ import yaml
 
 import pufferlib
 from pufferlib import pufferl
-from pufferlib.config_schema import validate_puffer_drive_config
+from pufferlib.config_schema import validate_opengigaflow_config
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
@@ -64,7 +64,7 @@ class ZeroPolicy(torch.nn.Module):
 
 def _load_config():
     with patch.object(sys, "argv", ["pufferl.py"]):
-        return pufferl.load_config("puffer_drive")
+        return pufferl.load_config("opengigaflow")
 
 
 def _set_small_observation_config(args):
@@ -211,7 +211,7 @@ def carla_evaluation(tmp_path_factory):
     pufferlib.vector.make = record_vector_make
     try:
         benchmark_results = pufferl.eval(
-            env_name="puffer_drive",
+            env_name="opengigaflow",
             args=args,
             policy=ZeroPolicy(),
             eval_output_dir=str(output_root),
@@ -352,7 +352,7 @@ def _run_standalone_eval_with_wandb(tmp_path, monkeypatch, benchmark_name):
     stub_wandb.init = open_session
     monkeypatch.setitem(sys.modules, "wandb", stub_wandb)
 
-    pufferl.eval(env_name="puffer_drive", args=args, policy=ZeroPolicy())
+    pufferl.eval(env_name="opengigaflow", args=args, policy=ZeroPolicy())
     return run_dir, stored_summary, stored_history, requested_run_paths
 
 
@@ -432,7 +432,7 @@ def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
 
     replay_summaries = pufferl._run_eval_rollout(
         replay_args,
-        "puffer_drive",
+        "opengigaflow",
         worker_env_kwargs,
         total_steps,
         "Seed replay",
@@ -539,7 +539,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
     replay_output_dir = tmp_path / drive_eval_replay.ZLIB_REPLAY_DIR_NAME
     summaries = pufferl._run_eval_rollout(
         args,
-        "puffer_drive",
+        "opengigaflow",
         worker_env_kwargs,
         total_steps,
         "Replay capture",
@@ -693,7 +693,7 @@ def _run_sdc_eval(output_root, map_dir, benchmark_name, max_scenarios_per_batch)
     args = _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir)
     _write_checkpoint_run_dir(output_root / f"{benchmark_name}_checkpoint", args)
     pufferl.eval(
-        env_name="puffer_drive",
+        env_name="opengigaflow",
         args=args,
         policy=ZeroPolicy(),
         eval_output_dir=str(output_root),
@@ -740,7 +740,7 @@ def test_batch_cap_rejects_non_positive_values():
     args = _load_config()
     args["env"]["max_scenarios_per_batch"] = 0
     with pytest.raises(pufferlib.APIUsageError, match="max_scenarios_per_batch"):
-        validate_puffer_drive_config(args, "test")
+        validate_opengigaflow_config(args, "test")
 
 
 def test_batch_cap_preserves_scenario_coverage(tmp_path, sdc_replay_map_dir):
@@ -776,7 +776,7 @@ def test_policy_builds_from_the_released_driver_env(sdc_replay_map_dir):
     policy only reads Python config attributes, which outlive close() -- but
     eval runs this path on every benchmark, so pin it."""
     with patch.object(sys, "argv", ["pufferl.py"]):
-        args = pufferl.load_config("puffer_drive")
+        args = pufferl.load_config("opengigaflow")
     args["train"]["device"] = "cpu"
     env_kwargs = {
         "num_agents": SDC_SCENARIO_COUNT,
@@ -803,7 +803,7 @@ def test_policy_builds_from_the_released_driver_env(sdc_replay_map_dir):
         batch_size=SDC_WORKER_COUNT,
     )
     try:
-        assert pufferl.load_policy(args, vecenv, "puffer_drive") is not None
+        assert pufferl.load_policy(args, vecenv, "opengigaflow") is not None
         obs, _ = vecenv.reset(SEED)
         assert obs.shape[0] == vecenv.agents_per_batch
     finally:

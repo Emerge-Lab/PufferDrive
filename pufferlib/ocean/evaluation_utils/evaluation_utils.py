@@ -10,11 +10,11 @@ import pufferlib
 import pufferlib.pytorch
 import pufferlib.utils
 from pufferlib.config_schema import (
-    normalize_puffer_drive_benchmarks,
-    normalize_puffer_drive_config,
-    puffer_drive_constructor_keys,
-    validate_puffer_drive_config,
-    validate_puffer_drive_resources,
+    normalize_opengigaflow_benchmarks,
+    normalize_opengigaflow_config,
+    opengigaflow_constructor_keys,
+    validate_opengigaflow_config,
+    validate_opengigaflow_resources,
 )
 from pufferlib.ocean.cosim.arch import drop_retired_settings
 
@@ -114,7 +114,7 @@ def load_benchmark_config(config_path, selected_names, map_dir_override=None, nu
             benchmark_environment = _require_mapping(benchmark.get("env"), f"Benchmark {name} env")
             benchmark = {**benchmark, "env": {**benchmark_environment, "map_dir": map_dir_override}}
         selected_benchmark_configs.append(benchmark)
-    resolved_benchmarks = normalize_puffer_drive_benchmarks(
+    resolved_benchmarks = normalize_opengigaflow_benchmarks(
         environment_config,
         selected_benchmark_configs,
         "benchmark_config",
@@ -134,7 +134,7 @@ def load_checkpoint_architecture(args):
     merged = copy.deepcopy(args)
     merged["policy"].update(_require_mapping(checkpoint_config.get("policy"), "checkpoint config policy"))
     checkpoint_env = _require_mapping(checkpoint_config.get("env"), "checkpoint config env")
-    accepted_env_keys = puffer_drive_constructor_keys()
+    accepted_env_keys = opengigaflow_constructor_keys()
     # a config saved before this obs column existed carries no key: that policy has no such column
     merged["env"]["obs_traffic_light_yellow_remaining"] = False
     merged["env"].update({key: value for key, value in checkpoint_env.items() if key in accepted_env_keys})
@@ -202,7 +202,7 @@ def _finalize_benchmark_args(args, cli_overrides, eval_training_render, validati
         args["env"]["compute_eval_metrics"] = True
         args["env"]["resample_frequency"] = args["env"]["scenario_length"]
 
-    args = normalize_puffer_drive_config(args, validation_context)
+    args = normalize_opengigaflow_config(args, validation_context)
     single_agent_replay = (
         args["env"]["simulation_mode"] == "replay" and args["env"]["control_mode"] == "control_sdc_only"
     )
@@ -211,8 +211,8 @@ def _finalize_benchmark_args(args, cli_overrides, eval_training_render, validati
             args["vec"]["num_envs"],
             args["eval"]["max_sdc_replay_workers"],
         )
-    validate_puffer_drive_config(args, validation_context)
-    validate_puffer_drive_resources(args, validation_context)
+    validate_opengigaflow_config(args, validation_context)
+    validate_opengigaflow_resources(args, validation_context)
     return args
 
 

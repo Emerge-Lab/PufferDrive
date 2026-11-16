@@ -1,17 +1,17 @@
-# PufferDrive policy under nuPlan's closed-loop evaluation
+# OpenGigaFlow policy under nuPlan's closed-loop evaluation
 
 ## Goal
 
-Evaluate a PufferDrive-trained policy with nuPlan's **unmodified** `run_simulation.py` closed-loop pipeline — the same simulator, metrics, and scoring CaRL's own nuPlan planners are evaluated with — so scores are directly comparable. The nuPlan analog of `pufferlib/ocean/cosim/carla/`.
+Evaluate an OpenGigaFlow-trained policy with nuPlan's **unmodified** `run_simulation.py` closed-loop pipeline — the same simulator, metrics, and scoring CaRL's own nuPlan planners are evaluated with — so scores are directly comparable. The nuPlan analog of `pufferlib/ocean/cosim/carla/`.
 
 ## Design
 
-Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner via `planner=pufferdrive_planner` (a config pointing at this package's `PufferDrivePlanner`), so the whole integration is this package:
+Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner via `planner=opengigaflow_planner` (a config pointing at this package's `OpenGigaFlowPlanner`), so the whole integration is this package:
 
-- `planner.py` — `PufferDrivePlanner(AbstractPlanner)`. The shadow `Drive`
+- `planner.py` — `OpenGigaFlowPlanner(AbstractPlanner)`. The shadow `Drive`
   env holds ONE policy agent (the ego) plus `num_agents - 1` static partner
   slots (`cosim_partner_slots`) that are never spawned or stepped by
-  PufferDrive. Per planning iteration (dt = the scenario's
+  OpenGigaFlow. Per planning iteration (dt = the scenario's
   `database_interval`): stream nuPlan's `PlannerInput` (ego state,
   `DetectionsTracks`, traffic lights) into the shadow env (`nuplan_bridge`
   transforms), recompute observations, run the policy on the ego row,
@@ -77,8 +77,8 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   the first 1.5 s.
 - `pufferlib/ocean/cosim/nuplan_bridge.py`
 - `config/` — the Hydra configs that plug the planner in without touching
-  nuplan-devkit or `carl_nuplan`: `planner/pufferdrive_planner.yaml` and two
-  challenge presets, `closed_loop_{nonreactive,reactive}_agents_pufferdrive`
+  nuplan-devkit or `carl_nuplan`: `planner/opengigaflow_planner.yaml` and two
+  challenge presets, `closed_loop_{nonreactive,reactive}_agents_opengigaflow`
   (log-replay vs IDM agents, each with its metrics; both pin `one_stage_controller`).
   Found via `hydra.searchpath=[pkg://pufferlib.ocean.cosim.nuplan.config, ...]`.
   Use city bins

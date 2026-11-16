@@ -1,4 +1,4 @@
-"""Shard one PufferDrive eval benchmark across GPUs or nodes and aggregate the results.
+"""Shard one OpenGigaFlow eval benchmark across GPUs or nodes and aggregate the results.
 
 Each shard runs an independent `puffer eval` process over a disjoint scenario
 window (eval.scenario_offset), then the per-shard episode_metrics.csv files are
@@ -32,7 +32,7 @@ FAILED_LOG_TAIL_LINES = 30
 def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("benchmark", help="Benchmark name from the benchmark config, e.g. carla")
-    parser.add_argument("--env-name", default="puffer_drive")
+    parser.add_argument("--env-name", default="opengigaflow")
     parser.add_argument("--total-scenarios", type=int, required=True)
     shard_group = parser.add_mutually_exclusive_group(required=True)
     shard_group.add_argument("--num-gpus", type=int, help="Run one shard per local GPU")

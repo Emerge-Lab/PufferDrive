@@ -1,4 +1,4 @@
-"""Interactive HTML replays of PufferDrive scenarios: encoding, rendering and the gallery index."""
+"""Interactive HTML replays of OpenGigaFlow scenarios: encoding, rendering and the gallery index."""
 
 import numpy as np
 import os
@@ -321,7 +321,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
 <html data-theme="light">
 <head>
     <meta charset="UTF-8">
-    <title>PufferDrive Replay</title>
+    <title>OpenGigaFlow Replay</title>
     <style>
         :root {
             --bg:#e9ebee; --surface:rgba(255,255,255,.92); --surface-solid:#ffffff; --border:#dcdfe5;
@@ -1451,7 +1451,7 @@ def build_gallery_index(folder_path=".", file_metrics=None, links=None):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>PufferDrive Replay Gallery</title>
+    <title>OpenGigaFlow Replay Gallery</title>
     <style>
         :root {
             color-scheme: light;
@@ -1871,7 +1871,7 @@ def build_gallery_index(folder_path=".", file_metrics=None, links=None):
     <div class="app-shell">
         <header class="top-header">
             <div class="brand">
-                <span class="brand-kicker">PufferDrive</span>
+                <span class="brand-kicker">OpenGigaFlow</span>
                 <span class="brand-title">Replay index</span>
                 __BRAND_LINKS__
             </div>

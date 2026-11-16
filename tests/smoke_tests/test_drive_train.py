@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deterministic CPU smoke test for the PufferDrive training pipeline.
+Deterministic CPU smoke test for the OpenGigaFlow training pipeline.
 
 Runs the real pipeline (load_config -> load_env -> load_policy -> PuffeRL) for
 2 epochs on CPU (synchronous Serial backend), then compares the captured training
@@ -22,10 +22,10 @@ identical on every host. A golden generated outside that image will NOT match CI
 To regenerate it after an intentional pipeline change (the image ENTRYPOINT
 already wraps qemu + python -m pytest, so pass only test args):
 
-    docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
+    docker build -f tests/smoke_tests/Dockerfile -t opengigaflow-smoke .
     docker run --rm -e SMOKE_UPDATE_GOLDEN=1 \
         -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
-        pufferdrive-smoke tests/smoke_tests/test_drive_train.py
+        opengigaflow-smoke tests/smoke_tests/test_drive_train.py
 
 Then commit the updated json. Subsequent runs assert against it within tolerance
 (np.isclose; tighten/loosen via SMOKE_RTOL / SMOKE_ATOL).
@@ -116,7 +116,7 @@ def _build_config():
     saved_argv = sys.argv
     sys.argv = [saved_argv[0]]
     try:
-        args = load_config("puffer_drive")
+        args = load_config("opengigaflow")
     finally:
         sys.argv = saved_argv
 
@@ -189,7 +189,7 @@ def _finalize_train_config(args, total_agents):
             "checkpoint_interval": 10_000_000,
         },
     )
-    return dict(**args["train"], env="puffer_drive", eval=args.get("eval", {}))
+    return dict(**args["train"], env="opengigaflow", eval=args.get("eval", {}))
 
 
 def _capture_metrics(pufferl):
@@ -259,12 +259,12 @@ def test_drive_smoke():
     pufferl = None
     with _Watchdog():
         try:
-            vecenv = load_env("puffer_drive", args)
+            vecenv = load_env("opengigaflow", args)
             total_agents = vecenv.num_agents
             train_config = _finalize_train_config(args, total_agents)
 
             _seed_everything()  # re-seed right before weight init
-            policy = load_policy(args, vecenv, "puffer_drive")
+            policy = load_policy(args, vecenv, "opengigaflow")
 
             pufferl = PuffeRL(train_config, vecenv, policy, logger=_DummyLogger())
             losses, env_means = _capture_metrics(pufferl)

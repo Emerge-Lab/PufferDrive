@@ -13,7 +13,7 @@ DRIVE_SOURCES := $(wildcard pufferlib/ocean/drive/*.c) $(wildcard pufferlib/ocea
 .PHONY: help test rebuild test-unit test-eval test-c test-docker-smoke
 
 help:
-	@echo "PufferDrive test targets:"
+	@echo "OpenGigaFlow test targets:"
 	@echo ""
 	@echo "  make test               Run the local suites (unit + eval + C), fail-fast."
 	@echo "                          Rebuilds the C extension first if any .c/.h changed."
@@ -49,5 +49,5 @@ test-docker-smoke:
 		echo "error: docker not found. This suite runs in a Linux container —"; \
 		echo "install Docker Desktop, or rely on the CI smoke job instead."; \
 		exit 1; }
-	docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
-	docker run --rm pufferdrive-smoke
+	docker build -f tests/smoke_tests/Dockerfile -t opengigaflow-smoke .
+	docker run --rm opengigaflow-smoke

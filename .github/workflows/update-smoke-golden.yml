@@ -26,13 +26,13 @@ jobs:
           ref: ${{ github.ref_name }}
 
       - name: Build smoke image
-        run: docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
+        run: docker build -f tests/smoke_tests/Dockerfile -t opengigaflow-smoke .
 
       - name: Regenerate goldens
         run: |
           docker run --rm -e SMOKE_UPDATE_GOLDEN=1 \
             -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
-            pufferdrive-smoke tests/smoke_tests/test_drive_train.py tests/smoke_tests/test_drive_rollout.py
+            opengigaflow-smoke tests/smoke_tests/test_drive_train.py tests/smoke_tests/test_drive_rollout.py
         timeout-minutes: 30
 
       - name: Upload golden artifact

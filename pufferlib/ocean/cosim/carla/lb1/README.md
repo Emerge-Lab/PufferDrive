@@ -1,8 +1,8 @@
-# PufferDrive policy under carla_garage's CARLA Leaderboard 1.0 (longest6 v1)
+# OpenGigaFlow policy under carla_garage's CARLA Leaderboard 1.0 (longest6 v1)
 
 ## Goal
 
-Evaluate a PufferDrive-trained policy with **carla_garage's unmodified Leaderboard 1.0** pipeline
+Evaluate an OpenGigaFlow-trained policy with **carla_garage's unmodified Leaderboard 1.0** pipeline
 (`leaderboard_evaluator_local.py`, CARLA 0.9.10.1, `longest6.xml` + `eval_scenarios.json`,
 `BENCHMARK=longest6`) — the evaluator, scenarios, scoring and `tools/result_parser.py` that produced
 the TransFuser++ longest6 numbers. The Leaderboard 2.0 counterpart (CaRL, CARLA 0.9.15) is
@@ -12,7 +12,7 @@ the TransFuser++ longest6 numbers. The Leaderboard 2.0 counterpart (CaRL, CARLA 
 
 Zero changes to carla_garage. The leaderboard imports any agent file via `--agent`; the difference to
 the Leaderboard 2.0 agent is the interpreter: the `garage` conda env is **Python 3.7** (the only Python
-the CARLA 0.9.10 egg ships for) and PufferDrive needs 3.9+, so one process cannot hold both. The
+the CARLA 0.9.10 egg ships for) and OpenGigaFlow needs 3.9+, so one process cannot hold both. The
 integration is therefore a client/server pair around the shared core:
 
 - `../shadow_ego.py` — `ShadowEgo`, the carla-free core used by both leaderboards: loads the checkpoint
@@ -26,9 +26,9 @@ integration is therefore a client/server pair around the shared core:
   waypoints, every traffic light's stop waypoints (from the trigger volume: 0.9.10 has no
   `get_stop_waypoints`) and every `traffic.stop` trigger volume, and sends them to the server. Every tick
   it ships ego/partner states and light states, and teleports the ego to the returned pose
-  (`COSIM_DYNAMICS_SOURCE=pufferdrive`) or applies the returned throttle/brake/steer (`carla_pedals`). The
+  (`COSIM_DYNAMICS_SOURCE=opengigaflow`) or applies the returned throttle/brake/steer (`carla_pedals`). The
   chase-cam mp4 (`COSIM_DEBUG_CARLA_VIEW`) is written here.
-- `policy_server.py` — started by the agent in the PufferDrive venv (`COSIM_SERVER_PYTHON`, default
+- `policy_server.py` — started by the agent in the OpenGigaFlow venv (`COSIM_SERVER_PYTHON`, default
   `<repo>/.venv/bin/python`), one process per route, `ShadowEgo` behind `lb1_protocol.py`
   (length-prefixed JSON over an inherited socket). Telemetry, world log and obs replay come out
   of this process (same `COSIM_*` variables and file names as the Leaderboard 2.0 agent).

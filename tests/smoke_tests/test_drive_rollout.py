@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic CPU smoke test for the PufferDrive simulator under random actions.
+"""Deterministic CPU smoke test for the OpenGigaFlow simulator under random actions.
 
 The training-free twin of test_drive_train.py: same env configuration and the
 same 5 x BPTT_HORIZON env steps, but with NO policy / PPO update in the loop.
@@ -15,10 +15,10 @@ fixed CPU so the result is identical on every host. To regenerate after an
 intentional simulator change (the image ENTRYPOINT already wraps qemu + python -m
 pytest, so pass only test args):
 
-    docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
+    docker build -f tests/smoke_tests/Dockerfile -t opengigaflow-smoke .
     docker run --rm -e SMOKE_UPDATE_GOLDEN=1 \
         -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
-        pufferdrive-smoke tests/smoke_tests/test_drive_rollout.py
+        opengigaflow-smoke tests/smoke_tests/test_drive_rollout.py
 
 Then commit the updated json. Subsequent runs assert against it within tolerance
 (np.isclose; tune via SMOKE_RTOL / SMOKE_ATOL).
@@ -64,7 +64,7 @@ def _build_config():
     saved_argv = sys.argv
     sys.argv = [saved_argv[0]]
     try:
-        args = load_config("puffer_drive")
+        args = load_config("opengigaflow")
     finally:
         sys.argv = saved_argv
 
@@ -145,7 +145,7 @@ def test_drive_rollout():
     args = _build_config()
     rng = np.random.default_rng(SEED)
 
-    vecenv = load_env("puffer_drive", args)
+    vecenv = load_env("opengigaflow", args)
     try:
         env_means = _capture_env_means(vecenv, rng)
     finally:

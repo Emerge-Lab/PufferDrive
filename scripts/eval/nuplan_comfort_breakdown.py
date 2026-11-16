@@ -1,4 +1,4 @@
-"""Which ego_is_comfortable sub-metric fails how often in nuPlan closed-loop eval runs of the PufferDrive planner.
+"""Which ego_is_comfortable sub-metric fails how often in nuPlan closed-loop eval runs of the OpenGigaFlow planner.
 usage: python scripts/eval/nuplan_comfort_breakdown.py <group_dir> [<group_dir> ...]
 Each group dir is a run_simulation.py `group` directory, fresh or tidied by tidy_nuplan_run.py; the per-scenario
 metric parquets under details/metrics (simulation/<challenge>/<ts>/metrics before the tidy) are read. nuPlan's

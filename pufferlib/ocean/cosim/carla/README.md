@@ -1,19 +1,19 @@
-# PufferDrive policy under CaRL's CARLA leaderboard
+# OpenGigaFlow policy under CaRL's CARLA leaderboard
 
 ## Goal
 
-Evaluate a PufferDrive-trained policy with **CaRL's unmodified `original_leaderboard`** pipeline — the same evaluator, scenarios, scoring, and statistics that produced the CaRL longest6-v2 numbers
+Evaluate an OpenGigaFlow-trained policy with **CaRL's unmodified `original_leaderboard`** pipeline — the same evaluator, scenarios, scoring, and statistics that produced the CaRL longest6-v2 numbers
 
 ## Design
 
 Zero changes to CaRL. The leaderboard imports any agent file via `--agent`, so the whole integration is this package:
 
 - `shadow_ego.py` — `ShadowEgo`, the carla-free core shared with the Leaderboard 1.0 integration (`lb1/`).
-  Loads a PufferDrive checkpoint, builds the shadow `Drive` env from the checkpoint's config, calibrates the bin frame, maps lights/stop signs and route goals, and every CARLA tick (the shadow env runs at the 0.05 s tick, no action repeat): overwrites ALL shadow agents (ego included) from the CARLA-frame snapshot (ego pose/velocity, nearest vehicles+walkers with true bounding boxes, traffic-light states, route goals from the leaderboard's target points), recomputes observations, runs the policy and integrates one dt into the ego's next pose (or into pedals and steer for CARLA's own physics). All per-route logs (telemetry, world log, obs replay) are written here.
+  Loads an OpenGigaFlow checkpoint, builds the shadow `Drive` env from the checkpoint's config, calibrates the bin frame, maps lights/stop signs and route goals, and every CARLA tick (the shadow env runs at the 0.05 s tick, no action repeat): overwrites ALL shadow agents (ego included) from the CARLA-frame snapshot (ego pose/velocity, nearest vehicles+walkers with true bounding boxes, traffic-light states, route goals from the leaderboard's target points), recomputes observations, runs the policy and integrates one dt into the ego's next pose (or into pedals and steer for CARLA's own physics). All per-route logs (telemetry, world log, obs replay) are written here.
 - `leaderboard_agent.py` — `AutonomousAgent` subclass (entry point `PufferAgent`), the CARLA side: reads the ground truth into the snapshot, teleports the ego to the returned pose (resting it on the road mesh), runs CaRL's criteria for the `carla_*` telemetry columns, and returns a `carla.VehicleControl` every tick. Get `sensor.camera.rgb` chase cam via `sensors()` — the leaderboard's own standard sensor mechanism, so this doesn't touch the read-only-w.r.t.-CARLA contract; frames stream straight to an mp4 writer. `COSIM_OBS_HTML` records the interactive observation replay (exact policy input/outputs).
 - `controller.py` — `PedalMap`:
   turns the jerk integrator's acceleration and steering into throttle/brake/steer for CARLA's own vehicle physics (`COSIM_DYNAMICS_SOURCE=carla_pedals`)
-- `lb1/` — the same policy under carla_garage's Leaderboard 1.0 (CARLA 0.9.10.1, longest6 v1): a Python 3.7 client agent plus `policy_server.py` running `ShadowEgo` in the PufferDrive venv; see `lb1/README.md`.
+- `lb1/` — the same policy under carla_garage's Leaderboard 1.0 (CARLA 0.9.10.1, longest6 v1): a Python 3.7 client agent plus `policy_server.py` running `ShadowEgo` in the OpenGigaFlow venv; see `lb1/README.md`.
 
 All shadow-env assumptions about the model (observation layout, dynamics model, dt, goal
 count/radius, reward conditioning) are adopted from the checkpoint's sibling `config.yaml`
@@ -52,7 +52,7 @@ longest6 v1 script sets 40, GIGAFLOW's eval value), `COSIM_OBS_HTML`,
 
 ### Ego dynamics source
 
-`COSIM_DYNAMICS_SOURCE=pufferdrive` (default): PufferDrive's
+`COSIM_DYNAMICS_SOURCE=opengigaflow` (default): OpenGigaFlow's
 own dynamics (the ones the policy was trained on) move the ego, and the CARLA
 actor is teleported to the post-step pose every tick, where the next tick's
 observation reads it. The teleport keeps the body flat on CARLA's road plane

@@ -9,9 +9,9 @@
 #SBATCH --output experiments/logs/alpasim_%j.out
 #SBATCH --error experiments/logs/alpasim_%j.err
 #SBATCH --partition dev
-# AlpaSim closed-loop evaluation of a PufferDrive checkpoint on NuRec scenes, the AlpaSim counterpart of 9_nuPlan.sh:
+# AlpaSim closed-loop evaluation of an OpenGigaFlow checkpoint on NuRec scenes, the AlpaSim counterpart of 9_nuPlan.sh:
 # alpasim-training's teacher driver runs the policy in a shadow env of this checkout (PUFFERDRIVE_ROOT=$PD) on the
-# scenes converted to PufferDrive bins; AlpaSim renders, simulates the ego and replays the logged traffic. AlpaSim's
+# scenes converted to OpenGigaFlow bins; AlpaSim renders, simulates the ego and replays the logged traffic. AlpaSim's
 # services run as containers: docker compose on scaleway; on kesai, which has no docker, as enroot containers started
 # straight from squashfs images inside this job (CONTAINER_RUNTIME=enroot) or as pyxis job steps (pyxis; every step first
 # unpacks its image to node-local disk, ~300 GB per run with this topology).
@@ -136,7 +136,7 @@ else
 fi
 echo "Evaluating checkpoint: $CKPT"
 
-# drop inherited entries from other PufferDrive checkouts: the teacher would import their pufferlib instead of $PD's
+# drop inherited entries from other OpenGigaFlow checkouts: the teacher would import their pufferlib instead of $PD's
 export PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
 export PUFFERDRIVE_ROOT=$PD
 mkdir -p "$PD/experiments/logs"  # the build helper keeps its source hash there
@@ -171,7 +171,7 @@ EOF
 )
 [ ${#SCENES[@]} -gt 0 ] || { echo "no scenes to evaluate"; exit 1; }
 
-# results live in the model's own eval folder, next to the PufferDrive benchmark evals
+# results live in the model's own eval folder, next to the OpenGigaFlow benchmark evals
 # The standard eval's folder is alpasim_<date>_<job>; a setting that differs from the values above adds its tag.
 FOLDER_TAG=$([ "$GOAL_MODE" = "gt_time:5" ] || echo "_${GOAL_MODE//:/}")$([ "$GOAL_RADIUS_M" = "2" ] || echo "_r$GOAL_RADIUS_M")
 FOLDER_TAG=$FOLDER_TAG$([ "$VRU_SIZE_PAD_M" = "0.8" ] || echo "_vrupad$VRU_SIZE_PAD_M")$([ "$PARTNER_SPLIT_LENGTH_M" = "7" ] || echo "_split$PARTNER_SPLIT_LENGTH_M")

@@ -1,6 +1,6 @@
-"""CARLA <-> PufferDrive coordinate transform + state readback for co-simulation.
+"""CARLA <-> OpenGigaFlow coordinate transform + state readback for co-simulation.
 
-PufferDrive's `carla*/opendrive__Town*.bin` maps are OpenDRIVE exports of the
+OpenGigaFlow's `carla*/opendrive__Town*.bin` maps are OpenDRIVE exports of the
 CARLA towns, stored in a y-flipped, per-town-translated frame. Empirically
 (road-network alignment + heading match to 1e-3 rad):
 
@@ -18,7 +18,7 @@ possibly-stale constant. In practice ICP's local gradient descent (start =
 centroid delta, refine by nearest-heading-bucket matching) silently settled a
 few meters from the true optimum for Town04/Town06 -- close enough that
 aggregate alignment stats still looked fine, but consistently off by about a
-lane width, so CARLA-synced background agents rendered off-lane in PufferDrive.
+lane width, so CARLA-synced background agents rendered off-lane in OpenGigaFlow.
 The fix that actually worked: a brute-force (tx, ty) grid search minimizing
 median nearest-neighbor distance from transformed CARLA waypoints to bin lane
 points (coarse then refined).
@@ -27,7 +27,7 @@ For Town6, TWO independently geometry-refined Town06 candidates -- (-150.1,
 dramatically WORSE on a full longest6 Town06 leaderboard sweep than the
 original (-150.93, 111.40).
 
-The PufferDrive env additionally subtracts its own `world_mean` inside
+The OpenGigaFlow env additionally subtracts its own `world_mean` inside
 `set_agent_states`/`set_agent_goals`, so the values produced here are in the
 *bin* frame (== sim frame + world_mean), matching `get_global_agent_state`.
 """
@@ -180,7 +180,7 @@ def calibrate_town_offset(driving_waypoints, transform, town_bin):
 
 
 class CarlaTransform:
-    """Bidirectional CARLA <-> PufferDrive-bin-frame transform for one town.
+    """Bidirectional CARLA <-> OpenGigaFlow-bin-frame transform for one town.
 
     z_offset: bin z = CARLA z + z_offset (calibrate_town_offset; the bins sit 0.8-1.6 m below CARLA's
     ground on Town03/04/05, so every injected height must go through z_to_bin)."""
@@ -203,7 +203,7 @@ class CarlaTransform:
     def state_to_bin(self, x, y, z, yaw_deg, vx, vy, angular_velocity_z_deg_s, accel_x, accel_y, box_z, box_extent_z):
         """(x, y, z, heading, vx, vy, yaw_rate, accel_long) in the bin frame from a CARLA-frame actor state.
         Angular velocity (deg/s) and acceleration (m/s^2, world frame) must come from CARLA's own physics, not
-        finite-differenced from a previous PufferDrive state: env.step() may have already overwritten this
+        finite-differenced from a previous OpenGigaFlow state: env.step() may have already overwritten this
         actor's previous state with a throwaway dummy-action rollout. box_z/box_extent_z: bounding-box pivot
         offset and half height (vehicles pivot at the ground, walkers at the capsule centre); bin z = ground."""
         bx, by = self.loc_to_bin(x, y)
@@ -226,7 +226,7 @@ class CarlaTransform:
         return -math.degrees(heading_rad)
 
 
-# CARLA traffic-light state name -> PufferDrive enum (datatypes.h:61-67)
+# CARLA traffic-light state name -> OpenGigaFlow enum (datatypes.h:61-67)
 #   UNKNOWN=0 RED=1 YELLOW=2 GREEN=3 OFF=4
 TRAFFIC_LIGHT_STATE_YELLOW = 2
 TRAFFIC_LIGHT_STATE_OFF = 4
@@ -243,7 +243,7 @@ CARLA_LIGHT_TIMER_FROZEN_S = 1.0e6
 
 
 def light_state_from_name(state_name) -> int:
-    """carla.TrafficLightState.<name> (as sent over a co-sim protocol) -> PufferDrive enum."""
+    """carla.TrafficLightState.<name> (as sent over a co-sim protocol) -> OpenGigaFlow enum."""
     return LIGHT_STATE_BY_NAME.get(state_name, 0)
 
 

@@ -53,14 +53,14 @@ def build_policy_and_obs(rows, fused):
     sys.argv = ["profile_policy_step"] + TRAIN_OVERRIDES
     import pufferlib.pufferl as P
 
-    args = P.load_config("puffer_drive")
-    args = P.normalize_puffer_drive_config(args, "training")
-    P.validate_puffer_drive_config(args, "training")
+    args = P.load_config("opengigaflow")
+    args = P.normalize_opengigaflow_config(args, "training")
+    P.validate_opengigaflow_config(args, "training")
     args = copy.deepcopy(args)
     args["policy"]["fused_slot_encoder"] = fused
-    vecenv = P.load_env("puffer_drive", args, seed=3)
+    vecenv = P.load_env("opengigaflow", args, seed=3)
     torch.manual_seed(0)
-    policy = P.load_policy(args, vecenv, "puffer_drive")
+    policy = P.load_policy(args, vecenv, "opengigaflow")
     vecenv.async_reset(3)
     obs_rows = []
     for _ in range(ROLLOUT_STEPS):

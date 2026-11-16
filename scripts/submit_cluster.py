@@ -1,5 +1,5 @@
 """
-Submitit script for launching PufferDrive training jobs on SLURM clusters.
+Submitit script for launching OpenGigaFlow training jobs on SLURM clusters.
 
 Example usage:
     # Single job with config file
@@ -47,7 +47,7 @@ import submitit
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Submit PufferDrive training jobs to SLURM cluster")
+    parser = argparse.ArgumentParser(description="Submit OpenGigaFlow training jobs to SLURM cluster")
 
     # Job management
     parser.add_argument("--save_dir", type=str, required=True, help="Base directory for experiment outputs")
@@ -90,7 +90,7 @@ def parse_args():
 
     # Program settings
     parser.add_argument(
-        "--main", type=str, default="-m pufferlib.pufferl train puffer_drive", help="Main command to run"
+        "--main", type=str, default="-m pufferlib.pufferl train opengigaflow", help="Main command to run"
     )
     parser.add_argument(
         "--args", type=str, nargs="+", default=None, help="Args to override/sweep (e.g., learning_rate=1e-4:3e-4)"
@@ -197,7 +197,7 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
                 display_key = key.split(".")[-1] if "." in key else key
                 name_entries.append(f"{display_key}{val}")
 
-        job_name = "_".join(name_entries) if name_entries else "pufferdrive"
+        job_name = "_".join(name_entries) if name_entries else "opengigaflow"
         # Sanitize job name
         job_name = (
             job_name[:128]

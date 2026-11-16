@@ -7,7 +7,7 @@
 #   CKPT=experiments/<run>/final_model.pt bash pufferlib/ocean/cosim/carla/lb1/run_leaderboard.sh
 #
 # Required env:
-#   CKPT             PufferDrive checkpoint .pt (config.yaml beside it or one level up) or an experiment dir
+#   CKPT             OpenGigaFlow checkpoint .pt (config.yaml beside it or one level up) or an experiment dir
 # Optional env:
 #   ROUTES           routes xml. Default: longest6_split/longest_weathers_0.xml (one Town01 route).
 #   SCENARIOS        scenario json. Default: eval_scenarios.json (the benchmark); no_scenarios.json = empty.
@@ -18,8 +18,8 @@
 #   CARLA_ROOT       CARLA 0.9.10.1 install.            Default: ~/ordnung/internal/CARLA_0.9.10
 #   GARAGE_WORK_DIR  carla_garage checkout.             Default: ~/ordnung/internal/carla_garage_1
 #   GARAGE_PY        python of the `garage` conda env.  Default: ~/miniconda3/envs/garage/bin/python
-#   COSIM_SERVER_PYTHON  python of the PufferDrive venv for policy_server.py. Default: $PD/.venv/bin/python
-#   PD               PufferDrive checkout. Default: the one holding this script.
+#   COSIM_SERVER_PYTHON  python of the OpenGigaFlow venv for policy_server.py. Default: $PD/.venv/bin/python
+#   PD               OpenGigaFlow checkout. Default: the one holding this script.
 #   LIBTIFF5_COMPAT  1 (default): the 0.9.10 egg links libtiff.so.5. When `import carla` fails, the garage env's
 #                    own lib dir is tried first (`conda install -n garage "libtiff<4.5"` puts one there), then
 #                    the system libtiff.so.6 is linked under that name inside $OUT's folder (0 = never link).

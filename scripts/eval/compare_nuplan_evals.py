@@ -1,4 +1,4 @@
-"""Paired comparison of two nuPlan closed-loop eval runs of the PufferDrive planner, overall and per city.
+"""Paired comparison of two nuPlan closed-loop eval runs of the OpenGigaFlow planner, overall and per city.
 
 usage: python scripts/eval/compare_nuplan_evals.py <baseline_group_dir> <candidate_group_dir> [--worst N]
 

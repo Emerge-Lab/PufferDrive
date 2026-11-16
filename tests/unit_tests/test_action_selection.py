@@ -168,7 +168,7 @@ def test_shipped_config_declares_a_valid_action_selection(monkeypatch):
 
     # load_config treats everything left in argv as a Hydra override.
     monkeypatch.setattr(sys, "argv", ["puffer"])
-    args = pufferl.load_config("puffer_drive")
+    args = pufferl.load_config("opengigaflow")
     assert args["eval"]["action_selection"] in VALID_ACTION_SELECTIONS
 
 
@@ -177,7 +177,7 @@ def test_config_rejects_invalid_action_selection(monkeypatch):
 
     monkeypatch.setattr(sys, "argv", ["puffer", "eval.action_selection=banana"])
     with pytest.raises(pufferlib.APIUsageError):
-        pufferl.load_config("puffer_drive")
+        pufferl.load_config("opengigaflow")
 
 
 # --------------------------------------------------------------------------
@@ -190,7 +190,7 @@ def test_drive_mean_action_is_exact_in_physical_units(monkeypatch):
     from pufferlib.ocean.drive.drive import Drive as DriveEnv
 
     monkeypatch.setattr(sys, "argv", ["puffer"])
-    args = pufferl.load_config("puffer_drive")
+    args = pufferl.load_config("opengigaflow")
     env = DriveEnv(
         num_agents=64,
         map_dir="pufferlib/resources/drive/binaries/carla",

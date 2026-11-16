@@ -1,4 +1,4 @@
-"""Where the files of a nuPlan closed-loop run of the PufferDrive planner live. A fresh run is nuPlan's own tree,
+"""Where the files of a nuPlan closed-loop run of the OpenGigaFlow planner live. A fresh run is nuPlan's own tree,
 simulation/<challenge>/<timestamp>/{aggregator_metric,metrics,simulation_log}; after scripts/eval/tidy_nuplan_run.py
 the run holds overview.csv, scenarios.csv, obs_html/, simulation_log/ and details/{aggregated_metrics.csv,metrics}
 (runs tidied before 2026-11-09 keep their logs under details/simulation_log/).

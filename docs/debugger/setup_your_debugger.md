@@ -63,11 +63,11 @@ Now create a file called **`launch.json`** with the following content:
   "configurations": [
     // --- Python debugger only ---
     {
-      "name": "Python: Debug puffer train puffer_drive",
+      "name": "Python: Debug puffer train opengigaflow",
       "type": "python",
       "request": "launch",
       "module": "pufferlib.pufferl",
-      "args": ["train", "puffer_drive"],
+      "args": ["train", "opengigaflow"],
       "cwd": "${workspaceFolder}",
       "python": "/home/ricky/git/PufferDrive/.venv/bin/python", // <- TODO: point to your python interpreter
       "justMyCode": false,
@@ -78,11 +78,11 @@ Now create a file called **`launch.json`** with the following content:
 
     // --- Python running under gdb (C/C++ breakpoints work) ---
     {
-      "name": "C (gdb): Debug C inside puffer_drive",
+      "name": "C (gdb): Debug C inside opengigaflow",
       "type": "cppdbg",
       "request": "launch",
       "program": "/home/ricky/git/PufferDrive/.venv/bin/python", // <- TODO: point to your python interpreter
-      "args": ["-m", "pufferlib.pufferl", "train", "puffer_drive"],
+      "args": ["-m", "pufferlib.pufferl", "train", "opengigaflow"],
       "cwd": "${workspaceFolder}",
       "MIMode": "gdb",
 
@@ -127,7 +127,7 @@ Open the debugger sidebar in VSCode:
 
 ### Selecting the Debugger Configuration
 
-Use the dropdown to select: **"C (gdb): Debug C inside puffer_drive"**
+Use the dropdown to select: **"C (gdb): Debug C inside opengigaflow"**
 
 ![](imgs/available_launch_configs.png)
 

@@ -1,6 +1,6 @@
 """Model FLOP utilization of the real PPO loop: rollout, update and whole epoch, plus agent steps per second.
 
-Builds the trainer exactly as `puffer train puffer_drive` does, runs warm-up epochs (torch.compile), then measures
+Builds the trainer exactly as `puffer train opengigaflow` does, runs warm-up epochs (torch.compile), then measures
 steady-state epochs. The model FLOPs per transition and the tensor-core peak of this GPU are the trainer's own
 (the values behind the MFU it logs), so no profiler touches the compiled policy (a TorchDispatchMode around it
 makes dynamo skip the frame for the rest of the process).
@@ -23,7 +23,7 @@ import torch
 import torch._dynamo
 
 
-ENV_NAME = "puffer_drive"
+ENV_NAME = "opengigaflow"
 RECOMPILE_EPOCH_FACTOR = 1.25
 PROFILE_SECTIONS = (
     "env",
@@ -117,9 +117,9 @@ def main():
     import pufferlib.pufferl as P
 
     config = P.load_config(ENV_NAME)
-    config = P.normalize_puffer_drive_config(config, "training")
-    P.validate_puffer_drive_config(config, "training")
-    P.validate_puffer_drive_resources(config, "training")
+    config = P.normalize_opengigaflow_config(config, "training")
+    P.validate_opengigaflow_config(config, "training")
+    P.validate_opengigaflow_resources(config, "training")
     torch_seed, env_seed = P.derive_rank_seeds(config["vec"]["seed"], config["train"]["seed"], 1, 0)
     torch.manual_seed(torch_seed)
     P.apply_matmul_env_flags()

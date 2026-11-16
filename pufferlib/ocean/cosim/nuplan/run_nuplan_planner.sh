@@ -5,26 +5,26 @@
 # module docstring.
 #
 # Usage (from a compute-node allocation's job id -- squeue -u $USER to find it):
-#   CKPT=/path/to/model_puffer_drive_xxxxxx.pt \
+#   CKPT=/path/to/model_opengigaflow_xxxxxx.pt \
 #     srun --jobid=<job> --overlap bash run_nuplan_planner.sh
 #
 # Required env:
-#   CKPT     PufferDrive checkpoint .pt.
+#   CKPT     OpenGigaFlow checkpoint .pt.
 # Optional env:
 #   SPLIT     carl_nuplan scenario_filter. Default: val14_split (the full
 #             closed-loop Val14 benchmark -- ~900 scenarios, "all the
 #             scenarios"). filter_pgh is a much smaller Pittsburgh-only
 #             filter, useful to validate a new checkpoint quickly first.
 #   CHALLENGES  space-separated challenge list. Default: both
-#             "closed_loop_nonreactive_agents_pufferdrive
-#              closed_loop_reactive_agents_pufferdrive" (log-replay + IDM).
+#             "closed_loop_nonreactive_agents_opengigaflow
+#              closed_loop_reactive_agents_opengigaflow" (log-replay + IDM).
 #   THREADS_PER_NODE  caps worker.threads_per_node. ray_distributed sizes its
 #             pool from the NODE's cpu count (128 on cs), not the slurm
 #             allocation -- 128 nuPlan workers OOMed a 160G job in 34 min
 #             (2026-08-09); size this to job_mem / ~12G per worker.
 #   WORKER    nuPlan worker config. Default: unset -> falls through to the
 #             devkit's own default (ray_distributed), matching
-#             scripts/eval/sim_pufferdrive.sh's established convention for a
+#             scripts/eval/sim_opengigaflow.sh's established convention for a
 #             full-benchmark run. NOT verified in this container this
 #             session -- only worker=sequential has been exercised end-to-end
 #             (one scenario). If ray_distributed misbehaves here, retry with
@@ -86,30 +86,30 @@ export NUPLAN_DEVKIT_ROOT=${NUPLAN_DEVKIT_ROOT:-/scratch/yw4142/nuplan-devkit}
 mkdir -p "$NUPLAN_EXP_ROOT"
 
 SPLIT=${SPLIT:-val14_split}
-CHALLENGES=${CHALLENGES:-"closed_loop_nonreactive_agents_pufferdrive closed_loop_reactive_agents_pufferdrive"}
+CHALLENGES=${CHALLENGES:-"closed_loop_nonreactive_agents_opengigaflow closed_loop_reactive_agents_opengigaflow"}
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 GROUP=${GROUP:-$NUPLAN_EXP_ROOT/nuplan_leaderboard_${TIMESTAMP}}
 OBS_HTML=${COSIM_OBS_HTML:-failures}
 [ "$OBS_HTML" = "1" ] && OBS_HTML=all
 
 EXTRA_ARGS=()
-[ "$OBS_HTML" != "0" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.obs_html_dir=$GROUP/obs_html" "planner.pufferdrive_planner.obs_html_render=false")
+[ "$OBS_HTML" != "0" ] && EXTRA_ARGS+=("planner.opengigaflow_planner.obs_html_dir=$GROUP/obs_html" "planner.opengigaflow_planner.obs_html_render=false")
 CITY_BIN_DIR=${CITY_BIN_DIR:-/scratch/yw4142/datasets/ad/nuplan/maps}
-EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
-[ -n "${SLIDING_GOAL_WINDOW:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.sliding_goal_window=$SLIDING_GOAL_WINDOW")
-[ -n "${STARTUP_JERK_CAP_SECONDS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_jerk_cap_seconds=$STARTUP_JERK_CAP_SECONDS")
-[ -n "${STARTUP_ACCEL_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_accel_jerk_cap_mps3=$STARTUP_ACCEL_JERK_CAP")
-[ -n "${STARTUP_BRAKE_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_brake_jerk_cap_mps3=$STARTUP_BRAKE_JERK_CAP")
-[ -n "${VRU_SIZE_PAD_M:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.vru_size_pad_m=$VRU_SIZE_PAD_M")
-[ -n "${BICYCLE_MIN_SPEED_MPS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_min_speed_mps=$BICYCLE_MIN_SPEED_MPS")
-[ -n "${BICYCLE_CENTER_ACCEL_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_center_accel_cap=$BICYCLE_CENTER_ACCEL_CAP")
-[ -n "${BICYCLE_CENTER_ACCEL_CAP_MARGIN:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.bicycle_center_accel_cap_margin=$BICYCLE_CENTER_ACCEL_CAP_MARGIN")
-[ -n "${STANDSTILL_JERK_DEADBAND:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_standstill_jerk_deadband_mps3=$STANDSTILL_JERK_DEADBAND")
-[ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_slots_partners_n=$OBS_SLOTS_PARTNERS_N")
-[ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.eval_perceived_size_margin_m=$EVAL_PERCEIVED_SIZE_MARGIN_M")
-[ -n "${REWARD_OVERSPEED:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.reward_overspeed=$REWARD_OVERSPEED")
-[ -n "${LANE_WIDTH_CLIP_MIN_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_lane_width_clip_min_m=$LANE_WIDTH_CLIP_MIN_M")
-[ -n "${LANE_WIDTH_CLIP_MAX_M:-}" ] && EXTRA_ARGS+=("++planner.pufferdrive_planner.env_overrides.obs_lane_width_clip_max_m=$LANE_WIDTH_CLIP_MAX_M")
+EXTRA_ARGS+=("planner.opengigaflow_planner.city_bin_dir=$CITY_BIN_DIR")
+[ -n "${SLIDING_GOAL_WINDOW:-}" ] && EXTRA_ARGS+=("planner.opengigaflow_planner.sliding_goal_window=$SLIDING_GOAL_WINDOW")
+[ -n "${STARTUP_JERK_CAP_SECONDS:-}" ] && EXTRA_ARGS+=("planner.opengigaflow_planner.startup_jerk_cap_seconds=$STARTUP_JERK_CAP_SECONDS")
+[ -n "${STARTUP_ACCEL_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.opengigaflow_planner.startup_accel_jerk_cap_mps3=$STARTUP_ACCEL_JERK_CAP")
+[ -n "${STARTUP_BRAKE_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.opengigaflow_planner.startup_brake_jerk_cap_mps3=$STARTUP_BRAKE_JERK_CAP")
+[ -n "${VRU_SIZE_PAD_M:-}" ] && EXTRA_ARGS+=("planner.opengigaflow_planner.vru_size_pad_m=$VRU_SIZE_PAD_M")
+[ -n "${BICYCLE_MIN_SPEED_MPS:-}" ] && EXTRA_ARGS+=("planner.opengigaflow_planner.bicycle_min_speed_mps=$BICYCLE_MIN_SPEED_MPS")
+[ -n "${BICYCLE_CENTER_ACCEL_CAP:-}" ] && EXTRA_ARGS+=("planner.opengigaflow_planner.bicycle_center_accel_cap=$BICYCLE_CENTER_ACCEL_CAP")
+[ -n "${BICYCLE_CENTER_ACCEL_CAP_MARGIN:-}" ] && EXTRA_ARGS+=("planner.opengigaflow_planner.bicycle_center_accel_cap_margin=$BICYCLE_CENTER_ACCEL_CAP_MARGIN")
+[ -n "${STANDSTILL_JERK_DEADBAND:-}" ] && EXTRA_ARGS+=("++planner.opengigaflow_planner.env_overrides.eval_standstill_jerk_deadband_mps3=$STANDSTILL_JERK_DEADBAND")
+[ -n "${OBS_SLOTS_PARTNERS_N:-}" ] && EXTRA_ARGS+=("++planner.opengigaflow_planner.env_overrides.obs_slots_partners_n=$OBS_SLOTS_PARTNERS_N")
+[ -n "${EVAL_PERCEIVED_SIZE_MARGIN_M:-}" ] && EXTRA_ARGS+=("++planner.opengigaflow_planner.env_overrides.eval_perceived_size_margin_m=$EVAL_PERCEIVED_SIZE_MARGIN_M")
+[ -n "${REWARD_OVERSPEED:-}" ] && EXTRA_ARGS+=("++planner.opengigaflow_planner.env_overrides.reward_overspeed=$REWARD_OVERSPEED")
+[ -n "${LANE_WIDTH_CLIP_MIN_M:-}" ] && EXTRA_ARGS+=("++planner.opengigaflow_planner.env_overrides.obs_lane_width_clip_min_m=$LANE_WIDTH_CLIP_MIN_M")
+[ -n "${LANE_WIDTH_CLIP_MAX_M:-}" ] && EXTRA_ARGS+=("++planner.opengigaflow_planner.env_overrides.obs_lane_width_clip_max_m=$LANE_WIDTH_CLIP_MAX_M")
 [ -n "${WORKER:-}" ] && EXTRA_ARGS+=("worker=$WORKER")
 [ -n "${THREADS_PER_NODE:-}" ] && EXTRA_ARGS+=("worker.threads_per_node=$THREADS_PER_NODE")
 [ -n "${LIMIT_TOTAL_SCENARIOS:-}" ] && EXTRA_ARGS+=("scenario_filter.limit_total_scenarios=$LIMIT_TOTAL_SCENARIOS")
@@ -131,8 +131,8 @@ for CHALLENGE in $CHALLENGES; do
         scenario_builder=nuplan \
         scenario_builder.data_root="${NUPLAN_VAL_DB_DIR:-$NUPLAN_DATA_ROOT/nuplan-v1.1/splits/val}" \
         scenario_filter=$SPLIT \
-        planner=pufferdrive_planner \
-        planner.pufferdrive_planner.checkpoint_path="$CKPT" \
+        planner=opengigaflow_planner \
+        planner.opengigaflow_planner.checkpoint_path="$CKPT" \
         callback="${CALLBACKS:-[simulation_log_callback]}" \
         main_callback="[time_callback, metric_file_callback, metric_aggregator_callback, csv_main_callback]" \
         hydra.searchpath="[pkg://pufferlib.ocean.cosim.nuplan.config, pkg://carl_nuplan.planning.script.config.common, pkg://carl_nuplan.planning.script.config.simulation, pkg://nuplan.planning.script.config.common, pkg://nuplan.planning.script.experiments]" \

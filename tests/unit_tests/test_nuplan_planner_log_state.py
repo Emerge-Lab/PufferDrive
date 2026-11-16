@@ -11,13 +11,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 pytest.importorskip("nuplan")
 pytest.importorskip("carl_nuplan")
 
-from pufferlib.ocean.cosim.nuplan.planner import LOG_EXCLUDED_STATE, PufferDrivePlanner
+from pufferlib.ocean.cosim.nuplan.planner import LOG_EXCLUDED_STATE, OpenGigaFlowPlanner
 
 WEIGHT_BYTES = 1 << 20
 
 
 def test_pickled_planner_drops_its_runtime_state():
-    planner = PufferDrivePlanner.__new__(PufferDrivePlanner)
+    planner = OpenGigaFlowPlanner.__new__(OpenGigaFlowPlanner)
     planner.__dict__.update({"_checkpoint_path": "model.pt", "_arch": {"num_agents": 2}})
     planner.__dict__.update({name: {"weights": bytes(WEIGHT_BYTES)} for name in LOG_EXCLUDED_STATE})
     pickled = pickle.dumps(planner)

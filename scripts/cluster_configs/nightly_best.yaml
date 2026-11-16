@@ -2,7 +2,7 @@
 #
 # The training recipe (env physics, goals, observations, perturbations,
 # rewards, policy architecture, optimizer settings) comes from the defaults
-# in pufferlib/config/puffer_drive.yaml. This file only overrides scale,
+# in pufferlib/config/opengigaflow.yaml. This file only overrides scale,
 # run length, and logging.
 #
 # Launch via scripts/launch_nightly_best.sh (3 seeds, date-stamped).

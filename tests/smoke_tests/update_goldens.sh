@@ -22,12 +22,12 @@ if [ ${#TESTS[@]} -eq 0 ]; then
 fi
 
 echo ">>> Building pinned image (picks up C/sim changes)"
-docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
+docker build -f tests/smoke_tests/Dockerfile -t opengigaflow-smoke .
 
 echo ">>> Regenerating goldens under QEMU: ${TESTS[*]}"
 docker run --rm -e SMOKE_UPDATE_GOLDEN=1 \
   -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
-  pufferdrive-smoke "${TESTS[@]}"
+  opengigaflow-smoke "${TESTS[@]}"
 
 echo ">>> Done. Updated goldens:"
 git -c core.fileMode=false status --short tests/smoke_tests/data/

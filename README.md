@@ -1,4 +1,4 @@
-# PufferDrive
+# OpenGigaFlow
 
 MARL autonomous driving RL environment. C simulation engine (GigaFlow/Waymo replay) + Python/PyTorch PPO training loop with V-trace and priority sampling.
 
@@ -38,7 +38,7 @@ directly, so no venv activation is needed. If your interpreter lives elsewhere
 
 ## Install (HPC cluster)
 
-For the NYU cluster, PufferDrive recommends a **mixed Singularity + venv** layout:
+For the NYU cluster, OpenGigaFlow recommends a **mixed Singularity + venv** layout:
 
 - **Singularity image** (read-only, system-wide): supplies CUDA + cuDNN.
 - **ext3 overlay** (writable via `--fakeroot`, host the miniforge3 base interpreter at `/ext3/miniforge3` only).
@@ -106,18 +106,18 @@ Place binaries under `pufferlib/resources/drive/binaries/`.
 
 ```bash
 # Single node
-puffer train puffer_drive
+puffer train opengigaflow
 
 # Override config on the fly (Hydra syntax: dotted.key=value). An override for a setting the config
 # does not have is ignored with a WARNING on stderr, so check the log for typos.
-puffer train puffer_drive train.learning_rate=0.001 env.num_agents=512
+puffer train opengigaflow train.learning_rate=0.001 env.num_agents=512
 
 # Local smoke test on a machine without CUDA
-puffer train puffer_drive train.device=cpu vec.backend=Serial env.num_agents=64 \
+puffer train opengigaflow train.device=cpu vec.backend=Serial env.num_agents=64 \
     train.total_timesteps=20480 train.batch_size=10240 train.minibatch_size=2560 train.bptt_horizon=16
 
 # Multi-GPU
-torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train puffer_drive
+torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train opengigaflow
 ```
 
 ## Eval
@@ -129,8 +129,8 @@ without it add `train.device=cpu`.
 
 ```bash
 # Run the CARLA YAML benchmark and render every evaluated scenario
-puffer eval puffer_drive carla \
-  load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+puffer eval opengigaflow carla \
+  load_model_path=experiments/opengigaflow_xxxx/models/model_opengigaflow_000500.pt \
   eval.render_scenarios=true \
   eval.capture_observations=false
 ```
@@ -141,8 +141,8 @@ deleted afterwards unless `eval.keep_zlib_replays=true`. To render only episodes
 where `offroad_rate > 0` instead:
 
 ```bash
-puffer eval puffer_drive carla \
-  load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+puffer eval opengigaflow carla \
+  load_model_path=experiments/opengigaflow_xxxx/models/model_opengigaflow_000500.pt \
   eval.render_filter=offroad_rate \
   eval.max_rendered_failures=10 \
   eval.capture_observations=false
@@ -203,7 +203,7 @@ To add a metric to the report: add its key to `TREND_METRICS` /
 `FINALS_METRICS` / `CURVE_METRICS` in `scripts/nightly_report.py`, then run
 `update` followed by `report`.
 
-## Key Configuration (`pufferlib/config/puffer_drive.yaml`)
+## Key Configuration (`pufferlib/config/opengigaflow.yaml`)
 
 ### `env` — Simulation
 
@@ -268,7 +268,7 @@ DEBUG=1 python setup.py build_ext --inplace --force
 NO_TRAIN=1 python setup.py build_ext --inplace --force
 
 # Debug train
-CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m pufferlib.pufferl train puffer_drive train.device=cpu vec.backend=Serial
+CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m pufferlib.pufferl train opengigaflow train.device=cpu vec.backend=Serial
 # or
-gdb --args python -m pufferlib.pufferl train puffer_drive train.device=cpu vec.backend=Serial
+gdb --args python -m pufferlib.pufferl train opengigaflow train.device=cpu vec.backend=Serial
 ```

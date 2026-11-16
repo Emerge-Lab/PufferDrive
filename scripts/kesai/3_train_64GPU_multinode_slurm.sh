@@ -50,7 +50,7 @@ bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # ~25 M SPS vs ~21.5 M with 32). 0063 ran 256 workers per rank (4.3x oversubscribed, 75 GB per GPU): +18% SPS from the worker count
 # but ~55% sample efficiency on goals/speed at 1e12 steps, so 60 stays the default. GPU memory ~21 GB fixed + 0.22 GB per 1024-agent worker (fp16).
 # A second instance needs its own RUN_NAME (plain VAR=... sbatch did not propagate on kesai): sbatch --export=ALL,RUN_NAME=k_scaled_0080_1000 scripts/kesai/3_train_64GPU_multinode_slurm.sh
-# 0067 = 0066 (the 0059 config, puffer_drive.yaml defaults, float16 rollout buffer, static footprint red light test) with the
+# 0067 = 0066 (the 0059 config, opengigaflow.yaml defaults, float16 rollout buffer, static footprint red light test) with the
 # training light cycle green U(3,10) / yellow U(2,3) s instead of GIGAFLOW's U(1,10) / U(1.5,2.25) and no training rear margin:
 # 0066's training red-light rate sat at 3.7% because committed slow crossings could not clear CARLA's tail band within a
 # 1.5 s yellow (8-map replay sweep: 17 -> 5 onsets). 0068 = 0067 with 128 workers per rank.
@@ -84,7 +84,7 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --rdzv_endpoint="${MASTER_ADDR}:${MASTER_PORT}" \
     --max_restarts=0 \
     --start-method spawn \
-    -m pufferlib.pufferl train puffer_drive \
+    -m pufferlib.pufferl train opengigaflow \
     wandb=True \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \

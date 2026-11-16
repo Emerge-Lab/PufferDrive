@@ -1,9 +1,9 @@
-"""nuPlan <-> PufferDrive map conversion + state readback for co-simulation.
+"""nuPlan <-> OpenGigaFlow map conversion + state readback for co-simulation.
 
 Unlike CARLA (see carla_bridge.py), nuPlan is already a right-handed, z-up,
 meters, radians frame — no reflection is needed. The only transform is a
 translation: nuPlan map coordinates are large (UTM-ish, ~1e5-1e6 m) and the
-PufferDrive bins store float32, so each bin is translated by an `origin`
+OpenGigaFlow bins store float32, so each bin is translated by an `origin`
 recovered per city (registered against the GPKG map, see `planner.py`'s
 `_city_bin_origin`) or read from a stored `centroid`:
 
@@ -30,10 +30,10 @@ import data_utils.mirror_map_bin as _mbin
 
 TRAFFIC_TYPE_LIGHT = 1  # matches the CARLA bins' traffic-element type
 
-# nuPlan TrackedObjectType -> PufferDrive agent type (1=vehicle 2=ped 3=cyclist)
+# nuPlan TrackedObjectType -> OpenGigaFlow agent type (1=vehicle 2=ped 3=cyclist)
 _NUPLAN_AGENT_TYPE = {"VEHICLE": 1, "PEDESTRIAN": 2, "BICYCLE": 3}
 
-# nuPlan TrafficLightStatusType -> PufferDrive light enum (datatypes.h: RED=1 YELLOW=2 GREEN=3).
+# nuPlan TrafficLightStatusType -> OpenGigaFlow light enum (datatypes.h: RED=1 YELLOW=2 GREEN=3).
 # Training never produces UNKNOWN (0), so an unknown or unreported light is treated as GREEN.
 LIGHT_STATE_RED = 1
 LIGHT_STATE_YELLOW = 2
@@ -45,7 +45,7 @@ _NUPLAN_LIGHT_STATE = {
     "UNKNOWN": LIGHT_STATE_GREEN,
 }
 
-FAR_AWAY = 1.0e6  # park surplus PufferDrive agents out of observation range
+FAR_AWAY = 1.0e6  # park surplus OpenGigaFlow agents out of observation range
 ROUTE_SEARCH_DEPTH_BLOCKS = 30  # PDM's Dijkstra window over route roadblocks
 
 
@@ -190,7 +190,7 @@ def logged_ego_boxes(scenario, transform: NuPlanTransform) -> np.ndarray:
 
 
 def read_bin_geometry(bin_path: Path) -> dict:
-    """Read the co-sim-relevant geometry out of an existing PufferDrive bin
+    """Read the co-sim-relevant geometry out of an existing OpenGigaFlow bin
     (city_bin_dir map-only bins or pre-converted training-format bins):
 
       origin            (ox, oy) from the stored centroid, or None if unset
@@ -450,7 +450,7 @@ def nearest_partner_slots(x, y, ego_x: float, ego_y: float, slots: int):
 
 def tracked_objects_to_arrays(tracked_objects, transform: NuPlanTransform, first_slot: int = 1):
     """nuPlan DetectionsTracks agents -> (idx, x, y, z, h, vx, vy, types, lengths, widths)
-    arrays in the bin frame, filling PufferDrive slots first_slot..N."""
+    arrays in the bin frame, filling OpenGigaFlow slots first_slot..N."""
     idx, x, y, z, h, vx, vy, tp, ln, wd = [], [], [], [], [], [], [], [], [], []
     for j, obj in enumerate(tracked_objects):
         bx, by = transform.loc_to_bin(obj.center.x, obj.center.y)

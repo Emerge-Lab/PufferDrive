@@ -25,7 +25,7 @@ else
 fi
 PD=${PD:-${SLURM_SUBMIT_DIR:-$PWD}}
 if [ ! -f "$PD/setup.py" ]; then
-    echo "cluster_env.sh: $PD is not the PufferDrive checkout; submit from the checkout root or set PD" >&2
+    echo "cluster_env.sh: $PD is not the OpenGigaFlow checkout; submit from the checkout root or set PD" >&2
     return 1 2>/dev/null || exit 1
 fi
 export SLURM_CPUS_PER_TASK=${SLURM_CPUS_ON_NODE:-${SLURM_CPUS_PER_TASK:-$(nproc)}}

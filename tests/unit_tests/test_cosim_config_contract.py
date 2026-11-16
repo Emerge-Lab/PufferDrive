@@ -3,7 +3,7 @@
 
 The CARLA leaderboard agent and the nuPlan planner both rebuild the
 checkpoint's shadow Drive env FROM ITS config.yaml
-(saved next to the checkpoint from pufferlib/config/puffer_drive.yaml) via
+(saved next to the checkpoint from pufferlib/config/opengigaflow.yaml) via
 cosim/arch.py's shadow_env_kwargs: every Drive-accepted env key is adopted,
 then CLEAN_EVAL_OVERRIDES is applied, then the co-sim's structural keys win.
 A key silently dropped (renamed in Drive.__init__ or removed from the yaml)
@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from pufferlib.ocean.drive.drive import Drive
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = REPO_ROOT / "pufferlib" / "config" / "puffer_drive.yaml"
+CONFIG_PATH = REPO_ROOT / "pufferlib" / "config" / "opengigaflow.yaml"
 
 # Env keys the co-sim reads DIRECTLY from the checkpoint config (KeyError if
 # missing): leaderboard_agent.setup() for the policy-step interval, the shadow
@@ -70,7 +70,7 @@ class TestCosimConfigContract(unittest.TestCase):
             self.assertIn(
                 key,
                 env,
-                f"env.{key} was removed from puffer_drive.yaml; the co-sim shadow env "
+                f"env.{key} was removed from opengigaflow.yaml; the co-sim shadow env "
                 f"(pufferlib/ocean/cosim) reads it from checkpoint configs and would "
                 f"either crash or silently fall back to a Drive default, breaking "
                 f"parity with the trained policy.",
@@ -81,7 +81,7 @@ class TestCosimConfigContract(unittest.TestCase):
             self.assertIn(
                 key,
                 self.cfg,
-                f"'{key}' was removed from puffer_drive.yaml; the co-sim loads the "
+                f"'{key}' was removed from opengigaflow.yaml; the co-sim loads the "
                 f"policy class/kwargs from it when restoring a checkpoint.",
             )
 

@@ -1,4 +1,4 @@
-"""Failure analysis + visualizations for a nuPlan closed-loop run of the PufferDrive planner
+"""Failure analysis + visualizations for a nuPlan closed-loop run of the OpenGigaFlow planner
 (pufferlib/ocean/cosim/nuplan). Needs the nuPlan devkit env (same interpreter as the simulation).
 
 usage: python scripts/eval/analyze_nuplan_cosim.py <group_dir> <report_dir> [--workers N] [--max-inline N] [--no-video]
@@ -367,9 +367,9 @@ def main():
     table = df[table_cols].round(2).copy()
     table["token"] = table["token"].map(lambda t: f"<a href='#{t}'>{t}</a>")
     html = [
-        "<html><head><meta charset='utf-8'><title>PufferDrive nuPlan closed-loop report</title>",
+        "<html><head><meta charset='utf-8'><title>OpenGigaFlow nuPlan closed-loop report</title>",
         "<style>body{font-family:sans-serif;max-width:1500px;margin:auto} table{border-collapse:collapse;font-size:12px} td,th{border:1px solid #ccc;padding:3px 6px}</style></head><body>",
-        f"<h1>PufferDrive nuPlan closed-loop &middot; {len(df)} scenarios &middot; mean score {df['score'].mean():.3f}</h1>",
+        f"<h1>OpenGigaFlow nuPlan closed-loop &middot; {len(df)} scenarios &middot; mean score {df['score'].mean():.3f}</h1>",
         "<p>Orange = ego, blue = other agents (red within 8 m), green dashed = expert path, lane connectors colored by reported light state.</p>",
         "<h2>Mean metrics</h2>",
         df[SCORE_COLS].mean().to_frame("mean").T.round(3).to_html(index=False),

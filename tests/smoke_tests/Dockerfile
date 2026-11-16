@@ -1,4 +1,4 @@
-# Bit-exact CPU image for the PufferDrive smoke golden test.
+# Bit-exact CPU image for the OpenGigaFlow smoke golden test.
 #
 # Option A: freeze every source of float divergence so the golden metrics in
 # data/drive_smoke_golden.json reproduce on ANY AVX2-capable x86-64 host
@@ -9,10 +9,10 @@
 #   - C sim float math: built baseline-ISA + -ffp-contract=off (see setup.py)
 #
 # Regenerate the golden (after an intentional pipeline change) INSIDE this image:
-#   docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
+#   docker build -f tests/smoke_tests/Dockerfile -t opengigaflow-smoke .
 #   docker run --rm -e SMOKE_UPDATE_GOLDEN=1 \
 #       -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
-#       pufferdrive-smoke
+#       opengigaflow-smoke
 # then commit tests/smoke_tests/data/drive_smoke_golden.json.
 FROM python:3.11-slim-bookworm
 

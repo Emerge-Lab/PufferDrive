@@ -1,5 +1,5 @@
-pufferdrive_planner:
-  _target_: pufferlib.ocean.cosim.nuplan.planner.PufferDrivePlanner
+opengigaflow_planner:
+  _target_: pufferlib.ocean.cosim.nuplan.planner.OpenGigaFlowPlanner
   _convert_: 'all'
 
   checkpoint_path: ???

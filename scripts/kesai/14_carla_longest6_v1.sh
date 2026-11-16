@@ -10,10 +10,10 @@
 #SBATCH --error experiments/logs/carla_longest6_v1_%j.err
 #SBATCH --open-mode=append               # a requeued job keeps the log of the instance it resumes
 #SBATCH --partition dev
-# CARLA longest6 v1 evaluation of a PufferDrive checkpoint through carla_garage's unmodified Leaderboard 1.0
+# CARLA longest6 v1 evaluation of an OpenGigaFlow checkpoint through carla_garage's unmodified Leaderboard 1.0
 # (CARLA 0.9.10.1, pufferlib/ocean/cosim/carla/lb1/leaderboard_agent.py), the Leaderboard 1.0 counterpart of
 # 11_carla_longest6_v2.sh. The garage evaluator runs in the `garage` conda env (Python 3.7, the CARLA 0.9.10 egg);
-# the agent starts pufferlib/ocean/cosim/carla/lb1/policy_server.py in a PufferDrive python ($SERVER_PY) per route.
+# the agent starts pufferlib/ocean/cosim/carla/lb1/policy_server.py in an OpenGigaFlow python ($SERVER_PY) per route.
 #
 # WORKERS parallel workers (default 32), each one CARLA server + one evaluator at a time, spread round-robin over the
 # GPUs of the allocation (1-8, e.g. `sbatch --gres gpu:2`): a server needs ~2 cores and no GPU once the agent has
@@ -56,7 +56,7 @@
 # its standard eval; never reported: a run with missing route records (a completion reports once every route has one)
 # and the scenario-free variant).
 # COSIM_DYNAMICS_SOURCE (carla_pedals, default: CARLA's physics moves the ego, driven only by the VehicleControl the agent
-# returns; pufferdrive: the ego is teleported along PufferDrive's own dynamics, tags the folder _pufferdrive).
+# returns; opengigaflow: the ego is teleported along OpenGigaFlow's own dynamics, tags the folder _opengigaflow).
 # Ablations of carla_pedals: COSIM_PEDAL_REVERSE (0, default: the car never backs up; 1 = it reverses, tags the folder _reverse) and
 # COSIM_PEDAL_YELLOW_MARGIN (1, default; 0 = the policy sees CARLA's remaining yellow, tags the folder _noyellowmargin).
 #
@@ -73,7 +73,7 @@ set -u
 source scripts/kesai/cluster_env.sh || exit 1
 
 export GARAGE_PY=${GARAGE_PY:-$HOME/miniconda3/envs/garage/bin/python}   # cp37: the CARLA 0.9.10 egg
-export SERVER_PY=${SERVER_PY:-$HOME/miniconda3/envs/carl/bin/python}     # any PufferDrive-capable python
+export SERVER_PY=${SERVER_PY:-$HOME/miniconda3/envs/carl/bin/python}     # any OpenGigaFlow-capable python
 export CARLA_ROOT=${CARLA_ROOT:-$HOME/CARLA_0.9.10}
 export GARAGE_WORK_DIR=${GARAGE_WORK_DIR:-$HOME/carla_garage_1}
 RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0071_1000}
@@ -103,7 +103,7 @@ if [ -n "$COMPLETE_RUN" ]; then
     PREVIOUS_WALKER_SPEED_FLOOR_MPS=$(run_info_value walker_speed_floor_mps)   # written by runs from before the floor was removed
     [[ "${PREVIOUS_WALKER_SPEED_FLOOR_MPS:-0}" =~ ^0([.]0+)?$ ]] || { echo "COMPLETE_RUN=$COMPLETE_RUN was driven with the removed walker speed floor ($PREVIOUS_WALKER_SPEED_FLOOR_MPS m/s) and cannot be completed"; exit 1; }
     COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-$(run_info_value dynamics_source)}
-    COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-pufferdrive}   # a run from before the knob was driven with pufferdrive
+    COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-opengigaflow}   # a run from before the knob was driven with opengigaflow
     COSIM_PEDAL_REVERSE=${COSIM_PEDAL_REVERSE:-$(run_info_value pedal_reverse)}   # a pedal run from before these two knobs has no such lines: set both by hand
     COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-$(run_info_value pedal_yellow_margin)}
 fi
@@ -140,7 +140,7 @@ export COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-0.8}
 export COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-40}   # GIGAFLOW's eval value; empty = the checkpoint's training value
 [[ -z "$COSIM_OBS_SLOTS_PARTNERS_N" || "$COSIM_OBS_SLOTS_PARTNERS_N" =~ ^[1-9][0-9]*$ ]] || { echo "COSIM_OBS_SLOTS_PARTNERS_N=\"$COSIM_OBS_SLOTS_PARTNERS_N\" must be a positive integer or empty"; exit 1; }
 export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-carla_pedals}   # carla_pedals: CARLA's physics moves the ego, see shadow_ego.py
-[[ "$COSIM_DYNAMICS_SOURCE" =~ ^(pufferdrive|carla_pedals)$ ]] || { echo "COSIM_DYNAMICS_SOURCE=\"$COSIM_DYNAMICS_SOURCE\" must be pufferdrive or carla_pedals"; exit 1; }
+[[ "$COSIM_DYNAMICS_SOURCE" =~ ^(opengigaflow|carla_pedals)$ ]] || { echo "COSIM_DYNAMICS_SOURCE=\"$COSIM_DYNAMICS_SOURCE\" must be opengigaflow or carla_pedals"; exit 1; }
 export COSIM_PEDAL_REVERSE=${COSIM_PEDAL_REVERSE:-0} COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}   # carla_pedals ablations, see shadow_ego.py
 [[ "$COSIM_PEDAL_REVERSE" =~ ^[01]$ && "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_REVERSE=\"$COSIM_PEDAL_REVERSE\" and COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }
 EVALUATOR=$GARAGE_WORK_DIR/leaderboard/leaderboard/leaderboard_evaluator_local.py
@@ -190,7 +190,7 @@ TAG=$TAG$([ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ] || echo "_$COSIM_DYNAMIC
 if [ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ]; then
     TAG=$TAG$([ "$COSIM_PEDAL_REVERSE" = "0" ] || echo "_reverse")$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
 fi
-# results live in the model's own eval folder, next to the PufferDrive benchmark evals
+# results live in the model's own eval folder, next to the OpenGigaFlow benchmark evals
 OUT=${COMPLETE_RUN:-$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
 : > "$OUT/server_pids"

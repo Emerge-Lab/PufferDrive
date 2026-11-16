@@ -45,7 +45,7 @@ def _aggregator_table():
 
 def _write_run(group, videos=False):
     """nuPlan's tree after a run with simulation_log_callback; videos=True adds carl_visualization_callback's .avi."""
-    sim = group / "simulation" / f"{CHALLENGE}_pufferdrive" / TIMESTAMP
+    sim = group / "simulation" / f"{CHALLENGE}_opengigaflow" / TIMESTAMP
     aggregator = sim / "aggregator_metric"
     aggregator.mkdir(parents=True)
     table = _aggregator_table()
@@ -59,7 +59,7 @@ def _write_run(group, videos=False):
     comfort = pd.DataFrame({"scenario_name": list(SCENARIOS), "metric_score": [0.0, 1.0, 1.0]})
     comfort.to_parquet(sim / "metrics" / "ego_is_comfortable.parquet")
     for token in SCENARIOS:
-        log_dir = sim / "simulation_log" / "PufferDrivePlanner" / "turn" / "log" / token
+        log_dir = sim / "simulation_log" / "OpenGigaFlowPlanner" / "turn" / "log" / token
         log_dir.mkdir(parents=True)
         (log_dir / f"{token}.msgpack.xz").write_bytes(b"log " + token.encode())
     if videos:
@@ -163,9 +163,9 @@ def test_tidy_leaves_unknown_files_and_reports_them(tmp_path, monkeypatch, capsy
     (sim / "extra.bin").write_bytes(b"?")
     _run(tmp_path, monkeypatch=monkeypatch)
     assert _tree(tmp_path / "simulation") == [
-        f"{CHALLENGE}_pufferdrive",
-        f"{CHALLENGE}_pufferdrive/{TIMESTAMP}",
-        f"{CHALLENGE}_pufferdrive/{TIMESTAMP}/extra.bin",
+        f"{CHALLENGE}_opengigaflow",
+        f"{CHALLENGE}_opengigaflow/{TIMESTAMP}",
+        f"{CHALLENGE}_opengigaflow/{TIMESTAMP}/extra.bin",
     ]
     assert "left in place, unknown" in capsys.readouterr().out
 

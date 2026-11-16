@@ -1,4 +1,4 @@
-"""PufferDrive structured schemas and final configuration validation.
+"""OpenGigaFlow structured schemas and final configuration validation.
 
 The dataclasses in this module define the admissible shape, types, and enum
 values for configuration input. Required fields use ``MISSING`` so absent YAML
@@ -51,7 +51,7 @@ def _raise_config_error(context, path, message):
         context_suffix = f" during {context}"
     else:
         context_suffix = ""
-    raise pufferlib.APIUsageError(f"Invalid PufferDrive configuration at {location}{context_suffix}: {message}")
+    raise pufferlib.APIUsageError(f"Invalid OpenGigaFlow configuration at {location}{context_suffix}: {message}")
 
 
 def _constrained_field(constraint_mode, default=MISSING):
@@ -161,7 +161,7 @@ class PackageName(Enum):
 
 
 class EnvironmentName(Enum):
-    puffer_drive = 0
+    opengigaflow = 0
 
 
 class PolicyName(Enum):
@@ -442,7 +442,7 @@ class EvaluationConfig:
 
 
 @dataclass
-class PufferDriveConfig:
+class OpenGigaFlowConfig:
     load_model_path: str | None = MISSING
     load_id: str | None = MISSING
     num_scenarios: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
@@ -470,12 +470,12 @@ class PufferDriveConfig:
 MAX_C_SEED = 2**31 - 1
 
 
-def normalize_puffer_drive_config(config, context="load"):
+def normalize_opengigaflow_config(config, context="load"):
     """Validate config structure and types, then return a normalized plain dictionary."""
     if not isinstance(config, Mapping):
         _raise_config_error(context, "root", "must be a mapping")
     try:
-        validated = OmegaConf.merge(OmegaConf.structured(PufferDriveConfig), dict(config))
+        validated = OmegaConf.merge(OmegaConf.structured(OpenGigaFlowConfig), dict(config))
         missing_keys = sorted(OmegaConf.missing_keys(validated))
         if missing_keys:
             _raise_config_error(context, missing_keys[0], "is required")
@@ -675,9 +675,9 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "vec.seed", f"must not exceed the C RNG maximum {MAX_C_SEED}")
 
 
-def validate_puffer_drive_config(config, context) -> None:
-    """Validate field and cross-field semantics on a normalized PufferDrive config."""
-    _validate_field_constraints(config, PufferDriveConfig, context)
+def validate_opengigaflow_config(config, context) -> None:
+    """Validate field and cross-field semantics on a normalized OpenGigaFlow config."""
+    _validate_field_constraints(config, OpenGigaFlowConfig, context)
     _validate_cross_field_constraints(config, context)
 
 
@@ -709,18 +709,18 @@ def _validate_map_resources(env, context):
     return available_maps
 
 
-def puffer_drive_constructor_keys():
-    """Return keyword arguments accepted by the PufferDrive constructor."""
+def opengigaflow_constructor_keys():
+    """Return keyword arguments accepted by the OpenGigaFlow constructor."""
     from pufferlib.ocean.drive.drive import Drive
 
     return set(inspect.signature(Drive.__init__).parameters) - {"self"}
 
 
-def normalize_puffer_drive_benchmarks(environment_config, benchmarks, context, validate_resources=True):
+def normalize_opengigaflow_benchmarks(environment_config, benchmarks, context, validate_resources=True):
     """Validate benchmark definitions and return normalized copies for merging."""
     if not isinstance(environment_config, Mapping):
         _raise_config_error(context, "env", "must be a mapping")
-    accepted_environment_fields = puffer_drive_constructor_keys()
+    accepted_environment_fields = opengigaflow_constructor_keys()
     unknown_environment_fields = set(environment_config) - accepted_environment_fields
     if unknown_environment_fields:
         _raise_config_error(
@@ -842,7 +842,7 @@ def normalize_puffer_drive_benchmarks(environment_config, benchmarks, context, v
     return normalized_benchmarks
 
 
-def validate_puffer_drive_resources(config, context):
+def validate_opengigaflow_resources(config, context):
     """Check final filesystem inputs separately from config semantics."""
     _validate_map_resources(config["env"], context)
 

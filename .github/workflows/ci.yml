@@ -85,10 +85,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build smoke image
-        run: docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
+        run: docker build -f tests/smoke_tests/Dockerfile -t opengigaflow-smoke .
 
       - name: Smoke golden test
-        run: docker run --rm pufferdrive-smoke
+        run: docker run --rm opengigaflow-smoke
         timeout-minutes: 30
 
   perf-tests:

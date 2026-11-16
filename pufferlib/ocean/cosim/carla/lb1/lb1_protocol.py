@@ -1,5 +1,5 @@
 """Length-prefixed JSON messages between lb1/leaderboard_agent.py (CARLA 0.9.10, Python 3.7) and
-lb1/policy_server.py (PufferDrive venv). Standard library only: the agent imports this file as a
+lb1/policy_server.py (OpenGigaFlow venv). Standard library only: the agent imports this file as a
 sibling module (the leaderboard puts the agent's directory on sys.path), the server as a package module.
 
 Handshake, then one request/reply pair per CARLA tick:

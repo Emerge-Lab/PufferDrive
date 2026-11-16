@@ -13,4 +13,4 @@
 # challenge, so the reactive and non-reactive scores always come from the same planner settings. Overridable env: as in
 # 9_nuPlan.sh; results go to $RUN_DIR/eval/nuplan_val14_nonreactive_*.
 source scripts/kesai/cluster_env.sh || exit 1
-CHALLENGES=closed_loop_nonreactive_agents_pufferdrive exec bash "$PD/scripts/kesai/9_nuPlan.sh"
+CHALLENGES=closed_loop_nonreactive_agents_opengigaflow exec bash "$PD/scripts/kesai/9_nuPlan.sh"

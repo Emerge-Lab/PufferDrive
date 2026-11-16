@@ -12,14 +12,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 pytest.importorskip("nuplan")
 pytest.importorskip("carl_nuplan")
 
-from pufferlib.ocean.cosim.nuplan.planner import PufferDrivePlanner
+from pufferlib.ocean.cosim.nuplan.planner import OpenGigaFlowPlanner
 
 
 STEP_SECONDS = 0.1
 
 
 def _planner():
-    planner = PufferDrivePlanner.__new__(PufferDrivePlanner)
+    planner = OpenGigaFlowPlanner.__new__(OpenGigaFlowPlanner)
     planner.__dict__.update({"_planning_step_s": STEP_SECONDS, "_partner_stopped_s": {}})
     return planner
 

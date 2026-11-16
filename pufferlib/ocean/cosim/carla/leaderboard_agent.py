@@ -1,12 +1,12 @@
-"""PufferDrive policy as a CARLA leaderboard agent (CaRL original_leaderboard, CARLA 0.9.15).
+"""OpenGigaFlow policy as a CARLA leaderboard agent (CaRL original_leaderboard, CARLA 0.9.15).
 
-Usage (CaRL env vars/paths as in CaRL/CARLA/README.md, plus PufferDrive repo
+Usage (CaRL env vars/paths as in CaRL/CARLA/README.md, plus OpenGigaFlow repo
 root on PYTHONPATH for `pufferlib` and `data_utils`):
 
   python ${CARL_WORK_DIR}/original_leaderboard/leaderboard/leaderboard/leaderboard_evaluator.py \
       --routes ${CARL_WORK_DIR}/custom_leaderboard/leaderboard/data/longest6_split/longest6_00.xml \
       --agent /path/to/pufferlib/ocean/cosim/carla/leaderboard_agent.py \
-      --agent-config /path/to/experiments/puffer_drive_xxx/models/model_xxx.pt \
+      --agent-config /path/to/experiments/opengigaflow_xxx/models/model_xxx.pt \
       --checkpoint /path/to/results/result.json --track MAP
 
 This file is the CARLA side only: it reads ground truth (ego, nearby actors, lights, stop signs, the

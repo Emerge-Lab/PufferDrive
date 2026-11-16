@@ -1,12 +1,12 @@
 """Jerk-integrator targets -> (steer, throttle, brake, reverse) for CARLA's own vehicle physics (PedalMap),
 and the ego's wheel geometry.
 
-The policy's jerk action is integrated by the shadow PufferDrive env into an
+The policy's jerk action is integrated by the shadow OpenGigaFlow env into an
 acceleration and a steering angle; PedalMap turns them into the pedals and steer
 that make CARLA's physics follow. CARLA (not the shadow env) moves the ego, so all
 leaderboard collision/infraction machinery sees a normally-driven vehicle. The
 simulator side wraps the returned values in carla.VehicleControl; this module never
-imports carla so it also runs in the PufferDrive venv behind lb1/policy_server.py.
+imports carla so it also runs in the OpenGigaFlow venv behind lb1/policy_server.py.
 """
 
 import math

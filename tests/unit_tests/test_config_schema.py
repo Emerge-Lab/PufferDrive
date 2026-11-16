@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PufferDrive schema and final resolved-config checker tests.
+"""OpenGigaFlow schema and final resolved-config checker tests.
 
 Run: python -m unittest tests.unit_tests.test_config_schema
 """
@@ -22,8 +22,8 @@ from pufferlib.config_schema import (
     InitMode,
     NonVehicleController,
     SimulationMode,
-    normalize_puffer_drive_config,
-    validate_puffer_drive_config,
+    normalize_opengigaflow_config,
+    validate_opengigaflow_config,
 )
 from pufferlib.ocean.drive import binding
 from pufferlib.pufferl import load_config
@@ -54,8 +54,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_valid_config_loads_with_plain_strings(self):
         """Final validation must not change the plain-dict contract: enum
         fields come back as their string names, not Enum members."""
-        args = load_config("puffer_drive")
-        self.assertIsNone(validate_puffer_drive_config(args, "test"))
+        args = load_config("opengigaflow")
+        self.assertIsNone(validate_opengigaflow_config(args, "test"))
         self.assertIsInstance(args["env"]["collision_behavior"], str)
         self.assertIn(args["env"]["collision_behavior"], ("ignore", "stop"))
         self.assertIsInstance(args["env"]["control_mode"], str)
@@ -69,13 +69,13 @@ class TestConfigSchema(unittest.TestCase):
 
     @patch("sys.argv", ["pufferl.py", "env.use_map_cache=false"])
     def test_boolean_cli_overrides_load(self):
-        args = load_config("puffer_drive")
+        args = load_config("opengigaflow")
 
         self.assertIs(args["env"]["use_map_cache"], False)
 
     @patch("sys.argv", ["pufferl.py"])
     def test_legacy_zero_or_one_values_normalize_to_booleans(self):
-        args = load_config("puffer_drive")
+        args = load_config("opengigaflow")
         args["env"].update(
             {
                 "use_map_cache": 1,
@@ -85,7 +85,7 @@ class TestConfigSchema(unittest.TestCase):
             }
         )
 
-        normalized = normalize_puffer_drive_config(args, "test")
+        normalized = normalize_opengigaflow_config(args, "test")
 
         self.assertIs(normalized["env"]["use_map_cache"], True)
         self.assertIs(normalized["env"]["preload_map_cache"], False)
@@ -98,7 +98,7 @@ class TestConfigSchema(unittest.TestCase):
             pufferlib.APIUsageError,
             r"at env\.collision_behavior while loading: Invalid value 'sotp'",
         ):
-            load_config("puffer_drive")
+            load_config("opengigaflow")
 
     @patch("sys.argv", ["pufferl.py", "env.num_agents=lots"])
     def test_wrong_type_fails_at_load(self):
@@ -106,7 +106,7 @@ class TestConfigSchema(unittest.TestCase):
             pufferlib.APIUsageError,
             r"at env\.num_agents while loading: Value 'lots'",
         ):
-            load_config("puffer_drive")
+            load_config("opengigaflow")
 
     @patch("sys.argv", ["pufferl.py", "+env.collission_behavior=stop"])
     def test_unknown_env_key_fails_at_load(self):
@@ -116,11 +116,11 @@ class TestConfigSchema(unittest.TestCase):
             pufferlib.APIUsageError,
             r"at env\.collission_behavior while loading: Key 'collission_behavior'",
         ):
-            load_config("puffer_drive")
+            load_config("opengigaflow")
 
     @patch("sys.argv", ["pufferl.py", "env.collision_behavior=1"])
     def test_enum_accepts_c_int_value(self):
-        args = load_config("puffer_drive")
+        args = load_config("opengigaflow")
         self.assertEqual(args["env"]["collision_behavior"], "stop")
 
     def test_schema_enums_match_binding_constants(self):
@@ -158,19 +158,19 @@ class TestConfigSchema(unittest.TestCase):
 
     @patch("sys.argv", ["pufferl.py"])
     def test_training_batch_relationships_are_checked(self):
-        args = load_config("puffer_drive")
+        args = load_config("opengigaflow")
 
         invalid = {**args, "train": {**args["train"], "batch_size": "auto", "bptt_horizon": "auto"}}
         with self.assertRaisesRegex(pufferlib.APIUsageError, "batch_size and bptt_horizon"):
-            validate_puffer_drive_config(invalid, "test")
+            validate_opengigaflow_config(invalid, "test")
 
         invalid = {**args, "train": {**args["train"], "minibatch_size": 10, "max_minibatch_size": 6}}
         with self.assertRaisesRegex(pufferlib.APIUsageError, "max_minibatch_size"):
-            validate_puffer_drive_config(invalid, "test")
+            validate_opengigaflow_config(invalid, "test")
 
         invalid = {**args, "train": {**args["train"], "batch_size": 8, "minibatch_size": 16}}
         with self.assertRaisesRegex(pufferlib.APIUsageError, "train.batch_size"):
-            validate_puffer_drive_config(invalid, "test")
+            validate_opengigaflow_config(invalid, "test")
 
         invalid = {
             **args,
@@ -183,7 +183,7 @@ class TestConfigSchema(unittest.TestCase):
             },
         }
         with self.assertRaisesRegex(pufferlib.APIUsageError, "bptt_horizon"):
-            validate_puffer_drive_config(invalid, "test")
+            validate_opengigaflow_config(invalid, "test")
 
         # Test derived batch_size < minibatch_size when batch_size is auto
         invalid = {
@@ -199,7 +199,7 @@ class TestConfigSchema(unittest.TestCase):
             },
         }
         with self.assertRaisesRegex(pufferlib.APIUsageError, "derived batch_size"):
-            validate_puffer_drive_config(invalid, "test")
+            validate_opengigaflow_config(invalid, "test")
 
         # Test total_agents > segments when neither is auto
         invalid = {
@@ -215,54 +215,54 @@ class TestConfigSchema(unittest.TestCase):
             },
         }
         with self.assertRaisesRegex(pufferlib.APIUsageError, "total agents .* must be <= segments"):
-            validate_puffer_drive_config(invalid, "test")
+            validate_opengigaflow_config(invalid, "test")
 
     @patch("sys.argv", ["pufferl.py"])
     def test_semantic_error_separates_field_path_from_context(self):
-        args = load_config("puffer_drive")
+        args = load_config("opengigaflow")
         args["env"]["obs_lane_stride"] = 0
 
         with self.assertRaisesRegex(
             pufferlib.APIUsageError,
             r"at env\.obs_lane_stride during training: must be a positive integer",
         ):
-            validate_puffer_drive_config(args, "training")
+            validate_opengigaflow_config(args, "training")
 
     @patch("sys.argv", ["pufferl.py"])
     def test_failure_replay_rejects_scenario_rendering(self):
-        args = load_config("puffer_drive")
+        args = load_config("opengigaflow")
         args["eval"]["failure_replay_csv"] = "failures.csv"
         args["eval"]["render_filter"] = "collision"
         args["eval"]["render_scenarios"] = True
 
         with self.assertRaisesRegex(pufferlib.APIUsageError, "scenario rendering"):
-            validate_puffer_drive_config(args, "test")
+            validate_opengigaflow_config(args, "test")
 
     @patch("sys.argv", ["pufferl.py"])
     def test_remote_load_id_requires_tracker(self):
-        args = load_config("puffer_drive")
+        args = load_config("opengigaflow")
         args["load_id"] = "remote-run"
 
         with self.assertRaisesRegex(pufferlib.APIUsageError, "load_id"):
-            validate_puffer_drive_config(args, "test")
+            validate_opengigaflow_config(args, "test")
 
     @patch("sys.argv", ["pufferl.py"])
     def test_preload_map_cache_requires_use_map_cache(self):
-        args = load_config("puffer_drive")
+        args = load_config("opengigaflow")
         args["env"]["preload_map_cache"] = True
         args["env"]["use_map_cache"] = False
 
         with self.assertRaisesRegex(pufferlib.APIUsageError, "preload_map_cache"):
-            validate_puffer_drive_config(args, "test")
+            validate_opengigaflow_config(args, "test")
 
     @patch("sys.argv", ["pufferl.py"])
     def test_partner_blindness_prob_min_must_not_exceed_max(self):
-        args = load_config("puffer_drive")
+        args = load_config("opengigaflow")
         args["env"]["partner_blindness_prob_min"] = 0.5
         args["env"]["partner_blindness_prob"] = 0.1
 
         with self.assertRaisesRegex(pufferlib.APIUsageError, "partner_blindness_prob_min"):
-            validate_puffer_drive_config(args, "test")
+            validate_opengigaflow_config(args, "test")
 
 
 if __name__ == "__main__":

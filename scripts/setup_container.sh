@@ -1,5 +1,5 @@
 #!/bin/bash
-# Setup script for PufferDrive Singularity container environment
+# Setup script for OpenGigaFlow Singularity container environment
 # This creates an overlay with all dependencies for running on HPC clusters
 # with older glibc versions.
 #
@@ -71,12 +71,12 @@ create_overlay() {
 # its own NCCL — we just have to make sure ld.so finds the bundled one first.
 patch_activate_nccl_fix() {
     local activate="$VENV_PATH/bin/activate"
-    if grep -q "PUFFERDRIVE_NCCL_FIX" "$activate" 2>/dev/null; then
+    if grep -q "OPENGIGAFLOW_NCCL_FIX" "$activate" 2>/dev/null; then
         return 0
     fi
     cat >> "$activate" <<'EOF'
 
-# PUFFERDRIVE_NCCL_FIX: prepend torch's bundled NCCL so libtorch_cuda finds
+# OPENGIGAFLOW_NCCL_FIX: prepend torch's bundled NCCL so libtorch_cuda finds
 # ncclCommShrink (added in NCCL 2.27). Without this, torchrun child procs
 # resolve libnccl.so.2 from the sif's old /usr/lib and crash on import torch.
 NCCL_DIR=$(compgen -G "$VIRTUAL_ENV/lib/python3.*/site-packages/nvidia/nccl/lib" | head -1)
@@ -193,7 +193,7 @@ install_deps() {
     echo "=== Installing PyTorch ==="
     uv pip install --reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-    echo "=== Installing PufferDrive (editable; also builds C extension via setup.py) ==="
+    echo "=== Installing OpenGigaFlow (editable; also builds C extension via setup.py) ==="
     cd "$PROJECT_ROOT"
     # --no-build-isolation: pyproject.toml's [build-system].requires includes
     # torch, which would otherwise make uv spin up a fresh build env and
@@ -256,7 +256,7 @@ case "${1:-}" in
         fi
         ;;
     *)
-        echo "PufferDrive Container Setup"
+        echo "OpenGigaFlow Container Setup"
         echo ""
         echo "Usage: $0 <command>"
         echo ""

@@ -71,8 +71,8 @@ class BicycleStep(NamedTuple):
     intent_steering_rad: float
 
 
-class PufferDrivePlanner(AbstractPlanner):
-    """nuPlan planner driven by a PufferDrive policy. nuPlan's KinematicBicycleModel is the ego plant, commanded
+class OpenGigaFlowPlanner(AbstractPlanner):
+    """nuPlan planner driven by an OpenGigaFlow policy. nuPlan's KinematicBicycleModel is the ego plant, commanded
     through CaRL's one_stage_controller like CaRL: every step the shadow ego takes nuPlan's pose, speed and yaw
     rate, keeps its own jerk-integrated accel/steering (the state the policy was trained to observe; the plant
     lags behind it), and its post-step accel/steering become the model's commands."""
@@ -107,7 +107,7 @@ class PufferDrivePlanner(AbstractPlanner):
         obs_html_render: bool = True,
     ):
         """
-        :param checkpoint_path: PufferDrive policy checkpoint (.pt); config.yaml
+        :param checkpoint_path: OpenGigaFlow policy checkpoint (.pt); config.yaml
             two levels up defines the policy architecture.
         :param bin_cache_dir: fallback cache dir for a city bin's `<bin>.origin.json`
             sidecar when the bin's own directory isn't writable.
@@ -117,7 +117,7 @@ class PufferDrivePlanner(AbstractPlanner):
         :param scenario: injected by the devkit (requires_scenario).
         :param map_radius: map extraction / light-matching radius [m].
         :param goal_spacing: minimum distance between consecutive route roadblock goals fed to the policy [m].
-        :param num_agents: PufferDrive agent-pool size (ego + streamed background).
+        :param num_agents: OpenGigaFlow agent-pool size (ego + streamed background).
         :param horizon_seconds: horizon of the returned action trajectory's sampling [s].
         :param sliding_goal_window: refill the goal window to `num_goals` goals ahead after every
             consumed goal (default: replace it only once exhausted, as in training), so the policy
@@ -297,7 +297,7 @@ class PufferDrivePlanner(AbstractPlanner):
             except OSError:
                 continue
         print(
-            f"[pufferdrive_planner] registered {bin_path.name}: "
+            f"[opengigaflow_planner] registered {bin_path.name}: "
             f"origin=({t[0]:.2f}, {t[1]:.2f}) resid={resid * 100:.1f} cm"
         )
         return nb.NuPlanTransform(t[0], t[1])
@@ -342,7 +342,7 @@ class PufferDrivePlanner(AbstractPlanner):
         from pufferlib.ocean.cosim.arch import shadow_env_kwargs
 
         if self._scenario is None:
-            raise RuntimeError("PufferDrivePlanner needs the scenario injected (requires_scenario)")
+            raise RuntimeError("OpenGigaFlowPlanner needs the scenario injected (requires_scenario)")
         return shadow_env_kwargs(
             cfg,
             overrides={
@@ -491,7 +491,7 @@ class PufferDrivePlanner(AbstractPlanner):
             )
 
         print(
-            f"[pufferdrive_planner] bin={bin_path.name} lights={len(self._connector_map)}/"
+            f"[opengigaflow_planner] bin={bin_path.name} lights={len(self._connector_map)}/"
             f"{self._num_traffic} goals={len(goals)}"
         )
 
@@ -667,7 +667,7 @@ class PufferDrivePlanner(AbstractPlanner):
         if self._obs_replay is None or iteration_index < self._scenario.get_number_of_iterations() - 2:
             return
         out = self._obs_replay.write(render_html=self._obs_html_render)
-        print(f"[pufferdrive_planner] wrote obs replay ({len(self._obs_replay)} steps) -> {out}")
+        print(f"[opengigaflow_planner] wrote obs replay ({len(self._obs_replay)} steps) -> {out}")
         self._obs_replay = None
 
     def compute_planner_trajectory(self, current_input: PlannerInput) -> AbstractTrajectory:

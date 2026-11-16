@@ -46,9 +46,9 @@ import pufferlib.ensemble
 from pufferlib.pytorch import clean_policy_state_dict
 from pufferlib.config_schema import (
     MAX_C_SEED,
-    normalize_puffer_drive_config,
-    validate_puffer_drive_config,
-    validate_puffer_drive_resources,
+    normalize_opengigaflow_config,
+    validate_opengigaflow_config,
+    validate_opengigaflow_resources,
 )
 
 
@@ -1443,10 +1443,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
                 "policy/observation architecture instead of the checkpoint's."
             )
 
-    args = normalize_puffer_drive_config(args, "training")
-    validate_puffer_drive_config(args, "training")
+    args = normalize_opengigaflow_config(args, "training")
+    validate_opengigaflow_config(args, "training")
     if vecenv is None:
-        validate_puffer_drive_resources(args, "training")
+        validate_opengigaflow_resources(args, "training")
 
     apply_matmul_env_flags()
     cpus_bound = False
@@ -2205,7 +2205,7 @@ def load_config(env_name, config_dir=CONFIG_DIR, overrides=None):
         cfg = compose(config_name=env_name, overrides=overrides)
 
     args = defaultdict(dict, OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True))
-    return defaultdict(dict, normalize_puffer_drive_config(args, "load"))
+    return defaultdict(dict, normalize_opengigaflow_config(args, "load"))
 
 
 def main():

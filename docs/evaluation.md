@@ -1,6 +1,6 @@
 # Evaluation
 
-PufferDrive evaluation is config-driven. A named benchmark defines which
+OpenGigaFlow evaluation is config-driven. A named benchmark defines which
 scenarios to run. The evaluator writes deterministic per-episode
 metrics and can replay only the failed episodes as interactive HTML.
 
@@ -14,12 +14,12 @@ evaluation application, not the simulator:
 
 - `pufferlib/config/evaluation/benchmark.yaml` defines the shared deterministic
   environment and named benchmarks.
-- `pufferlib/config/puffer_drive.yaml` selects that file and configures the
+- `pufferlib/config/opengigaflow.yaml` selects that file and configures the
   evaluator under `eval`.
 
 Each configured benchmark contains:
 
-- `name`: positional benchmark name passed after `puffer_drive`.
+- `name`: positional benchmark name passed after `opengigaflow`.
 - `simulation_mode`: `gigaflow` for generated scenarios or `replay` for recorded ones.
 - `num_scenarios`: number of episode summaries expected in the report.
 - `num_maps`: number of sorted map files available to the benchmark.
@@ -42,7 +42,7 @@ Replay benchmarks using `control_sdc_only` additionally cap their worker count w
 Benchmark selection and a 3.0 checkpoint are required, with the matching `config.yaml` in the run directory.
 
 ```bash
-puffer eval puffer_drive carla_fast \
+puffer eval opengigaflow carla_fast \
   load_model_path=experiments/<run>/final_model.pt \
   train.device=cpu
 ```
@@ -50,14 +50,14 @@ puffer eval puffer_drive carla_fast \
 Select multiple benchmarks with a comma-separated value:
 
 ```bash
-puffer eval puffer_drive carla_fast,womd_single \
+puffer eval opengigaflow carla_fast,womd_single \
   load_model_path=experiments/<run>/final_model.pt
 ```
 
 For a smaller CPU run using the committed `carla_fast` benchmark:
 
 ```bash
-puffer eval puffer_drive carla_fast \
+puffer eval opengigaflow carla_fast \
   load_model_path=experiments/<run>/final_model.pt \
   eval.num_agents=50 \
   vec.num_envs=2 \
@@ -68,7 +68,7 @@ Hydra overrides are applied after the selected benchmark. This supports
 parameter experiments without editing `benchmark.yaml`:
 
 ```bash
-puffer eval puffer_drive carla_fast \
+puffer eval opengigaflow carla_fast \
   load_model_path=experiments/<run>/final_model.pt \
   env.goal_speed=10 \
   eval.output_name=goal_speed_10
@@ -97,7 +97,7 @@ benchmark config, checkpoint configuration, worker arguments, maps, and seeds.
 Capture and render every scenario from the standard benchmark pass with:
 
 ```bash
-puffer eval puffer_drive carla_fast \
+puffer eval opengigaflow carla_fast \
   load_model_path=experiments/<run>/final_model.pt \
   eval.render_scenarios=true \
   eval.capture_observations=false
@@ -115,7 +115,7 @@ compressed files are removed after rendering by default; use
 To evaluate and render the environment distribution used during training, run:
 
 ```bash
-puffer eval puffer_drive carla_fast \
+puffer eval opengigaflow carla_fast \
   load_model_path=path/to/model.pt \
   env.eval_training_render=true
 ```
@@ -126,7 +126,7 @@ Set `eval.render_filter` to render scenarios where a selected metric is greater
 than zero:
 
 ```bash
-puffer eval puffer_drive carla_fast \
+puffer eval opengigaflow carla_fast \
   load_model_path=experiments/<run>/final_model.pt \
   eval.render_filter=offroad_rate \
   eval.max_rendered_failures=10 \
@@ -148,8 +148,8 @@ To filter and replay an existing metrics CSV without rerunning the standard
 benchmark pass:
 
 ```bash
-puffer eval puffer_drive carla \
-  load_model_path=experiments/mimolette/models/model_puffer_drive_003815.pt \
+puffer eval opengigaflow carla \
+  load_model_path=experiments/mimolette/models/model_opengigaflow_003815.pt \
   eval.failure_replay_csv=experiments/mimolette/eval/carla/episode_metrics.csv \
   eval.render_filter=offroad_rate \
   eval.max_rendered_failures=10 \

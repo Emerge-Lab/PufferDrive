@@ -1,4 +1,4 @@
-"""Tidy a nuPlan closed-loop run of the PufferDrive planner (the run_simulation.py `group` directory that
+"""Tidy a nuPlan closed-loop run of the OpenGigaFlow planner (the run_simulation.py `group` directory that
 scripts/kesai/9_nuPlan.sh writes under <run>/eval) down to what is read after the run:
 
   overview.csv    CLS, the eight sub-metrics and the loss_* importance of each (CaRL's csv_main_callback)

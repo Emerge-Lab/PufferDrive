@@ -1,4 +1,4 @@
-"""Failure analysis + visualizations for CARLA leaderboard runs of the PufferDrive co-sim agent
+"""Failure analysis + visualizations for CARLA leaderboard runs of the OpenGigaFlow co-sim agent
 (pufferlib/ocean/cosim/carla/leaderboard_agent.py run with COSIM_WORLD_LOG and COSIM_TELEMETRY set).
 Same report shape as analyze_nuplan_cosim.py: score table worst first, failure-category counts,
 per-route diagnosis, six-frame top-down strip + speed plot + chase-cam video. The matplotlib top-down mp4
@@ -393,9 +393,9 @@ def main():
     table = df[TABLE_COLS].round(2).copy()
     table["route"] = table["route"].map(lambda t: f"<a href='#{t}'>{t}</a>")
     html = [
-        "<html><head><meta charset='utf-8'><title>PufferDrive CARLA leaderboard report</title>",
+        "<html><head><meta charset='utf-8'><title>OpenGigaFlow CARLA leaderboard report</title>",
         "<style>body{font-family:sans-serif;max-width:1500px;margin:auto} table{border-collapse:collapse;font-size:12px} td,th{border:1px solid #ccc;padding:3px 6px}</style></head><body>",
-        f"<h1>PufferDrive CARLA leaderboard &middot; {len(df)} routes &middot; mean driving score {df['driving_score'].mean():.1f} &middot; mean route completion {df['route_completion'].mean():.0f}%</h1>",
+        f"<h1>OpenGigaFlow CARLA leaderboard &middot; {len(df)} routes &middot; mean driving score {df['driving_score'].mean():.1f} &middot; mean route completion {df['route_completion'].mean():.0f}%</h1>",
         (
             "<p>Orange = ego, blue = vehicles (red within 8 m), purple = pedestrians, green dashed = route with goal dots (current goal circled), "
             "stop lines colored by light state, x = infraction (black collision, red other). Speed plot: grey bands = standstills &ge; 8 s, "

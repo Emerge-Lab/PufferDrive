@@ -28,7 +28,7 @@ def pad_weight(w1_bf16, feature_pad):
     return padded
 
 
-@torch.library.custom_op("pufferdrive::fused_slot_encoder_bwd", mutates_args=())
+@torch.library.custom_op("opengigaflow::fused_slot_encoder_bwd", mutates_args=())
 def fused_slot_encoder_bwd(
     x: torch.Tensor,
     counts: torch.Tensor,
@@ -61,7 +61,7 @@ def _(x, counts, w1_padded, b1, gamma, beta, w2, normed_relu, argmax, grad_poole
     )
 
 
-@torch.library.custom_op("pufferdrive::fused_slot_encoder", mutates_args=())
+@torch.library.custom_op("opengigaflow::fused_slot_encoder", mutates_args=())
 def fused_slot_encoder(
     x: torch.Tensor,
     counts: torch.Tensor,

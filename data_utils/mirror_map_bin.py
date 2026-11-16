@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""mirror_map_bin.py — Reflect a PufferDrive map .bin across the x-axis to
+"""mirror_map_bin.py — Reflect an OpenGigaFlow map .bin across the x-axis to
 flip driving convention (right-hand traffic → left-hand traffic).
 
 CARLA's OpenDRIVE maps are right-hand-traffic by default. Negating y for every

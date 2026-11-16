@@ -1,6 +1,6 @@
 # Cluster training — operational guide
 
-How to run PufferDrive training on a SLURM cluster. This is written with the NYU cluster in mind but it should mostly hold for any SLURM cluster.
+How to run OpenGigaFlow training on a SLURM cluster. This is written with the NYU cluster in mind but it should mostly hold for any SLURM cluster.
 
 ## A quick overview of the setup and launch process
 
@@ -33,7 +33,7 @@ python scripts/submit_cluster.py \
 
 ## Container model
 
-PufferDrive on Greene runs inside a singularity container. The container provides
+OpenGigaFlow on Greene runs inside a singularity container. The container provides
 a modern glibc + CUDA toolkit; the project's Python environment lives in a venv
 on `/scratch` so installs aren't bottlenecked by the slow process of building a venv inside a container.
 
@@ -155,7 +155,7 @@ sbatch --account=<general-account> --partition=cpu_short \
 
 ### `TORCH_CUDA_ARCH_LIST`: a quick warning that won't generally be an issue
 
-PufferDrive's C extension contains CUDA kernels. When `setup.py build_ext`
+OpenGigaFlow's C extension contains CUDA kernels. When `setup.py build_ext`
 compiles them, `nvcc` emits machine code for each architecture listed in
 the `TORCH_CUDA_ARCH_LIST` env var (and only those); the result is a large binary containing one variant per arch. If the env var is unset, the build
 defaults to whatever GPU was visible to the compiler at build time which is often

@@ -10,7 +10,7 @@ run_name: default_run
 tb: false
 tag: null
 package: ocean
-env_name: puffer_drive
+env_name: opengigaflow
 policy_name: Drive
 vec:
   backend: Multiprocessing

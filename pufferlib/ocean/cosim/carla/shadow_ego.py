@@ -1,8 +1,8 @@
-"""PufferDrive shadow env + policy driving one ego from another simulator's ground truth.
+"""OpenGigaFlow shadow env + policy driving one ego from another simulator's ground truth.
 
 Shared by the CARLA leaderboard integrations: CaRL's Leaderboard 2.0 agent (leaderboard_agent.py,
 CARLA 0.9.15, in-process) and the Leaderboard 1.0 client/server pair (lb1/, CARLA 0.9.10, whose
-Python 3.7 cannot import PufferDrive). The simulator side only reads CARLA and moves the ego;
+Python 3.7 cannot import OpenGigaFlow). The simulator side only reads CARLA and moves the ego;
 everything the policy needs happens here and never imports carla. Inputs and outputs are in the
 CARLA frame (metres, degrees, left-handed y) as plain lists/dicts, so they also travel as JSON.
 
@@ -29,8 +29,8 @@ step(snapshot) every simulator tick, snapshot = {
 
 Environment variables:
   COSIM_DEVICE=cpu             torch device for the policy
-  COSIM_DYNAMICS_SOURCE=pufferdrive
-                               "pufferdrive" (default): PufferDrive's own dynamics (the ones the policy
+  COSIM_DYNAMICS_SOURCE=opengigaflow
+                               "opengigaflow" (default): OpenGigaFlow's own dynamics (the ones the policy
                                trained on) move the ego; StepResult.motion is the pose the simulator
                                teleports the ego to every step.
                                "carla_pedals": CARLA's physics moves the ego, driven only by the (steer, throttle,
@@ -117,7 +117,7 @@ SCENARIO_LENGTH_MARGIN_STEPS = 2
 MIN_PARTNER_SIZE_M = 0.1
 # Shadow-env metrics_array indices (datatypes.h): collision/offroad/red-light/stop-sign flags.
 EGO_INFRACTION_METRICS = {"collision": 0, "offroad": 1, "red_light": 2, "stop_sign": 3}
-DYNAMICS_SOURCES = ("pufferdrive", "carla_pedals")
+DYNAMICS_SOURCES = ("opengigaflow", "carla_pedals")
 EGO_OBS_STEERING_IDX = 3  # write_ego_obs column order: speed, width, length, steering, accel_long, ...
 DRIVE_WHEELBASE_PER_LENGTH = 0.6  # must equal the jerk model's wheelbase / sim_length
 STANDSTILL_SPEED_MPS = 0.1  # carla_pedals: below this, in either direction, the ego counts as standing
@@ -186,7 +186,7 @@ def ego_speed_from_state(state):
 class StepResult:
     """One policy step: `actions` (num_agents, act_dim), the shadow env's infraction flags (None unless
     telemetry is written), and the ego command -- `motion` = [x0, y0, yaw0_deg, speed0, x1, y1, yaw1_deg, speed1, z1]
-    (CARLA frame, pre- and post-step pose to teleport along) in pufferdrive mode, `control` = (steer,
+    (CARLA frame, pre- and post-step pose to teleport along) in opengigaflow mode, `control` = (steer,
     throttle, brake, reverse) in carla_pedals mode; `target` = (speed_mps, yaw_deg) the policy intends one dt ahead."""
 
     def __init__(self, actions, target, motion=None, control=None, pd_flags=None):
@@ -202,7 +202,7 @@ class ShadowEgo:
         self.route_tag = route_tag
         self.checkpoint, self.cfg = resolve_checkpoint(path_to_conf_file)
         self.device = os.environ.get("COSIM_DEVICE", "cpu")
-        self.dynamics_source = os.environ.get("COSIM_DYNAMICS_SOURCE", "pufferdrive")
+        self.dynamics_source = os.environ.get("COSIM_DYNAMICS_SOURCE", "opengigaflow")
         if self.dynamics_source not in DYNAMICS_SOURCES:
             raise ValueError(f"COSIM_DYNAMICS_SOURCE must be one of {DYNAMICS_SOURCES}, got {self.dynamics_source!r}")
         env_cfg = self.cfg["env"]
@@ -338,7 +338,7 @@ class ShadowEgo:
         )
         self.transform = cb.CarlaTransform(town, offset=offset, z_offset=z_offset)
         ego_state = [float(v) for v in ego["state"]]
-        if self.dynamics_source == "pufferdrive":
+        if self.dynamics_source == "opengigaflow":
             self._sync_ego(ego_state, zero_velocity=True)
         target_points = np.asarray(route["sparse_plan"], dtype=np.float64).reshape(-1, 3).copy()
         dense_points = np.asarray(route["dense_plan"], dtype=np.float64).reshape(-1, 3).copy()
@@ -622,7 +622,7 @@ class ShadowEgo:
     def _integrate(self, actions):
         """Step the shadow env ONCE (one policy step == one shadow tick).
 
-        dynamics_source='pufferdrive': PufferDrive's own jerk dynamics (the ones the policy
+        dynamics_source='opengigaflow': OpenGigaFlow's own jerk dynamics (the ones the policy
         trained on) ARE the ego's motion -- no target to chase. StepResult.motion is the pre/post-step
         pose the simulator teleports the ego along, where the next tick's observation reads it.
 
@@ -639,7 +639,7 @@ class ShadowEgo:
         speed_after = self._ego_speed()
         accel_after = float(np.asarray(self.env.observations)[0][4]) * self._accel_long_norm()
 
-        if self.dynamics_source == "pufferdrive":
+        if self.dynamics_source == "opengigaflow":
             x0, y0 = self.transform.bin_to_loc(float(before["x"][0]), float(before["y"][0]))
             x1, y1 = self.transform.bin_to_loc(float(after["x"][0]), float(after["y"][0]))
             yaw0_deg = self.transform.bin_heading_to_yaw(float(before["heading"][0]))
@@ -695,9 +695,9 @@ class ShadowEgo:
 
     def _ego_infractions(self):
         """{'collision': f, 'offroad': f, 'red_light': f, 'stop_sign': f} from the shadow
-        pufferdrive env's own model of the ego (compute_metrics, refreshed by
+        OpenGigaFlow env's own model of the ego (compute_metrics, refreshed by
         the last integrate()) -- what the policy would have caused according
-        to PufferDrive's own dynamics, not necessarily what the real CARLA
+        to OpenGigaFlow's own dynamics, not necessarily what the real CARLA
         vehicle did (the simulator side's own detectors tell that)."""
         state = self.env.get_state()
         scenario = state[0] if isinstance(state, list) else state
@@ -816,7 +816,7 @@ class ShadowEgo:
 
     def telemetry(self, result, carla_flags):
         """One CSV row per policy step (when COSIM_TELEMETRY is set): what the loop commanded vs
-        achieved, the nearest mapped light's state and both infraction sources (pd_* = shadow pufferdrive
+        achieved, the nearest mapped light's state and both infraction sources (pd_* = shadow OpenGigaFlow
         env, carla_* = the simulator side's own ground truth, None -> all 0)."""
         if self.telemetry_file is None:
             return
@@ -833,7 +833,7 @@ class ShadowEgo:
             near_dist, near_state = float(np.sqrt(d2[j])), int(self.last_light_states[j])
         current_speed = (
             float(np.asarray(self.env.observations)[0, 0]) * self._max_speed()
-            if self.dynamics_source == "pufferdrive"
+            if self.dynamics_source == "opengigaflow"
             else self._ego_speed_carla
         )
         self.telemetry_file.write(

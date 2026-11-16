@@ -1,6 +1,6 @@
 """Shadow env + policy process behind lb1/leaderboard_agent.py (CARLA Leaderboard 1.0, CARLA 0.9.10).
 
-Started by the agent in the PufferDrive venv, one process per route, talking lb1_protocol over an
+Started by the agent in the OpenGigaFlow venv, one process per route, talking lb1_protocol over an
 inherited socket: `init` builds the ShadowEgo for the route, every `tick` runs one policy step and
 answers with the ego command (teleport pose or control values),
 `finish` flushes the per-route outputs. Options come from the COSIM_* environment variables
@@ -81,7 +81,7 @@ def serve(sock, shadow):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
-        "--checkpoint", required=True, help="PufferDrive checkpoint .pt or run dir (config.yaml beside)"
+        "--checkpoint", required=True, help="OpenGigaFlow checkpoint .pt or run dir (config.yaml beside)"
     )
     parser.add_argument("--socket-fd", type=int, required=True, help="inherited socket to the leaderboard agent")
     parser.add_argument("--route-tag", required=True, help="per-route file stem for every output")

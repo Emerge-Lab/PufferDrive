@@ -22,11 +22,11 @@ case "$RUN_DIR" in /*) ;; *) RUN_DIR=$PD/$RUN_DIR ;; esac # relative to the chec
 export CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || { echo "missing $CKPT"; exit 1; }
 # reactive = IDM agents (CLS-R), nonreactive = log-replay agents (CLS-NR)
-export CHALLENGES=${CHALLENGES:-closed_loop_reactive_agents_pufferdrive}
+export CHALLENGES=${CHALLENGES:-closed_loop_reactive_agents_opengigaflow}
 case "$CHALLENGES" in
-    closed_loop_reactive_agents_pufferdrive) CHALLENGE_TAG=""; WANDB_EVAL_TYPE=nuplan_reactive ;;
-    closed_loop_nonreactive_agents_pufferdrive) CHALLENGE_TAG="_nonreactive"; WANDB_EVAL_TYPE=nuplan_nonreactive ;;
-    *) echo "CHALLENGES must be closed_loop_reactive_agents_pufferdrive or closed_loop_nonreactive_agents_pufferdrive"; exit 1 ;;
+    closed_loop_reactive_agents_opengigaflow) CHALLENGE_TAG=""; WANDB_EVAL_TYPE=nuplan_reactive ;;
+    closed_loop_nonreactive_agents_opengigaflow) CHALLENGE_TAG="_nonreactive"; WANDB_EVAL_TYPE=nuplan_nonreactive ;;
+    *) echo "CHALLENGES must be closed_loop_reactive_agents_opengigaflow or closed_loop_nonreactive_agents_opengigaflow"; exit 1 ;;
 esac
 WANDB_REPORT=${WANDB_REPORT:-1}
 VAL14_SCENARIO_COUNT=1118  # a run that scored fewer scenarios (LIMIT_TOTAL_SCENARIOS, failed simulations) is not reported
@@ -37,7 +37,7 @@ export NUPLAN_DATA_ROOT=$SHARED_DATA/nuplan
 export NUPLAN_MAPS_ROOT=$SHARED_DATA/nuplan/maps
 # the runner's default would mkdir a /scratch path of the old cluster (harmless, but a Permission denied line in every kesai log)
 export NUPLAN_EXP_ROOT=${NUPLAN_EXP_ROOT:-$HOME/nuplan_exp}
-# PD first, and drop inherited entries from other PufferDrive checkouts (the login shell still exports
+# PD first, and drop inherited entries from other OpenGigaFlow checkouts (the login shell still exports
 # $HOME/cosim_Puffer): Python would otherwise import that checkout's pufferlib package.
 INHERITED_PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
 export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${INHERITED_PYTHONPATH:+:$INHERITED_PYTHONPATH}
@@ -105,7 +105,7 @@ ABLATION_TAG=""
 [ "$BICYCLE_CENTER_ACCEL_CAP" = "true" ] && [ "$BICYCLE_CENTER_ACCEL_CAP_MARGIN" != "0.95" ] \
     && ABLATION_TAG="${ABLATION_TAG}_centercap${BICYCLE_CENTER_ACCEL_CAP_MARGIN}"
 [ -n "$STANDSTILL_JERK_DEADBAND" ] && ABLATION_TAG="${ABLATION_TAG}_deadband${STANDSTILL_JERK_DEADBAND}"
-# results: the model's own eval folder, next to the PufferDrive benchmark evals (overview.csv, scenarios.csv, obs_html/, simulation_log/, details/)
+# results: the model's own eval folder, next to the OpenGigaFlow benchmark evals (overview.csv, scenarios.csv, obs_html/, simulation_log/, details/)
 export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
 # NO_TRAIN skips the training-only CUDA extension (_C, never imported by the planner): the cp39 nuPlan env builds only
