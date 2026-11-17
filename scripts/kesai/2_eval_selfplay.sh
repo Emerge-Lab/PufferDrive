@@ -16,7 +16,7 @@ source scripts/kesai/cluster_env.sh || exit 1
 # SCENARIO_LENGTH empty = the benchmark's; WANDB_REPORT=1 writes km/infraction to the run's final_eval/selfplay_km_per_infraction,
 # so keep it 0 for A/B variants such as other maps.
 RUN_NAME=k_scaled_0082_1000
-MAP_DIR=$PD/opengigaflow/resources/carla_128_affine_aug_v21
+MAP_DIR=$PD/opengigaflow/resources/carla_v21  # the 8 towns: the benchmark reads only the folder's first 8 sorted maps
 EVAL_OUTPUT_DIR_NAME=eval_v21_maps
 TOTAL_SCENARIOS=80000
 SCENARIO_LENGTH=

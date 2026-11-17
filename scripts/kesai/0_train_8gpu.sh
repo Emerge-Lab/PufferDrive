@@ -26,7 +26,7 @@ WORKER_COUNT=128
 ROLLOUT_STEP_COUNT=128
 MINIBATCH_SIZE=393216
 TRAIN_MAP_DIR=$PD/opengigaflow/resources/carla_128_affine_aug_v21
-SELFPLAY_EVAL_MAP_DIR=$PD/opengigaflow/resources/carla_128_affine_aug_v21
+SELFPLAY_EVAL_MAP_DIR=$PD/opengigaflow/resources/carla_v21  # the 8 towns: the benchmark reads only the folder's first 8 sorted maps
 
 export SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 [ -n "${SEED}" ] || { echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} has no run configured; aborting."; exit 1; }

@@ -51,35 +51,46 @@ co-simulation needs (`CITY_BIN_DIR`).
 All settings, with comments, are in `opengigaflow/config/opengigaflow.yaml`.
 
 ```bash
-# Single node
-opengigaflow train
+# Single node; train.data_dir is the run's folder
+opengigaflow train train.data_dir=experiments/<run>
 
 # Override config on the fly (Hydra syntax: dotted.key=value). An override for a setting the config
 # does not have is ignored with a WARNING on stderr, so check the log for typos.
-opengigaflow train train.learning_rate=0.001 env.num_agents=512
+opengigaflow train train.data_dir=experiments/<run> train.learning_rate=0.001 env.num_agents=512
 ```
+
+The run folder receives `config.yaml`, the latest checkpoint (`models/`), `trainer_state.pt` and, when training
+ends, `final_model.pt`. `train.data_dir` defaults to `experiments/` itself, and a run started in a folder that
+already holds a `trainer_state.pt` resumes it, so give every run its own folder. `wandb=True` (with
+`wandb_project` and `run_name`) and `tb=True` log to Weights & Biases and TensorBoard.
 
 Short local run on a machine without CUDA:
 
 ```bash
-opengigaflow train train.device=cpu vec.backend=Serial vec.num_envs=2 vec.batch_size=2 env.num_agents=64 \
+opengigaflow train train.data_dir=experiments/<run> \
+    train.device=cpu vec.backend=Serial vec.num_envs=2 vec.batch_size=2 env.num_agents=64 \
     train.total_timesteps=8192 train.batch_size=2048 train.minibatch_size=1024 train.bptt_horizon=16
 ```
 
 8-GPU server:
 
 ```bash
-torchrun --standalone --nnodes=1 --nproc-per-node=8 -m opengigaflow.rl train
+torchrun --standalone --nnodes=1 --nproc-per-node=8 -m opengigaflow.rl train train.data_dir=experiments/<run>
 ```
 
-The SLURM version is `scripts/kesai/0_train_8gpu.sh`: one 8-GPU node per seed, then the
-evaluations. `scripts/kesai/1_train_multinode.sh` spans several nodes.
+On SLURM we train with `scripts/kesai/0_train_8gpu.sh` (one 8-GPU node per seed, then the evaluations);
+`scripts/kesai/1_train_multinode.sh` spans several nodes. Like all `scripts/kesai/` jobs they are examples from
+our cluster to copy and adapt.
 
 ## Evaluation
 
 Each evaluation loads a checkpoint from a training run, e.g. `experiments/<run>/final_model.pt`, with the run's
-`config.yaml` next to it. The `scripts/kesai/` scripts are written for our SLURM clusters
-(`scripts/kesai/cluster_env.sh`); adjust their `#SBATCH` lines and paths before using them.
+`config.yaml` next to it.
+
+The `scripts/kesai/` jobs referenced below are the ones we submit on our own SLURM clusters. Treat them as
+examples to copy and adapt, not as a general interface: next to the evaluation settings they hold our partition
+and resource requests, our data layout (`scripts/kesai/cluster_env.sh`), our conda environment names and the run
+that was current when they were committed.
 
 ### Self-play
 
