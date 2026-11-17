@@ -51,8 +51,7 @@ co-simulation needs (`CITY_BIN_DIR`).
 ## Train
 
 All settings, with comments, are in `opengigaflow/config/opengigaflow.yaml`. The defaults are sized for the server
-under [Recommended hardware](#recommended-hardware): 128 environment workers and a 393,216-sample minibatch per GPU,
-which takes about 50 GB of GPU memory. On a smaller machine, lower `vec.num_envs` (a process cannot start more
+under [Recommended hardware](#recommended-hardware): 128 environment workers and a 393,216-sample minibatch per GPU. On a smaller machine, lower `vec.num_envs` (a process cannot start more
 workers than the machine has hardware threads), `train.minibatch_size` and `train.max_minibatch_size`.
 
 ```bash
@@ -119,8 +118,7 @@ python scripts/parallel_eval.py selfplay --num-gpus 8 \
     eval.render_filter=all_infractions
 ```
 
-`vec.num_envs` is the number of environment workers per GPU (default 128, the training value); with 60, the 8
-shards use 480 of our server's 512 hardware threads. The multi-node SLURM version is
+`vec.num_envs` is the number of environment workers per GPU (default 128, the training value);  The multi-node SLURM version is
 `scripts/kesai/2_eval_selfplay.sh`. Benchmark definitions, filtered replays and the output layout are described in
 [docs/evaluation.md](docs/evaluation.md).
 
@@ -195,13 +193,13 @@ We optimized the code and the default configuration for the server we train on:
 One such server trains the default configuration at about 10.5 million agent steps per second (SPS, summed over
 the 8 GPUs): a full run of 1 trillion steps takes about 26 hours.
 
-The closest cloud instances have the same 8 GPUs:
+The closest cloud instances with the same GPU:
 
-- **Google Cloud `g4-standard-384`:** 384 vCPUs (AMD EPYC Turin), 1,440 GB RAM.
-- **AWS `g7e.48xlarge`:** 192 vCPUs (Intel Xeon Emerald Rapids), 2,048 GiB RAM.
+- **Google Cloud `g4-standard-384`:** 8 GPUs, 384 vCPUs (AMD EPYC Turin), 1,440 GB RAM.
+- **AWS `g7e.48xlarge`:** 8 GPUs, 192 vCPUs (Intel Xeon Emerald Rapids), 2,048 GiB RAM.
 
-We have not run on either. A vCPU is one hardware thread, so both have fewer CPU threads than our server's 512,
-and the simulator runs on the CPU: expect a lower SPS, on the AWS instance in particular.
+We have not run on any of them. A vCPU is one hardware thread, so the two 8-GPU instances have fewer CPU threads
+than our server's 512, and the simulator runs on the CPU: expect a lower SPS, on the AWS instance in particular.
 
 The fused encoder kernels (`opengigaflow/ocean/cuda_slot_encoder.py`) are compiled at run time for the installed
 GPU, but their tile sizes and shared-memory layout are hand-tuned for the GPU above. On a different GPU model it
