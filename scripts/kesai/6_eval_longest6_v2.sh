@@ -28,10 +28,9 @@
 #   REPORT (0)                 1 = scripts/eval/analyze_carla_cosim.py's HTML report in $OUT/report (needs LOGGING=1)
 #   TIDY (1)                   0 = keep every file
 #   WANDB_REPORT (1)           results.csv's DS becomes the run's final_eval/longest6_v2_DS in wandb; 0 for ablations
-#   COSIM_MAX_SPEED_MPS (30)   ego speed cap
-#   COSIM_ZERO_PARTNER_STOPPED_TIME (1)  vehicles' stopped-time obs held at 0, walkers keep theirs; 0 = all real
-#   COSIM_VRU_SIZE_PAD_M (0.8) added to the length and width of walker and two-wheeler boxes; 0 = true CARLA boxes
-#   COSIM_PEDAL_YELLOW_MARGIN (1)  0 = the policy sees CARLA's remaining yellow
+#   COSIM_MAX_SPEED_MPS, COSIM_ZERO_PARTNER_STOPPED_TIME, COSIM_VRU_SIZE_PAD_M, COSIM_PEDAL_YELLOW_MARGIN
+#                              the shadow env's eval settings (shadow_ego.py: COSIM_EVAL_DEFAULTS); set one only for an ablation
+#   COSIM_OBS_SLOTS_PARTNERS_N (empty)  partner slots in the policy's obs; empty = the checkpoint's training value
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
 
@@ -91,27 +90,24 @@ cd "$PD" || exit 1
 OMP_THREADS=${OMP_NUM_THREADS:-$([ "$WORKERS" -ge 16 ] && echo 2 || echo 4)}
 export OMP_NUM_THREADS=$OMP_THREADS MKL_NUM_THREADS=$OMP_THREADS OPENBLAS_NUM_THREADS=$OMP_THREADS NUMEXPR_NUM_THREADS=$OMP_THREADS
 export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
-export COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}
-[[ "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }
-export COSIM_MAX_SPEED_MPS=${COSIM_MAX_SPEED_MPS:-30}
-export COSIM_ZERO_PARTNER_STOPPED_TIME=${COSIM_ZERO_PARTNER_STOPPED_TIME:-1}
-export COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-0.8}
+COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-}  # the longest6 v2 numbers so far use the checkpoint's slots, not shadow_ego.py's 40
 export COSIM_OBS_HTML_MAX_STEPS=${COSIM_OBS_HTML_MAX_STEPS:-20000}
 export COSIM_OBS_HTML_RENDER=0  # routes save the compact replay only; render_carla_obs_html.py renders all pages into $OUT/obs_html
+# a COSIM_* setting assigned above reaches the agent only when exported
+for setting_name in "${!COSIM_@}"; do export "$setting_name"; done
 
-# The standard eval's folder is carla_longest6_v2_<date>_<job>; a setting that differs from its default adds its tag.
+# The standard eval's folder is carla_longest6_v2_<date>_<job>; a setting that differs from its default, or a shadow-env setting set for the run, adds its tag.
 TAG=longest6_v2$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")
 TAG=$TAG$([ "$SEEDS" = "0 1 2" ] || echo "_seeds$(echo "$SEEDS" | tr ' ' '-')")
-TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0.8" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
-TAG=$TAG$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
+TAG=$TAG${COSIM_MAX_SPEED_MPS+_maxspeed${COSIM_MAX_SPEED_MPS:-trained}}${COSIM_ZERO_PARTNER_STOPPED_TIME+_zerostopped$COSIM_ZERO_PARTNER_STOPPED_TIME}
+TAG=$TAG${COSIM_VRU_SIZE_PAD_M+_vrupad$COSIM_VRU_SIZE_PAD_M}${COSIM_OBS_SLOTS_PARTNERS_N:+_partners$COSIM_OBS_SLOTS_PARTNERS_N}
+[ "${COSIM_PEDAL_YELLOW_MARGIN:-}" = "0" ] && TAG=${TAG}_noyellowmargin
 # results live in the model's own eval folder, next to the OpenGigaFlow benchmark evals
 OUT=$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
 {
     echo "checkpoint $CKPT"; echo "routes $ROUTES"; echo "seeds $SEEDS"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"
-    echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
     echo "dynamics_source carla_pedals"
-    echo "pedal_yellow_margin $COSIM_PEDAL_YELLOW_MARGIN"
     echo "git $(git -C "$PD" rev-parse --short HEAD 2>/dev/null) $(git -C "$PD" diff --quiet 2>/dev/null || echo dirty)"
     echo "port_base $PORT_BASE"
 } > "$OUT/run_info.txt"
@@ -123,6 +119,16 @@ case "$IMPORTED_AGENT" in
     "$PD"/*) echo "agent: $IMPORTED_AGENT" ;;
     *) echo "ERROR: agent imported from '$IMPORTED_AGENT', expected $PD"; exit 1 ;;
 esac
+# the shadow env's eval settings of this run: COSIM_EVAL_DEFAULTS unless set, validated by a ShadowEgo of the checkpoint
+SHADOW_SETTINGS=$("$PY" - "$CKPT" <<'EOF'
+import os, sys
+from opengigaflow.ocean.cosim.carla.shadow_ego import COSIM_EVAL_DEFAULTS, ShadowEgo
+ShadowEgo(sys.argv[1], "settings")
+for name, default in COSIM_EVAL_DEFAULTS.items():
+    print(name[len("COSIM_"):].lower(), os.environ.get(name, default))
+EOF
+) || { echo "ERROR: invalid COSIM_* eval settings for $CKPT (see traceback above)"; exit 1; }
+echo "$SHADOW_SETTINGS" >> "$OUT/run_info.txt"
 
 mapfile -t ROUTE_IDS < <("$PY" -c "
 import sys, xml.etree.ElementTree as ET

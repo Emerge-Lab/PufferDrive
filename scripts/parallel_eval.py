@@ -7,15 +7,17 @@ import sys
 from datetime import datetime
 
 import pandas as pd
+import yaml
 
 RESERVED_OVERRIDE_KEYS = ("num_scenarios", "eval.num_scenarios", "eval.scenario_offset", "eval.output_subdir")
+DEFAULT_CONFIG_FILE = os.path.join("config", "opengigaflow.yaml")  # inside the opengigaflow package
 FAILED_LOG_TAIL_LINES = 30
 
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("benchmark", help="Benchmark name from the benchmark config, e.g. selfplay")
-    parser.add_argument("--total-scenarios", type=int, required=True)
+    parser.add_argument("--total-scenarios", type=int, help="Default: the benchmark's num_scenarios")
     shard_group = parser.add_mutually_exclusive_group(required=True)
     shard_group.add_argument("--num-gpus", type=int, help="Run one shard per local GPU")
     shard_group.add_argument(
@@ -62,6 +64,21 @@ def plan_shards(total_scenarios, num_shards):
     return shards
 
 
+def benchmark_scenario_count(benchmark_name, benchmark_config_path):
+    """num_scenarios of the benchmark in the config the shards load (None: opengigaflow.yaml's eval.benchmark_config)."""
+    import opengigaflow
+    from opengigaflow.ocean.evaluation_utils import evaluation_utils
+
+    if benchmark_config_path is None:
+        # not rl.load_config: importing rl installs its SIGINT handler and warning filter in this launcher
+        with open(os.path.join(os.path.dirname(opengigaflow.__file__), DEFAULT_CONFIG_FILE)) as default_config_file:
+            benchmark_config_path = yaml.safe_load(default_config_file)["eval"]["benchmark_config"]
+    _, benchmarks = evaluation_utils.load_benchmark_config(benchmark_config_path, benchmark_name)
+    if len(benchmarks) != 1:
+        raise SystemExit("--total-scenarios is required when several benchmarks are selected")
+    return benchmarks[0]["num_scenarios"]
+
+
 def main():
     arguments, overrides = parse_arguments()
     override_values = dict(override.split("=", 1) for override in overrides)
@@ -69,8 +86,11 @@ def main():
     num_shards = arguments.num_nodes * arguments.shards_per_node if use_srun else arguments.num_gpus
     if num_shards < 1:
         raise SystemExit("--num-gpus/--num-nodes must be at least 1")
-    if arguments.total_scenarios < num_shards:
-        raise SystemExit("--total-scenarios must be at least the shard count")
+    total_scenarios = arguments.total_scenarios
+    if total_scenarios is None:
+        total_scenarios = benchmark_scenario_count(arguments.benchmark, override_values.get("eval.benchmark_config"))
+    if total_scenarios < num_shards:
+        raise SystemExit(f"{total_scenarios} scenarios cannot fill {num_shards} shards")
     if use_srun:
         if "SLURM_JOB_ID" not in os.environ:
             raise SystemExit("--num-nodes requires running inside a SLURM allocation")
@@ -117,7 +137,7 @@ def main():
     os.makedirs(aggregate_dir)
 
     gpu_ids = None if use_srun else resolve_gpu_ids(num_shards)
-    shards = plan_shards(arguments.total_scenarios, num_shards)
+    shards = plan_shards(total_scenarios, num_shards)
     processes = []
     for shard_idx, (scenario_offset, shard_scenario_count) in enumerate(shards):
         shard_subdir = f"{stamp}_shard{shard_idx:02d}"
@@ -188,7 +208,7 @@ def main():
         shard_frames.append(shard_frame)
 
     episode_summaries = pd.concat(shard_frames, ignore_index=True).to_dict("records")
-    summary = evaluation_utils._write_eval_reports(episode_summaries, aggregate_dir, arguments.total_scenarios)
+    summary = evaluation_utils._write_eval_reports(episode_summaries, aggregate_dir, total_scenarios)
     print(f"Aggregated {summary['num_episodes']} episodes from {len(processes)} shards into {aggregate_dir}")
     if not arguments.keep_shards:
         tidy_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval", "tidy_selfplay_eval.py")

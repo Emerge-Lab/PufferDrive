@@ -8,7 +8,9 @@ self-play and, through co-simulation, in nuPlan and the CARLA leaderboard.
 
 - **Simulator:** C engine with a Python binding. Up to 150 agents per environment, with collisions, off-road
   detection, traffic lights, stop signs, speed limits and scripted pedestrians. `gigaflow` mode populates a map
-  with agents and random goals; `replay` mode plays back logged scenarios.
+  with agents and random goals; `replay` mode plays back logged scenarios. Besides the policy, agents can be
+  driven by two built-in rule-based controllers, IDM and a PDM-Closed style planner (`env.sdc_controller`,
+  `env.non_sdc_controller`).
 - **Training:** PPO with advantage filtering, on one GPU or several via `torchrun`, in bfloat16 with fused CUDA
   encoder kernels. The policy is conditioned on randomized reward weights and speed caps, so one network covers a
   range of driving styles.
@@ -48,7 +50,10 @@ co-simulation needs (`CITY_BIN_DIR`).
 
 ## Train
 
-All settings, with comments, are in `opengigaflow/config/opengigaflow.yaml`.
+All settings, with comments, are in `opengigaflow/config/opengigaflow.yaml`. The defaults are sized for the server
+under [Recommended hardware](#recommended-hardware): 128 environment workers and a 393,216-sample minibatch per GPU,
+which takes about 50 GB of GPU memory. On a smaller machine, lower `vec.num_envs` (a process cannot start more
+workers than the machine has hardware threads), `train.minibatch_size` and `train.max_minibatch_size`.
 
 ```bash
 # Single node; train.data_dir is the run's folder
@@ -88,9 +93,9 @@ Each evaluation loads a checkpoint from a training run, e.g. `experiments/<run>/
 `config.yaml` next to it.
 
 The `scripts/kesai/` jobs referenced below are the ones we submit on our own SLURM clusters. Treat them as
-examples to copy and adapt, not as a general interface: next to the evaluation settings they hold our partition
-and resource requests, our data layout (`scripts/kesai/cluster_env.sh`), our conda environment names and the run
-that was current when they were committed.
+examples to copy and adapt, not as a general interface: they hold our partition and resource requests, our data
+layout (`scripts/kesai/cluster_env.sh`), our conda environment names and the run that was current when they were
+committed. The training and evaluation settings themselves are this repository's defaults.
 
 ### Self-play
 
@@ -100,22 +105,24 @@ episodes rendered as HTML; add `train.device=cpu` without a GPU):
 ```bash
 opengigaflow eval selfplay_fast \
     load_model_path=experiments/<run>/final_model.pt \
+    vec.num_envs=16 \
     eval.render_filter=all_infractions \
     eval.max_rendered_failures=10
 ```
 
-8-GPU server, as in the KE:SAI scripts (80,000 ten-minute `selfplay` scenarios, one shard per GPU):
+8-GPU server (the `selfplay` benchmark: 80,000 ten-minute scenarios, one shard per GPU):
 
 ```bash
-python scripts/parallel_eval.py selfplay --total-scenarios 80000 --num-gpus 8 \
+python scripts/parallel_eval.py selfplay --num-gpus 8 \
     load_model_path=experiments/<run>/final_model.pt \
     vec.num_envs=60 \
     eval.render_filter=all_infractions
 ```
 
-`vec.num_envs` is the number of environment workers per GPU; 60 fits a node with 480 cores. The multi-node SLURM
-version is `scripts/kesai/2_eval_selfplay.sh`. Benchmark definitions, filtered replays and the output
-layout are described in [docs/evaluation.md](docs/evaluation.md).
+`vec.num_envs` is the number of environment workers per GPU (default 128, the training value); with 60, the 8
+shards use 480 of our server's 512 hardware threads. The multi-node SLURM version is
+`scripts/kesai/2_eval_selfplay.sh`. Benchmark definitions, filtered replays and the output layout are described in
+[docs/evaluation.md](docs/evaluation.md).
 
 ### nuPlan (Val14)
 
@@ -145,9 +152,9 @@ bash opengigaflow/ocean/cosim/nuplan/run_nuplan_planner.sh
 ```
 
 All 1,118 Val14 scenarios on an 8-GPU node: `RUN_DIR=experiments/<run> sbatch scripts/kesai/3_eval_nuplan_reactive.sh`
-(`4_eval_nuplan_nonreactive.sh` for log-replay agents). The script also sets the planner options behind our scores
-(goal window, start-up jerk caps, pedestrian box padding, 40 partner slots, lane-width clipping); use the same
-values for comparable numbers.
+(`4_eval_nuplan_nonreactive.sh` for log-replay agents). The planner options behind our scores (goal window, start-up
+jerk caps, pedestrian box padding, 40 partner slots, lane-width clipping) are the defaults in
+`opengigaflow/ocean/cosim/nuplan/config/planner/opengigaflow_planner.yaml`.
 
 ### CARLA longest6 v1 (Leaderboard 1.0)
 
@@ -172,9 +179,35 @@ bash opengigaflow/ocean/cosim/carla/lb1/run_leaderboard.sh
 ```
 
 All 36 routes with 3 seeds on an 8-GPU node:
-`RUN_DIR=experiments/<run> sbatch scripts/kesai/5_eval_longest6_v1.sh`. The script also sets the co-simulation
-options behind our scores (`COSIM_*`: CARLA pedal control, 40 partner slots, pedestrian box padding, 30 m/s speed
-cap); use the same values for comparable numbers.
+`RUN_DIR=experiments/<run> sbatch scripts/kesai/5_eval_longest6_v1.sh`. The co-simulation options behind our scores
+(40 partner slots, pedestrian box padding, 30 m/s speed cap) are the defaults, `COSIM_EVAL_DEFAULTS` in
+`opengigaflow/ocean/cosim/carla/shadow_ego.py`.
+
+## Recommended hardware
+
+We optimized the code and the default configuration for the server we train on:
+
+- **Server:** [Supermicro A+ Server AS-5126GS-TNRT2](https://www.supermicro.com/en/products/system/datasheet/as-5126gs-tnrt2)
+- **CPU:** 2 x AMD EPYC 9755 (256 cores, 512 threads)
+- **RAM:** 1,024 GB (16 x 64 GB DDR5-6400)
+- **GPU:** 8 x NVIDIA RTX PRO 6000 Blackwell Server Edition (96 GB each)
+
+One such server trains the default configuration at about 10.5 million agent steps per second (SPS, summed over
+the 8 GPUs): a full run of 1 trillion steps takes about 26 hours.
+
+The closest cloud instances have the same 8 GPUs:
+
+- **Google Cloud `g4-standard-384`:** 384 vCPUs (AMD EPYC Turin), 1,440 GB RAM.
+- **AWS `g7e.48xlarge`:** 192 vCPUs (Intel Xeon Emerald Rapids), 2,048 GiB RAM.
+
+We have not run on either. A vCPU is one hardware thread, so both have fewer CPU threads than our server's 512,
+and the simulator runs on the CPU: expect a lower SPS, on the AWS instance in particular.
+
+The fused encoder kernels (`opengigaflow/ocean/cuda_slot_encoder.py`) are compiled at run time for the installed
+GPU, but their tile sizes and shared-memory layout are hand-tuned for the GPU above. On a different GPU model it
+is worth letting a coding agent retune them: `tests/unit_tests/test_fused_slot_encoder.py` checks the kernels
+against the PyTorch reference, and the `SPS` and `MFU_train` values logged during training show the effect.
+`policy.fused_slot_encoder=false` turns the kernels off and runs the model in plain PyTorch. The Pytorch implementation is significantly (about 2x) slower than the custom CUDA implementation.
 
 ## Debug
 
@@ -203,7 +236,7 @@ make test
 # Individual suites
 make test-unit       # tests/unit_tests
 make test-eval       # tests/eval (evaluation integration)
-make test-c          # tests/drive (dynamics, geometry, IDM, collisions, ...)
+make test-c          # tests/drive (dynamics, geometry, IDM, PDM, collisions, ...)
 
 # Force-rebuild the C extension regardless of timestamps
 make rebuild

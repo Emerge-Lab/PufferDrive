@@ -3,10 +3,11 @@
 Environment variables:
   COSIM_DEVICE=cpu                    torch device of the policy
   COSIM_PEDAL_YELLOW_MARGIN=1         the policy sees the remaining yellow less the gear shift time
-  COSIM_MAX_SPEED_MPS                 ego speed cap (C_vel = cap / base_max_speed_mps) inside the trained C_vel range
-  COSIM_ZERO_PARTNER_STOPPED_TIME=0   1: vehicle partners' seconds_stopped held at 0 (walkers keep theirs)
-  COSIM_VRU_SIZE_PAD_M=0.0            added to the length and width of every walker and two-wheeler partner box
-  COSIM_OBS_SLOTS_PARTNERS_N          partner obs slots (default: the checkpoint's; max-pooled, so any count transfers)
+  COSIM_MAX_SPEED_MPS=30              ego speed cap (C_vel = cap / base_max_speed_mps) inside the trained C_vel range;
+                                      empty = the checkpoint's own cap
+  COSIM_ZERO_PARTNER_STOPPED_TIME=1   vehicle partners' seconds_stopped held at 0 (walkers keep theirs); 0 = all real
+  COSIM_VRU_SIZE_PAD_M=0.8            added to the length and width of every walker and two-wheeler partner box
+  COSIM_OBS_SLOTS_PARTNERS_N=40       partner obs slots (max-pooled, so any count transfers); empty = the checkpoint's
   COSIM_TELEMETRY=/dir                per-route CSV of the shadow env's and the simulator's infraction flags
   COSIM_OBS_HTML=/dir                 per-route opengigaflow.viz replay of the exact obs and policy outputs
   COSIM_OBS_HTML_RENDER=1             0: save only the .replay.zlib (scripts/eval/render_carla_obs_html.py)
@@ -65,6 +66,14 @@ PARTNER_ROW_COLUMNS = 17
     PARTNER_ACTOR_ID,
 ) = range(ACTOR_STATE_COLUMNS, PARTNER_ROW_COLUMNS)
 
+# the eval settings behind our longest6 scores; the environment variable of the same name overrides each one
+COSIM_EVAL_DEFAULTS = {
+    "COSIM_MAX_SPEED_MPS": "30",
+    "COSIM_ZERO_PARTNER_STOPPED_TIME": "1",
+    "COSIM_VRU_SIZE_PAD_M": "0.8",
+    "COSIM_OBS_SLOTS_PARTNERS_N": "40",
+    "COSIM_PEDAL_YELLOW_MARGIN": "1",
+}
 PARTNER_MAX_ABS_DZ_M = 20.0  # CARLA actors farther above/below the ego are hidden scenario props, not traffic
 DEFAULT_BASE_MAX_SPEED_MPS = 20.0  # Drive() defaults, for checkpoints whose config predates the keys
 DEFAULT_CONDITIONING_SPEED_SCALE = 1.5
@@ -82,9 +91,9 @@ TELEMETRY_HEADER = (
 
 
 def cosim_max_speed_mps(env_cfg):
-    """COSIM_MAX_SPEED_MPS as a float inside the checkpoint's trained C_vel range, or None when unset."""
-    raw = os.environ.get("COSIM_MAX_SPEED_MPS")
-    if raw is None:
+    """COSIM_MAX_SPEED_MPS as a float inside the checkpoint's trained C_vel range, or None when empty (its own cap)."""
+    raw = os.environ.get("COSIM_MAX_SPEED_MPS", COSIM_EVAL_DEFAULTS["COSIM_MAX_SPEED_MPS"])
+    if not raw:
         return None
     max_speed_mps = float(raw)
     base_max_speed_mps = float(env_cfg.get("base_max_speed_mps") or DEFAULT_BASE_MAX_SPEED_MPS)
@@ -100,8 +109,8 @@ def cosim_max_speed_mps(env_cfg):
 
 
 def cosim_obs_slots_partners_n():
-    """COSIM_OBS_SLOTS_PARTNERS_N as a positive int, or None when unset/empty (the checkpoint's training value)."""
-    raw = os.environ.get("COSIM_OBS_SLOTS_PARTNERS_N")
+    """COSIM_OBS_SLOTS_PARTNERS_N as a positive int, or None when empty (the checkpoint's training value)."""
+    raw = os.environ.get("COSIM_OBS_SLOTS_PARTNERS_N", COSIM_EVAL_DEFAULTS["COSIM_OBS_SLOTS_PARTNERS_N"])
     if not raw:
         return None
     obs_slots_partners_n = int(raw)
@@ -144,9 +153,13 @@ class ShadowEgo:
         env_cfg = self.cfg["env"]
         self.max_speed_mps = cosim_max_speed_mps(env_cfg)
         self.obs_slots_partners_n = cosim_obs_slots_partners_n()
-        self.zero_partner_stopped_time = env_flag("COSIM_ZERO_PARTNER_STOPPED_TIME")
-        self.pedal_yellow_margin = env_flag("COSIM_PEDAL_YELLOW_MARGIN", "1")
-        self.vru_size_pad_m = float(os.environ.get("COSIM_VRU_SIZE_PAD_M", "0.0"))
+        self.zero_partner_stopped_time = env_flag(
+            "COSIM_ZERO_PARTNER_STOPPED_TIME", COSIM_EVAL_DEFAULTS["COSIM_ZERO_PARTNER_STOPPED_TIME"]
+        )
+        self.pedal_yellow_margin = env_flag(
+            "COSIM_PEDAL_YELLOW_MARGIN", COSIM_EVAL_DEFAULTS["COSIM_PEDAL_YELLOW_MARGIN"]
+        )
+        self.vru_size_pad_m = float(os.environ.get("COSIM_VRU_SIZE_PAD_M", COSIM_EVAL_DEFAULTS["COSIM_VRU_SIZE_PAD_M"]))
         if not (self.vru_size_pad_m >= 0.0):
             raise ValueError(f"COSIM_VRU_SIZE_PAD_M must be >= 0, got {self.vru_size_pad_m}")
         # Shadow agent pool == the training per-env cap

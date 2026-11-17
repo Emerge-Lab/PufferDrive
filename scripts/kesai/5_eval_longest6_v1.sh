@@ -32,11 +32,8 @@
 #   TIDY (1)                   0 = keep every file
 #   WANDB_REPORT (1)           results.csv's DS becomes the run's final_eval/longest6_v1_DS in wandb; 0 for ablations
 #   LIBTIFF5_COMPAT (1)        no libtiff.so.5 for the egg: the garage env's, else a link to the system .so.6; 0 = never link
-#   COSIM_MAX_SPEED_MPS (30)   ego speed cap
-#   COSIM_ZERO_PARTNER_STOPPED_TIME (1)  vehicles' stopped-time obs held at 0, walkers keep theirs; 0 = all real
-#   COSIM_VRU_SIZE_PAD_M (0.8) added to the length and width of walker and two-wheeler boxes; 0 = true boxes
-#   COSIM_OBS_SLOTS_PARTNERS_N (40)  partner slots in the policy's obs; empty = the checkpoint's training value
-#   COSIM_PEDAL_YELLOW_MARGIN (1)  0 = the policy sees CARLA's remaining yellow
+#   COSIM_MAX_SPEED_MPS, COSIM_ZERO_PARTNER_STOPPED_TIME, COSIM_VRU_SIZE_PAD_M, COSIM_OBS_SLOTS_PARTNERS_N,
+#   COSIM_PEDAL_YELLOW_MARGIN  the shadow env's eval settings (shadow_ego.py: COSIM_EVAL_DEFAULTS); set one only for an ablation
 #   COMPLETE_RUN               an existing $OUT: reruns in place its route runs without a valid record with the settings
 #                              of its run_info.txt (CKPT must match); a requeued job completes its own folder this way
 set -u
@@ -68,15 +65,17 @@ if [ -n "$COMPLETE_RUN" ]; then
     REPETITIONS=${REPETITIONS:-$(run_info_value repetitions)}
     # the rest of the line: several seeds; a run from before the seeds layout has no such line -> SEEDS stays empty
     SEEDS=${SEEDS-$(awk '$1 == "seeds" {$1 = ""; print substr($0, 2); exit}' "$COMPLETE_RUN/run_info.txt")}
-    COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-$(run_info_value vru_size_pad_m)}
-    COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-$(run_info_value obs_slots_partners_n)}   # a run from before the knob: empty = the checkpoint's value
     PREVIOUS_WALKER_SPEED_FLOOR_MPS=$(run_info_value walker_speed_floor_mps)   # written by runs from before the floor was removed
     [[ "${PREVIOUS_WALKER_SPEED_FLOOR_MPS:-0}" =~ ^0([.]0+)?$ ]] || { echo "COMPLETE_RUN=$COMPLETE_RUN was driven with the removed walker speed floor ($PREVIOUS_WALKER_SPEED_FLOOR_MPS m/s) and cannot be completed"; exit 1; }
     PREVIOUS_DYNAMICS_SOURCE=$(run_info_value dynamics_source)   # a run without the line teleported the ego, like an opengigaflow one
     [ "$PREVIOUS_DYNAMICS_SOURCE" = "carla_pedals" ] || { echo "COMPLETE_RUN=$COMPLETE_RUN was driven with the removed teleport dynamics (dynamics_source ${PREVIOUS_DYNAMICS_SOURCE:-not recorded}) and cannot be completed"; exit 1; }
     PREVIOUS_PEDAL_REVERSE=$(run_info_value pedal_reverse)   # written by runs from before reverse was removed
     [ "${PREVIOUS_PEDAL_REVERSE:-0}" = "0" ] || { echo "COMPLETE_RUN=$COMPLETE_RUN was driven with the removed pedal reverse (pedal_reverse $PREVIOUS_PEDAL_REVERSE) and cannot be completed"; exit 1; }
-    COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-$(run_info_value pedal_yellow_margin)}   # a run from before the knob has no such line: set it by hand
+    # the run's own shadow-env settings unless set here; one the run did not record keeps shadow_ego.py's default
+    for setting in max_speed_mps zero_partner_stopped_time vru_size_pad_m obs_slots_partners_n pedal_yellow_margin; do
+        setting_name=COSIM_${setting^^}
+        [ -z "${!setting_name+x}" ] && grep -Eq "^$setting( |\$)" "$COMPLETE_RUN/run_info.txt" && export "$setting_name=$(run_info_value "$setting")"
+    done
 fi
 SCENARIOS=${SCENARIOS:-1}
 if [ "$SCENARIOS" = "1" ]; then
@@ -107,11 +106,8 @@ case "$OBS_HTML" in 1) OBS_HTML=failures ;; 0|failures|all) ;; *) echo "OBS_HTML
 REPORT=${REPORT:-0}
 TIDY=${TIDY:-1}
 WANDB_REPORT=${WANDB_REPORT:-1}
-export COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-0.8}
-export COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-40}   # GIGAFLOW's eval value; empty = the checkpoint's training value
-[[ -z "$COSIM_OBS_SLOTS_PARTNERS_N" || "$COSIM_OBS_SLOTS_PARTNERS_N" =~ ^[1-9][0-9]*$ ]] || { echo "COSIM_OBS_SLOTS_PARTNERS_N=\"$COSIM_OBS_SLOTS_PARTNERS_N\" must be a positive integer or empty"; exit 1; }
-export COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}
-[[ "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }
+# a COSIM_* setting assigned above reaches the policy servers only when exported
+for setting_name in "${!COSIM_@}"; do export "$setting_name"; done
 EVALUATOR=$GARAGE_WORK_DIR/leaderboard/leaderboard/leaderboard_evaluator_local.py
 CARLA_EGG=$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
 AGENT=$PD/opengigaflow/ocean/cosim/carla/lb1/leaderboard_agent.py
@@ -134,12 +130,12 @@ command -v flock >/dev/null 2>&1 || { echo "flock (util-linux) is needed for the
 PORT_BASE=$(pick_port_base "$WORKERS" "$PORT_BASE" 12000 22000) || { echo "no free port range for $WORKERS workers (ss -ltun)"; exit 1; }
 echo "port base $PORT_BASE: rpc $PORT_BASE+50w, TM $((PORT_BASE + 6000))+50w"
 
-# The standard eval's folder is carla_longest6_v1_<date>_<job>; a setting that differs from its default adds its tag.
+# The standard eval's folder is carla_longest6_v1_<date>_<job>; a setting that differs from its default, or a shadow-env setting set for the run, adds its tag.
 TAG=longest6_v1$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")
 case "$SEEDS" in "0 1 2") ;; "") TAG=${TAG}_legacyseed ;; *) TAG=${TAG}_seeds$(echo "$SEEDS" | tr ' ' '-') ;; esac
-TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0.8" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
-TAG=$TAG$([ "$COSIM_OBS_SLOTS_PARTNERS_N" = "40" ] || echo "_partners${COSIM_OBS_SLOTS_PARTNERS_N:-trained}")
-TAG=$TAG$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
+TAG=$TAG${COSIM_MAX_SPEED_MPS+_maxspeed${COSIM_MAX_SPEED_MPS:-trained}}${COSIM_ZERO_PARTNER_STOPPED_TIME+_zerostopped$COSIM_ZERO_PARTNER_STOPPED_TIME}
+TAG=$TAG${COSIM_VRU_SIZE_PAD_M+_vrupad$COSIM_VRU_SIZE_PAD_M}${COSIM_OBS_SLOTS_PARTNERS_N+_partners${COSIM_OBS_SLOTS_PARTNERS_N:-trained}}
+[ "${COSIM_PEDAL_YELLOW_MARGIN:-}" = "0" ] && TAG=${TAG}_noyellowmargin
 # results live in the model's own eval folder, next to the OpenGigaFlow benchmark evals
 OUT=${COMPLETE_RUN:-$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
@@ -148,10 +144,8 @@ GIT_STATE=$(git -C "$PD" rev-parse --short HEAD 2>/dev/null)$(git -C "$PD" diff 
 if [ -z "$COMPLETE_RUN" ]; then
     {
         echo "checkpoint $CKPT"; echo "routes $ROUTE_DIR ($ROUTES_XML)"; echo "scenarios $SCENARIO_FILE"
-        echo "seeds $SEEDS"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"; echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
-        echo "obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N"
+        echo "seeds $SEEDS"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"
         echo "dynamics_source carla_pedals"   # COMPLETE_RUN refuses a run without it
-        echo "pedal_yellow_margin $COSIM_PEDAL_YELLOW_MARGIN"
         echo "port_base $PORT_BASE"
         echo "git $GIT_STATE"
     } > "$OUT/run_info.txt"
@@ -194,8 +188,6 @@ OMP_THREADS=${OMP_NUM_THREADS:-$([ "$WORKERS" -ge 16 ] && echo 2 || echo 4)}
 export OMP_NUM_THREADS=$OMP_THREADS MKL_NUM_THREADS=$OMP_THREADS OPENBLAS_NUM_THREADS=$OMP_THREADS NUMEXPR_NUM_THREADS=$OMP_THREADS
 export COSIM_SERVER_PYTHON=$SERVER_PY
 export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
-export COSIM_MAX_SPEED_MPS=${COSIM_MAX_SPEED_MPS:-30}
-export COSIM_ZERO_PARTNER_STOPPED_TIME=${COSIM_ZERO_PARTNER_STOPPED_TIME:-1}
 export COSIM_OBS_HTML_MAX_STEPS=${COSIM_OBS_HTML_MAX_STEPS:-20000}
 export COSIM_OBS_HTML_RENDER=0  # routes save the compact replay only; render_carla_obs_html.py renders all pages into $OUT/obs_html
 
@@ -206,6 +198,16 @@ case "$IMPORTED_CORE" in
     "$PD"/*) echo "shadow env: $IMPORTED_CORE" ;;
     *) echo "ERROR: shadow env imported from '$IMPORTED_CORE', expected $PD"; exit 1 ;;
 esac
+# the shadow env's eval settings of this run: COSIM_EVAL_DEFAULTS unless set, validated by a ShadowEgo of the checkpoint
+SHADOW_SETTINGS=$(env -u PYTHONPATH PYTHONPATH="$PD" "$SERVER_PY" - "$CKPT" <<'EOF'
+import os, sys
+from opengigaflow.ocean.cosim.carla.shadow_ego import COSIM_EVAL_DEFAULTS, ShadowEgo
+ShadowEgo(sys.argv[1], "settings")
+for name, default in COSIM_EVAL_DEFAULTS.items():
+    print(name[len("COSIM_"):].lower(), os.environ.get(name, default))
+EOF
+) || { echo "ERROR: invalid COSIM_* eval settings for $CKPT (see traceback above)"; exit 1; }
+[ -z "$COMPLETE_RUN" ] && echo "$SHADOW_SETTINGS" >> "$OUT/run_info.txt"
 "$GARAGE_PY" -c "import carla, leaderboard.leaderboard_evaluator_local" || { echo "ERROR: the garage python cannot import the evaluator (see traceback above)"; exit 1; }
 
 route_done() {  # 0 when the route json holds a record that is not one of the crash states garage resubmits
@@ -250,7 +252,7 @@ if [ -n "$COMPLETE_RUN" ]; then
         done
         for f in "$OUT"/worker_w*.log; do [ -e "$f" ] && mv "$f" "$PREVIOUS/"; done
     fi
-    echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]:-none}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N; pedal_yellow_margin $COSIM_PEDAL_YELLOW_MARGIN; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
+    echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]:-none}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; ${SHADOW_SETTINGS//$'\n'/; }; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
 fi
 [ "$WORKERS" -gt "${#UNITS[@]}" ] && WORKERS=${#UNITS[@]}
 # one shared queue, longest route first; length = the xml's polyline (a failed run's duration would read short)

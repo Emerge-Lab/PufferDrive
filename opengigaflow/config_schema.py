@@ -107,15 +107,17 @@ class Controller(Enum):
     policy = 1
     replay = 2
     idm = 3
+    pdm = 4
 
 
 class NonVehicleController(Enum):
-    # config-only "auto": Drive resolves it to replay when non_sdc_controller is idm, else to non_sdc_controller
+    # config-only "auto": Drive resolves it to replay when non_sdc_controller is idm or pdm, else to non_sdc_controller
     auto = -1
     static = 0
     policy = 1
     replay = 2
     idm = 3
+    pdm = 4
 
 
 class InitMode(Enum):
@@ -220,6 +222,7 @@ class DriveEnvConfig:
     sdc_controller: Controller = MISSING
     non_sdc_controller: Controller = MISSING
     non_vehicle_controller: NonVehicleController = MISSING
+    pdm_horizon_s: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     replay_expert_agents: int = MISSING
     init_mode: InitMode = MISSING
     compute_eval_metrics: bool = MISSING

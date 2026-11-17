@@ -13,16 +13,20 @@
 #   LIMIT_TOTAL_SCENARIOS  caps scenario_filter.limit_total_scenarios (unset: the whole SPLIT)
 #   SCENARIO_TOKENS        scenario_filter.scenario_tokens
 #   GROUP                  output group dir (default $NUPLAN_EXP_ROOT/nuplan_leaderboard_<timestamp>)
-#   SLIDING_GOAL_WINDOW    true|false: refill the goal window after every consumed goal (default false)
+#   SLIDING_GOAL_WINDOW    true|false: refill the goal window after every consumed goal (unset = planner yaml, true)
 #   STARTUP_ACCEL_JERK_CAP / STARTUP_BRAKE_JERK_CAP / STARTUP_JERK_CAP_SECONDS  ego jerk caps [m/s^3] at the start
-#   VRU_SIZE_PAD_M         [m] added to pedestrian and bicycle partner boxes in the policy's obs (unset/0 = off)
+#                          (unset = planner yaml, 2 / 2 for 1.5 s; 0 = off)
+#   VRU_SIZE_PAD_M         [m] added to pedestrian and bicycle partner boxes in the policy's obs (unset = planner yaml,
+#                          0.8; 0 = off)
 #   BICYCLE_MIN_SPEED_MPS  [m/s] speed floor of the ego plant (0 = no reverse driving, -2 = Drive's floor)
 #   BICYCLE_CENTER_ACCEL_CAP / BICYCLE_CENTER_ACCEL_CAP_MARGIN  CaRL's clip_angular_adjustment and its cap factor
+#                          (unset = planner yaml, true / 0.95)
 #   STANDSTILL_JERK_DEADBAND  [m/s^3] shadow-env standstill jerk deadband (unset = arch.py's 1.5, 0 = off)
 #   OBS_SLOTS_PARTNERS_N   shadow-env partner obs slots (unset = planner yaml, 40)
 #   EVAL_PERCEIVED_SIZE_MARGIN_M  [m per side] ego box inflation in the policy's obs (unset = arch.py, 0.2)
 #   REWARD_OVERSPEED       overspeed conditioning alpha fed to the policy (unset = arch.py, 0.1)
-#   LANE_WIDTH_CLIP_MIN_M / LANE_WIDTH_CLIP_MAX_M  [m] clip the observed lane widths (unset = off)
+#   LANE_WIDTH_CLIP_MIN_M / LANE_WIDTH_CLIP_MAX_M  [m] clip the observed lane widths (unset = planner yaml, 2.85 / 4.4;
+#                          MAX 0 = off)
 #   EXTRA_HYDRA            extra Hydra overrides, space-separated
 #   COSIM_OBS_HTML         all|failures (default)|infractions|0: observation replay pages -> $GROUP/obs_html
 #   COSIM_OBS_HTML_MAX_SCORE  failures: render scenarios scoring below this (default 0.9)

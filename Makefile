@@ -19,7 +19,7 @@ help:
 	@echo ""
 	@echo "  make test-unit          Python unit tests (tests/unit_tests)"
 	@echo "  make test-eval          Evaluation integration tests (tests/eval)"
-	@echo "  make test-c             C sim tests (tests/drive: dynamics, geometry, IDM, ...)"
+	@echo "  make test-c             C sim tests (tests/drive: dynamics, geometry, IDM, PDM, ...)"
 	@echo ""
 	@echo "  make test-docker-smoke  Full smoke suite in Docker (train/rollout goldens)"
 

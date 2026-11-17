@@ -37,9 +37,9 @@ export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_TH
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
-# k_scaled_0080: the opengigaflow.yaml defaults with 128 env workers and minibatch 393216 per rank (12.6M rows per optimizer
-# step on 32 ranks) at lr 1.5e-3 for 1e12 steps; the other overrides are run identity, logging and hardware. GPU memory ~21 GB + 0.22 GB per
-# 1024-agent worker (fp16). Another run: sbatch --export=ALL,RUN_NAME=<name> scripts/kesai/1_train_multinode.sh
+# k_scaled_0080: opengigaflow.yaml's training settings (minibatch 393216 per rank = 12.6M rows per optimizer step on 32 ranks)
+# at lr 1.5e-3; the other overrides are run identity and logging. GPU memory ~21 GB + 0.22 GB per 1024-agent worker (fp16).
+# Another run: sbatch --export=ALL,RUN_NAME=<name> scripts/kesai/1_train_multinode.sh
 srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
     --nproc-per-node=8 \
@@ -54,11 +54,7 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
     run_name=${RUN_NAME} \
-    train.total_timesteps=1000000000000 \
-    vec.num_envs=128 \
-    train.max_minibatch_size=393216 \
-    train.minibatch_size=393216 \
-    train.learning_rate=0.0015 \
+    train.learning_rate=0.0015 \ # Higher learning rate is required as with 4 nodes the total minibatch size increases by 4x, reducing the total amount of optimizer steps.
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
@@ -75,7 +71,6 @@ done
 # 8 srun shards per node, each one GPU, an eighth of the CPUs and 60 env workers (x 5 scenarios = 300 per 9000-step episode)
 echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
 .venv/bin/python scripts/parallel_eval.py selfplay \
-    --total-scenarios 80000 \
     --num-nodes 4 \
     --shards-per-node 8 \
     env.map_dir=$PD/opengigaflow/resources/carla \

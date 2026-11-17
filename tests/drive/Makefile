@@ -18,6 +18,7 @@ UNIT_SRCS := \
 	test_drive_dynamics.c \
 	test_drive_map_cache.c \
 	test_drive_idm.c \
+	test_drive_pdm.c \
 	test_drive_speed_limits.c \
 	test_drive_cosim_setters.c \
 	test_drive_pedestrians.c \

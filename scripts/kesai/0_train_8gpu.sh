@@ -22,15 +22,12 @@ start=$(date +%s)
 
 SEEDS=(1000 2000 3000 4000)
 RUN_PREFIX=k_scaled_0085
-WORKER_COUNT=128
-ROLLOUT_STEP_COUNT=128
-MINIBATCH_SIZE=393216
 TRAIN_MAP_DIR=$PD/opengigaflow/resources/carla_128_affine_aug_v21
 SELFPLAY_EVAL_MAP_DIR=$PD/opengigaflow/resources/carla_v21  # the 8 towns: the benchmark reads only the folder's first 8 sorted maps
 
 export SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 [ -n "${SEED}" ] || { echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} has no run configured; aborting."; exit 1; }
-echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} workers=${WORKER_COUNT} rollout_steps=${ROLLOUT_STEP_COUNT} minibatch=${MINIBATCH_SIZE} maps=${TRAIN_MAP_DIR}"
+echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} maps=${TRAIN_MAP_DIR}"
 for MAP_DIR in "${TRAIN_MAP_DIR}" "${SELFPLAY_EVAL_MAP_DIR}"; do
     [ -d "${MAP_DIR}" ] || { echo "missing map dir ${MAP_DIR} (git-ignored, copy it to the cluster)"; exit 1; }
 done
@@ -51,8 +48,7 @@ export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_TH
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
-# one 8-GPU node per seed (array task = SEEDS index); the knobs above are k_scaled_0085's (0083's on the v21 maps), the rest is
-# opengigaflow.yaml's except train.total_timesteps (1e12)
+# one 8-GPU node per seed (array task = SEEDS index); k_scaled_0085 = opengigaflow.yaml's training settings on the v21 maps
 srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
     --nproc-per-node=8 \
@@ -68,11 +64,6 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     train.data_dir=${DATA_DIR} \
     run_name=${RUN_NAME} \
     env.map_dir=${TRAIN_MAP_DIR} \
-    train.total_timesteps=1000000000000 \
-    vec.num_envs=${WORKER_COUNT} \
-    train.bptt_horizon=${ROLLOUT_STEP_COUNT} \
-    train.max_minibatch_size=${MINIBATCH_SIZE} \
-    train.minibatch_size=${MINIBATCH_SIZE} \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
@@ -89,7 +80,6 @@ done
 # 8 srun shards per node, each one GPU, an eighth of the CPUs and 60 env workers (x 5 scenarios = 300 per 9000-step episode)
 echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
 .venv/bin/python scripts/parallel_eval.py selfplay \
-    --total-scenarios 80000 \
     --num-nodes 1 \
     --shards-per-node 8 \
     env.map_dir=${SELFPLAY_EVAL_MAP_DIR} \

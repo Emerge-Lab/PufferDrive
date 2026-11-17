@@ -612,6 +612,11 @@ static int my_init(Drive *env, PyObject *kwargs) {
     env->sdc_controller = (int) unpack(kwargs, "sdc_controller");
     env->non_sdc_controller = (int) unpack(kwargs, "non_sdc_controller");
     env->non_vehicle_controller = (int) unpack(kwargs, "non_vehicle_controller");
+    env->pdm_horizon_seconds = (float) unpack(kwargs, "pdm_horizon_s");
+    if (!(env->pdm_horizon_seconds > 0.0f) || !isfinite(env->pdm_horizon_seconds)) {
+        PyErr_SetString(PyExc_ValueError, "pdm_horizon_s must be a positive finite float");
+        return -1;
+    }
     env->replay_expert_agents = (int) unpack(kwargs, "replay_expert_agents");
     env->simulation_mode = (int) unpack(kwargs, "simulation_mode");
     if (env->scripted_pedestrian_slots > 0

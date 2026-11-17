@@ -54,6 +54,7 @@ policy.critic_num_layers: 0
 policy.action_type: discrete
 
 # Training: short schedule, small minibatch, compiled
+vec.num_envs: 20
 train.total_timesteps: 1_000_000_000
 train.learning_rate: 0.001
 train.minibatch_size: 32000

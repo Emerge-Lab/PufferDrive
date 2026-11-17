@@ -49,45 +49,18 @@ export CALLBACKS="[simulation_log_callback]"
 export WORKER=ray_distributed
 # CPU-bound; a worker plateaus at ~2 GB with every city map cached: 384 stay under ~770 GB of a kesai node's 1 TB
 export THREADS_PER_NODE=${THREADS_PER_NODE:-$([ "$CLUSTER" = kesai ] && echo 384 || echo 128)}
-# refill the goal window after every consumed goal; ego accel / brake jerk caps [m/s^3] for the first 1.5 s (0 = off)
-export SLIDING_GOAL_WINDOW=true
-export STARTUP_ACCEL_JERK_CAP=2
-export STARTUP_BRAKE_JERK_CAP=2
-# added to the length and width of pedestrian and bicycle boxes in the policy's obs (0 = off)
-export VRU_SIZE_PAD_M=0.8
-# shadow-env obs: partner slots (training 20, GIGAFLOW eval 40) and the ego's perceived-size margin [m per side]
-export OBS_SLOTS_PARTNERS_N=40
-export EVAL_PERCEIVED_SIZE_MARGIN_M=0.2
-# overspeed conditioning alpha: the max of the U(0, 0.1) training range
-export REWARD_OVERSPEED=0.1
-# observed lane widths [m] clipped to the CARLA training range (nuPlan lanes reach 50 m); LANE_WIDTH_CLIP_MAX_M=0 = off
-export LANE_WIDTH_CLIP_MIN_M=${LANE_WIDTH_CLIP_MIN_M:-2.85}
-export LANE_WIDTH_CLIP_MAX_M=${LANE_WIDTH_CLIP_MAX_M:-4.4}
-# speed floor [m/s] of the ego plant, nuPlan's KinematicBicycleModel driven as CaRL drives it (-2 = Drive's floor)
-export BICYCLE_MIN_SPEED_MPS=${BICYCLE_MIN_SPEED_MPS:-0}
-# cap the plant's center accel (nuPlan's comfort input) while turning: CaRL's clip_angular_adjustment at MARGIN x bound
-export BICYCLE_CENTER_ACCEL_CAP=${BICYCLE_CENTER_ACCEL_CAP:-true}
-export BICYCLE_CENTER_ACCEL_CAP_MARGIN=${BICYCLE_CENTER_ACCEL_CAP_MARGIN:-0.95}
-# shadow-env standstill jerk deadband [m/s^3]; empty = the planner's 1.5, 0 = off
-export STANDSTILL_JERK_DEADBAND=${STANDSTILL_JERK_DEADBAND:-}
-# The standard eval's folder is nuplan_val14[_nonreactive]_<date>_<job>; a setting that differs from the values above adds its tag.
+# the planner's eval settings are opengigaflow_planner.yaml's; an override variable of run_nuplan_planner.sh set here tags the folder
 ABLATION_TAG=""
-[ "$SLIDING_GOAL_WINDOW" != "true" ] && ABLATION_TAG="${ABLATION_TAG}_noslide"
-[ "$STARTUP_ACCEL_JERK_CAP" != "2" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
-[ "$STARTUP_BRAKE_JERK_CAP" != "2" ] && ABLATION_TAG="${ABLATION_TAG}_jbrk${STARTUP_BRAKE_JERK_CAP}"
-[ "$VRU_SIZE_PAD_M" != "0.8" ] && ABLATION_TAG="${ABLATION_TAG}_vrupad${VRU_SIZE_PAD_M}m"
+for override in SLIDING_GOAL_WINDOW:slide STARTUP_JERK_CAP_SECONDS:jsec STARTUP_ACCEL_JERK_CAP:jacc STARTUP_BRAKE_JERK_CAP:jbrk \
+    VRU_SIZE_PAD_M:vrupad OBS_SLOTS_PARTNERS_N:slots EVAL_PERCEIVED_SIZE_MARGIN_M:margin REWARD_OVERSPEED:overspeed \
+    LANE_WIDTH_CLIP_MIN_M:lanewmin LANE_WIDTH_CLIP_MAX_M:lanewmax BICYCLE_MIN_SPEED_MPS:vmin \
+    BICYCLE_CENTER_ACCEL_CAP:centercap BICYCLE_CENTER_ACCEL_CAP_MARGIN:centercapmargin STANDSTILL_JERK_DEADBAND:deadband; do
+    override_name=${override%%:*}
+    [ -n "${!override_name:-}" ] || continue
+    export "$override_name"  # a plain assignment above would otherwise tag the folder without reaching the runner
+    ABLATION_TAG="${ABLATION_TAG}_${override##*:}${!override_name}"
+done
 [ "$CITY_BIN_DIR" != "$SHARED_DATA/nuplan/PufferDrive" ] && ABLATION_TAG="${ABLATION_TAG}_bins$(basename "$CITY_BIN_DIR")"
-[ "${OBS_SLOTS_PARTNERS_N:-40}" != "40" ] && ABLATION_TAG="${ABLATION_TAG}_slots${OBS_SLOTS_PARTNERS_N}"
-[ "${EVAL_PERCEIVED_SIZE_MARGIN_M:-0.2}" != "0.2" ] && ABLATION_TAG="${ABLATION_TAG}_margin${EVAL_PERCEIVED_SIZE_MARGIN_M}"
-[ "${REWARD_OVERSPEED:-0.1}" != "0.1" ] && ABLATION_TAG="${ABLATION_TAG}_overspeed${REWARD_OVERSPEED}"
-[ "$LANE_WIDTH_CLIP_MAX_M" = "0" ] && ABLATION_TAG="${ABLATION_TAG}_nolanew"
-[ "$LANE_WIDTH_CLIP_MAX_M" != "0" ] && [ "$LANE_WIDTH_CLIP_MIN_M-$LANE_WIDTH_CLIP_MAX_M" != "2.85-4.4" ] \
-    && ABLATION_TAG="${ABLATION_TAG}_lanew${LANE_WIDTH_CLIP_MIN_M}-${LANE_WIDTH_CLIP_MAX_M}"
-[ "$BICYCLE_MIN_SPEED_MPS" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_vmin${BICYCLE_MIN_SPEED_MPS}"
-[ "$BICYCLE_CENTER_ACCEL_CAP" != "true" ] && ABLATION_TAG="${ABLATION_TAG}_nocentercap"
-[ "$BICYCLE_CENTER_ACCEL_CAP" = "true" ] && [ "$BICYCLE_CENTER_ACCEL_CAP_MARGIN" != "0.95" ] \
-    && ABLATION_TAG="${ABLATION_TAG}_centercap${BICYCLE_CENTER_ACCEL_CAP_MARGIN}"
-[ -n "$STANDSTILL_JERK_DEADBAND" ] && ABLATION_TAG="${ABLATION_TAG}_deadband${STANDSTILL_JERK_DEADBAND}"
 # results: the model's own eval folder, next to the OpenGigaFlow benchmark evals (overview.csv, scenarios.csv, obs_html/, simulation_log/, details/)
 export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 

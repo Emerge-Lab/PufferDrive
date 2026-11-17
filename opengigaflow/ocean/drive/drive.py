@@ -103,6 +103,7 @@ class Drive(opengigaflow.VecEnv):
         sdc_controller="policy",
         non_sdc_controller="policy",
         non_vehicle_controller="auto",
+        pdm_horizon_s=4.0,
         replay_expert_agents=1,
         map_dir=None,
         config_only=False,
@@ -293,6 +294,11 @@ class Drive(opengigaflow.VecEnv):
             raise ValueError("scripted_pedestrian_ratio > 0 needs gigaflow simulation_mode without cosim_partner_slots")
         if goal_source == "external" and simulation_mode != "gigaflow":
             raise ValueError("goal_source 'external' is only supported in gigaflow simulation_mode (co-sim)")
+        self.pdm_horizon_s = float(pdm_horizon_s)
+        if not 0.0 < self.pdm_horizon_s < float("inf"):
+            raise ValueError(f"pdm_horizon_s must be finite and > 0. Got: {pdm_horizon_s}")
+        if "pdm" in (sdc_controller, non_sdc_controller) and simulation_mode == "gigaflow" and goal_source != "route":
+            raise ValueError("the pdm controller follows the agent's route: gigaflow needs goal_source 'route'")
 
         self.ego_features = binding.EGO_FEATURES
 
@@ -423,9 +429,10 @@ class Drive(opengigaflow.VecEnv):
             "policy": binding.CONTROLLER_POLICY,
             "replay": binding.CONTROLLER_REPLAY,
             "idm": binding.CONTROLLER_IDM,
+            "pdm": binding.CONTROLLER_PDM,
         }
         if non_vehicle_controller == "auto":
-            non_vehicle_controller = "replay" if non_sdc_controller == "idm" else non_sdc_controller
+            non_vehicle_controller = "replay" if non_sdc_controller in ("idm", "pdm") else non_sdc_controller
         self.sdc_controller = controller_values[sdc_controller]
         self.non_sdc_controller = controller_values[non_sdc_controller]
         self.non_vehicle_controller = controller_values[non_vehicle_controller]
@@ -588,6 +595,7 @@ class Drive(opengigaflow.VecEnv):
             "sdc_controller": self.sdc_controller,
             "non_sdc_controller": self.non_sdc_controller,
             "non_vehicle_controller": self.non_vehicle_controller,
+            "pdm_horizon_s": self.pdm_horizon_s,
             "replay_expert_agents": self.replay_expert_agents,
             "simulation_mode": self.simulation_mode,
             "reward_conditioning": self.reward_conditioning,

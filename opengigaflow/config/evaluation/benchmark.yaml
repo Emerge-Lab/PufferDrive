@@ -44,7 +44,7 @@ env:
 benchmarks:
   - name: selfplay
     seed: 42
-    num_scenarios: 1000
+    num_scenarios: 80000
     env:
       simulation_mode: gigaflow
       num_maps: 8

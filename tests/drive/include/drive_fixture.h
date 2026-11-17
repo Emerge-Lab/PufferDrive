@@ -117,6 +117,7 @@ static inline Drive drive_test_env_config(
     env.sdc_controller = CONTROLLER_POLICY;
     env.non_sdc_controller = CONTROLLER_POLICY;
     env.non_vehicle_controller = CONTROLLER_REPLAY;
+    env.pdm_horizon_seconds = 4.0f;
     env.simulation_mode = simulation_mode;
     env.reward_conditioning = 0;
     env.reward_randomization = 0;

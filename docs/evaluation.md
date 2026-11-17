@@ -32,7 +32,10 @@ Each configured benchmark contains:
 `eval.num_agents` is the agent capacity of each evaluation worker and must be at
 least the benchmark's `max_agents_per_env`. The policy inference batch grows with
 the number of workers, so reduce both `eval.num_agents` and `vec.num_envs` for a
-small local CPU check.
+small local CPU check. An evaluation starts `vec.num_envs` worker processes; the
+default of 128 is the training value, and a process cannot start more workers
+than the machine has hardware threads, so pass a smaller `vec.num_envs` on a
+workstation.
 
 Replay benchmarks using `control_sdc_only` additionally cap their worker count with
 `eval.max_sdc_replay_workers` (default `4`).
@@ -77,6 +80,22 @@ opengigaflow eval selfplay_fast \
 Use `eval.output_name` when comparing runs so the folder identifies the
 experiment. The resolved configuration saved with every result records the
 effective values.
+
+The controller overrides evaluate the simulator's rule-based drivers on the same
+benchmarks. `pdm` is a PDM-Closed style planner, `idm` the intelligent driver
+model; both follow the agents' routes, and the checkpoint is loaded but its
+actions are ignored:
+
+```bash
+opengigaflow eval selfplay_fast \
+  load_model_path=experiments/<run>/final_model.pt \
+  env.sdc_controller=pdm env.non_sdc_controller=pdm \
+  eval.output_name=pdm
+```
+
+PDM does not slow down for goals, so with the benchmark's goal rule (the last
+goal of a set counts only below `env.goal_speed`) read its infraction and
+distance metrics, not its goal metrics.
 
 ## Evaluation flow
 

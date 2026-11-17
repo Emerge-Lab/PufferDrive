@@ -1,6 +1,6 @@
 # Multi-agent nightly program config (scripts/launch_nightly_best.sh): opengigaflow.yaml's recipe, scale and length here.
 
-# full training scale (the defaults are sized for on-premise dev runs)
+# full training scale on one GPU (the defaults are sized for an 8-GPU node)
 policy.action_type: discrete
 env.num_agents: 3200
 vec.num_envs: 40
@@ -8,7 +8,7 @@ train.minibatch_size: 256000
 train.max_minibatch_size: 64000
 train.compile: true
 
-# night-sized: the default 500B-step schedule does not finish overnight
+# night-sized: the default 1e12-step schedule does not finish overnight
 train.total_timesteps: 10_000_000_000
 train.checkpoint_interval: 500
 

@@ -27,7 +27,8 @@ server you started yourself, in a cp310 env (CARLA 0.9.15 ships no cp312 wheel):
 --routes <xml> ...` (VS Code launch config "Cosim: CARLA leaderboard agent") with `CARL_WORK_DIR` and
 `SCENARIO_RUNNER_ROOT` exported (route scenarios silently fail to load without the latter, so `leaderboard_agent.py`
 refuses to start). The agent's environment variables are listed in `leaderboard_agent.py`, the shadow env's (`COSIM_*`)
-in `shadow_ego.py`.
+in `shadow_ego.py`; its `COSIM_EVAL_DEFAULTS` are the eval settings behind our scores, except that
+`6_eval_longest6_v2.sh` keeps the checkpoint's partner slots.
 
 ### Ego dynamics
 

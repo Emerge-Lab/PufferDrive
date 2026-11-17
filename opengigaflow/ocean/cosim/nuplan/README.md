@@ -17,8 +17,8 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   transforms), recompute observations, run the policy on the ego row,
   `env.step` (the jerk model integrates the ego's accel/steering intent one
   dt), and return that intent as an action trajectory for nuPlan's ego plant.
-- Ego plant (`3_eval_nuplan_reactive.sh` runs it with floor 0 and the center cap at margin 0.95: run 431 = 93.01; a different
-  floor or cap tags the result folder `_vmin<floor>`, `_nocentercap` or `_centercap<m>`): nuPlan's `KinematicBicycleModel`, driven through
+- Ego plant (by default floor 0 and the center cap at margin 0.95: run 431 = 93.01; `3_eval_nuplan_reactive.sh` tags the result
+  folder of another floor or cap `_vmin<floor>`, `_centercapfalse` or `_centercapmargin<m>`): nuPlan's `KinematicBicycleModel`, driven through
   CaRL's `one_stage_controller` exactly like CaRL, with the model's own actuator lag (the challenge presets
   pin the controller). Every step the shadow ego takes nuPlan's pose, speed
   and yaw rate but keeps its own jerk-integrated accel/steering (the state the policy was trained to
@@ -52,23 +52,23 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   much is added to every pedestrian and bicycle partner box's length and width in the
   policy's observation (training spawns nothing below 0.8 x 0.8 m, nuPlan pedestrians
   are 0.4-0.8 m, bicycles ~0.5 m wide), so they read strictly larger than the smallest
-  training vehicle; nuPlan still scores the true boxes. Off by default, `3_eval_nuplan_reactive.sh` sets
-  0.8 m. Eval hack `obs_lane_width_clip_min_m` / `obs_lane_width_clip_max_m` (env
+  training vehicle; nuPlan still scores the true boxes. Default 0.8 m, 0 = off.
+  Eval hack `obs_lane_width_clip_min_m` / `obs_lane_width_clip_max_m` (env
   `LANE_WIDTH_CLIP_MIN_M` / `LANE_WIDTH_CLIP_MAX_M`, Drive env keys via `env_overrides`): the
   lane widths the policy observes are clipped to this range (the CARLA training maps span
   2.85-4.4 m, the nuPlan city bins reach 50 m at junction connectors and multi-lane
-  roadblocks). Off by default, `3_eval_nuplan_reactive.sh` sets 2.85-4.4 m. The shadow env consumes the goals of its
+  roadblocks). Default 2.85-4.4 m, max 0 = off. The shadow env consumes the goals of its
   `num_goals` window itself exactly like training (`goal_regen_mode: finite`,
-  consumed slots zeroed in the obs); the planner pushes the next window only
-  when the current one is exhausted or its current goal is clearly behind the
-  ego. `sliding_goal_window: true` (env `SLIDING_GOAL_WINDOW=true`) instead
-  refills the window after every consumed goal, so the policy sees a
+  consumed slots zeroed in the obs). By default (`sliding_goal_window: true`)
+  the planner refills the window after every consumed goal, so the policy sees a
   window-final speed-gated goal (which it parks at) only at the true route
-  end. Lights nuPlan does not report are GREEN (training never produces
+  end; with `SLIDING_GOAL_WINDOW=false` it pushes the next window only when the
+  current one is exhausted or its current goal is clearly behind the ego.
+  Lights nuPlan does not report are GREEN (training never produces
   UNKNOWN).
 - Start-up jerk caps (`startup_accel_jerk_cap_mps3` /
   `startup_brake_jerk_cap_mps3`, env `STARTUP_ACCEL_JERK_CAP` /
-  `STARTUP_BRAKE_JERK_CAP`, 0 = off) clip the ego's continuous jerk action for
+  `STARTUP_BRAKE_JERK_CAP`, default 2 m/s³ each, 0 = off) clip the ego's continuous jerk action for
   the first `startup_jerk_cap_seconds` (1.5) of each scenario. nuPlan's
   `ego_lon_jerk` is a Savitzky-Golay derivative that extrapolates at the
   trajectory edges: the policy's full +4 m/s³ ramp reads 2.2 m/s³ mid-scenario
