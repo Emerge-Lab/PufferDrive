@@ -17,7 +17,7 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   transforms), recompute observations, run the policy on the ego row,
   `env.step` (the jerk model integrates the ego's accel/steering intent one
   dt), and return that intent as an action trajectory for nuPlan's ego plant.
-- Ego plant (by default floor 0 and the center cap at margin 0.95: run 431 = 93.01; `3_eval_nuplan_reactive.sh` tags the result
+- Ego plant (by default floor 0 and the center cap at margin 0.95: run 431 = 93.01; `scripts/slurm/eval_nuplan.sh` tags the result
   folder of another floor or cap `_vmin<floor>`, `_centercapfalse` or `_centercapmargin<m>`): nuPlan's `KinematicBicycleModel`, driven through
   CaRL's `one_stage_controller` exactly like CaRL, with the model's own actuator lag (the challenge presets
   pin the controller). Every step the shadow ego takes nuPlan's pose, speed
@@ -84,7 +84,7 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
 
 ## Visualization and run layout
 
-- `COSIM_OBS_HTML=all|failures|infractions|0` (`3_eval_nuplan_reactive.sh`: `infractions`): one interactive opengigaflow.viz
+- `COSIM_OBS_HTML=all|failures|infractions|0` (`scripts/slurm/eval_nuplan.sh`: `infractions`): one interactive opengigaflow.viz
   replay per scenario -> `$GROUP/obs_html/<token>.html`, showing the exact observation
   vector the policy received each step (partner/lane/boundary/light slots, goals), its
   action/value/entropy/probabilities and the encoder max-pool winners. This is what the

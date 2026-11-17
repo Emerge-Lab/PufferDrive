@@ -113,7 +113,7 @@ mkdir -p "$OUT/routes" "$OUT/aggregate"
 } > "$OUT/run_info.txt"
 echo "Results -> $OUT"
 
-PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
+PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/slurm/build_ext_if_changed.sh" "$PD" || exit 1
 IMPORTED_AGENT=$("$PY" -c "import opengigaflow.ocean.cosim.carla.leaderboard_agent as a; print(a.__file__)") || { echo "ERROR: agent import failed (see traceback above)"; exit 1; }
 case "$IMPORTED_AGENT" in
     "$PD"/*) echo "agent: $IMPORTED_AGENT" ;;

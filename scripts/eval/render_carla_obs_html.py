@@ -220,7 +220,7 @@ def collect_jobs(run_dir, towns, select):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("run_dir", help="output dir of 6_eval_longest6_v2.sh / 5_eval_longest6_v1.sh (holds routes/)")
+    ap.add_argument("run_dir", help="output dir of eval_longest6_v1.sh / 6_eval_longest6_v2.sh (holds routes/)")
     ap.add_argument("--routes", help="evaluated route xml, names the town of every route")
     ap.add_argument("--select", choices=SELECT_MODES, default="failures", help="route runs that get a page")
     ap.add_argument("--workers", type=int, default=min(16, os.cpu_count() or 1))

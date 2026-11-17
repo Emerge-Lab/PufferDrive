@@ -128,7 +128,7 @@ echo "Evaluating checkpoint: $CKPT"
 export PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
 export PUFFERDRIVE_ROOT=$PD
 # cp312 binding for the alpasim-training venv; NO_TRAIN skips the training-only CUDA extension
-NO_TRAIN=1 PATH="$ALPAGYM_ROOT/.venv/bin:$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
+NO_TRAIN=1 PATH="$ALPAGYM_ROOT/.venv/bin:$PATH" bash "$PD/scripts/slurm/build_ext_if_changed.sh" "$PD" || exit 1
 IMPORTED_OPENGIGAFLOW=$("$ALPAGYM_PY" -c "import alpagym_distill.teacher, opengigaflow; from opengigaflow.ocean.drive import binding; print(opengigaflow.__file__)") \
     || { echo "ERROR: teacher import failed (see traceback above)"; exit 1; }
 case "$IMPORTED_OPENGIGAFLOW" in

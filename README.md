@@ -51,8 +51,8 @@ co-simulation needs (`CITY_BIN_DIR`).
 ## Train
 
 All settings, with comments, are in `opengigaflow/config/opengigaflow.yaml`. The defaults are sized for the server
-under [Recommended hardware](#recommended-hardware): 128 environment workers and a 393,216-sample minibatch per GPU. On a smaller machine, lower `vec.num_envs` (a process cannot start more
-workers than the machine has hardware threads), `train.minibatch_size` and `train.max_minibatch_size`.
+under [Recommended hardware](#recommended-hardware): 128 environment workers and a 393,216-sample minibatch per GPU. On a smaller machine, lower `vec.num_envs`,
+`train.minibatch_size` and `train.max_minibatch_size`.
 
 ```bash
 # Single node; train.data_dir is the run's folder
@@ -82,19 +82,17 @@ opengigaflow train train.data_dir=experiments/<run> \
 torchrun --standalone --nnodes=1 --nproc-per-node=8 -m opengigaflow.rl train train.data_dir=experiments/<run>
 ```
 
-On SLURM we train with `scripts/kesai/0_train_8gpu.sh` (one 8-GPU node per seed, then the evaluations);
-`scripts/kesai/1_train_multinode.sh` spans several nodes. Like all `scripts/kesai/` jobs they are examples from
-our cluster to copy and adapt.
+On SLURM, `RUN_NAME=<run> sbatch scripts/slurm/train.sh` trains one run on the nodes of its allocation and then
+runs the self-play evaluation; its arguments are config overrides.
 
 ## Evaluation
 
 Each evaluation loads a checkpoint from a training run, e.g. `experiments/<run>/final_model.pt`, with the run's
 `config.yaml` next to it.
 
-The `scripts/kesai/` jobs referenced below are the ones we submit on our own SLURM clusters. Treat them as
-examples to copy and adapt, not as a general interface: they hold our partition and resource requests, our data
-layout (`scripts/kesai/cluster_env.sh`), our conda environment names and the run that was current when they were
-committed. The training and evaluation settings themselves are this repository's defaults.
+The SLURM jobs referenced below are in `scripts/slurm/`. Each lists its settings at the top (the run, paths, GPUs
+per node, what to render): set them in the environment or edit them there, adjust the `#SBATCH` lines to your
+cluster and submit from the checkout root. `scripts/kesai/` holds the same jobs filled in for our cluster.
 
 ### Self-play
 
@@ -104,7 +102,6 @@ episodes rendered as HTML; add `train.device=cpu` without a GPU):
 ```bash
 opengigaflow eval selfplay_fast \
     load_model_path=experiments/<run>/final_model.pt \
-    vec.num_envs=16 \
     eval.render_filter=all_infractions \
     eval.max_rendered_failures=10
 ```
@@ -118,8 +115,8 @@ python scripts/parallel_eval.py selfplay --num-gpus 8 \
     eval.render_filter=all_infractions
 ```
 
-`vec.num_envs` is the number of environment workers per GPU (default 128, the training value);  The multi-node SLURM version is
-`scripts/kesai/2_eval_selfplay.sh`. Benchmark definitions, filtered replays and the output layout are described in
+`vec.num_envs` is the number of environment workers per GPU (default 128, the training value). The multi-node SLURM version is
+`scripts/slurm/eval_selfplay.sh`. Benchmark definitions, filtered replays and the output layout are described in
 [docs/evaluation.md](docs/evaluation.md).
 
 ### nuPlan (Val14)
@@ -149,8 +146,8 @@ CHALLENGES=closed_loop_reactive_agents_opengigaflow WORKER=sequential LIMIT_TOTA
 bash opengigaflow/ocean/cosim/nuplan/run_nuplan_planner.sh
 ```
 
-All 1,118 Val14 scenarios on an 8-GPU node: `RUN_DIR=experiments/<run> sbatch scripts/kesai/3_eval_nuplan_reactive.sh`
-(`4_eval_nuplan_nonreactive.sh` for log-replay agents). The planner options behind our scores (goal window, start-up
+All 1,118 Val14 scenarios on an 8-GPU node: `RUN_DIR=experiments/<run> sbatch scripts/slurm/eval_nuplan.sh`
+(with `CHALLENGES=closed_loop_nonreactive_agents_opengigaflow` for log-replay agents). The planner options behind our scores (goal window, start-up
 jerk caps, pedestrian box padding, 40 partner slots, lane-width clipping) are the defaults in
 `opengigaflow/ocean/cosim/nuplan/config/planner/opengigaflow_planner.yaml`.
 
@@ -177,7 +174,7 @@ bash opengigaflow/ocean/cosim/carla/lb1/run_leaderboard.sh
 ```
 
 All 36 routes with 3 seeds on an 8-GPU node:
-`RUN_DIR=experiments/<run> sbatch scripts/kesai/5_eval_longest6_v1.sh`. The co-simulation options behind our scores
+`RUN_DIR=experiments/<run> sbatch scripts/slurm/eval_longest6_v1.sh`. The co-simulation options behind our scores
 (40 partner slots, pedestrian box padding, 30 m/s speed cap) are the defaults, `COSIM_EVAL_DEFAULTS` in
 `opengigaflow/ocean/cosim/carla/shadow_ego.py`.
 

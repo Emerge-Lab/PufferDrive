@@ -33,9 +33,7 @@ Each configured benchmark contains:
 least the benchmark's `max_agents_per_env`. The policy inference batch grows with
 the number of workers, so reduce both `eval.num_agents` and `vec.num_envs` for a
 small local CPU check. An evaluation starts `vec.num_envs` worker processes; the
-default of 128 is the training value, and a process cannot start more workers
-than the machine has hardware threads, so pass a smaller `vec.num_envs` on a
-workstation.
+default of 128 is the training value.
 
 Replay benchmarks using `control_sdc_only` additionally cap their worker count with
 `eval.max_sdc_replay_workers` (default `4`).

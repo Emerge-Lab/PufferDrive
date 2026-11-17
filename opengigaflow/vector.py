@@ -285,15 +285,6 @@ class Multiprocessing:
             raise opengigaflow.APIUsageError(
                 f"num_workers ({num_workers}) must equal num_envs ({num_envs}): each worker process runs one env"
             )
-
-        import psutil
-
-        cpu_threads = psutil.cpu_count(logical=True)
-        if num_workers > cpu_threads:
-            raise opengigaflow.APIUsageError(
-                f"num_workers ({num_workers}) > hardware threads ({cpu_threads}) is disallowed."
-                " Idle workers block instead of spinning, so one process per hardware thread is the limit."
-            )
         if num_envs % batch_size != 0:
             raise opengigaflow.APIUsageError("num_envs must be divisible by batch_size")
 

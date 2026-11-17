@@ -9,78 +9,28 @@
 #SBATCH --output experiments/logs/train_multinode_%j.out
 #SBATCH --error experiments/logs/train_multinode_%j.err
 #SBATCH --partition dev
-
+# Multi-node training on our cluster, then the evaluations: our values for scripts/slurm/train.sh, which documents the settings.
+# k_scaled_0080 = opengigaflow.yaml's training settings (minibatch 393216 per rank = 12.6M rows per optimizer step on 32 ranks)
+# at lr 1.5e-3. GPU memory ~21 GB + 0.22 GB per 1024-agent worker (fp16).
+# Another run: sbatch --export=ALL,RUN_NAME=<name> scripts/kesai/1_train_multinode.sh
 source scripts/kesai/cluster_env.sh || exit 1
 
-export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
-export MASTER_PORT=29500
-export WORLD_SIZE=$SLURM_JOB_NUM_NODES
+SEED=1000
 
-printf 'START TIME: %s\nMaster node: %s\nTotal nodes: %s\n' "$(date)" "${MASTER_ADDR}:${MASTER_PORT}" "${WORLD_SIZE}"
-start=$(date +%s)
+set -a  # every assignment up to "set +a" reaches scripts/slurm/train.sh
+RUN_NAME=${RUN_NAME:-k_scaled_0080_${SEED}}
+SELFPLAY_EVAL_MAP_DIR=$PD/opengigaflow/resources/carla
+SELFPLAY_EVAL_WANDB_REPORT=1
+WORKERS_PER_GPU=60  # self-play eval: 8 shards x 60 env workers = the node's 480 CPUs (x 5 scenarios = 300 per 9000-step episode)
+# the co-sim evals need one 8-GPU node each
+FOLLOW_UP_EVALS="scripts/kesai/3_eval_nuplan_reactive.sh scripts/kesai/4_eval_nuplan_nonreactive.sh scripts/kesai/6_eval_longest6_v2.sh scripts/kesai/5_eval_longest6_v1.sh scripts/kesai/7_eval_alpasim.sh"
+set +a
 
-export SEED=1000
-
-export RUN_NAME=${RUN_NAME:-k_scaled_0080_${SEED}}
-echo ${RUN_NAME}
-
-export DATA_DIR=$PD/experiments/${RUN_NAME}
-echo ${DATA_DIR}
-
-# passed to train as train.final_model_name, so the evals below find the final model without knowing its epoch
-export FINAL_MODEL_NAME=final_model.pt
-export MODEL_PATH=${DATA_DIR}/${FINAL_MODEL_NAME}
-echo ${MODEL_PATH}
-
-# one BLAS/OpenMP thread per process: the env workers would otherwise thrash the CPUs
-export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
-
-source .venv/bin/activate
-bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
-# k_scaled_0080: opengigaflow.yaml's training settings (minibatch 393216 per rank = 12.6M rows per optimizer step on 32 ranks)
-# at lr 1.5e-3; the other overrides are run identity and logging. GPU memory ~21 GB + 0.22 GB per 1024-agent worker (fp16).
-# Another run: sbatch --export=ALL,RUN_NAME=<name> scripts/kesai/1_train_multinode.sh
-srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
-    --nnodes=${SLURM_JOB_NUM_NODES} \
-    --nproc-per-node=8 \
-    --rdzv_id=${SLURM_JOB_ID} \
-    --rdzv_backend=c10d \
-    --rdzv_endpoint="${MASTER_ADDR}:${MASTER_PORT}" \
-    --max_restarts=0 \
-    --start-method spawn \
-    -m opengigaflow.rl train \
+# Higher learning rate: with 4 nodes the total minibatch size increases by 4x, reducing the total amount of optimizer steps.
+exec bash scripts/slurm/train.sh \
     wandb=True \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
-    train.data_dir=${DATA_DIR} \
-    run_name=${RUN_NAME} \
-    train.learning_rate=0.0015 \ # Higher learning rate is required as with 4 nodes the total minibatch size increases by 4x, reducing the total amount of optimizer steps.
-    train.final_model_name=${FINAL_MODEL_NAME} \
-    train.seed=${SEED} \
+    train.learning_rate=0.0015 \
+    train.seed="$SEED" \
     tb=True
-
-[ -f "${MODEL_PATH}" ] || { echo "Training did not produce ${MODEL_PATH}; skipping evaluation."; exit 1; }
-
-# the co-sim evals need one 8-GPU node each: submitted before the long self-play eval below, so they queue while it runs
-for EVAL_SCRIPT in 3_eval_nuplan_reactive.sh 4_eval_nuplan_nonreactive.sh 6_eval_longest6_v2.sh 5_eval_longest6_v1.sh 7_eval_alpasim.sh; do
-    echo "Submitting scripts/kesai/${EVAL_SCRIPT} for ${MODEL_PATH}"
-    RUN_DIR=${DATA_DIR} sbatch scripts/kesai/${EVAL_SCRIPT} \
-        || echo "submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/${EVAL_SCRIPT}"
-done
-
-# 8 srun shards per node, each one GPU, an eighth of the CPUs and 60 env workers (x 5 scenarios = 300 per 9000-step episode)
-echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
-.venv/bin/python scripts/parallel_eval.py selfplay \
-    --num-nodes 4 \
-    --shards-per-node 8 \
-    env.map_dir=$PD/opengigaflow/resources/carla \
-    vec.num_envs=60 \
-    eval.render_filter=all_infractions \
-    eval.capture_observations=true \
-    eval.output_name=${RUN_NAME} \
-    load_model_path=${MODEL_PATH} \
-    wandb=True
-
-end=$(date +%s)
-echo "END TIME: $(date)"
-echo "Runtime: $((end-start))"

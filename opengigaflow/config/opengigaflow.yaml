@@ -11,7 +11,6 @@ tag: null
 policy_name: Drive
 vec:
   backend: Multiprocessing
-  # Env workers per GPU rank; each rank is limited to the machine's hardware threads, the ranks together are not
   num_envs: 128
   num_workers: auto
   batch_size: auto
