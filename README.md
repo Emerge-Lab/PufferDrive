@@ -178,6 +178,76 @@ All 36 routes with 3 seeds on an 8-GPU node:
 (40 partner slots, pedestrian box padding, 30 m/s speed cap) are the defaults, `COSIM_EVAL_DEFAULTS` in
 `opengigaflow/ocean/cosim/carla/shadow_ego.py`.
 
+## Performance
+
+### GIGAFLOW benchmarks
+
+In the following we compare the performance of OpenGigaFlow to GIGAFLOW on benchmarks reported in the GIGAFLOW paper.
+
+#### nuPlan Val14 (reactive)
+nuPlan Val14 (reactive) is the most common planning benchmark in the literature and measure peformance of the policy on nuPlan maps in 20 second scenarios, with log-replay initialization and other agents being controlled by IDM.
+OpenGigaFlow is the first open-model that can outperform PDM-Closed zero-shot without training on nuPlan data or maps.
+
+| Method             | Type | Zero-shot | Open |  CLS |
+|--------------------|:----:|:---------:|:----:|-----:|
+| PDM-Closed         | Rule |     ❌     |  ✅   | 92.1 |
+| PlanTF             |  IL  |     ❌     |  ✅   | 76.1 |
+| Diffusion Planner  |  IL  |     ❌     |  ✅   | 82.7 |
+| CaRL, tuned        |  RL  |     ❌     |  ✅   | 93.1 |
+| GIGAFLOW           |  RL  |     ✅     |  ❌   | 93.8 |
+| TerraZero          |  RL  |     ❌     |  ❌   | 94.2 |
+| OpenGigaFlow 1.0.0 |  RL  |     ✅     |  ✅   |      |
+
+#### CARLA longest6 v1 (Leaderboard 1.0)
+longest6 v1 is a classic CARLA benchmark, that test the models ability to drive longer distances (much longer than nuPlan around ~1.6 km per route) consistently. Additionally it tests the agent in safety critical scenarios such as other cars running red lights, that are not observed in everyday driving logs. OpenGigaFlow is the state-of-the-art open model on this benchmark.
+
+| Method             | Type | Zero-shot | Open | Driving score |
+|--------------------|:----:|:---------:|:----:|--------------:|
+| TransFuser Expert  | Rule |     ❌     |  ✅   |        77 ± 2 |
+| TF++ Expert        | Rule |     ❌     |  ✅   |        83 ± 1 |
+| PlanT              |  IL  |     ❌     |  ✅   |        81 ± 7 |
+| GIGAFLOW           |  RL  |     ✅     |  ❌   |        92 ± 2 |
+| OpenGigaFlow 1.0.0 |  RL  |     ✅     |  ✅   |               |
+
+#### Self-play
+
+This is an benchmark where all 50 cars on 8 CARLA towns are driven by the same method, therefore measuring performance in full autonomy traffic. An infraction is a collision or leaving the road. This is the benchmark the GigaFlow policies are optimized for and they outperform other methods by more than 3 orders of magnitude here.
+GIGAFLOW numbers are italic because the original benchmark is not open so there might be difference in the evaluation setup compared to our results.
+
+| Method                | Type | Open | km / infraction |
+|-----------------------|:----:|:----:|----------------:|
+| IDM                   | Rule |  ✅   |              11 |
+| PDM                   | Rule |  ✅   |             316 |
+| OpenGigaFlow 1.0.0    |  RL  |  ✅   |         441,266 |
+| *GIGAFLOW (reported)* |  RL  |  ❌   |     *3,000,000* |
+
+
+### Additional benchmarks
+
+Here we report some additional evals that are not part of the original GIGAFLOW paper, so the training recipe and method is not tuned for these benchmarks. OpenGigaFlow achieves reasonable performance zero-shot on them but is not state-of-the-art.
+
+#### nuPlan Val14 (non-reactive)
+The same as Val14 Reactive except other cars are driven by log replay and do not react to the ego agent.
+
+| Method             | Type | Zero-shot | Open |  CLS |
+|--------------------|:----:|:---------:|:----:|-----:|
+| PDM-Closed         | Rule |     ❌     |  ✅   | 92.8 |
+| PlanTF             |  IL  |     ❌     |  ✅   | 84.6 |
+| Diffusion Planner  |  IL  |     ❌     |  ✅   | 89.6 |
+| GIGAFLOW           |  RL  |     ✅     |  ❌   |    – |
+| CaRL, tuned        |  RL  |     ❌     |  ✅   | 93.9 |
+| OpenGigaFlow 1.0.0 |  RL  |     ✅     |  ✅   |      |
+
+#### CARLA longest6 v2 (Leaderboard 2.0)
+
+| Method             | Type | Zero-shot | Open | Driving score |
+|--------------------|:----:|:---------:|:----:|--------------:|
+| PDM-Lite           | Rule |     ❌     |  ✅   |            73 |
+| PlanT              |  IL  |     ❌     |  ✅   |        62 ± 2 |
+| Roach              |  RL  |     ❌     |  ✅   |       22 ± 14 |
+| CaRL               |  RL  |     ❌     |  ✅   |        64 ± 2 |
+| OpenGigaFlow 1.0.0 |  RL  |     ✅     |  ✅   |               |
+
 ## Recommended hardware
 
 We optimized the code and the default configuration for the server we train on:
@@ -187,16 +257,15 @@ We optimized the code and the default configuration for the server we train on:
 - **RAM:** 1,024 GB (16 x 64 GB DDR5-6400)
 - **GPU:** 8 x NVIDIA RTX PRO 6000 Blackwell Server Edition (96 GB each)
 
-One such server trains the default configuration at about 10.5 million agent steps per second (SPS, summed over
-the 8 GPUs): a full run of 1 trillion steps takes about 26 hours.
+One such server trains the default configuration at about 10.5 million agent samples per second (SPS): a full run of 1 trillion steps takes about 26 hours. For comparison this is ~8x faster than the original GIGAFLOW training which achieved 1.2 million SPS on an 8x A100 server. As of November 2026, 8x RTX PRO 6000 instances and 8x A100 (80GB) instances cost roughly the same on cloud providers.
 
 The closest cloud instances with the same GPU:
 
 - **Google Cloud `g4-standard-384`:** 8 GPUs, 384 vCPUs (AMD EPYC Turin), 1,440 GB RAM.
 - **AWS `g7e.48xlarge`:** 8 GPUs, 192 vCPUs (Intel Xeon Emerald Rapids), 2,048 GiB RAM.
 
-We have not run on any of them. A vCPU is one hardware thread, so the two 8-GPU instances have fewer CPU threads
-than our server's 512, and the simulator runs on the CPU: expect a lower SPS, on the AWS instance in particular.
+On the Google Cloud instance we reached a 10 million SPS after some tuning. The AWS instance is untested: it has
+half as many vCPUs (a vCPU is one hardware thread) and the simulator runs on the CPU, so its SPS may be lower.
 
 The fused encoder kernels (`opengigaflow/ocean/cuda_slot_encoder.py`) are compiled at run time for the installed
 GPU, but their tile sizes and shared-memory layout are hand-tuned for the GPU above. On a different GPU model it

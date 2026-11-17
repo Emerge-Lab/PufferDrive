@@ -183,7 +183,7 @@ if not NO_TRAIN:
     ]
 
 setup(
-    version="3.0.0",
+    version="1.0.0",
     # Scope discovery to opengigaflow, does not follow symlinks
     packages=["opengigaflow"]
     + ["opengigaflow." + pkg for pkg in find_namespace_packages(where="opengigaflow")]
