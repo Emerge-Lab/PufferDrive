@@ -237,7 +237,7 @@ def gallery_metrics(row):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("run_dir", help="output dir of 12_alpasim.sh (holds obs_html/ and details/)")
+    ap.add_argument("run_dir", help="output dir of 7_eval_alpasim.sh (holds obs_html/ and details/)")
     ap.add_argument("--select", choices=SELECT_MODES, default="imperfect", help="scenes that get a page")
     ap.add_argument("--prune", action="store_true", help="delete every .replay.zlib once the pages are written")
     ap.add_argument("--workers", type=int, default=min(16, os.cpu_count() or 1))

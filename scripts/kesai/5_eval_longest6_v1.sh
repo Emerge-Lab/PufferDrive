@@ -24,7 +24,7 @@
 #   ROUTE_SUBSET               "0 5 17": only these route ids
 #   WORKERS (32), NUM_GPUS (the allocation's), STAGGER_S (5 s between worker launches), MAX_ATTEMPTS (3)
 #   PORT_BASE (12000)          worker w: rpc port PORT_BASE+50w, TM PORT_BASE+6000+50w; run_info.txt: the base used
-#   OMP_NUM_THREADS            policy server threads (2 from 16 workers on, else 4)
+#   OMP_NUM_THREADS            policy server threads (2 from 16 workers on, else 4; a job chained by a training script inherits its 1)
 #   LOGGING (1)                telemetry, world log and obs replay per route; 0 = scores only
 #   CARLA_VIEW (0)             1 = chase-cam mp4 per route (needs LOGGING=1)
 #   OBS_HTML (1 = failures)    replay pages of the route runs with a flagged infraction or failed status; all; 0 = none
@@ -36,8 +36,7 @@
 #   COSIM_ZERO_PARTNER_STOPPED_TIME (1)  vehicles' stopped-time obs held at 0, walkers keep theirs; 0 = all real
 #   COSIM_VRU_SIZE_PAD_M (0.8) added to the length and width of walker and two-wheeler boxes; 0 = true boxes
 #   COSIM_OBS_SLOTS_PARTNERS_N (40)  partner slots in the policy's obs; empty = the checkpoint's training value
-#   COSIM_DYNAMICS_SOURCE (carla_pedals: CARLA's physics moves the ego; opengigaflow: teleported by OpenGigaFlow's)
-#   COSIM_PEDAL_YELLOW_MARGIN (1)  carla_pedals: 0 = the policy sees CARLA's remaining yellow
+#   COSIM_PEDAL_YELLOW_MARGIN (1)  0 = the policy sees CARLA's remaining yellow
 #   COMPLETE_RUN               an existing $OUT: reruns in place its route runs without a valid record with the settings
 #                              of its run_info.txt (CKPT must match); a requeued job completes its own folder this way
 set -u
@@ -73,11 +72,11 @@ if [ -n "$COMPLETE_RUN" ]; then
     COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-$(run_info_value obs_slots_partners_n)}   # a run from before the knob: empty = the checkpoint's value
     PREVIOUS_WALKER_SPEED_FLOOR_MPS=$(run_info_value walker_speed_floor_mps)   # written by runs from before the floor was removed
     [[ "${PREVIOUS_WALKER_SPEED_FLOOR_MPS:-0}" =~ ^0([.]0+)?$ ]] || { echo "COMPLETE_RUN=$COMPLETE_RUN was driven with the removed walker speed floor ($PREVIOUS_WALKER_SPEED_FLOOR_MPS m/s) and cannot be completed"; exit 1; }
-    PREVIOUS_PEDAL_REVERSE=$(run_info_value pedal_reverse)   # written by runs from before reverse was removed; only carla_pedals runs used it
-    [ "$(run_info_value dynamics_source)" = "carla_pedals" ] && [ "${PREVIOUS_PEDAL_REVERSE:-0}" != "0" ] && { echo "COMPLETE_RUN=$COMPLETE_RUN was driven with the removed pedal reverse (pedal_reverse $PREVIOUS_PEDAL_REVERSE) and cannot be completed"; exit 1; }
-    COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-$(run_info_value dynamics_source)}
-    COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-opengigaflow}   # a run from before the knob was driven with opengigaflow
-    COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-$(run_info_value pedal_yellow_margin)}   # a pedal run from before the knob has no such line: set it by hand
+    PREVIOUS_DYNAMICS_SOURCE=$(run_info_value dynamics_source)   # a run without the line teleported the ego, like an opengigaflow one
+    [ "$PREVIOUS_DYNAMICS_SOURCE" = "carla_pedals" ] || { echo "COMPLETE_RUN=$COMPLETE_RUN was driven with the removed teleport dynamics (dynamics_source ${PREVIOUS_DYNAMICS_SOURCE:-not recorded}) and cannot be completed"; exit 1; }
+    PREVIOUS_PEDAL_REVERSE=$(run_info_value pedal_reverse)   # written by runs from before reverse was removed
+    [ "${PREVIOUS_PEDAL_REVERSE:-0}" = "0" ] || { echo "COMPLETE_RUN=$COMPLETE_RUN was driven with the removed pedal reverse (pedal_reverse $PREVIOUS_PEDAL_REVERSE) and cannot be completed"; exit 1; }
+    COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-$(run_info_value pedal_yellow_margin)}   # a run from before the knob has no such line: set it by hand
 fi
 SCENARIOS=${SCENARIOS:-1}
 if [ "$SCENARIOS" = "1" ]; then
@@ -111,8 +110,6 @@ WANDB_REPORT=${WANDB_REPORT:-1}
 export COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-0.8}
 export COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-40}   # GIGAFLOW's eval value; empty = the checkpoint's training value
 [[ -z "$COSIM_OBS_SLOTS_PARTNERS_N" || "$COSIM_OBS_SLOTS_PARTNERS_N" =~ ^[1-9][0-9]*$ ]] || { echo "COSIM_OBS_SLOTS_PARTNERS_N=\"$COSIM_OBS_SLOTS_PARTNERS_N\" must be a positive integer or empty"; exit 1; }
-export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-carla_pedals}
-[[ "$COSIM_DYNAMICS_SOURCE" =~ ^(opengigaflow|carla_pedals)$ ]] || { echo "COSIM_DYNAMICS_SOURCE=\"$COSIM_DYNAMICS_SOURCE\" must be opengigaflow or carla_pedals"; exit 1; }
 export COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}
 [[ "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }
 EVALUATOR=$GARAGE_WORK_DIR/leaderboard/leaderboard/leaderboard_evaluator_local.py
@@ -142,10 +139,7 @@ TAG=longest6_v1$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "
 case "$SEEDS" in "0 1 2") ;; "") TAG=${TAG}_legacyseed ;; *) TAG=${TAG}_seeds$(echo "$SEEDS" | tr ' ' '-') ;; esac
 TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0.8" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
 TAG=$TAG$([ "$COSIM_OBS_SLOTS_PARTNERS_N" = "40" ] || echo "_partners${COSIM_OBS_SLOTS_PARTNERS_N:-trained}")
-TAG=$TAG$([ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ] || echo "_$COSIM_DYNAMICS_SOURCE")
-if [ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ]; then
-    TAG=$TAG$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
-fi
+TAG=$TAG$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
 # results live in the model's own eval folder, next to the OpenGigaFlow benchmark evals
 OUT=${COMPLETE_RUN:-$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
@@ -156,7 +150,7 @@ if [ -z "$COMPLETE_RUN" ]; then
         echo "checkpoint $CKPT"; echo "routes $ROUTE_DIR ($ROUTES_XML)"; echo "scenarios $SCENARIO_FILE"
         echo "seeds $SEEDS"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"; echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
         echo "obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N"
-        echo "dynamics_source $COSIM_DYNAMICS_SOURCE"
+        echo "dynamics_source carla_pedals"   # COMPLETE_RUN refuses a run without it
         echo "pedal_yellow_margin $COSIM_PEDAL_YELLOW_MARGIN"
         echo "port_base $PORT_BASE"
         echo "git $GIT_STATE"
@@ -256,7 +250,7 @@ if [ -n "$COMPLETE_RUN" ]; then
         done
         for f in "$OUT"/worker_w*.log; do [ -e "$f" ] && mv "$f" "$PREVIOUS/"; done
     fi
-    echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]:-none}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N; dynamics_source $COSIM_DYNAMICS_SOURCE; pedal_yellow_margin $COSIM_PEDAL_YELLOW_MARGIN; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
+    echo "completion $COMPLETION_STAMP on $(hostname): route runs ${UNITS[*]:-none}; checkpoint $CKPT; scenarios $SCENARIO_FILE; seeds $SEEDS; repetitions $REPETITIONS; vru_size_pad_m $COSIM_VRU_SIZE_PAD_M; obs_slots_partners_n $COSIM_OBS_SLOTS_PARTNERS_N; pedal_yellow_margin $COSIM_PEDAL_YELLOW_MARGIN; gpus $NUM_GPUS; git $GIT_STATE" >> "$OUT/run_info.txt"
 fi
 [ "$WORKERS" -gt "${#UNITS[@]}" ] && WORKERS=${#UNITS[@]}
 # one shared queue, longest route first; length = the xml's polyline (a failed run's duration would read short)

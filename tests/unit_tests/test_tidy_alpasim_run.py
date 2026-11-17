@@ -89,7 +89,7 @@ def _metrics_frame():
 
 
 def _write_fresh_run(root, aggregated=True, source_exists=True):
-    """A finished 12_alpasim.sh run before the tidy: the host's alpagym/ tree with the wizard underneath."""
+    """A finished 7_eval_alpasim.sh run before the tidy: the host's alpagym/ tree with the wizard underneath."""
     run = root / "alpasim_gt_time5_r2_final_model_20261109_120000_7"
     alpagym, wizard = run / "alpagym", run / "alpagym" / "alpasim" / "wizard_0"
     (alpagym / "logs").mkdir(parents=True)

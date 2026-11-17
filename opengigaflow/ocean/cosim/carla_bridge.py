@@ -27,11 +27,6 @@ def bin_path_for_town(town: str) -> str:
     return str(_BIN_DIR / f"opendrive__{town}.bin")
 
 
-def wrap_deg_180(d):
-    """Wrap a degree value (e.g. a yaw difference) to [-180, 180)."""
-    return (d + 180.0) % 360.0 - 180.0
-
-
 # median lane-normal residual left after calibration: larger = wrong bin for this map
 OFFSET_CALIBRATION_MAX_RESIDUAL_M = 1.0
 OFFSET_CALIBRATION_SPACING_M = 10.0
@@ -155,9 +150,6 @@ class CarlaTransform:
 
     def bin_to_loc(self, bx, by):
         return bx - self.tx, -(by - self.ty)
-
-    def z_to_carla(self, bz):
-        return bz - self.tz
 
     def bin_heading_to_yaw(self, heading_rad):
         return -math.degrees(heading_rad)

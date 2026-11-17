@@ -222,7 +222,7 @@ def _write_selfplay_summary(run_dir, distance_per_infraction_meters, num_episode
 
 
 def _write_alpasim_results(run_dir, score_line, at_fault_rows=(ALPASIM_AT_FAULT_ROW,)):
-    """results.txt as 12_alpasim.sh writes it: score line, km between incidents (all, at-fault), per-metric means."""
+    """results.txt as 7_eval_alpasim.sh writes it: score line, km between incidents (all, at-fault), per-metric means."""
     out_dir = run_dir / "eval" / "alpasim_gt_time5_r2_final_model_20261102_013615_909"
     out_dir.mkdir(parents=True)
     result_lines = [

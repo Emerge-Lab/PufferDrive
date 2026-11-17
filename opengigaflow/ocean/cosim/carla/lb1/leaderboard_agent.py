@@ -47,23 +47,9 @@ MAX_JUNCTION_ADVANCE_STEPS = 400  # 200 m: a stop waypoint farther from its junc
 NO_LIGHT_ID = -1
 NO_PARKING_LANE = -1.0
 
-WHEEL_POSITION_CM_PER_M = 100.0
-ROAD_PROBE_MOUNT_Z_M = 0.5  # inside the hull, above any plausible penetration
-ROAD_PROBE_RANGE_M = 20.0
-ROAD_PROBE_POINTS_PER_SECOND = 2000
-ROAD_SURFACE_TAGS = (6, 7, 14, 15, 16, 22)  # CityObjectLabel RoadLines, Roads, Ground, Bridge, RailTrack, Terrain
-REST_ORIGIN_ABOVE_ROAD_M = 0.033  # mkz2017 origin height at rest on a flat road (measured, 0.9.10)
-MESH_LIFT_MARGIN_M = 0.05
-MESH_OFFSET_DEADBAND_M = 0.02
-MESH_OFFSET_MAX_STEP_M = 0.3
-
 
 def get_entry_point():
     return "OpenGigaFlowAgentLB1"
-
-
-def wrap_deg_180(d):
-    return (d + 180.0) % 360.0 - 180.0
 
 
 def actor_state_row(actor):
@@ -94,24 +80,6 @@ def partner_row(actor):
 def plan_xyz(plan):
     """[(carla.Transform, RoadOption)] -> [[x, y, z], ...] CARLA-frame positions."""
     return [[t.location.x, t.location.y, t.location.z] for t, _ in plan]
-
-
-def lane_z_at(wp, offset_m):
-    """Lane height offset_m along the lane from wp (negative = behind); None past the lane network."""
-    if offset_m == 0.0:
-        return wp.transform.location.z
-    found = wp.next(offset_m) if offset_m > 0.0 else wp.previous(-offset_m)
-    return found[0].transform.location.z if found else None
-
-
-def lane_chord_pose(wp, sample_offsets_m):
-    """(origin z, pitch_deg) of a rigid body chord resting on the lane's height profile around wp."""
-    sample_z = [lane_z_at(wp, s) for s in sample_offsets_m]
-    if any(z is None for z in sample_z):
-        return wp.transform.location.z, wrap_deg_180(wp.transform.rotation.pitch)
-    slope = (sample_z[-1] - sample_z[0]) / (sample_offsets_m[-1] - sample_offsets_m[0])
-    z = max(z_i - slope * s_i for z_i, s_i in zip(sample_z, sample_offsets_m))
-    return z, math.degrees(math.atan(slope))
 
 
 def driving_waypoint_samples(carla_map):
@@ -257,44 +225,6 @@ class Mp4Writer:
             self.writer = None
 
 
-class RoadProbe:
-    """Semantic lidar firing straight down from inside the hull: 0.9.10's substitute for World.cast_ray."""
-
-    def __init__(self, world, vehicle, tick_dt):
-        blueprint = world.get_blueprint_library().find("sensor.lidar.ray_cast_semantic")
-        for name, value in (
-            ("channels", "1"),
-            ("range", str(ROAD_PROBE_RANGE_M)),
-            ("points_per_second", str(ROAD_PROBE_POINTS_PER_SECOND)),
-            ("rotation_frequency", str(1.0 / tick_dt)),
-            ("upper_fov", "-90"),
-            ("lower_fov", "-90"),
-        ):
-            blueprint.set_attribute(name, value)
-        mount = carla.Transform(carla.Location(x=0.0, y=0.0, z=ROAD_PROBE_MOUNT_Z_M))
-        self.sensor = world.spawn_actor(blueprint, mount, attach_to=vehicle)
-        self.sensor.listen(self._on_data)
-        self._frame = None
-        self._distance_m = None
-        self._consumed_frame = None
-
-    def _on_data(self, data):
-        distances = sorted(-d.point.z for d in data if d.object_tag in ROAD_SURFACE_TAGS)
-        if distances:
-            self._frame, self._distance_m = data.frame, distances[len(distances) // 2]
-
-    def fresh_distance_m(self):
-        """Median road distance along the body's down axis from the newest unread scan; None when nothing new."""
-        if self._frame is None or self._frame == self._consumed_frame:
-            return None
-        self._consumed_frame = self._frame
-        return self._distance_m
-
-    def destroy(self):
-        self.sensor.stop()
-        self.sensor.destroy()
-
-
 class PolicyServerLink:
     """policy_server.py as a child process in the OpenGigaFlow venv, one request/reply per message."""
 
@@ -363,12 +293,6 @@ class OpenGigaFlowAgentLB1(autonomous_agent.AutonomousAgent):
         self.carla_view_writer = None
         self._collision_sensor = None
         self._collision_events = []
-        self.road_probe = None
-        self.body_chord_offsets_m = None
-        self.mesh_offset_m = 0.0
-        self._previous_body_z = None
-        self._previous_lane_center_z = None
-        self._previous_pitch_rad = 0.0
 
     def sensors(self):
         if not self.debug_carla_view_dir:
@@ -401,18 +325,6 @@ class OpenGigaFlowAgentLB1(autonomous_agent.AutonomousAgent):
         self.tick_dt = float(self.world.get_settings().fixed_delta_seconds)
         self.lights = list(self.world.get_actors().filter("traffic.traffic_light"))
         body = self.vehicle.bounding_box
-        wheels = [
-            [w.max_steer_angle, w.position.x, w.position.y, w.position.z]
-            for w in self.vehicle.get_physics_control().wheels
-        ]
-        front_left, rear_left = wheels[0][1:], wheels[2][1:]
-        half_wheelbase_m = (
-            0.5 * math.sqrt(sum((a - b) ** 2 for a, b in zip(front_left, rear_left))) / WHEEL_POSITION_CM_PER_M
-        )
-        body_rear_m, body_front_m = body.location.x - body.extent.x, body.location.x + body.extent.x
-        assert body_rear_m < -half_wheelbase_m < half_wheelbase_m < body_front_m
-        self.body_chord_offsets_m = (body_rear_m, -half_wheelbase_m, 0.0, half_wheelbase_m, body_front_m)
-        self.road_probe = RoadProbe(self.world, self.vehicle, self.tick_dt)
         route = {
             "town": town,
             "tick_dt": self.tick_dt,
@@ -496,58 +408,6 @@ class OpenGigaFlowAgentLB1(autonomous_agent.AutonomousAgent):
             ],
         }
 
-    def _teleport_carla_ego(self, motion):
-        """Place the CARLA ego at the shadow env's post-step pose (shadow_ego.StepResult.motion): the body chord on
-        the lane's height profile, lifted by the probed road-mesh offset (0.9.10 has no road-mesh raycast)."""
-        _, _, yaw0_deg, _, x, y, yaw_deg, speed, carla_z = motion
-        yaw_delta_deg = wrap_deg_180(yaw_deg - yaw0_deg)
-        wp = self.cmap.get_waypoint(carla.Location(x=x, y=y, z=carla_z))
-        chord_z, pitch_deg = (carla_z, 0.0) if wp is None else lane_chord_pose(wp, self.body_chord_offsets_m)
-        self._update_mesh_offset()
-        z = chord_z + self.mesh_offset_m + REST_ORIGIN_ABOVE_ROAD_M + MESH_LIFT_MARGIN_M
-        pitch_rad, yaw_rad = math.radians(pitch_deg), math.radians(yaw_deg)
-        self._previous_body_z = z
-        self._previous_lane_center_z = carla_z if wp is None else wp.transform.location.z
-        self._previous_pitch_rad = pitch_rad
-        forward = (
-            math.cos(yaw_rad) * math.cos(pitch_rad),
-            math.sin(yaw_rad) * math.cos(pitch_rad),
-            math.sin(pitch_rad),
-        )
-        # one ordered batch, zero momentum first: CARLA's resolver reacts violently to velocity carried into a new pose
-        zero = carla.Vector3D(x=0.0, y=0.0, z=0.0)
-        CarlaDataProvider.get_client().apply_batch_sync(
-            [
-                carla.command.ApplyTargetVelocity(self.vehicle.id, zero),
-                carla.command.ApplyTargetAngularVelocity(self.vehicle.id, zero),
-                carla.command.ApplyTransform(
-                    self.vehicle.id,
-                    carla.Transform(
-                        carla.Location(x=x, y=y, z=z), carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=0.0)
-                    ),
-                ),
-                carla.command.ApplyTargetVelocity(
-                    self.vehicle.id, carla.Vector3D(x=speed * forward[0], y=speed * forward[1], z=speed * forward[2])
-                ),
-                carla.command.ApplyTargetAngularVelocity(
-                    self.vehicle.id, carla.Vector3D(x=0.0, y=0.0, z=yaw_delta_deg / self.tick_dt)
-                ),
-            ],
-            False,
-        )
-
-    def _update_mesh_offset(self):
-        """Road mesh height above the lane's height profile under the body, from the probe's newest scan at the previous pose."""
-        distance_m = self.road_probe.fresh_distance_m()
-        if distance_m is None or self._previous_body_z is None:
-            return
-        # the ray follows the pitched body's down axis; the mount offset is along that axis too
-        vertical_clearance_m = (distance_m - ROAD_PROBE_MOUNT_Z_M) * math.cos(self._previous_pitch_rad)
-        measured_m = self._previous_body_z - vertical_clearance_m - self._previous_lane_center_z
-        step_m = measured_m - self.mesh_offset_m
-        if abs(step_m) > MESH_OFFSET_DEADBAND_M:
-            self.mesh_offset_m += max(-MESH_OFFSET_MAX_STEP_M, min(MESH_OFFSET_MAX_STEP_M, step_m))
-
     def run_step(self, input_data, timestamp, sensors=None):
         if not self.initialized:
             self._init_on_first_step()
@@ -560,12 +420,7 @@ class OpenGigaFlowAgentLB1(autonomous_agent.AutonomousAgent):
         message = {"type": "tick", "snapshot": self._snapshot(), "ground_truth": None}
         if self.ground_truth:
             message["ground_truth"] = self._ground_truth_observation()
-        reply = self.server.request(message)
-        if reply.get("motion") is not None:
-            self._teleport_carla_ego(reply["motion"])
-        if reply.get("control") is None:
-            return carla.VehicleControl()
-        steer, throttle, brake = reply["control"]
+        steer, throttle, brake = self.server.request(message)["control"]
         return carla.VehicleControl(steer=steer, throttle=throttle, brake=brake)
 
     def destroy(self, results=None):
@@ -579,9 +434,6 @@ class OpenGigaFlowAgentLB1(autonomous_agent.AutonomousAgent):
         if self.carla_view_writer is not None:
             self.carla_view_writer.close()
             print(f"[opengigaflow_agent_lb1] wrote CARLA chase-cam video for route {self.route_tag}", flush=True)
-        if self.road_probe is not None:
-            self.road_probe.destroy()
-            self.road_probe = None
         if self._collision_sensor is not None:
             self._collision_sensor.stop()
             self._collision_sensor.destroy()

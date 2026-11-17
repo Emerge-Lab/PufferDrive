@@ -18,15 +18,14 @@ integration is therefore a client/server pair around the shared core:
 - `../shadow_ego.py` — `ShadowEgo`, the carla-free core used by both leaderboards: loads the checkpoint
   and its `config.yaml`, builds the shadow `Drive` env (clean-eval profile, `cosim/arch.py`), calibrates
   the bin frame against CARLA's driving waypoints, maps CARLA lights/stop signs onto the bin, turns the
-  leaderboard's target points into route goals, and per tick overwrites the partners (and, in `carla_pedals`
-  mode, the ego) from the snapshot, runs the policy and integrates one dt. All inputs/outputs are CARLA-frame plain data.
+  leaderboard's target points into route goals, and per tick overwrites the ego and the partners from the
+  snapshot, runs the policy and integrates one dt into pedals and steer. All inputs/outputs are CARLA-frame plain data.
 - `leaderboard_agent.py` (this directory) — the `AutonomousAgent` for the garage evaluator (entry point
   `OpenGigaFlowAgentLB1`), Python 3.7, imports nothing from `opengigaflow`. On the first tick it reads the town, the
   ego's box, the route (`set_global_plan` sparse target points + the dense 1 m route), the driving
   waypoints, every traffic light's stop waypoints (from the trigger volume: 0.9.10 has no
   `get_stop_waypoints`) and every `traffic.stop` trigger volume, and sends them to the server. Every tick
-  it ships ego/partner states and light states, and teleports the ego to the returned pose
-  (`COSIM_DYNAMICS_SOURCE=opengigaflow`) or applies the returned throttle/brake/steer (`carla_pedals`). The
+  it ships ego/partner states and light states and applies the returned throttle/brake/steer. The
   chase-cam mp4 (`COSIM_DEBUG_CARLA_VIEW`) is written here.
 - `policy_server.py` — started by the agent in the OpenGigaFlow venv (`COSIM_SERVER_PYTHON`, default
   `<repo>/.venv/bin/python`), one process per route, `ShadowEgo` behind `lb1_protocol.py`
@@ -68,14 +67,14 @@ launch config "Cosim: CARLA leaderboard 1.0 agent (garage)" runs `run_evaluator.
 `LD_LIBRARY_PATH` at `experiments/compat_lib` (gitignored), which holds the `libtiff.so.5` link:
 `mkdir -p experiments/compat_lib && ln -s /usr/lib/x86_64-linux-gnu/libtiff.so.6 experiments/compat_lib/libtiff.so.5`.
 
-All 36 longest6 routes on the cluster: `scripts/kesai/14_carla_longest6_v1.sh` (WORKERS CARLA 0.9.10 server
+All 36 longest6 routes on the cluster: `scripts/kesai/5_eval_longest6_v1.sh` (WORKERS CARLA 0.9.10 server
 + evaluator pairs sharing the GPUs, each pulling the next `longest6_split` route run from one longest-first
 queue, retries, garage's `result_parser.py` aggregation,
-the nuPlan-style HTML report and the obs replay gallery, like `11_carla_longest6_v2.sh`).
+the nuPlan-style HTML report and the obs replay gallery, like `6_eval_longest6_v2.sh`).
 
 The evaluator reads `BENCHMARK=longest6` (background traffic on every spawn point, stop-sign penalty
 1.0) and `ROUTES` (names the route records) from the environment; `run_leaderboard.sh`,
-`run_evaluator.py` and script 14 export them.
+`run_evaluator.py` and `5_eval_longest6_v1.sh` export them.
 
 ## Differences to the Leaderboard 2.0 co-sim
 
@@ -85,10 +84,7 @@ The evaluator reads `BENCHMARK=longest6` (background traffic on every spawn poin
   stop sign 1.0 under `BENCHMARK=longest6`, no min-speed or scenario-timeout infractions, blocked after
   180 s (`BLOCKED_THRESHOLD`), route timeout 0.8 s/m. `result.json` records carry nine infraction keys.
 - The ego is `vehicle.lincoln.mkz2017`; routes carry weather.
-- CARLA 0.9.10: no `World.cast_ray`, so the ego's body chord rests on the lane's OpenDRIVE height profile
-  and a downward semantic lidar probes the road mesh's offset from it (Town02's mesh sits 0.22 m above its
-  OpenDRIVE; the egg's `Rotation.get_up_vector()` points down, so the pitch comes from the profile too);
-  stop waypoints from the trigger volume.
+- CARLA 0.9.10 has no `get_stop_waypoints`: the lights' stop waypoints come from the trigger volume.
 - The `carla_*` telemetry columns come from `ground_truth.py` (straight-ahead probes in place of lane
   waypoints for the stop sign, no same-lane check for the red light), not from CaRL's criteria.
 
@@ -98,7 +94,7 @@ As for the Leaderboard 2.0 agent: `result.json` (the leaderboard's), `telemetry/
 `world_log/<route>.npz`, `obs_html/<route>.replay.zlib` (rendered by
 `scripts/eval/render_carla_obs_html.py`), `carla_view/<route>.mp4`. `scripts/eval/analyze_carla_cosim.py`
 builds the HTML report from a run folder holding `result.json`, `world_log/`, `telemetry/`, `carla_view/`.
-The cluster scripts (`scripts/kesai/11_carla_longest6_v2.sh`, `14_carla_longest6_v1.sh`) render the pages of the
+The cluster scripts (`scripts/kesai/6_eval_longest6_v2.sh`, `5_eval_longest6_v1.sh`) render the pages of the
 failed route runs only and then flatten every route folder with `scripts/eval/tidy_carla_run.py`: `results.csv`
 at the top, `routes/route_<id>_s<seed>.result.json` for every route run plus `.telemetry.csv` and
 `.world_log.npz` of the failed ones, `details/` for the timing and logs; `TIDY=0` keeps the route folders.

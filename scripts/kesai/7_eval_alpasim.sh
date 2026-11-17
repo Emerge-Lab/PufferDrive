@@ -20,12 +20,12 @@
 #     enroot import -o $SQSH_DIR/nre_ga_26.04.sqsh docker://nvcr.io#nvidia/nre/nre-ga:26.04
 #     python scripts/kesai/docker_archive_to_sqsh.py alpasim-base-<version>.tar.zst $SQSH_DIR/alpasim_base_<version>.sqsh
 # Settings are the plain assignments below; RUN_DIR, TOPOLOGY and N_SCENES are also read from the environment
-# (3_train and 18_train submit this eval with RUN_DIR=<run> sbatch). The topology follows the job's GPUs (8, 2 or 1), e.g.
-#   sbatch --gres gpu:2 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
-#   N_SCENES=2 sbatch --gres gpu:1 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh   # smoke test
+# (0_train_8gpu and 1_train_multinode submit this eval with RUN_DIR=<run> sbatch). The topology follows the job's GPUs (8, 2 or 1), e.g.
+#   sbatch --gres gpu:2 --mem 200G --cpus-per-task 48 scripts/kesai/7_eval_alpasim.sh
+#   N_SCENES=2 sbatch --gres gpu:1 --mem 200G --cpus-per-task 48 scripts/kesai/7_eval_alpasim.sh   # smoke test
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
-# a submission from an array job (18_train) inherits SLURM_ARRAY_*: the wizard would split scenes and skip aggregation
+# a submission from an array job (0_train_8gpu) inherits SLURM_ARRAY_*: the wizard would split scenes and skip aggregation
 unset SLURM_ARRAY_TASK_COUNT SLURM_ARRAY_TASK_ID SLURM_ARRAY_TASK_MIN SLURM_ARRAY_TASK_MAX SLURM_ARRAY_JOB_ID
 
 TOPOLOGY=${TOPOLOGY:-}  # empty = from the GPU count below: 8gpu_64rollouts, 2gpu or 1gpu

@@ -299,7 +299,7 @@ train:
   # Accumulate gradients above this size
   max_minibatch_size: 65536
   # Skip each PPO epoch's leftover minibatch (fewer than minibatch_size transitions) unless it is the only one
-  discard_partial_minibatch: false
+  discard_partial_minibatch: true
   bptt_horizon: 128
   compile: true
   compile_mode: default

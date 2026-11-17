@@ -39,7 +39,7 @@ source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
 # k_scaled_0080: the opengigaflow.yaml defaults with 128 env workers and minibatch 393216 per rank (12.6M rows per optimizer
 # step on 32 ranks) at lr 1.5e-3 for 1e12 steps; the other overrides are run identity, logging and hardware. GPU memory ~21 GB + 0.22 GB per
-# 1024-agent worker (fp16). Another run: sbatch --export=ALL,RUN_NAME=<name> scripts/kesai/3_train_64GPU_multinode_slurm.sh
+# 1024-agent worker (fp16). Another run: sbatch --export=ALL,RUN_NAME=<name> scripts/kesai/1_train_multinode.sh
 srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
     --nproc-per-node=8 \
@@ -66,7 +66,7 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
 [ -f "${MODEL_PATH}" ] || { echo "Training did not produce ${MODEL_PATH}; skipping evaluation."; exit 1; }
 
 # the co-sim evals need one 8-GPU node each: submitted before the long self-play eval below, so they queue while it runs
-for EVAL_SCRIPT in 9_nuPlan.sh 13_nuPlan_nonreactive.sh 11_carla_longest6_v2.sh 14_carla_longest6_v1.sh 12_alpasim.sh; do
+for EVAL_SCRIPT in 3_eval_nuplan_reactive.sh 4_eval_nuplan_nonreactive.sh 6_eval_longest6_v2.sh 5_eval_longest6_v1.sh 7_eval_alpasim.sh; do
     echo "Submitting scripts/kesai/${EVAL_SCRIPT} for ${MODEL_PATH}"
     RUN_DIR=${DATA_DIR} sbatch scripts/kesai/${EVAL_SCRIPT} \
         || echo "submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/${EVAL_SCRIPT}"

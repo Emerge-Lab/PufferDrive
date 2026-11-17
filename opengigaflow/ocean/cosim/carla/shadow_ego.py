@@ -2,8 +2,7 @@
 
 Environment variables:
   COSIM_DEVICE=cpu                    torch device of the policy
-  COSIM_DYNAMICS_SOURCE=opengigaflow  opengigaflow: the shadow env moves the ego; carla_pedals: CARLA's physics does
-  COSIM_PEDAL_YELLOW_MARGIN=1         carla_pedals: the policy sees the remaining yellow less the gear shift time
+  COSIM_PEDAL_YELLOW_MARGIN=1         the policy sees the remaining yellow less the gear shift time
   COSIM_MAX_SPEED_MPS                 ego speed cap (C_vel = cap / base_max_speed_mps) inside the trained C_vel range
   COSIM_ZERO_PARTNER_STOPPED_TIME=0   1: vehicle partners' seconds_stopped held at 0 (walkers keep theirs)
   COSIM_VRU_SIZE_PAD_M=0.0            added to the length and width of every walker and two-wheeler partner box
@@ -72,9 +71,8 @@ DEFAULT_CONDITIONING_SPEED_SCALE = 1.5
 MAX_POLICY_STEPS = 100_000  # shadow-env episode cap (~1.4 h at the 0.05 s CARLA tick); sizes the light state buffers
 MIN_PARTNER_SIZE_M = 0.1
 EGO_INFRACTION_METRICS = {"collision": 0, "offroad": 1, "red_light": 2, "stop_sign": 3}  # metrics_array indices
-DYNAMICS_SOURCES = ("opengigaflow", "carla_pedals")
 DRIVE_WHEELBASE_PER_LENGTH = 0.6  # must equal the jerk model's wheelbase / sim_length
-STANDSTILL_SPEED_MPS = 0.1  # carla_pedals: slower than this, rolling backwards included, the ego counts as standing
+STANDSTILL_SPEED_MPS = 0.1  # slower than this, rolling backwards included, the ego counts as standing
 TELEMETRY_HEADER = (
     "step,current_speed,target_speed,ego_action,goal_cursor,goal_dist_m,"
     "near_light_dist_m,near_light_state,"
@@ -125,14 +123,11 @@ def ego_speed_from_state(state):
 
 
 class StepResult:
-    """One policy step: `actions` (1, act_dim) float32, the shadow env's infraction flags `pd_flags` (None unless
-    telemetry is written) and the ego command: `motion` = [x0, y0, yaw0_deg, speed0, x1, y1, yaw1_deg, speed1, z1]
-    (CARLA frame, pre- and post-step pose to teleport along) in opengigaflow mode, `control` = (steer, throttle,
-    brake) in carla_pedals mode."""
+    """One policy step: `actions` (1, act_dim) float32, the ego command `control` = (steer, throttle, brake) and the
+    shadow env's infraction flags `pd_flags` (None unless telemetry is written)."""
 
-    def __init__(self, actions, motion=None, control=None, pd_flags=None):
+    def __init__(self, actions, control, pd_flags=None):
         self.actions = actions
-        self.motion = motion
         self.control = control
         self.pd_flags = pd_flags
 
@@ -146,9 +141,6 @@ class ShadowEgo:
         self.checkpoint = str(checkpoint)
         self.cfg = load_checkpoint_config(checkpoint_config_path(checkpoint))
         self.device = os.environ.get("COSIM_DEVICE", "cpu")
-        self.dynamics_source = os.environ.get("COSIM_DYNAMICS_SOURCE", "opengigaflow")
-        if self.dynamics_source not in DYNAMICS_SOURCES:
-            raise ValueError(f"COSIM_DYNAMICS_SOURCE must be one of {DYNAMICS_SOURCES}, got {self.dynamics_source!r}")
         env_cfg = self.cfg["env"]
         self.max_speed_mps = cosim_max_speed_mps(env_cfg)
         self.obs_slots_partners_n = cosim_obs_slots_partners_n()
@@ -169,12 +161,12 @@ class ShadowEgo:
         self._partner_stopped_s = {}  # CARLA actor id -> seconds at standstill
         self._partner_stopped_speed_threshold = float(binding.AGENT_STOPPED_SPEED_THRESHOLD)
         self._steering_limit_rad = float(binding.STEERING_LIMIT)
-        self._intent_accel_mps2 = 0.0  # carla_pedals: the jerk integrator's own state, never re-read from CARLA
+        self._intent_accel_mps2 = 0.0  # the jerk integrator's own state, never re-read from CARLA
         self._intent_steering_rad = 0.0
         self._plant_speed_mps = 0.0  # along the car's forward axis, negative while it rolls backwards
         self._plant_gear = 0
-        self._held = False  # carla_pedals: braked to a stop and kept on the brake until the policy asks to move
-        self._yellow_margin_s = 0.0  # carla_pedals: the policy sees this much less yellow than CARLA has left
+        self._held = False  # braked to a stop and kept on the brake until the policy asks to move
+        self._yellow_margin_s = 0.0  # the policy sees this much less yellow than CARLA has left
         self.obs_html_max_steps = int(os.environ.get("COSIM_OBS_HTML_MAX_STEPS", "12000"))
         self.obs_html_render = env_flag("COSIM_OBS_HTML_RENDER", "1")
         self._obs_html = None
@@ -183,7 +175,7 @@ class ShadowEgo:
         self.initialized = False
         self.policy = None
         self.env = None
-        self.controller = None  # PedalMap in carla_pedals mode
+        self.controller = None
         self.goal_window = None
         self.target_speed_mps = 0.0  # the shadow ego's post-step speed, held between policy steps
         self._ego_speed_carla = 0.0  # CARLA's own ego speed at the last sync (carla dynamics telemetry)
@@ -259,8 +251,6 @@ class ShadowEgo:
         )
         self.transform = cb.CarlaTransform(town, offset=offset, z_offset=z_offset)
         ego_state = [float(v) for v in ego["state"]]
-        if self.dynamics_source == "opengigaflow":
-            self._sync_ego(ego_state, zero_velocity=True)
         target_points = np.asarray(route["sparse_plan"], dtype=np.float64).reshape(-1, 3).copy()
         dense_points = np.asarray(route["dense_plan"], dtype=np.float64).reshape(-1, 3).copy()
         self.dense_plan_xy = dense_points[:, :2].copy()  # CARLA frame, for the world log
@@ -314,11 +304,10 @@ class ShadowEgo:
         self.last_yellow_remaining_s = np.zeros(self.num_traffic, np.float32)
         self._yellow_countdown = YellowCountdown(self.env.traffic_light_yellow_min_s, self.dt)
 
-        if self.dynamics_source == "carla_pedals":
-            self.controller = PedalMap(pedal_gains_for(ego.get("blueprint")))
-            if self.pedal_yellow_margin:
-                # a sprint through a yellow can lose one gear shift without drive, which the policy does not know about
-                self._yellow_margin_s = self.controller.gains.gear_shift_seconds
+        self.controller = PedalMap(pedal_gains_for(ego.get("blueprint")))
+        if self.pedal_yellow_margin:
+            # a sprint through a yellow can lose one gear shift without drive, which the policy does not know about
+            self._yellow_margin_s = self.controller.gains.gear_shift_seconds
 
         if self.obs_html_dir:
             from opengigaflow.ocean.cosim.obs_replay import ObsReplayCapture
@@ -431,7 +420,7 @@ class ShadowEgo:
             remaining_by_id[light_id] = countdown_s[light_id] if timed_s is None else timed_s
         return remaining_by_id
 
-    def _sync_ego(self, ego_state, zero_velocity=False, keep_integrator_state=False):
+    def _sync_ego(self, ego_state):
         """Overwrite agent 0 (ego) from the simulator's ground-truth pose/size."""
         bin_state = self.transform.state_to_bin(
             ego_state[STATE_X],
@@ -446,18 +435,12 @@ class ShadowEgo:
             self.ego_box_z,
             self.ego_extent[2],
         )
-        if zero_velocity:
-            x, y, z, heading, *_ = bin_state
-            bin_state = (x, y, z, heading, 0.0, 0.0, 0.0, 0.0)
-        steering = None
-        if keep_integrator_state:
-            bin_state = self._plant_state(bin_state)
-            steering = [self._intent_steering_rad]
-        self.env.set_agent_states([0], *[[value] for value in bin_state], steering=steering)
+        bin_state = self._plant_state(bin_state)
+        self.env.set_agent_states([0], *[[value] for value in bin_state], steering=[self._intent_steering_rad])
         self.env.set_agent_sizes([0], [2.0 * self.ego_extent[0]], [2.0 * self.ego_extent[1]])
 
     def _plant_state(self, bin_state):
-        """carla_pedals: pose, velocity and yaw rate from CARLA's physics, acceleration from the jerk integrator."""
+        """Pose, velocity and yaw rate from CARLA's physics, acceleration from the jerk integrator."""
         x, y, z, heading, vx, vy, yaw_rate, _ = bin_state
         self._plant_speed_mps = vx * math.cos(heading) + vy * math.sin(heading)
         self.controller.observe(self._plant_speed_mps, -yaw_rate, self.tick_dt)
@@ -478,13 +461,12 @@ class ShadowEgo:
         return (x, y, z, travel_heading, vx, vy, yaw_rate, self._intent_accel_mps2)
 
     def _sync(self, snapshot):
-        """Overwrite the shadow env's partners and lights (and the ego in carla_pedals mode) from the simulator's
-        ground truth -> the recomputed observations, row 0 = ego."""
+        """Overwrite the shadow env's ego, partners and lights from the simulator's ground truth -> the recomputed
+        observations, row 0 = ego."""
         ego_state = [float(v) for v in snapshot["ego"]]
         self._ego_speed_carla = ego_speed_from_state(ego_state)
-        if self.dynamics_source == "carla_pedals":
-            self._plant_gear = int(snapshot["ego_gear"])
-            self._sync_ego(ego_state, keep_integrator_state=True)
+        self._plant_gear = int(snapshot["ego_gear"])
+        self._sync_ego(ego_state)
         ego = self.env.get_global_agent_state()
         ebx, eby = float(ego["x"][0]), float(ego["y"][0])
 
@@ -514,25 +496,12 @@ class ShadowEgo:
         return np.asarray(self.env.recompute_observations())
 
     def _integrate(self, actions):
-        """Step the shadow env once: opengigaflow mode teleports the ego along its pre/post-step pose, carla_pedals
-        mode turns the jerk integrator's acceleration and steering into pedals and steer for CARLA's physics."""
+        """Step the shadow env once and turn the jerk integrator's acceleration and steering into pedals and steer
+        for CARLA's physics."""
         if self.step_count >= MAX_POLICY_STEPS:
             raise RuntimeError(f"route exceeded MAX_POLICY_STEPS={MAX_POLICY_STEPS} policy steps")
-        before = self.env.get_global_agent_state()
-        speed_before = self._ego_speed()
         self.env.step(actions)
         self.target_speed_mps = self._ego_speed()
-
-        if self.dynamics_source == "opengigaflow":
-            after = self.env.get_global_agent_state()
-            x0, y0 = self.transform.bin_to_loc(float(before["x"][0]), float(before["y"][0]))
-            x1, y1 = self.transform.bin_to_loc(float(after["x"][0]), float(after["y"][0]))
-            yaw0_deg = self.transform.bin_heading_to_yaw(float(before["heading"][0]))
-            yaw1_deg = self.transform.bin_heading_to_yaw(float(after["heading"][0]))
-            z1 = self.transform.z_to_carla(float(after["z"][0]))
-            return StepResult(
-                actions, motion=[x0, y0, yaw0_deg, speed_before, x1, y1, yaw1_deg, self.target_speed_mps, z1]
-            )
 
         ego_obs = np.asarray(self.env.observations)[0]
         self._intent_accel_mps2 = float(ego_obs[EGO_OBS_ACCEL_LONG_IDX]) * binding.ACCEL_LONG_NORM
@@ -547,7 +516,7 @@ class ShadowEgo:
             self._plant_gear,
             self._held and self._intent_accel_mps2 <= 0.0,
         )
-        return StepResult(actions, control=control)
+        return StepResult(actions, control)
 
     def step(self, snapshot):
         """One policy step from snapshot = {ego: ACTOR_STATE, ego_gear, partners: PARTNER_ROW list (nearest first),
@@ -659,9 +628,8 @@ class ShadowEgo:
             d2 = (self.stop_line_centers[:, 0] - ex) ** 2 + (self.stop_line_centers[:, 1] - ey) ** 2
             j = int(d2.argmin())
             near_dist, near_state = float(np.sqrt(d2[j])), int(self.last_light_states[j])
-        current_speed = self._ego_speed() if self.dynamics_source == "opengigaflow" else self._ego_speed_carla
         self.telemetry_file.write(
-            f"{self.step_count},{current_speed:.3f},{self.target_speed_mps:.3f},"
+            f"{self.step_count},{self._ego_speed_carla:.3f},{self.target_speed_mps:.3f},"
             f"{float(result.actions[0, 0])},{self.goal_window.current_index},{goal_dist:.1f},{near_dist:.1f},{near_state},"
             f"{pd_flags['collision']:.0f},{pd_flags['offroad']:.0f},{pd_flags['red_light']:.0f},"
             f"{pd_flags['stop_sign']:.0f},"
@@ -673,10 +641,9 @@ class ShadowEgo:
         """Route done: flush every per-route output and release the shadow env."""
         if not self.initialized:
             return
-        pedal_stats = {} if self.controller is None else self.controller.stats()
         print(
             f"[opengigaflow_agent] route done: goals {self.goal_window.current_index + 1}/{len(self.route_goals)}, "
-            f"tracking {pedal_stats}"
+            f"tracking {self.controller.stats()}"
         )
         if self.telemetry_file is not None:
             self.telemetry_file.close()

@@ -9,10 +9,10 @@ Evaluate an OpenGigaFlow-trained policy with **CaRL's unmodified `original_leade
 Zero changes to CaRL. The leaderboard imports any agent file via `--agent`, so the whole integration is this package:
 
 - `shadow_ego.py` — `ShadowEgo`, the carla-free core shared with the Leaderboard 1.0 integration (`lb1/`).
-  Loads an OpenGigaFlow checkpoint, builds the shadow `Drive` env from the checkpoint's config, calibrates the bin frame, maps lights/stop signs and route goals, and every CARLA tick (the shadow env runs at the 0.05 s tick, no action repeat): overwrites the partners (and, in `carla_pedals` mode, the ego) from the CARLA-frame snapshot (ego pose/velocity, nearest vehicles+walkers with true bounding boxes, traffic-light states, route goals from the leaderboard's target points), recomputes observations, runs the policy and integrates one dt into the ego's next pose (or into pedals and steer for CARLA's own physics). All per-route logs (telemetry, world log, obs replay) are written here.
-- `leaderboard_agent.py` — `AutonomousAgent` subclass (entry point `OpenGigaFlowAgent`), the CARLA side: reads the ground truth into the snapshot, teleports the ego to the returned pose (resting it on the road mesh), runs CaRL's criteria for the `carla_*` telemetry columns, and returns a `carla.VehicleControl` every tick. Get `sensor.camera.rgb` chase cam via `sensors()` — the leaderboard's own standard sensor mechanism, so this doesn't touch the read-only-w.r.t.-CARLA contract; frames stream straight to an mp4 writer. `COSIM_OBS_HTML` records the interactive observation replay (exact policy input/outputs).
+  Loads an OpenGigaFlow checkpoint, builds the shadow `Drive` env from the checkpoint's config, calibrates the bin frame, maps lights/stop signs and route goals, and every CARLA tick (the shadow env runs at the 0.05 s tick, no action repeat): overwrites the ego and the partners from the CARLA-frame snapshot (ego pose/velocity, nearest vehicles+walkers with true bounding boxes, traffic-light states, route goals from the leaderboard's target points), recomputes observations, runs the policy and integrates one dt into pedals and steer for CARLA's own physics. All per-route logs (telemetry, world log, obs replay) are written here.
+- `leaderboard_agent.py` — `AutonomousAgent` subclass (entry point `OpenGigaFlowAgent`), the CARLA side: reads the ground truth into the snapshot, runs CaRL's criteria for the `carla_*` telemetry columns, and returns the policy's `carla.VehicleControl` every tick. Get `sensor.camera.rgb` chase cam via `sensors()` — the leaderboard's own standard sensor mechanism, so this doesn't touch the read-only-w.r.t.-CARLA contract; frames stream straight to an mp4 writer. `COSIM_OBS_HTML` records the interactive observation replay (exact policy input/outputs).
 - `controller.py` — `PedalMap`:
-  turns the jerk integrator's acceleration and steering into throttle/brake/steer for CARLA's own vehicle physics (`COSIM_DYNAMICS_SOURCE=carla_pedals`)
+  turns the jerk integrator's acceleration and steering into throttle/brake/steer for CARLA's own vehicle physics
 - `lb1/` — the same policy under carla_garage's Leaderboard 1.0 (CARLA 0.9.10.1, longest6 v1): a Python 3.7 client agent plus `policy_server.py` running `ShadowEgo` in the OpenGigaFlow venv; see `lb1/README.md`.
 
 All shadow-env assumptions about the model (observation layout, dynamics model, dt, goal
@@ -22,32 +22,17 @@ count/radius, reward conditioning) are adopted from the checkpoint's sibling `co
 
 ## How to run
 
-All 36 longest6 v2 routes on the cluster: `scripts/kesai/11_carla_longest6_v2.sh`. Locally, against a CARLA 0.9.15
+All 36 longest6 v2 routes on the cluster: `scripts/kesai/6_eval_longest6_v2.sh`. Locally, against a CARLA 0.9.15
 server you started yourself, in a cp310 env (CARLA 0.9.15 ships no cp312 wheel): `run_evaluator.py --model-dir <dir>
 --routes <xml> ...` (VS Code launch config "Cosim: CARLA leaderboard agent") with `CARL_WORK_DIR` and
 `SCENARIO_RUNNER_ROOT` exported (route scenarios silently fail to load without the latter, so `leaderboard_agent.py`
 refuses to start). The agent's environment variables are listed in `leaderboard_agent.py`, the shadow env's (`COSIM_*`)
 in `shadow_ego.py`.
 
-### Ego dynamics source
+### Ego dynamics
 
-`COSIM_DYNAMICS_SOURCE=opengigaflow` (default): OpenGigaFlow's
-own dynamics (the ones the policy was trained on) move the ego, and the CARLA
-actor is teleported to the post-step pose every tick, where the next tick's
-observation reads it. The teleport keeps the body flat on CARLA's road plane
-(pitch/roll from the waypoint's up vector rotated into the policy's heading,
-velocity along the pitched forward vector): a yaw-only pose on Town03/04
-grades of 5-15 deg buried the wheels in the mesh and logged 20-30
-`static.road` collisions per route. Physics is left ON (disabling it on the
-leaderboard-managed hero actor segfaults UE4), but the batched `ApplyTransform`
-overrides it every step. Target linear/angular velocity is also pushed each step so CARLA's own
-`get_velocity()` (read by CaRL's own criteria, e.g. `MinSpeedTest`) reflects
-the actual motion. The ego is then no longer a physically-simulated CARLA
-vehicle; the leaderboard's route/collision/infraction criteria still see it
-correctly since they only read its pose.
-
-`COSIM_DYNAMICS_SOURCE=carla_pedals` drives the CARLA vehicle the way the leaderboard
-prescribes: the agent only returns a `carla.VehicleControl` (steer, throttle, brake) from
+The agent drives the CARLA vehicle the way the leaderboard
+prescribes: it only returns a `carla.VehicleControl` (steer, throttle, brake) from
 `run_step`, nothing else touches the ego, and the gearbox stays automatic: the leaderboard resets
 `manual_gear_shift` on every control, so the agent cannot select gears. Like the nuPlan planner's
 bicycle model, CARLA is the plant: pose, speed, yaw rate and the current gear are
@@ -74,9 +59,9 @@ summary line prints how far the gains are off (`accel_bias_*`, per gear
 `accel_bias_by_gear_mps2` = (ticks, bias), `yaw_rate_gain`). An automatic
 shift leaves the car without drive for `gear_shift_seconds` (0.5 s on the v1 car), which no pedal
 value can make up for and the policy has never seen: it would sprint through a yellow and arrive
-late. So in this mode the policy sees that much less remaining yellow than CARLA reports and stops
-at those lights instead (`COSIM_PEDAL_YELLOW_MARGIN=0`: it sees CARLA's value and sprints). Scripts
-11 and 14 pass that switch through and tag the result folder `_noyellowmargin`.
+late. So the policy sees that much less remaining yellow than CARLA reports and stops
+at those lights instead (`COSIM_PEDAL_YELLOW_MARGIN=0`: it sees CARLA's value and sprints). The longest6
+scripts pass that switch through and tag the result folder `_noyellowmargin`.
 Not handled: road grade (gravity is not compensated).
 
 ### Bin frame calibration

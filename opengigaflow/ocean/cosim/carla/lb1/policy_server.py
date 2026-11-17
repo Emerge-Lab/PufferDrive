@@ -20,11 +20,7 @@ MAX_MESSAGES = MAX_POLICY_STEPS + 16  # ticks plus the handshake; the shadow env
 
 
 def reply_for_step(result):
-    return {
-        "type": "control",
-        "motion": None if result.motion is None else [float(v) for v in result.motion],
-        "control": None if result.control is None else [float(v) for v in result.control],
-    }
+    return {"type": "control", "control": [float(v) for v in result.control]}
 
 
 def serve(sock, shadow):

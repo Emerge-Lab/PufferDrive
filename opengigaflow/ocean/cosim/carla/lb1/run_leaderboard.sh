@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run lb1/leaderboard_agent.py under carla_garage's leaderboard_evaluator_local.py (CARLA Leaderboard 1.0,
 # CARLA 0.9.10.1): start a CARLA server, evaluate one routes xml, stop the server. One machine, one GPU;
-# scripts/kesai/14_carla_longest6_v1.sh is the cluster version over all 36 longest6 routes.
+# scripts/kesai/5_eval_longest6_v1.sh is the cluster version over all 36 longest6 routes.
 #
 # Usage:
 #   CKPT=experiments/<run>/final_model.pt bash opengigaflow/ocean/cosim/carla/lb1/run_leaderboard.sh

@@ -112,6 +112,7 @@ FINE_TUNE_ENV_KEYS = {
     "obs_dropout_lane",
     "obs_slots_partners_n",
     "obs_slots_traffic_controls_n",
+    "obs_traffic_light_yellow_remaining",
     "traffic_lights_enabled",
     "stop_signs_enabled",
 }
@@ -1293,6 +1294,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
                 args["policy"].update(yaml_config["policy"])
             if isinstance(yaml_config.get("env"), dict):
                 checkpoint_env = yaml_config["env"]
+                # a config saved before this obs column existed carries no key: that policy has no such column
+                args["env"]["obs_traffic_light_yellow_remaining"] = False
                 args["env"].update({key: checkpoint_env[key] for key in checkpoint_env if key in FINE_TUNE_ENV_KEYS})
         else:
             print(
@@ -1385,6 +1388,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
             trainer.global_step = tstate["global_step"]
             trainer.last_log_step = trainer.global_step
             trainer.epoch = tstate["update"]
+            trainer.ema_max = tstate["ema_max"]
             # fast-forward the cosine schedule to the resumed epoch
             for _ in range(trainer.epoch):
                 trainer.scheduler.step()

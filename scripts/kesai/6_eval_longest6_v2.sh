@@ -21,7 +21,7 @@
 #   ROUTE_SUBSET               "0 5 17": only these route ids
 #   WORKERS (16), NUM_GPUS (the allocation's), STAGGER_S (15 s between worker launches), MAX_ATTEMPTS (3)
 #   PORT_BASE (12000)          worker w: rpc port PORT_BASE+50w, TM PORT_BASE+6000+50w; run_info.txt: the base used
-#   OMP_NUM_THREADS            policy threads (2 from 16 workers on, else 4)
+#   OMP_NUM_THREADS            policy threads (2 from 16 workers on, else 4; a job chained by a training script inherits its 1)
 #   LOGGING (1)                telemetry, world log and obs replay per route; 0 = scores only
 #   CARLA_VIEW (0)             1 = chase-cam mp4 per route on a rendering server (needs LOGGING=1)
 #   OBS_HTML (1 = failures)    replay pages of the route runs with a flagged infraction or failed status; all; 0 = none
@@ -31,8 +31,7 @@
 #   COSIM_MAX_SPEED_MPS (30)   ego speed cap
 #   COSIM_ZERO_PARTNER_STOPPED_TIME (1)  vehicles' stopped-time obs held at 0, walkers keep theirs; 0 = all real
 #   COSIM_VRU_SIZE_PAD_M (0.8) added to the length and width of walker and two-wheeler boxes; 0 = true CARLA boxes
-#   COSIM_DYNAMICS_SOURCE (carla_pedals: CARLA's physics moves the ego; opengigaflow: teleported by OpenGigaFlow's)
-#   COSIM_PEDAL_YELLOW_MARGIN (1)  carla_pedals: 0 = the policy sees CARLA's remaining yellow
+#   COSIM_PEDAL_YELLOW_MARGIN (1)  0 = the policy sees CARLA's remaining yellow
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
 
@@ -92,8 +91,6 @@ cd "$PD" || exit 1
 OMP_THREADS=${OMP_NUM_THREADS:-$([ "$WORKERS" -ge 16 ] && echo 2 || echo 4)}
 export OMP_NUM_THREADS=$OMP_THREADS MKL_NUM_THREADS=$OMP_THREADS OPENBLAS_NUM_THREADS=$OMP_THREADS NUMEXPR_NUM_THREADS=$OMP_THREADS
 export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
-export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-carla_pedals}
-[[ "$COSIM_DYNAMICS_SOURCE" =~ ^(opengigaflow|carla_pedals)$ ]] || { echo "COSIM_DYNAMICS_SOURCE=\"$COSIM_DYNAMICS_SOURCE\" must be opengigaflow or carla_pedals"; exit 1; }
 export COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}
 [[ "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }
 export COSIM_MAX_SPEED_MPS=${COSIM_MAX_SPEED_MPS:-30}
@@ -106,17 +103,14 @@ export COSIM_OBS_HTML_RENDER=0  # routes save the compact replay only; render_ca
 TAG=longest6_v2$([ "$SCENARIOS" = "1" ] || echo "_noscen")$([ "$REPETITIONS" = "1" ] || echo "_rep$REPETITIONS")
 TAG=$TAG$([ "$SEEDS" = "0 1 2" ] || echo "_seeds$(echo "$SEEDS" | tr ' ' '-')")
 TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0.8" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
-TAG=$TAG$([ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ] || echo "_$COSIM_DYNAMICS_SOURCE")
-if [ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ]; then
-    TAG=$TAG$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
-fi
+TAG=$TAG$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
 # results live in the model's own eval folder, next to the OpenGigaFlow benchmark evals
 OUT=$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT/routes" "$OUT/aggregate"
 {
     echo "checkpoint $CKPT"; echo "routes $ROUTES"; echo "seeds $SEEDS"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"
     echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
-    echo "dynamics_source $COSIM_DYNAMICS_SOURCE"
+    echo "dynamics_source carla_pedals"
     echo "pedal_yellow_margin $COSIM_PEDAL_YELLOW_MARGIN"
     echo "git $(git -C "$PD" rev-parse --short HEAD 2>/dev/null) $(git -C "$PD" diff --quiet 2>/dev/null || echo dirty)"
     echo "port_base $PORT_BASE"

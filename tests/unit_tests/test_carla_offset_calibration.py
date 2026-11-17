@@ -68,8 +68,7 @@ def test_calibration_recovers_translation_and_height():
     assert abs(z_offset - TRUE_Z_OFFSET) < 0.02
 
 
-def test_transform_z_round_trip():
+def test_transform_z_offset():
     transform = cb.CarlaTransform("Town04", z_offset=TRUE_Z_OFFSET)
     assert transform.z_to_bin(0.0) == TRUE_Z_OFFSET
-    assert transform.z_to_carla(transform.z_to_bin(-1.24)) == -1.24
     assert cb.CarlaTransform("Town04").tz == 0.0

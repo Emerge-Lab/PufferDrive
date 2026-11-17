@@ -3,7 +3,7 @@ library only (the agent imports it as a sibling module). Handshake, then one req
   server -> client  {"type": "config", "partner_slots", "partner_max_abs_dz_m", "light_probe_steps_m"}
   client -> server  {"type": "init", "route": ShadowEgo.init_route dict}         -> {"type": "ready"}
   client -> server  {"type": "tick", "snapshot": ShadowEgo.step dict, "ground_truth": ground_truth.py observation
-                     or null}                    -> {"type": "control", "motion": [...] | null, "control": [...] | null}
+                     or null}                                     -> {"type": "control", "control": [steer, throttle, brake]}
   client -> server  {"type": "finish"}                                            -> {"type": "done"}
 """
 

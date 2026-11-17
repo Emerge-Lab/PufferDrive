@@ -398,6 +398,7 @@ class Multiprocessing:
                     worker_seeds[worker_idx],
                     self.worker_cpus[worker_idx],
                 ),
+                daemon=True,  # a driver that fails before close() must exit instead of waiting on its workers
             )
             process.start()
             self.processes.append(process)

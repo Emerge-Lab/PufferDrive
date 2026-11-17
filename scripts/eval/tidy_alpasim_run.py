@@ -1,4 +1,4 @@
-"""Tidy a scripts/kesai/12_alpasim.sh run to results.txt, run_info.txt, obs_html/, details/ and kept rollout logs."""
+"""Tidy a scripts/kesai/7_eval_alpasim.sh run to results.txt, run_info.txt, obs_html/, details/ and kept rollout logs."""
 
 import argparse
 import json
@@ -146,7 +146,7 @@ def sweep_wizard(wizard_dir, rows, keep_rule):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("run_dir", help="output dir of 12_alpasim.sh")
+    ap.add_argument("run_dir", help="output dir of 7_eval_alpasim.sh")
     ap.add_argument("--keep_rollout_logs", choices=tuple(KEEP_RULES), default="none")
     ap.add_argument("--keep_container_info", action="store_true", help="keep the containers' INFO lines in the logs")
     args = ap.parse_args()

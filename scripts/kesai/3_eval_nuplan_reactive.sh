@@ -14,7 +14,7 @@ source scripts/kesai/cluster_env.sh || exit 1
 
 export PY=$(conda info --base)/envs/carl_nuplan/bin/python
 # Overridable env (default):
-#   RUN_DIR           the training run (3_train submits this job with RUN_DIR=<its run dir>)
+#   RUN_DIR           the training run (0_train_8gpu and 1_train_multinode submit this job with RUN_DIR=<its run dir>)
 #   CHALLENGES        closed_loop_reactive_agents_opengigaflow | closed_loop_nonreactive_agents_opengigaflow
 #   WANDB_REPORT (1)  the CLS -> the run's final_eval/nuplan_{reactive,nonreactive}_CLS in wandb; 0 for ablations
 RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0059_1000}
@@ -109,7 +109,7 @@ if [ "$WANDB_REPORT" = "1" ] && [ $RUNNER_STATUS -eq 0 ]; then
         "$WANDB_EVAL_TYPE" "$GROUP/overview.csv" --run-dir "$RUN_DIR" --expected-episode-count "$VAL14_SCENARIO_COUNT" \
         || echo "wandb report failed (results above are unaffected)"
 fi
-# the job's own log next to the results (the SBATCH --output of this script or of 13_nuPlan_nonreactive.sh)
+# the job's own log next to the results (the SBATCH --output of this script or of 4_eval_nuplan_nonreactive.sh)
 JOB_LOGS=(experiments/logs/nuPlan_*_"${SLURM_JOB_ID:-none}".out experiments/logs/nuPlan_*_"${SLURM_JOB_ID:-none}".err)
 for job_log in "${JOB_LOGS[@]}"; do
     [ -f "$job_log" ] && [ -d "$GROUP/details" ] && cp "$job_log" "$GROUP/details/"

@@ -5180,7 +5180,8 @@ void c_step(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
-        if (agent->metrics_array[REACHED_GOAL_IDX] == 0.0f) {
+        // stopped and removed agents skipped compute_metrics above, so their goal flag is from an earlier step
+        if (agent->stopped || agent->removed || agent->metrics_array[REACHED_GOAL_IDX] == 0.0f) {
             continue;
         }
         if (env->goal_source == GOAL_SOURCE_GT || env->goal_source == GOAL_SOURCE_GT_MAP

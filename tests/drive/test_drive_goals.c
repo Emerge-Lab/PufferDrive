@@ -376,6 +376,44 @@ static int test_step_observations_follow_goal_updates(void) {
     return 0;
 }
 
+static int test_goal_update_skips_stopped_and_removed_agents(void) {
+    // neither runs compute_metrics, so a goal flag from an earlier step must not roll or renew their goals
+    srand(23);
+    const int regen_modes[] = {GOAL_REGEN_ROLLING, GOAL_REGEN_FINITE};
+    const int regen_case_count = sizeof(regen_modes) / sizeof(regen_modes[0]);
+    for (int case_idx = 0; case_idx < regen_case_count; case_idx++) {
+        Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
+        env.goal_source = GOAL_SOURCE_MAP;
+        env.goal_regen_mode = regen_modes[case_idx];
+        allocate(&env);
+        c_reset(&env);
+
+        Agent *agent = &env.agents[env.active_agent_indices[0]];
+        agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
+        if (env.goal_regen_mode == GOAL_REGEN_ROLLING) {
+            agent->stopped = 1;
+            agent->current_goal_idx = 1;
+        } else {
+            invalidate_agent(agent);
+            agent->removed = 1;
+            agent->current_goal_idx = agent->goal_count;
+        }
+        int goal_idx_before = agent->current_goal_idx;
+        float goal_x_before[MAX_GOALS], goal_y_before[MAX_GOALS];
+        memcpy(goal_x_before, agent->list_goal_x, sizeof(goal_x_before));
+        memcpy(goal_y_before, agent->list_goal_y, sizeof(goal_y_before));
+        drive_set_neutral_actions(&env);
+
+        c_step(&env);
+
+        EXPECT_EQ_INT(agent->current_goal_idx, goal_idx_before);
+        EXPECT_TRUE(memcmp(goal_x_before, agent->list_goal_x, sizeof(goal_x_before)) == 0);
+        EXPECT_TRUE(memcmp(goal_y_before, agent->list_goal_y, sizeof(goal_y_before)) == 0);
+        free_allocated(&env);
+    }
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_commit_goals_front_align_fills_every_slot);
@@ -388,6 +426,7 @@ int main(void) {
     RUN_TEST(test_roll_goals_slides_window_and_appends);
     RUN_TEST(test_roll_goals_bails_on_replay_pins);
     RUN_TEST(test_step_observations_follow_goal_updates);
+    RUN_TEST(test_goal_update_skips_stopped_and_removed_agents);
     RUN_TEST(test_gt_goals_along_trajectory_are_laneless);
     RUN_TEST(test_gt_map_goals_snap_to_lane_centers);
     return test_summary(failures);

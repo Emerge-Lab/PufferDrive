@@ -21,15 +21,19 @@ printf 'START TIME: %s\nMaster node: %s\nTotal nodes: %s\n' "$(date)" "${MASTER_
 start=$(date +%s)
 
 SEEDS=(1000 2000 3000 4000)
-RUN_PREFIX=k_scaled_0084
-WORKER_COUNT=64
-ROLLOUT_STEP_COUNT=64
+RUN_PREFIX=k_scaled_0085
+WORKER_COUNT=128
+ROLLOUT_STEP_COUNT=128
 MINIBATCH_SIZE=393216
-DISCARD_PARTIAL_MINIBATCH=true
+TRAIN_MAP_DIR=$PD/opengigaflow/resources/carla_128_affine_aug_v21
+SELFPLAY_EVAL_MAP_DIR=$PD/opengigaflow/resources/carla_v21
 
 export SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 [ -n "${SEED}" ] || { echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} has no run configured; aborting."; exit 1; }
-echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} workers=${WORKER_COUNT} rollout_steps=${ROLLOUT_STEP_COUNT} minibatch=${MINIBATCH_SIZE} discard_partial_minibatch=${DISCARD_PARTIAL_MINIBATCH}"
+echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} workers=${WORKER_COUNT} rollout_steps=${ROLLOUT_STEP_COUNT} minibatch=${MINIBATCH_SIZE} maps=${TRAIN_MAP_DIR}"
+for MAP_DIR in "${TRAIN_MAP_DIR}" "${SELFPLAY_EVAL_MAP_DIR}"; do
+    [ -d "${MAP_DIR}" ] || { echo "missing map dir ${MAP_DIR} (git-ignored, copy it to the cluster)"; exit 1; }
+done
 
 export RUN_NAME=${RUN_PREFIX}_${SEED}
 echo ${RUN_NAME}
@@ -47,8 +51,8 @@ export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_TH
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
-# one 8-GPU node per seed (array task = SEEDS index); the knobs above are k_scaled_0084's, the rest is opengigaflow.yaml's except
-# train.total_timesteps (1e12)
+# one 8-GPU node per seed (array task = SEEDS index); the knobs above are k_scaled_0085's (0083's on the v21 maps), the rest is
+# opengigaflow.yaml's except train.total_timesteps (1e12)
 srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
     --nproc-per-node=8 \
@@ -63,12 +67,12 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
     run_name=${RUN_NAME} \
+    env.map_dir=${TRAIN_MAP_DIR} \
     train.total_timesteps=1000000000000 \
     vec.num_envs=${WORKER_COUNT} \
     train.bptt_horizon=${ROLLOUT_STEP_COUNT} \
     train.max_minibatch_size=${MINIBATCH_SIZE} \
     train.minibatch_size=${MINIBATCH_SIZE} \
-    train.discard_partial_minibatch=${DISCARD_PARTIAL_MINIBATCH} \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
@@ -76,7 +80,7 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
 [ -f "${MODEL_PATH}" ] || { echo "Training did not produce ${MODEL_PATH}; skipping evaluation."; exit 1; }
 
 # the co-sim evals need one 8-GPU node each: submitted before the long self-play eval below, so they queue while it runs
-for EVAL_SCRIPT in 9_nuPlan.sh 13_nuPlan_nonreactive.sh 11_carla_longest6_v2.sh 14_carla_longest6_v1.sh 12_alpasim.sh; do
+for EVAL_SCRIPT in 3_eval_nuplan_reactive.sh 4_eval_nuplan_nonreactive.sh 6_eval_longest6_v2.sh 5_eval_longest6_v1.sh 7_eval_alpasim.sh; do
     echo "Submitting scripts/kesai/${EVAL_SCRIPT} for ${MODEL_PATH}"
     RUN_DIR=${DATA_DIR} sbatch scripts/kesai/${EVAL_SCRIPT} \
         || echo "submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/${EVAL_SCRIPT}"
@@ -88,7 +92,7 @@ echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
     --total-scenarios 80000 \
     --num-nodes 1 \
     --shards-per-node 8 \
-    env.map_dir=$PD/opengigaflow/resources/carla \
+    env.map_dir=${SELFPLAY_EVAL_MAP_DIR} \
     vec.num_envs=60 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \

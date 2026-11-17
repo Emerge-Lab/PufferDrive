@@ -17,7 +17,7 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   transforms), recompute observations, run the policy on the ego row,
   `env.step` (the jerk model integrates the ego's accel/steering intent one
   dt), and return that intent as an action trajectory for nuPlan's ego plant.
-- Ego plant (script 9 runs it with floor 0 and the center cap at margin 0.95: run 431 = 93.01; a different
+- Ego plant (`3_eval_nuplan_reactive.sh` runs it with floor 0 and the center cap at margin 0.95: run 431 = 93.01; a different
   floor or cap tags the result folder `_vmin<floor>`, `_nocentercap` or `_centercap<m>`): nuPlan's `KinematicBicycleModel`, driven through
   CaRL's `one_stage_controller` exactly like CaRL, with the model's own actuator lag (the challenge presets
   pin the controller). Every step the shadow ego takes nuPlan's pose, speed
@@ -52,12 +52,12 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   much is added to every pedestrian and bicycle partner box's length and width in the
   policy's observation (training spawns nothing below 0.8 x 0.8 m, nuPlan pedestrians
   are 0.4-0.8 m, bicycles ~0.5 m wide), so they read strictly larger than the smallest
-  training vehicle; nuPlan still scores the true boxes. Off by default, script 9 sets
+  training vehicle; nuPlan still scores the true boxes. Off by default, `3_eval_nuplan_reactive.sh` sets
   0.8 m. Eval hack `obs_lane_width_clip_min_m` / `obs_lane_width_clip_max_m` (env
   `LANE_WIDTH_CLIP_MIN_M` / `LANE_WIDTH_CLIP_MAX_M`, Drive env keys via `env_overrides`): the
   lane widths the policy observes are clipped to this range (the CARLA training maps span
   2.85-4.4 m, the nuPlan city bins reach 50 m at junction connectors and multi-lane
-  roadblocks). Off by default, script 9 sets 2.85-4.4 m. The shadow env consumes the goals of its
+  roadblocks). Off by default, `3_eval_nuplan_reactive.sh` sets 2.85-4.4 m. The shadow env consumes the goals of its
   `num_goals` window itself exactly like training (`goal_regen_mode: finite`,
   consumed slots zeroed in the obs); the planner pushes the next window only
   when the current one is exhausted or its current goal is clearly behind the
@@ -84,7 +84,7 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
 
 ## Visualization and run layout
 
-- `COSIM_OBS_HTML=all|failures|infractions|0` (script 9: `infractions`): one interactive opengigaflow.viz
+- `COSIM_OBS_HTML=all|failures|infractions|0` (`3_eval_nuplan_reactive.sh`: `infractions`): one interactive opengigaflow.viz
   replay per scenario -> `$GROUP/obs_html/<token>.html`, showing the exact observation
   vector the policy received each step (partner/lane/boundary/light slots, goals), its
   action/value/entropy/probabilities and the encoder max-pool winners. This is what the

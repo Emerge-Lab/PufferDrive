@@ -5,28 +5,6 @@ from typing import NamedTuple
 import numpy as np
 
 
-WHEEL_ROW_COLUMNS = 4  # max_steer_deg, position x/y/z (cm, CARLA's physics control units)
-WHEEL_POSITION_CM_PER_M = 100.0
-DEFAULT_WHEELBASE_M = 2.85  # Lincoln MKZ-ish fallback for implausible physics controls
-WHEELBASE_RANGE_M = (1.5, 5.0)
-
-
-def wheel_rows(vehicle):
-    """[[max_steer_deg, x_cm, y_cm, z_cm], ...] of a live CARLA vehicle's wheels (read-only physics control)."""
-    return [[w.max_steer_angle, w.position.x, w.position.y, w.position.z] for w in vehicle.get_physics_control().wheels]
-
-
-def wheelbase_from_wheels(rows):
-    """Distance [m] between the steered and the fixed wheels' centres of wheel_rows; the default when implausible."""
-    rows = np.asarray(rows, dtype=np.float64).reshape(-1, WHEEL_ROW_COLUMNS)
-    steering, fixed = rows[rows[:, 0] > 0.0], rows[rows[:, 0] <= 0.0]
-    if not (len(steering) and len(fixed)):
-        return DEFAULT_WHEELBASE_M
-    axle_offset_cm = steering[:, 1:].mean(axis=0) - fixed[:, 1:].mean(axis=0)
-    wheelbase_m = float(np.linalg.norm(axle_offset_cm)) / WHEEL_POSITION_CM_PER_M
-    return wheelbase_m if WHEELBASE_RANGE_M[0] <= wheelbase_m <= WHEELBASE_RANGE_M[1] else DEFAULT_WHEELBASE_M
-
-
 YAW_TRACKING_MIN_SPEED_MPS = 2.0
 
 
