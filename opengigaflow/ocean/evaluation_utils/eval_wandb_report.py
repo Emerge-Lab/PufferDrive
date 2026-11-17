@@ -33,7 +33,7 @@ HEADLINE_METRIC_KEYS = {
 ALPASIM_AT_FAULT_METRIC_KEY = "final_eval/alpasim_km_per_at_fault_incident"
 SOURCE_KEY_SUFFIX = "_source"
 
-SELFPLAY_BENCHMARK_NAME = "carla"
+SELFPLAY_BENCHMARK_NAME = "selfplay"
 SELFPLAY_SUMMARY_FILE_NAME = "evaluation_summary.json"
 METERS_PER_KM = 1000.0
 

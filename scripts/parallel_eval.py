@@ -14,7 +14,7 @@ FAILED_LOG_TAIL_LINES = 30
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("benchmark", help="Benchmark name from the benchmark config, e.g. carla")
+    parser.add_argument("benchmark", help="Benchmark name from the benchmark config, e.g. selfplay")
     parser.add_argument("--total-scenarios", type=int, required=True)
     shard_group = parser.add_mutually_exclusive_group(required=True)
     shard_group.add_argument("--num-gpus", type=int, help="Run one shard per local GPU")

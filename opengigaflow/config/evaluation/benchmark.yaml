@@ -42,7 +42,7 @@ env:
   scripted_pedestrian_ratio: 0.0
 
 benchmarks:
-  - name: carla
+  - name: selfplay
     seed: 42
     num_scenarios: 1000
     env:
@@ -62,7 +62,7 @@ benchmarks:
       disable_red_light_infractions: true
       disable_stop_sign_infractions: true
 
-  - name: carla_fast
+  - name: selfplay_fast
     seed: 42
     num_scenarios: 250
     env:

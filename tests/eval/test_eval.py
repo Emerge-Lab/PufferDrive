@@ -340,10 +340,10 @@ def _run_standalone_eval_with_wandb(tmp_path, monkeypatch, benchmark_name):
 
 def test_standalone_selfplay_eval_reports_its_km_per_infraction_to_wandb(tmp_path, monkeypatch):
     run_dir, stored_summary, stored_history, requested_run_paths = _run_standalone_eval_with_wandb(
-        tmp_path, monkeypatch, "carla"
+        tmp_path, monkeypatch, "selfplay"
     )
 
-    summary_path = next(run_dir.glob("eval/carla/*/evaluation_summary.json"))
+    summary_path = next(run_dir.glob("eval/selfplay/*/evaluation_summary.json"))
     distance_per_infraction_meters = json.loads(summary_path.read_text())["metrics_mean"]["avg_distance_per_infraction"]
     km_per_infraction = distance_per_infraction_meters / 1000.0
     assert set(requested_run_paths) == {f"{WANDB_PROJECT}/{WANDB_RUN_NAME}"}
@@ -360,7 +360,7 @@ def test_standalone_selfplay_eval_reports_its_km_per_infraction_to_wandb(tmp_pat
 
 def test_standalone_eval_of_another_benchmark_reports_nothing_to_wandb(tmp_path, monkeypatch):
     _, stored_summary, stored_history, requested_run_paths = _run_standalone_eval_with_wandb(
-        tmp_path, monkeypatch, "carla_fast"
+        tmp_path, monkeypatch, "selfplay_fast"
     )
 
     assert requested_run_paths == []

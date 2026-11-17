@@ -83,20 +83,20 @@ Each evaluation loads a checkpoint from a training run, e.g. `experiments/<run>/
 
 ### Self-play
 
-Runs inside OpenGigaFlow on the 8 CARLA towns. Short local run (`carla_fast`: 250 scenarios of 33 s, failed
+Runs inside OpenGigaFlow on the 8 CARLA towns. Short local run (`selfplay_fast`: 250 scenarios of 33 s, failed
 episodes rendered as HTML; add `train.device=cpu` without a GPU):
 
 ```bash
-opengigaflow eval carla_fast \
+opengigaflow eval selfplay_fast \
     load_model_path=experiments/<run>/final_model.pt \
     eval.render_filter=all_infractions \
     eval.max_rendered_failures=10
 ```
 
-8-GPU server, as in the KE:SAI scripts (80,000 ten-minute `carla` scenarios, one shard per GPU):
+8-GPU server, as in the KE:SAI scripts (80,000 ten-minute `selfplay` scenarios, one shard per GPU):
 
 ```bash
-python scripts/parallel_eval.py carla --total-scenarios 80000 --num-gpus 8 \
+python scripts/parallel_eval.py selfplay --total-scenarios 80000 --num-gpus 8 \
     load_model_path=experiments/<run>/final_model.pt \
     vec.num_envs=60 \
     eval.render_filter=all_infractions

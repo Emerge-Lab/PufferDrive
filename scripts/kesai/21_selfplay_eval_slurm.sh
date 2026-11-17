@@ -31,7 +31,7 @@ echo "run ${RUN_NAME}  output dir ${EVAL_OUTPUT_DIR_NAME}  scenarios ${TOTAL_SCE
 
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
 
-.venv/bin/python scripts/parallel_eval.py carla \
+.venv/bin/python scripts/parallel_eval.py selfplay \
     --total-scenarios ${TOTAL_SCENARIOS} \
     --num-nodes ${SLURM_JOB_NUM_NODES} \
     --shards-per-node 8 \

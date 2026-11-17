@@ -84,7 +84,7 @@ done
 
 # 8 srun shards per node, each one GPU, an eighth of the CPUs and 60 env workers (x 5 scenarios = 300 per 9000-step episode)
 echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
-.venv/bin/python scripts/parallel_eval.py carla \
+.venv/bin/python scripts/parallel_eval.py selfplay \
     --total-scenarios 80000 \
     --num-nodes 1 \
     --shards-per-node 8 \

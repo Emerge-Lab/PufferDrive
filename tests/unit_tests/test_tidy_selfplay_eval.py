@@ -46,7 +46,7 @@ def _episode_rows(pairs, shard_dir=None):
 
 def _write_parallel_eval(root):
     """The aggregate dir and two shard folders as parallel_eval.py leaves them."""
-    benchmark_dir = root / "eval" / "carla_k_scaled_0099_1000"
+    benchmark_dir = root / "eval" / "selfplay_k_scaled_0099_1000"
     run_dir = benchmark_dir / STAMP
     run_dir.mkdir(parents=True)
     (run_dir / "evaluation_summary.json").write_text(json.dumps({"num_scenarios": 20, "num_episodes": 20}))
@@ -121,7 +121,7 @@ def test_tidy_is_a_no_op_the_second_time(tmp_path, monkeypatch, capsys):
 
 
 def test_tidy_handles_a_single_process_eval_dir(tmp_path, monkeypatch):
-    run_dir = tmp_path / "eval" / "carla" / STAMP
+    run_dir = tmp_path / "eval" / "selfplay" / STAMP
     failures = run_dir / "failures" / "rendered_replays"
     failures.mkdir(parents=True)
     (run_dir / "evaluation_summary.json").write_text("{}")
