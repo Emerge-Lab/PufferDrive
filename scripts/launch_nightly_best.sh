@@ -1,23 +1,12 @@
 #!/bin/bash
-# Launch multi-agent "nightly best" training on the cluster via submit_cluster.py.
-# Mirrors launch_single_agent.sh but uses nightly_best.yaml (multi-agent
-# gigaflow over 8 CARLA towns, 10B total steps). Code-isolated per run,
-# container-wrapped, gpu-heartbeated, date-stamped wandb run names.
-#
-# Run on the login node (it sources the venv and submits from there):
+# Multi-agent nightly training (nightly_best.yaml, 10B steps over the CARLA towns) via submit_cluster.py: one
+# code-isolated, container-wrapped, heartbeated job per seed with date-stamped wandb names. Run on the login node:
 #   ./scripts/launch_nightly_best.sh
-#
-# Overridable via the environment:
-#   PROGRAM_CONFIG  program_config YAML (default: nightly_best.yaml)
-#   SEEDS           colon sweep passed to --args train.seed (default 0:1:2 -> 3 jobs)
-#   ACCOUNT/PARTITION/TIME   SLURM overrides
-#   MEM             SLURM --mem (default 192gb; the multi-agent config plus
-#                   catalog training evaluation can spike past 128gb)
-#   PREFIX          run-name prefix (default <date>_multi_agent)
-#
-# Examples:
-#   SEEDS=0 ./scripts/launch_nightly_best.sh                  # one-seed dry run
-#   PARTITION=h100_tandon ./scripts/launch_nightly_best.sh    # if h200 QOS is full
+# Overridable env (default):
+#   PROGRAM_CONFIG (scripts/cluster_configs/nightly_best.yaml), COMPUTE_CONFIG (nyu_greene.yaml)
+#   SEEDS (0:1:2)   one job per seed, e.g. SEEDS=0 for a one-seed dry run
+#   ACCOUNT, PARTITION (h200_tandon; e.g. h100_tandon when its QOS is full), TIME (1800 min), MEM (192gb)
+#   PREFIX          run-name prefix (<date>_multi_agent)
 set -euo pipefail
 
 PROGRAM_CONFIG="${PROGRAM_CONFIG:-scripts/cluster_configs/nightly_best.yaml}"
@@ -30,21 +19,16 @@ SEEDS="${SEEDS:-0:1:2}"
 PREFIX="${PREFIX:-$(date +%Y-%m-%d)_multi_agent}"
 DATE_STAMP="$(date +%Y-%m-%d)"
 
-# Optional wandb rerouting: exporting WANDB_BASE_URL/WANDB_ENTITY in the
-# launch environment pins the server/org for the jobs (e.g.
-# WANDB_BASE_URL=https://api.wandb.ai WANDB_ENTITY=emerge_ for the public
-# org instead of the cluster's self-hosted default).
+# exported WANDB_BASE_URL / WANDB_ENTITY pin the jobs' wandb server and org (e.g. https://api.wandb.ai, emerge_)
 EXTRA_WANDB_ARGS=()
 [ -n "${WANDB_BASE_URL:-}" ] && EXTRA_WANDB_ARGS+=(--wandb-base-url "$WANDB_BASE_URL")
 [ -n "${WANDB_ENTITY:-}" ] && EXTRA_WANDB_ARGS+=(--wandb-entity "$WANDB_ENTITY")
 
 source "/scratch/$USER/venvs/pufferdrive/bin/activate"
 
-# Refresh the nightly trend runs
 python scripts/nightly_report.py update || echo "trend update failed (non-fatal)"
 
-# One submission per seed so we can pass a per-seed run_name (wandb display
-# name like 2026-05-31_seed0).
+# one submission per seed for a per-seed run_name (2026-05-31_seed0)
 IFS=':' read -ra SEED_LIST <<< "$SEEDS"
 for SEED in "${SEED_LIST[@]}"; do
     python scripts/submit_cluster.py \

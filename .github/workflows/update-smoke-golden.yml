@@ -1,8 +1,7 @@
 name: Update Smoke Golden
 
-# Regenerate tests/smoke_tests/data/drive_smoke_golden.json inside the pinned
-# QEMU/Haswell image (the only place it is bit-reproducible) and commit it back.
-#   git commit --allow-empty -m "regen smoke golden [update-golden]" && git push
+# Regenerate the smoke goldens in the pinned image and commit them back; run it by hand or push a commit with
+# [update-golden] in its message: git commit --allow-empty -m "regen smoke golden [update-golden]" && git push
 
 on:
   workflow_dispatch:
@@ -25,15 +24,9 @@ jobs:
         with:
           ref: ${{ github.ref_name }}
 
-      - name: Build smoke image
-        run: docker build -f tests/smoke_tests/Dockerfile -t opengigaflow-smoke .
-
       - name: Regenerate goldens
-        run: |
-          docker run --rm -e SMOKE_UPDATE_GOLDEN=1 \
-            -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
-            opengigaflow-smoke tests/smoke_tests/test_drive_train.py tests/smoke_tests/test_drive_rollout.py
-        timeout-minutes: 30
+        run: tests/smoke_tests/update_goldens.sh
+        timeout-minutes: 45
 
       - name: Upload golden artifact
         uses: actions/upload-artifact@v4
@@ -46,11 +39,9 @@ jobs:
       - name: Commit regenerated goldens
         run: |
           GOLDENS="tests/smoke_tests/data/drive_smoke_golden.json tests/smoke_tests/data/drive_rollout_golden.json"
-          # The container writes the goldens as root via the bind mount; reclaim
-          # them so git can stage/commit cleanly.
+          # the container writes the goldens as root through the bind mount
           sudo chown "$(id -u):$(id -g)" $GOLDENS
-          # json.dump writes no trailing newline; add one so the committed files
-          # satisfy pre-commit's end-of-file-fixer.
+          # json.dump writes no trailing newline, which pre-commit's end-of-file-fixer wants
           for f in $GOLDENS; do
             [ -n "$(tail -c1 "$f")" ] && printf '\n' >> "$f"
           done

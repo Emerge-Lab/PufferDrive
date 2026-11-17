@@ -1,5 +1,4 @@
-"""Scripted pedestrians (env.scripted_pedestrian_ratio): config validation, per-env slot rounding, and a
-short gigaflow rollout in which walkers appear as static partners and get logged."""
+"""Scripted pedestrians: ratio validation, per-env slot rounding, and walkers that appear as logged static partners."""
 
 import numpy as np
 import pytest
@@ -17,7 +16,6 @@ def _kwargs(**overrides):
         "min_agents_per_env": AGENTS_PER_ENV,
         "max_agents_per_env": AGENTS_PER_ENV,
         "num_maps": 1,
-        "allow_map_subset": True,
         "map_dir": MAP_DIR,
         "simulation_mode": "gigaflow",
         "scenario_length": 300,

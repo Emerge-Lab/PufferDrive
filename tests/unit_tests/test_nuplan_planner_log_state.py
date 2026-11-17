@@ -1,17 +1,15 @@
 """The planner's pickled state (nuPlan writes it into every simulation log) carries no policy, env or goal window."""
 
-import os
 import pickle
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 pytest.importorskip("nuplan")
 pytest.importorskip("carl_nuplan")
 
 from opengigaflow.ocean.cosim.nuplan.planner import LOG_EXCLUDED_STATE, OpenGigaFlowPlanner
+
 
 WEIGHT_BYTES = 1 << 20
 

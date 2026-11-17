@@ -19,26 +19,28 @@ from nuplan.planning.simulation.trajectory.trajectory_sampling import Trajectory
 from carl_nuplan.planning.simulation.trajectory.action_trajectory import ActionTrajectory
 
 from opengigaflow.ocean.cosim import nuplan_bridge as nb
-from opengigaflow.ocean.cosim.arch import checkpoint_config_path, load_checkpoint_config
+from opengigaflow.ocean.cosim.arch import (
+    EGO_OBS_ACCEL_LONG_IDX,
+    EGO_OBS_SPEED_IDX,
+    EGO_OBS_STEERING_IDX,
+    FAR_AWAY,
+    SCENARIO_LENGTH_MARGIN_STEPS,
+    checkpoint_config_path,
+    load_checkpoint_config,
+    shadow_env_kwargs,
+)
 from opengigaflow.ocean.cosim.goals import RouteGoalWindow, route_goals_from_xy
 from opengigaflow.ocean.cosim.light_timing import YellowCountdown
 from opengigaflow.ocean.cosim.nuplan_bicycle import (
-    DEVKIT_ACCEL_TIME_CONSTANT_S,
-    DEVKIT_STEERING_TIME_CONSTANT_S,
     BicycleCommandConfig,
     bicycle_commands,
     bicycle_response,
     floor_clamped_intent_accel,
 )
+from opengigaflow.ocean.drive import binding
 from opengigaflow.ocean.drive.drive import Drive
 
-from opengigaflow.ocean.cosim.nuplan_bridge import FAR_AWAY
-from opengigaflow.ocean.drive import binding
-
-EGO_OBS_ACCEL_LONG_IDX = 4  # write_ego_obs column order: speed, width, length, steering, accel_long, ...
-EGO_OBS_STEERING_IDX = 3
 BICYCLE_RESPONSE_TOL = 1e-4  # m/s^2 and m/s: nuPlan's ego state must be the bicycle model's response to our command
-SCENARIO_LENGTH_MARGIN_STEPS = 2  # shadow env must never hit its own truncation while nuPlan still plans
 NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2 = 2.40  # ego_lon_acceleration_statistics.yaml max_lon_accel
 COMFORT_ACCEL_MARGIN = 0.96  # nuPlan Savitzky-Golay-smooths the reported accel and overshoots a hard cap by ~0.5%
 EGO_ACCEL_CAP_MPS2 = COMFORT_ACCEL_MARGIN * NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2  # sets the policy's c_acc conditioning
@@ -60,8 +62,7 @@ _bin_geometry_cache: Dict[str, dict] = {}
 
 
 class BicycleStep(NamedTuple):
-    """One planning call: the plant state it saw, the command it sent and the jerk integrator's post-step state
-    (the accel/steering the policy observes and the next call restamps)."""
+    """One planning call: the plant state it saw, the command it sent and the jerk integrator's post-step state."""
 
     time_us: int
     plant_accel_mps2: float
@@ -72,10 +73,9 @@ class BicycleStep(NamedTuple):
 
 
 class OpenGigaFlowPlanner(AbstractPlanner):
-    """nuPlan planner driven by an OpenGigaFlow policy. nuPlan's KinematicBicycleModel is the ego plant, commanded
-    through CaRL's one_stage_controller like CaRL: every step the shadow ego takes nuPlan's pose, speed and yaw
-    rate, keeps its own jerk-integrated accel/steering (the state the policy was trained to observe; the plant
-    lags behind it), and its post-step accel/steering become the model's commands."""
+    """nuPlan planner driven by an OpenGigaFlow policy; the ego plant is nuPlan's KinematicBicycleModel behind CaRL's
+    one_stage_controller. The shadow ego takes the plant's pose, speed and yaw rate but keeps its own jerk-integrated
+    accel/steering (the state training showed; the plant lags), whose post-step values become the commands."""
 
     requires_scenario: bool = True
 
@@ -90,15 +90,12 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         goal_spacing: float = 20.0,
         num_agents: int = 64,
         horizon_seconds: float = 8.0,
-        deterministic: bool = True,
         sliding_goal_window: bool = False,
         startup_jerk_cap_seconds: float = 1.5,
         startup_accel_jerk_cap_mps3: float = 0.0,
         startup_brake_jerk_cap_mps3: float = 0.0,
         vru_size_pad_m: float = 0.0,
         bicycle_min_speed_mps: float = 0.0,
-        bicycle_accel_time_constant_s: float = DEVKIT_ACCEL_TIME_CONSTANT_S,
-        bicycle_steering_time_constant_s: float = DEVKIT_STEERING_TIME_CONSTANT_S,
         bicycle_center_accel_cap: bool = False,
         bicycle_center_accel_cap_margin: float = 1.0,
         env_overrides: Optional[Dict] = None,
@@ -106,50 +103,6 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         obs_html_max_steps: int = 800,
         obs_html_render: bool = True,
     ):
-        """
-        :param checkpoint_path: OpenGigaFlow policy checkpoint (.pt); config.yaml
-            two levels up defines the policy architecture.
-        :param bin_cache_dir: fallback cache dir for a city bin's `<bin>.origin.json`
-            sidecar when the bin's own directory isn't writable.
-        :param city_bin_dir: directory of whole-city map-only bins named
-            `nuplan__<map_name>.bin` (the only map source; see module
-            docstring). A missing bin is a hard error, no fallback.
-        :param scenario: injected by the devkit (requires_scenario).
-        :param map_radius: map extraction / light-matching radius [m].
-        :param goal_spacing: minimum distance between consecutive route roadblock goals fed to the policy [m].
-        :param num_agents: OpenGigaFlow agent-pool size (ego + streamed background).
-        :param horizon_seconds: horizon of the returned action trajectory's sampling [s].
-        :param sliding_goal_window: refill the goal window to `num_goals` goals ahead after every
-            consumed goal (default: replace it only once exhausted, as in training), so the policy
-            sees a window-final speed-gated goal only at the true route end.
-        :param startup_jerk_cap_seconds: length of the scenario-start window the jerk caps apply to [s].
-        :param startup_accel_jerk_cap_mps3: cap on the ego's positive (accelerating) longitudinal jerk
-            during the start window [m/s³]; 0 = uncapped. nuPlan's Savitzky-Golay jerk extrapolates at
-            the trajectory edges, so a ramp that starts at t=0 reads ~2x its raw jerk.
-        :param startup_brake_jerk_cap_mps3: same cap for braking jerk; 0 = uncapped.
-        :param vru_size_pad_m: eval hack: pedestrian and bicycle partner boxes grow by this much in length
-            and width [m] before the policy sees them, so they read strictly larger than the smallest
-            training vehicle (0.8 x 0.8 m; nuPlan pedestrians are 0.4-0.8 m, bicycles ~0.5 m wide); nuPlan
-            keeps scoring the true boxes. 0 = off.
-        :param bicycle_min_speed_mps: speed floor of the plant [m/s], enforced on the command (the model has
-            none): 0 = CaRL's no-reverse driving, -2 = Drive's MAX_BACKWARD_SPEED.
-        :param bicycle_accel_time_constant_s: the motion model's acceleration low-pass time constant [s]
-            (devkit default 0.2); a mismatch fails the per-step response check.
-        :param bicycle_steering_time_constant_s: same for steering [s] (devkit default 0.05).
-        :param bicycle_center_accel_cap: CaRL's clip_angular_adjustment. nuPlan scores the
-            acceleration at the vehicle center, which the devkit computes as rear-axle accel + d*yaw_rate^2 +
-            d*yaw_accel (d = rear axle to center), so the plant's acceleration is reduced while turning to keep
-            that reading under EGO_ACCEL_CAP_MPS2 x bicycle_center_accel_cap_margin. The policy keeps its own
-            intent and observations.
-        :param bicycle_center_accel_cap_margin: factor on EGO_ACCEL_CAP_MPS2 for the center cap (nuPlan smooths
-            the reported acceleration with a Savitzky-Golay window and overshoots a peaky capped profile).
-        :param env_overrides: Drive env kwargs applied on top of the checkpoint's env config.
-        :param obs_html_dir: write the interactive opengigaflow.viz observation replay per
-            scenario (the exact obs the policy received, its outputs and encoder pool winners).
-        :param obs_html_render: render the html right away; False saves only the compact
-            .replay.zlib so pages can be rendered later for selected scenarios
-            (scripts/eval/render_obs_html.py, e.g. only those scoring below a threshold).
-        """
         self._checkpoint_path = checkpoint_path
         self._bin_cache_dir = Path(bin_cache_dir)
         self._city_bin_dir = Path(city_bin_dir) if city_bin_dir else None
@@ -159,7 +112,6 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         self._goal_spacing = float(goal_spacing)
         self._num_agents = int(num_agents)
         self._horizon_seconds = float(horizon_seconds)
-        self._deterministic = deterministic
         self._sliding_goal_window = bool(sliding_goal_window)
         self._startup_jerk_cap_seconds = float(startup_jerk_cap_seconds)
         self._startup_accel_jerk_cap_mps3 = float(startup_accel_jerk_cap_mps3)
@@ -177,10 +129,6 @@ class OpenGigaFlowPlanner(AbstractPlanner):
             raise ValueError(
                 f"bicycle_min_speed_mps must be within [{binding.MAX_BACKWARD_SPEED}, 0], got {bicycle_min_speed_mps}"
             )
-        self._bicycle_accel_time_constant_s = float(bicycle_accel_time_constant_s)
-        self._bicycle_steering_time_constant_s = float(bicycle_steering_time_constant_s)
-        if not (self._bicycle_accel_time_constant_s >= 0 and self._bicycle_steering_time_constant_s >= 0):
-            raise ValueError("the bicycle model time constants must be >= 0")
         self._bicycle_center_accel_cap = bool(bicycle_center_accel_cap)
         self._bicycle_center_accel_cap_margin = float(bicycle_center_accel_cap_margin)
         if not 0 < self._bicycle_center_accel_cap_margin <= 1:
@@ -213,7 +161,6 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         self._partner_stopped_s: Dict[str, float] = {}  # track_token -> seconds below the stopped speed threshold
         self._planning_step_s: Optional[float] = None  # nuPlan's planning interval, resolved in _build
 
-    # --- AbstractPlanner interface -------------------------------------------
     def initialize(self, initialization: PlannerInitialization) -> None:
         self._initialization = initialization
 
@@ -240,21 +187,10 @@ class OpenGigaFlowPlanner(AbstractPlanner):
             state[name] = None
         return state
 
-    # --- whole-city map-only bins -------------------------------------------
     def _find_city_bin(self) -> Path:
-        """City bin for this scenario's map (the map id the devkit read from
-        the log db's `map_version`). Assumed to exist -- city_bin_dir covers
-        every map, no fallback."""
+        """City bin of the scenario's map (the log db's map_version); city_bin_dir covers every map."""
         map_name = str(self._initialization.map_api.map_name).replace(".gpkg", "")
         return self._city_bin_dir / f"nuplan__{map_name}.bin"
-
-    def _gpkg_layer(self, layer_name: str):
-        """Whole-city vector layer (GeoDataFrame, UTM) from the scenario's map."""
-        map_api = self._initialization.map_api
-        try:
-            return map_api._load_vector_map_layer(layer_name)
-        except AttributeError:
-            return map_api._maps_db.load_vector_layer(map_api.map_name, layer_name)
 
     @staticmethod
     def _bin_fingerprint(bin_path: Path) -> str:
@@ -263,10 +199,8 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         return f"{stat.st_size:x}-{stat.st_mtime_ns:x}"
 
     def _city_bin_origin(self, bin_path: Path, stop_line_centers: np.ndarray) -> nb.NuPlanTransform:
-        """Recover a city bin's frame origin (it stores no centroid): global
-        translation vote on stop-line landmarks, then translation-only ICP of
-        the bin's lane centerlines onto the GPKG baseline paths. Cached in a
-        sidecar json — one registration per city, ever."""
+        """A city bin's frame origin (it stores none): stop-line translation vote, then translation-only ICP of the
+        bin's lane centerlines onto the GPKG baseline paths; cached in a sidecar json, one registration per city."""
         sidecar = bin_path.with_suffix(".origin.json")
         fingerprint = self._bin_fingerprint(bin_path)
         cache = sidecar if sidecar.exists() else self._bin_cache_dir / sidecar.name
@@ -279,9 +213,10 @@ class OpenGigaFlowPlanner(AbstractPlanner):
             raise RuntimeError(f"{bin_path}: no traffic elements to register the origin with")
         import shapely
 
-        stops = self._gpkg_layer("stop_polygons").geometry.centroid
+        map_api = self._initialization.map_api
+        stops = map_api._load_vector_map_layer("stop_polygons").geometry.centroid
         init = nb.coarse_translation_vote(stop_line_centers, np.stack([stops.x.to_numpy(), stops.y.to_numpy()], axis=1))
-        lane_utm = shapely.get_coordinates(self._gpkg_layer("baseline_paths").geometry.values)
+        lane_utm = shapely.get_coordinates(map_api._load_vector_map_layer("baseline_paths").geometry.values)
         t, resid = nb.fit_translation(nb.read_bin_lane_points(bin_path), lane_utm, init=init)
         if resid > 0.5:
             raise RuntimeError(
@@ -309,16 +244,11 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         if geo is None:
             geo = nb.read_bin_geometry(city_bin)
             _bin_geometry_cache[str(city_bin)] = geo
-        tf = (
-            nb.NuPlanTransform(*geo["origin"])
-            if geo["origin"] is not None
-            else self._city_bin_origin(city_bin, geo["stop_line_centers"])
-        )
-        return city_bin, tf, geo
+        return city_bin, self._city_bin_origin(city_bin, geo["stop_line_centers"]), geo
 
     def _match_traffic_lights(self, geo: dict, ex: float, ey: float) -> Dict[str, int]:
-        """Signalized lane connectors within map_radius -> bin traffic elements,
-        matched by entry pose to co-directional stop lines (no sidecar file needed)."""
+        """Signalized lane connectors within map_radius -> bin traffic elements, by entry pose to co-directional
+        stop lines."""
         from nuplan.common.actor_state.state_representation import Point2D
         from nuplan.common.maps.maps_datatypes import SemanticMapLayer
 
@@ -335,12 +265,7 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         )
 
     def _resolve_arch(self, cfg: Dict, bin_path: Path) -> Dict:
-        """Shadow-env Drive kwargs: the checkpoint's training env section
-        decides every Drive-accepted key, the clean-eval profile is applied on
-        top (see cosim/arch.py), `env_overrides` wins -- except for the
-        structural co-sim keys (map/pool wiring), which are not overridable."""
-        from opengigaflow.ocean.cosim.arch import shadow_env_kwargs
-
+        """Shadow-env Drive kwargs: shadow_env_kwargs with env_overrides on top, the structural co-sim keys last."""
         if self._scenario is None:
             raise RuntimeError("OpenGigaFlowPlanner needs the scenario injected (requires_scenario)")
         return shadow_env_kwargs(
@@ -362,9 +287,7 @@ class OpenGigaFlowPlanner(AbstractPlanner):
                 "dt": float(self._scenario.database_interval),
                 "scenario_length": int(self._scenario.get_number_of_iterations()) + SCENARIO_LENGTH_MARGIN_STEPS,
                 "resample_frequency": 0,
-                # External sim owns the episode: a training-config
-                # termination_mode=1 would c_reset() the pool (ego included)
-                # once parked FAR_AWAY slots latch under "stop" behaviors.
+                # the external sim owns the episode: termination_mode=1 would c_reset() the pool, ego included
                 "termination_mode": 0,
                 # native-eval scenario batching builds zero envs on a map-only bin
                 "eval_mode": False,
@@ -375,7 +298,6 @@ class OpenGigaFlowPlanner(AbstractPlanner):
             },
         )
 
-    # --- lazy construction ----------------------------------------------------
     def _build(self, ego_state: EgoState) -> None:
         import torch
 
@@ -408,8 +330,6 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         self._bicycle_cfg = BicycleCommandConfig(
             dt_s=float(self._arch["dt"]),
             min_speed_mps=self._bicycle_min_speed_mps,
-            accel_time_constant_s=self._bicycle_accel_time_constant_s,
-            steering_time_constant_s=self._bicycle_steering_time_constant_s,
             center_accel_cap_mps2=EGO_ACCEL_CAP_MPS2 * self._bicycle_center_accel_cap_margin
             if self._bicycle_center_accel_cap
             else 0.0,
@@ -417,20 +337,10 @@ class OpenGigaFlowPlanner(AbstractPlanner):
             rear_axle_to_center_m=float(vehicle.rear_axle_to_center),
         )
 
-        # Round-trip probe: slot 0 must be the ego we set. It is silently wrong when
-        # gigaflow spawning failed (e.g. a city bin without lane connectivity).
+        # round-trip probe: slot 0 is silently not the ego when gigaflow spawning failed on the bin
         probe_x, probe_y = self._transform.loc_to_bin(ex, ey)
-        zero = np.zeros(1, np.float32)
         self._env.set_agent_states(
-            np.array([0], np.int32),
-            np.array([probe_x], np.float32),
-            np.array([probe_y], np.float32),
-            zero,
-            np.array([float(ego_state.center.heading)], np.float32),
-            zero,
-            zero,
-            zero,
-            zero,
+            [0], [probe_x], [probe_y], [0.0], [float(ego_state.center.heading)], [0.0], [0.0], [0.0], [0.0]
         )
         readback = self._env.get_global_agent_state()
         if abs(float(readback["x"][0]) - probe_x) > 0.5 or abs(float(readback["y"][0]) - probe_y) > 0.5:
@@ -472,11 +382,8 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         route_goals = route_goals_from_xy(goals, origin_xy=self._transform.loc_to_bin(ex, ey))
         self._goal_window = RouteGoalWindow(self._env, route_goals, sliding=self._sliding_goal_window)
 
-        # ego bounding box from nuPlan vehicle parameters (static)
         fp = ego_state.car_footprint
-        self._env.set_agent_sizes(
-            np.array([0], np.int32), np.array([fp.length], np.float32), np.array([fp.width], np.float32)
-        )
+        self._env.set_agent_sizes([0], [fp.length], [fp.width])
 
         if self._obs_html_dir:
             from opengigaflow.ocean.cosim.obs_replay import ObsReplayCapture
@@ -495,7 +402,6 @@ class OpenGigaFlowPlanner(AbstractPlanner):
             f"{self._num_traffic} goals={len(goals)}"
         )
 
-    # --- world sync -----------------------------------------------------------
     def _advance_partner_stopped_s(self, tracked_objects) -> None:
         """One observation step of the stopped time per nuPlan track; a track missing from the step starts over."""
         step_s = self._planning_step_s
@@ -520,20 +426,19 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         speed = float(dcs.rear_axle_velocity_2d.x)
         last = self._last_bicycle_step
         intent_accel = float(dcs.rear_axle_acceleration_2d.x) if last is None else last.intent_accel_mps2
-        self._stamp_ego(
-            ex,
-            ey,
-            h,
-            speed * math.cos(h),
-            speed * math.sin(h),
-            float(dcs.angular_velocity),
-            floor_clamped_intent_accel(self._bicycle_cfg, speed, intent_accel),
-            float(ego_state.tire_steering_angle) if last is None else last.intent_steering_rad,
+        env.set_agent_states(
+            [0],
+            [ex],
+            [ey],
+            [0.0],
+            [h],
+            [speed * math.cos(h)],
+            [speed * math.sin(h)],
+            [float(dcs.angular_velocity)],
+            [floor_clamped_intent_accel(self._bicycle_cfg, speed, intent_accel)],
+            steering=[float(ego_state.tire_steering_angle) if last is None else last.intent_steering_rad],
         )
 
-        # background (slots 1..): streamed from nuPlan, never simulated here. nuPlan's TrackedObject
-        # carries no acceleration/angular-velocity (perception detections, not ego telemetry), but
-        # write_partner_obs never reads those fields for non-ego agents, so zero is exact, not a stopgap.
         # stopped time follows the nuPlan track, not the shadow slot (slots shift whenever a track appears or ends)
         self._advance_partner_stopped_s(detections.tracked_objects)
         objs = nb.partner_tracked_objects(
@@ -541,18 +446,18 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         )
         partner_count = 0
         if objs:
-            _, x, y, z, hh, vx, vy, tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
+            x, y, hh, vx, vy, tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
             stopped_s = np.array([self._partner_stopped_s[obj.track_token] for obj in objs], np.float32)
             if self._vru_size_pad_m > 0:
                 ln, wd = nb.pad_vru_partner_sizes(tp, ln, wd, self._vru_size_pad_m)
-            # nearest first only when the slots run out: devkit ordering is by type/token, so blind truncation
-            # could drop a close vehicle while keeping far ones
+            # nearest first only when the slots run out: the devkit orders by type/token
             keep = nb.nearest_partner_slots(x, y, ex, ey, self._num_agents - 1)
             partner_count = len(keep)
             idx = np.arange(1, 1 + partner_count, dtype=np.int32)
+            # tracks carry no z, yaw rate or acceleration; partner obs never read the latter two, so zero is exact
             zeros = np.zeros(partner_count, np.float32)
             env.set_agent_states(
-                idx, x[keep], y[keep], z[keep], hh[keep], vx[keep], vy[keep], zeros, zeros, stopped_s[keep]
+                idx, x[keep], y[keep], zeros, hh[keep], vx[keep], vy[keep], zeros, zeros, stopped_s[keep]
             )
             env.set_agent_sizes(idx, ln[keep], wd[keep])
         surplus = np.arange(1 + partner_count, self._num_agents, dtype=np.int32)
@@ -561,7 +466,6 @@ class OpenGigaFlowPlanner(AbstractPlanner):
             zero = np.zeros_like(far)
             env.set_agent_states(surplus, far, far, far, zero, zero, zero, zero, zero)
 
-        # traffic lights: state array sized to the bin's element count
         if self._num_traffic:
             self._last_light_states = nb.traffic_light_states(
                 traffic_light_data, self._connector_map, self._num_traffic, self._route_connector_ids
@@ -576,30 +480,6 @@ class OpenGigaFlowPlanner(AbstractPlanner):
             env.set_traffic_light_states(self._last_light_states, yellow_remaining_s)
 
         self._goal_window.sync(ex, ey, h)
-
-    def _stamp_ego(
-        self,
-        bin_x: float,
-        bin_y: float,
-        heading: float,
-        vx: float,
-        vy: float,
-        yaw_rate: float,
-        accel_long: float,
-        steering: float,
-    ) -> None:
-        self._env.set_agent_states(
-            np.array([0], np.int32),
-            np.array([bin_x], np.float32),
-            np.array([bin_y], np.float32),
-            np.array([0.0], np.float32),
-            np.array([heading], np.float32),
-            np.array([vx], np.float32),
-            np.array([vy], np.float32),
-            np.array([yaw_rate], np.float32),
-            np.array([accel_long], np.float32),
-            steering=np.array([steering], np.float32),
-        )
 
     def _check_bicycle_response(self, ego_state: EgoState) -> None:
         last = self._last_bicycle_step
@@ -621,43 +501,32 @@ class OpenGigaFlowPlanner(AbstractPlanner):
                 "ego_controller=one_stage_controller and its bicycle time constants must match that model"
             )
 
-    # --- planning -------------------------------------------------------------
     def _policy_forward(self, obs: np.ndarray):
-        """One policy call on observation rows -> (env actions [row, action dim], obs tensor, logits, value,
-        entropy, discrete action classes)."""
+        """One policy call -> (env actions [row, action dim], obs tensor, logits, value, entropy, discrete classes)."""
         import torch
 
         import opengigaflow.pytorch
-        import opengigaflow.spaces
 
-        # A discrete policy head on a continuous env needs the bin->continuous
-        # mapping (rl.py feeds cont_action to the env, never the bin indices).
-        env_continuous = isinstance(self._env.single_action_space, opengigaflow.spaces.Box)
-        if self._deterministic:
-            action_selection = (
-                opengigaflow.pytorch.ACTION_SELECT_MEAN
-                if env_continuous and not self._policy.is_continuous
-                else opengigaflow.pytorch.ACTION_SELECT_MODE
-            )
-        else:
-            action_selection = opengigaflow.pytorch.ACTION_SELECT_SAMPLE
+        action_selection = (
+            opengigaflow.pytorch.ACTION_SELECT_MODE
+            if self._policy.is_continuous
+            else opengigaflow.pytorch.ACTION_SELECT_MEAN
+        )
         obs_tensor = torch.as_tensor(obs).to(self._device)
         with torch.no_grad():
             logits, value = self._policy.forward_eval(obs_tensor)
             action, _, entropy, cont_action = opengigaflow.pytorch.sample_logits(
                 logits,
                 action_selection=action_selection,
-                env_continuous=env_continuous,
+                env_continuous=True,
                 policy=self._policy,
             )
-        env_action = cont_action if env_continuous and cont_action is not None else action
+        env_action = cont_action if cont_action is not None else action
         act = env_action.cpu().numpy().reshape(len(obs), -1)
-        if not env_continuous:
-            act = act.astype(np.int32)
         return act, obs_tensor, logits, value, entropy, action
 
     def _capture_obs_replay(self, obs, act, obs_tensor, logits, value, entropy, action) -> None:
-        # sample_logits' discrete `action` is the class taken (mode/sample) or the argmax under mean selection
+        # sample_logits' discrete `action` is the mode, or the argmax under mean selection
         action_index = action.cpu().numpy().reshape(-1) if not self._policy.is_continuous else None
         self._obs_replay.capture(
             obs, act, self._obs_replay.policy_outputs(obs_tensor, logits, value, entropy), action_index
@@ -703,7 +572,7 @@ class OpenGigaFlowPlanner(AbstractPlanner):
         ego_obs = np.asarray(self._env.observations)[0]
         intent_accel = float(ego_obs[EGO_OBS_ACCEL_LONG_IDX]) * binding.ACCEL_LONG_NORM
         intent_steering = float(ego_obs[EGO_OBS_STEERING_IDX]) * binding.STEERING_LIMIT
-        shadow_speed = float(ego_obs[0]) * self._env.obs_norm_speed_mps
+        shadow_speed = float(ego_obs[EGO_OBS_SPEED_IDX]) * self._env.obs_norm_speed_mps
         dcs = ego_state.dynamic_car_state
         accel = float(dcs.rear_axle_acceleration_2d.x)
         speed = float(dcs.rear_axle_velocity_2d.x)

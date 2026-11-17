@@ -1,17 +1,5 @@
-"""CARLA-side ground truth of the Leaderboard 1.0 criteria, recomputed in the policy server from what the
-Python 3.7 client observes (it cannot run CaRL's criteria the Leaderboard 2.0 agent uses). Feeds the
-carla_* telemetry columns and the infraction clips; the leaderboard's own result.json stays the score.
-
-Per-tick observation sent by lb1/leaderboard_agent.py (CARLA frame):
-  {"collision": [other actor type ids since the last tick],
-   "lane": [driving_distance_m, driving_lane_width_m, parking_distance_m (-1: no parking lane),
-            parking_lane_width_m, driving_lane_yaw_deg, driving_is_junction]}
-plus the snapshot's ego state. Ports of scenario_runner's RunningRedLightTest (tail line crossing the
-0.4-lane-width stop line of a red light within 15 m, once per light), RunningStopTest (entered a stop
-trigger volume, left its 20 m influence without a standstill) and OutsideRouteLanesTest (farther than
-half a lane plus 1.3 m from both the driving and the parking lane, or facing more than 120 deg away from
-a non-junction lane).
-"""
+"""Leaderboard 1.0 criteria (RunningRedLightTest, RunningStopTest, OutsideRouteLanesTest, collisions) recomputed in
+the policy server for the carla_* telemetry from the client's per-tick {"collision": [type ids], "lane": LANE_* row}."""
 
 import math
 

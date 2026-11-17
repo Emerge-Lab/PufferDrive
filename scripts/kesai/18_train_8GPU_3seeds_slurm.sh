@@ -13,14 +13,11 @@
 
 source scripts/kesai/cluster_env.sh || exit 1
 
-# Set up PyTorch Distributed Rendezvous parameters from Slurm variables
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_PORT=29500
 export WORLD_SIZE=$SLURM_JOB_NUM_NODES
 
-echo "START TIME: $(date)"
-echo "Master node: ${MASTER_ADDR}:${MASTER_PORT}"
-echo "Total nodes: ${WORLD_SIZE}"
+printf 'START TIME: %s\nMaster node: %s\nTotal nodes: %s\n' "$(date)" "${MASTER_ADDR}:${MASTER_PORT}" "${WORLD_SIZE}"
 start=$(date +%s)
 
 SEEDS=(1000 2000 3000 4000)
@@ -31,10 +28,7 @@ MINIBATCH_SIZE=393216
 DISCARD_PARTIAL_MINIBATCH=true
 
 export SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
-if [ -z "${SEED}" ]; then
-    echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} has no run configured; aborting."
-    exit 1
-fi
+[ -n "${SEED}" ] || { echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} has no run configured; aborting."; exit 1; }
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} workers=${WORKER_COUNT} rollout_steps=${ROLLOUT_STEP_COUNT} minibatch=${MINIBATCH_SIZE} discard_partial_minibatch=${DISCARD_PARTIAL_MINIBATCH}"
 
 export RUN_NAME=${RUN_PREFIX}_${SEED}
@@ -43,28 +37,18 @@ echo ${RUN_NAME}
 export DATA_DIR=$PD/experiments/${RUN_NAME}
 echo ${DATA_DIR}
 
-# Name the training run writes its final model under, so the eval steps below can
-# find it without knowing the last epoch number. Passed to train as
-# train.final_model_name so the two can never disagree.
+# passed to train as train.final_model_name, so the evals below find the final model without knowing its epoch
 export FINAL_MODEL_NAME=final_model.pt
 export MODEL_PATH=${DATA_DIR}/${FINAL_MODEL_NAME}
 echo ${MODEL_PATH}
 
-# Thread limit limits CPU thrashing across worker environments
-export NUMEXPR_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export VECLIB_MAXIMUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export OMP_NUM_THREADS=1
+# one BLAS/OpenMP thread per process: the env workers would otherwise thrash the CPUs
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
-# 0073 / 0074 = the 0072 config (3_train_64GPU_multinode_slurm.sh) on one node per training, minibatch 262144 / 393216, seeds 1000 and 2000.
-# 0081 = the 0074 config (minibatch 393216, lr 5e-4) on the current code with a quarter of the rollout per iteration, 29.8k iterations instead of 7451: 64 workers per rank (0074: 128) and 64 steps per rollout (0074: 128). Seeds 1000-4000, one array task each.
-# 0082 = the 0074 config again (128 workers per rank, 128 steps per rollout, minibatch 393216, lr 5e-4) on the current code, seed 1000 only (array task 0; task 1 = seed 2000).
-# 0083 = 0082 with train.discard_partial_minibatch=true (each PPO epoch skips its leftover minibatch), seed 1000 only (array task 0).
-# 0084 = the 0081 config (64 workers per rank, 64 steps per rollout, minibatch 393216, lr 5e-4) with train.discard_partial_minibatch=true, seed 1000 only (array task 0).
-# Execute torchrun across all nodes using srun
+# one 8-GPU node per seed (array task = SEEDS index); the knobs above are k_scaled_0084's, the rest is opengigaflow.yaml's except
+# train.total_timesteps (1e12)
 srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
     --nproc-per-node=8 \
@@ -89,30 +73,16 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     train.seed=${SEED} \
     tb=True
 
-if [ ! -f ${MODEL_PATH} ]; then
-    echo "Training did not produce ${MODEL_PATH}; skipping evaluation."
-    exit 1
-fi
+[ -f "${MODEL_PATH}" ] || { echo "Training did not produce ${MODEL_PATH}; skipping evaluation."; exit 1; }
 
-# nuPlan (reactive and non-reactive), longest6 (v2 and v1) and AlpaSim evals need one 8-GPU node each: submit them as their own jobs before the long self-play eval below so they queue while it runs.
-echo "Training done, submitting nuPlan reactive eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh \
-    || echo "nuPlan eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh"
-echo "Submitting nuPlan non-reactive eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh \
-    || echo "nuPlan non-reactive eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh"
-echo "Submitting longest6 v2 eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6_v2.sh \
-    || echo "longest6 v2 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6_v2.sh"
-echo "Submitting longest6 v1 eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/14_carla_longest6_v1.sh \
-    || echo "longest6 v1 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/14_carla_longest6_v1.sh"
-echo "Submitting AlpaSim eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
-    || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
+# the co-sim evals need one 8-GPU node each: submitted before the long self-play eval below, so they queue while it runs
+for EVAL_SCRIPT in 9_nuPlan.sh 13_nuPlan_nonreactive.sh 11_carla_longest6_v2.sh 14_carla_longest6_v1.sh 12_alpasim.sh; do
+    echo "Submitting scripts/kesai/${EVAL_SCRIPT} for ${MODEL_PATH}"
+    RUN_DIR=${DATA_DIR} sbatch scripts/kesai/${EVAL_SCRIPT} \
+        || echo "submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/${EVAL_SCRIPT}"
+done
 
-# parallel_eval runs 8 srun shards per node (one GPU and an eighth of the CPUs each, 60 blocking workers like
-# training) so the eval uses every GPU and thread of the allocation; 60 workers x 5 scenarios = 300 scenarios per 9000-step episode.
+# 8 srun shards per node, each one GPU, an eighth of the CPUs and 60 env workers (x 5 scenarios = 300 per 9000-step episode)
 echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
 .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 80000 \
@@ -120,15 +90,6 @@ echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
     --shards-per-node 8 \
     env.map_dir=$PD/opengigaflow/resources/carla \
     vec.num_envs=60 \
-    eval.reward_comfort=0.05 \
-    eval.reward_lane_center=0.0038 \
-    eval.obs_slots_partners_n=40 \
-    env.eval_perceived_size_margin_m=0.2 \
-    eval.min_goal_spacing=20 \
-    eval.max_goal_spacing=200 \
-    env.disable_red_light_infractions=1 \
-    env.disable_stop_sign_infractions=1 \
-    env.eval_standstill_jerk_deadband_mps3=1.5 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
@@ -136,6 +97,5 @@ echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
     wandb=True
 
 end=$(date +%s)
-runtime=$((end-start))
 echo "END TIME: $(date)"
-echo "Runtime: ${runtime}"
+echo "Runtime: $((end-start))"

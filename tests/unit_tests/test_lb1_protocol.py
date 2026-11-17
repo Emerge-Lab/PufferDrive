@@ -1,17 +1,11 @@
-"""Leaderboard 1.0 co-sim client: wire protocol round trips, and the client stays Python 3.7 / opengigaflow-free
-(it runs inside carla_garage's `garage` conda env, the only Python the CARLA 0.9.10 egg supports)."""
+"""LB1 co-sim client: protocol round trips; it stays Python 3.7 and opengigaflow-free for CARLA 0.9.10's garage env."""
 
 import ast
-import os
 import socket
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
-
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from opengigaflow.ocean.cosim.carla.lb1 import lb1_protocol
 

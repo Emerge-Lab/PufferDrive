@@ -1,13 +1,9 @@
 """A nuPlan partner's stopped time follows its track token, not the shadow-env slot it happens to occupy."""
 
-import os
-import sys
 from types import SimpleNamespace
 
 import pytest
 
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 pytest.importorskip("nuplan")
 pytest.importorskip("carl_nuplan")

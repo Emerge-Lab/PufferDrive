@@ -1,11 +1,5 @@
 """lb1/ground_truth.py: the Leaderboard 1.0 criteria recomputed from plain CARLA-frame geometry."""
 
-import os
-import sys
-
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
 from opengigaflow.ocean.cosim.carla.lb1.ground_truth import LeaderboardOneGroundTruth, segments_intersect
 
 

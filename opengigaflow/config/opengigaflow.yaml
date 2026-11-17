@@ -1,5 +1,4 @@
 load_model_path: null
-load_id: null
 num_scenarios: 3
 wandb: false
 wandb_project: opengigaflow
@@ -9,14 +8,12 @@ wandb_group: debug
 run_name: default_run
 tb: false
 tag: null
-env_name: opengigaflow
 policy_name: Drive
 vec:
   backend: Multiprocessing
   num_envs: 20
   num_workers: auto
   batch_size: auto
-  zero_copy: true
   seed: 42
 env:
   # --- Simulation ---
@@ -238,7 +235,7 @@ policy:
   # Encoder activation - options: "relu", "tanh", "gelu"
   encoder_activation: relu
   encoder_layer_norm: true
-  # Shared backbone layer
+  # Backbone layers (the actor and the critic each get one of this shape)
   backbone_hidden_size: 1024
   backbone_num_layers: 3
   # Backbone activation - options: "relu", "tanh", "gelu"
@@ -265,7 +262,7 @@ train:
   device: cuda
   anneal_lr: true
   precision: bfloat16
-  # false: pure float32 matmuls/convs (no TensorFloat-32); requires precision float32
+  # false: pure float32 matmuls/convs (no TensorFloat-32); with precision bfloat16 it needs policy.fp32_heads
   tf32: false
   rollout_dtype: float16
   total_timesteps: 500000000000
@@ -294,7 +291,7 @@ train:
   data_dir: experiments
   resume_state_path: null
   checkpoint_interval: 50
-  # batch_size = num_workers * num_agents *  bptt_horizon
+  # auto = vec.num_envs * env.num_agents * bptt_horizon
   batch_size: auto
   # Lower bound on the batch size in transitions. Null means no lower bound.
   min_batch_size: null

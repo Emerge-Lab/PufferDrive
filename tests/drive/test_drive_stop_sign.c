@@ -28,7 +28,6 @@ static Agent drive_test_stop_agent(float x, float y, float heading) {
     Agent agent = drive_test_agent(x, y, heading);
     reset_agent_state(&agent);
     agent.current_lane_idx = 100;
-    agent.previous_lane_idx = 100;
     return agent;
 }
 

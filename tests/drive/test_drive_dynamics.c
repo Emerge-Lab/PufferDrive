@@ -60,32 +60,22 @@ static int test_jerk_stop_reset_keeps_driver_jerk(void) {
     agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
     agent->reward_coefs[REWARD_COEF_SPEED] = 1.0f;
     float (*actions)[2] = (float (*)[2]) env.actions;
-    const float braking_jerk_action = JERK_LONG[1] / -JERK_LONG[0]; // decodes to -4 m/s^3
     const float stop_speed_mps = 0.3f;
     const float stop_accel_mps2 = -3.0f;
-    {
+    const float jerk_actions[2] = {0.0f, JERK_LONG[1] / -JERK_LONG[0]}; // the second decodes to -4 m/s^3
+    const float expected_jerk_mps3[2] = {0.0f, JERK_LONG[1]};
+    const float jerk_tolerance_mps3[2] = {1e-6f, 1e-3f};
+    for (int case_idx = 0; case_idx < 2; case_idx++) {
         agent->sim_vx = stop_speed_mps * agent->cos_heading;
         agent->sim_vy = stop_speed_mps * agent->sin_heading;
         update_agent_speed(agent);
         agent->accel_long = stop_accel_mps2;
-        actions[0][0] = 0.0f;
+        actions[0][0] = jerk_actions[case_idx];
         actions[0][1] = 0.0f;
         move_dynamics(&env, 0, env.active_agent_indices[0]);
         EXPECT_NEAR(agent->sim_speed, 0.0f, 1e-6f);
         EXPECT_NEAR(agent->accel_long, 0.0f, 1e-6f);
-        EXPECT_NEAR(agent->jerk_long, 0.0f, 1e-6f);
-    }
-    {
-        agent->sim_vx = stop_speed_mps * agent->cos_heading;
-        agent->sim_vy = stop_speed_mps * agent->sin_heading;
-        update_agent_speed(agent);
-        agent->accel_long = stop_accel_mps2;
-        actions[0][0] = braking_jerk_action;
-        actions[0][1] = 0.0f;
-        move_dynamics(&env, 0, env.active_agent_indices[0]);
-        EXPECT_NEAR(agent->sim_speed, 0.0f, 1e-6f);
-        EXPECT_NEAR(agent->accel_long, 0.0f, 1e-6f);
-        EXPECT_NEAR(agent->jerk_long, JERK_LONG[1], 1e-3f);
+        EXPECT_NEAR(agent->jerk_long, expected_jerk_mps3[case_idx], jerk_tolerance_mps3[case_idx]);
     }
     free_allocated(&env);
     return 0;

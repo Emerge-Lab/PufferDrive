@@ -12,27 +12,6 @@ from opengigaflow.ocean.drive import binding
 from opengigaflow.ocean.drive.drive import compute_effective_road_obs_count
 
 
-VEHICLE_COLORS = [
-    "#681D00",
-    "#1F77B4",
-    "#FF7F0E",
-    "#2CA02C",
-    "#9467BD",
-    "#8C564B",
-    "#D47CBA",
-    "#BCBD22",
-    "#17BECF",
-    "#AEC7E8",
-    "#FFBB78",
-    "#98DF8A",
-    "#FF9896",
-    "#C5B0D5",
-    "#C49C94",
-    "#F7B6D2",
-    "#DBDB8D",
-    "#9EDAE5",
-]
-
 METRIC_LABELS = [
     "collision",
     "offroad",
@@ -54,7 +33,7 @@ METRIC_LABELS = [
     "multi_lane_score",
 ]
 
-PAYLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+PAYLOAD_CHUNK_RAW_BYTES = 3 * 1024 * 1024  # a multiple of 3: every <script> chunk is standalone base64
 OBS_QUANTIZE_FRAME_CHUNK = 64
 REPLAY_COMPRESSION_LEVEL = 1
 REPLAY_HEADER_PROBE_BYTES = 1 << 16
@@ -62,36 +41,62 @@ PAYLOAD_CHUNK_PATTERN = re.compile(
     rb'<script type="application/octet-stream" class="payload-chunk">([A-Za-z0-9+/=]*)</script>'
 )
 REPLAY_INFLATE_MAX_ROUNDS = 1 << 12
+OBS_NORM_DEFAULTS = {
+    "obs_norm_goal_offset_m": 100.0,
+    "obs_norm_xy_offset_m": 100.0,
+    "obs_norm_veh_width_m": 10.0,
+    "obs_norm_veh_length_m": 15.0,
+    "obs_norm_road_seg_length_m": 5.0,
+    "obs_norm_road_seg_width_m": 5.0,
+    "obs_norm_speed_mps": 60.0,
+}
+REPLAY_CHUNK_DTYPES = {
+    "agent_f32": np.float32,
+    "agent_i32": np.int32,
+    "metrics_f32": np.float32,
+    "traffic_i16": np.int16,
+    "raw_action": np.float32,
+    "clipped_action": np.float32,
+    "value": np.float32,
+    "entropy": np.float32,
+}
+OPTIONAL_REPLAY_CHUNK_DTYPES = {
+    "goals_f32": np.float32,
+    "rewards_f32": np.float32,
+    "coefs_f32": np.float32,
+    "obs": np.int16,
+    "obs_scale": np.float32,
+    "policy_probs": np.float32,
+    "action_index": np.int32,  # discrete class behind a continuous executed action (-1: none)
+    "policy_mean": np.float32,
+    "policy_std": np.float32,
+    "policy_log_prob": np.float32,
+    "pool_partner": np.int16,
+    "pool_lane": np.int16,
+    "pool_boundary": np.int16,
+    "pool_traffic": np.int16,
+}
+PACKED_DTYPE_NAMES = {np.dtype(np.float32): "float32", np.dtype(np.int32): "int32", np.dtype(np.int16): "int16"}
+FAILURE_FILTERS = (
+    ("offroad", "offroad_rate", "Off-road"),
+    ("collision", "collision_rate", "Collisions"),
+    ("atfault", "at_fault_collision_rate", "At-fault collisions"),
+    ("redlight", "red_light_violation_rate", "Red-light violations"),
+    ("stopsign", "stop_sign_violation_rate", "Stop-sign violations"),
+)
 
 
-def _obs_scales(
-    env_cfg=None,
-    obs_norm_goal_offset_m=100.0,
-    obs_norm_xy_offset_m=100.0,
-    obs_norm_veh_width_m=10.0,
-    obs_norm_veh_length_m=15.0,
-    obs_norm_road_seg_length_m=5.0,
-    obs_norm_road_seg_width_m=5.0,
-    obs_norm_speed_mps=60.0,
-):
-    env_cfg = env_cfg or {}
-    obs_norm_goal_offset_m = float(env_cfg.get("obs_norm_goal_offset_m", obs_norm_goal_offset_m))
-    obs_norm_xy_offset_m = float(env_cfg.get("obs_norm_xy_offset_m", obs_norm_xy_offset_m))
-    obs_norm_veh_width_m = float(env_cfg.get("obs_norm_veh_width_m", obs_norm_veh_width_m))
-    obs_norm_veh_length_m = float(env_cfg.get("obs_norm_veh_length_m", obs_norm_veh_length_m))
-    obs_norm_road_seg_length_m = float(env_cfg.get("obs_norm_road_seg_length_m", obs_norm_road_seg_length_m))
-    obs_norm_road_seg_width_m = float(env_cfg.get("obs_norm_road_seg_width_m", obs_norm_road_seg_width_m))
-    obs_norm_speed_mps = float(env_cfg.get("obs_norm_speed_mps", obs_norm_speed_mps))
-    inverse_xy_scale = None if obs_norm_xy_offset_m == 0 else 1.0 / obs_norm_xy_offset_m
+def _obs_scales(env_cfg):
+    obs_norm = {key: float(env_cfg.get(key, default)) for key, default in OBS_NORM_DEFAULTS.items()}
+    position_per_meter = 1.0 / obs_norm["obs_norm_xy_offset_m"]
     return {
-        "obs_norm_goal_offset_m": obs_norm_goal_offset_m,
-        "meters_to_position": 1.0 if inverse_xy_scale is None else inverse_xy_scale,
-        "veh_width_to_position": 1.0 if inverse_xy_scale is None else obs_norm_veh_width_m * inverse_xy_scale,
-        "veh_len_to_position": 1.0 if inverse_xy_scale is None else obs_norm_veh_length_m * inverse_xy_scale,
-        "goal_to_position": 1.0 if inverse_xy_scale is None else obs_norm_goal_offset_m * inverse_xy_scale,
-        "road_length_to_position": 1.0 if inverse_xy_scale is None else obs_norm_road_seg_length_m * inverse_xy_scale,
-        "road_width_to_position": 1.0 if inverse_xy_scale is None else obs_norm_road_seg_width_m * inverse_xy_scale,
-        "speed_to_mps": obs_norm_speed_mps,
+        "meters_to_position": position_per_meter,
+        "veh_width_to_position": obs_norm["obs_norm_veh_width_m"] * position_per_meter,
+        "veh_len_to_position": obs_norm["obs_norm_veh_length_m"] * position_per_meter,
+        "goal_to_position": obs_norm["obs_norm_goal_offset_m"] * position_per_meter,
+        "road_length_to_position": obs_norm["obs_norm_road_seg_length_m"] * position_per_meter,
+        "road_width_to_position": obs_norm["obs_norm_road_seg_width_m"] * position_per_meter,
+        "speed_to_mps": obs_norm["obs_norm_speed_mps"],
     }
 
 
@@ -99,22 +104,15 @@ def _pack_replay_binary(header, chunks):
     packed = {}
     arrays = []
     offset = 0
-    dtype_names = {
-        np.dtype(np.float32): "float32",
-        np.dtype(np.int32): "int32",
-        np.dtype(np.int16): "int16",
-        np.dtype(np.uint8): "uint8",
-    }
     for name, arr in chunks.items():
         arr = np.ascontiguousarray(arr)
-        dtype = dtype_names[arr.dtype]
+        dtype = PACKED_DTYPE_NAMES[arr.dtype]
         packed[name] = {"dtype": dtype, "shape": list(arr.shape), "offset": offset, "nbytes": arr.nbytes}
         offset += arr.nbytes
         pad = (-offset) % 4
         arrays.append((arr, pad))
         offset += pad
 
-    header = dict(header)
     header["chunks"] = packed
     header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
     pad = (-(4 + len(header_bytes))) % 4
@@ -135,8 +133,6 @@ def encode_interactive_replay(scenario, replay):
     road_types = []
     road_ids = []
     for road_idx, elem in enumerate(scenario.get("road_elements", []) or []):
-        if not isinstance(elem, dict):
-            continue
         elem_type = int(elem.get("type", 0))
         xs = elem.get("x") or []
         ys = elem.get("y") or []
@@ -161,8 +157,6 @@ def encode_interactive_replay(scenario, replay):
     traffic_stop_lines = []
     traffic_types = []
     for elem in scenario.get("traffic_elements", []) or []:
-        if not isinstance(elem, dict):
-            continue
         stop_line = elem.get("stop_line") or [0, 0, 0, 0, 0, 0]
         traffic_stop_lines.append([float(v) for v in stop_line[:6]])
         traffic_types.append(int(elem.get("type", 0)))
@@ -204,39 +198,14 @@ def encode_interactive_replay(scenario, replay):
         "road_ids": np.asarray(road_ids or [0], dtype=np.int32),
         "traffic_stop_lines": np.asarray(traffic_stop_lines or [[0, 0, 0, 0, 0, 0]], dtype=np.float32),
         "traffic_types": np.asarray(traffic_types or [0], dtype=np.int16),
-        "agent_f32": replay["agent_f32"].astype(np.float32, copy=False),
-        "agent_i32": replay["agent_i32"].astype(np.int32, copy=False),
-        "metrics_f32": replay["metrics_f32"].astype(np.float32, copy=False),
-        "traffic_i16": replay["traffic_i16"].astype(np.int16, copy=False),
-        "raw_action": replay["raw_action"].astype(np.float32, copy=False),
-        "clipped_action": replay["clipped_action"].astype(np.float32, copy=False),
-        "value": replay["value"].astype(np.float32, copy=False),
-        "entropy": replay["entropy"].astype(np.float32, copy=False),
+        **{name: replay[name].astype(dtype, copy=False) for name, dtype in REPLAY_CHUNK_DTYPES.items()},
     }
-    if replay.get("goals_f32") is not None:
-        chunks["goals_f32"] = replay["goals_f32"].astype(np.float32, copy=False)
-    if replay.get("rewards_f32") is not None:
-        chunks["rewards_f32"] = replay["rewards_f32"].astype(np.float32, copy=False)
-    if replay.get("coefs_f32") is not None:
-        chunks["coefs_f32"] = replay["coefs_f32"].astype(np.float32, copy=False)
-    if quantized_observations is not None:
-        chunks["obs"] = quantized_observations
-        chunks["obs_scale"] = observation_scale_per_dim.astype(np.float32)
-    if replay.get("policy_probs") is not None:
-        chunks["policy_probs"] = replay["policy_probs"].astype(np.float32, copy=False)
-    if replay.get("action_index") is not None:  # discrete class behind a continuous executed action (-1: none)
-        chunks["action_index"] = replay["action_index"].astype(np.int32, copy=False)
-    if replay.get("policy_mean") is not None:
-        chunks["policy_mean"] = replay["policy_mean"].astype(np.float32, copy=False)
-        chunks["policy_std"] = replay["policy_std"].astype(np.float32, copy=False)
-        chunks["policy_log_prob"] = replay["policy_log_prob"].astype(np.float32, copy=False)
-    for pool_name in ("pool_partner", "pool_lane", "pool_boundary", "pool_traffic"):
-        if replay.get(pool_name) is not None:
-            chunks[pool_name] = replay[pool_name].astype(np.int16, copy=False)
+    chunk_sources = dict(replay, obs=quantized_observations, obs_scale=observation_scale_per_dim)
+    for name, dtype in OPTIONAL_REPLAY_CHUNK_DTYPES.items():
+        if chunk_sources.get(name) is not None:
+            chunks[name] = chunk_sources[name].astype(dtype, copy=False)
 
-    # Ghost: logged/expert trajectory bbox per active agent, so policy-vs-log divergence is visible
-    # (esp. control_sdc_only, 1 active agent). Frame-aligned: frame f = logged pose at timestep init_step + f.
-    # Fields: x, y, heading, length, width; width <= 0 marks frames with no valid logged pose.
+    # ghost per active slot: [x, y, heading, length, width] logged at timestep init_step + frame; width <= 0: no log
     agents = scenario.get("agents", []) or []
     active_indices = scenario.get("active_agent_indices", []) or []
     expert_indices = [agent_idx for agent_idx, agent in enumerate(agents) if int(agent.get("mark_as_expert", 0)) == 1]
@@ -255,21 +224,23 @@ def encode_interactive_replay(scenario, replay):
         agent_idx = active_indices[slot]
         if agent_idx < 0 or agent_idx >= len(agents):
             continue
-        a = agents[agent_idx]
-        lx = np.asarray(a.get("log_trajectory_x") or [], dtype=np.float32)
-        ly = np.asarray(a.get("log_trajectory_y") or [], dtype=np.float32)
-        lh = np.asarray(a.get("log_heading") or [], dtype=np.float32)
-        lv = np.asarray(a.get("log_valid") or [], dtype=np.int32)
-        n = min(frame_count, max(0, lx.shape[0] - init_step))
-        if n <= 0:
+        agent = agents[agent_idx]
+        log_x = np.asarray(agent.get("log_trajectory_x") or [], dtype=np.float32)
+        log_y = np.asarray(agent.get("log_trajectory_y") or [], dtype=np.float32)
+        log_heading = np.asarray(agent.get("log_heading") or [], dtype=np.float32)
+        log_valid = np.asarray(agent.get("log_valid") or [], dtype=np.int32)
+        logged_frame_count = min(frame_count, max(0, log_x.shape[0] - init_step))
+        if logged_frame_count <= 0:
             continue
-        window = slice(init_step, init_step + n)
-        ghost[:n, slot, 0] = lx[window]
-        ghost[:n, slot, 1] = ly[window]
-        ghost[:n, slot, 2] = lh[window]
-        ghost[:n, slot, 3] = float(a.get("sim_length", 0.0))
-        width = float(a.get("sim_width", 0.0))
-        ghost[:n, slot, 4] = np.where(lv[window] == 0, 0.0, width) if lv.shape[0] >= init_step + n else width
+        window = slice(init_step, init_step + logged_frame_count)
+        ghost[:logged_frame_count, slot, 0] = log_x[window]
+        ghost[:logged_frame_count, slot, 1] = log_y[window]
+        ghost[:logged_frame_count, slot, 2] = log_heading[window]
+        ghost[:logged_frame_count, slot, 3] = float(agent.get("sim_length", 0.0))
+        width = float(agent.get("sim_width", 0.0))
+        if log_valid.shape[0] >= init_step + logged_frame_count:
+            width = np.where(log_valid[window] == 0, 0.0, width)
+        ghost[:logged_frame_count, slot, 4] = width
     chunks["ghost_f32"] = ghost
 
     metadata = {
@@ -277,13 +248,12 @@ def encode_interactive_replay(scenario, replay):
         "scenario_id": scenario.get("scenario_id", "Unknown"),
         "expert_indices": expert_indices,
         "total_agents": int(scenario.get("num_total_agents", replay["agent_f32"].shape[1])),
-        "eval_overrides": replay.get("eval_overrides") or {},
-        "frames": int(replay["agent_f32"].shape[0]),
+        "frames": frame_count,
         "agent_cap": int(replay["agent_f32"].shape[1]),
         "agent_goal_radius_field": int(binding.AGENT_F32_GOAL_RADIUS_IDX),
         "default_goal_radius_meters": float(env_cfg["goal_radius"]),
         "traffic_cap": int(replay["traffic_i16"].shape[1]),
-        "active_count": int(replay["raw_action"].shape[1]),
+        "active_count": active_count,
         "obs_dim": int(replay["obs"].shape[2]) if replay.get("obs") is not None else 0,
         "obs_layout": "agent_dim_frame_delta" if replay.get("obs") is not None else None,
         "obs_agents": replay.get("obs_agents"),  # None: every agent's observations are stored
@@ -314,7 +284,9 @@ def encode_interactive_replay(scenario, replay):
     return _pack_replay_binary(metadata, chunks)
 
 
-def _render_interactive_replay_payload(compressed_payload, filename):
+def render_interactive_replay_zlib(replay_path, filename):
+    """replay_path: a .replay.zlib, or a rendered page whose embedded payload is rendered again."""
+    compressed_payload = read_replay_source(replay_path)
     html_template = """
 <!DOCTYPE html>
 <html data-theme="light">
@@ -353,7 +325,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         .highlight { color:var(--accent); }
         button, select, input { font:inherit; color:inherit; }
         .btn { border:1px solid var(--border); border-radius:7px; padding:6px 12px; background:var(--surface-solid); color:var(--text); font-size:12px; font-weight:600; cursor:pointer; }
-        .btn:hover { border-color:var(--accent); color:var(--accent); }
+        .btn:hover, .cam-chip:hover, #view-bar .btn.on, .obs-tool:hover, .obs-tool.on { color:var(--accent); border-color:var(--accent); }
         .btn.icon { display:flex; align-items:center; justify-content:center; width:36px; height:30px; padding:0; color:var(--accent); }
         select { border:1px solid var(--border); border-radius:7px; padding:5px 8px; background:var(--surface-solid); color:var(--text); font-size:12px; cursor:pointer; }
         input[type=range] { width:300px; accent-color:var(--accent); }
@@ -362,8 +334,6 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         #hud-global h3 { cursor:pointer; }
         #hud-global.collapsed > *:not(h3) { display:none; }
         #hud-global.collapsed h3 { padding-bottom:0; border-bottom:0; }
-        #overrides-body { grid-template-columns:1fr; max-height:34vh; overflow-y:auto; }
-        #overrides-body .num { font-size:10px; overflow-wrap:anywhere; text-align:right; }
         #perturbation-legend { margin-top:10px; padding-top:8px; border-top:1px solid var(--border); }
         .perturbation-key { display:flex; align-items:center; gap:8px; margin-top:5px; color:var(--muted); font-size:10px; font-weight:600; }
         .perturbation-line { width:28px; height:0; border-top:3px solid; }
@@ -371,12 +341,10 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         .perturbation-line.phantom-braking { border-color:#b45309; }
         .perturbation-line.human-log { border-color:#ff0000; }
         .perturbation-line.collision-onset { border-color:currentColor; border-top-style:dashed; }
-        /* Agent panel: dark instrument-cluster surface in both themes — scoped variable overrides restyle all children. */
         #hud-telemetry { --border:#4a5468; --muted:#aab3c5; --field:rgba(255,255,255,.07); --accent:#7cbcff; position:absolute; top:14px; right:14px; width:372px; max-height:calc(100vh - 90px); padding:12px 14px; overflow-y:auto; display:none; background:rgba(54,62,77,.95); color:#eef1f6; }
         [data-theme="dark"] #hud-telemetry { background:rgba(48,56,70,.95); }
         #tel-drag-handle { display:flex; align-items:center; gap:6px; }
         .cam-chip { margin-left:auto; padding:2px 8px; border:1px solid var(--border); border-radius:10px; background:transparent; color:var(--muted); font-size:9px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; cursor:pointer; }
-        .cam-chip:hover { color:var(--accent); border-color:var(--accent); }
         .heat { grid-column:1 / -1; display:grid; gap:3px; margin-top:6px; padding:6px; border:1px solid var(--border); border-radius:7px; background:rgba(5,10,20,.18); }
         .heat-cell { position:relative; display:flex; align-items:center; justify-content:center; height:25px; border-radius:4px; border:1px solid rgba(255,255,255,.10); font-family:var(--mono); font-size:9px; font-weight:700; font-variant-numeric:tabular-nums; box-shadow:inset 0 1px 0 rgba(255,255,255,.14); overflow:hidden; }
         .heat-cell.selected { z-index:1; outline:2px solid #fff; outline-offset:1px; box-shadow:0 0 0 3px var(--accent),0 0 18px rgba(124,188,255,.72),inset 0 0 0 1px rgba(13,20,32,.55); transform:scale(1.04); }
@@ -399,7 +367,6 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         .toggle-body.is-collapsed { display:none; }
         #controls { position:absolute; left:50%; bottom:16px; transform:translateX(-50%); padding:9px 12px; display:flex; gap:12px; align-items:center; }
         #view-bar { position:absolute; right:14px; bottom:16px; padding:7px 10px; display:flex; gap:8px; align-items:center; font-size:11px; }
-        #view-bar .btn.on { border-color:var(--accent); color:var(--accent); }
         #view-bar .zx { display:flex; gap:4px; align-items:center; color:var(--muted); }
         #view-bar input[type=range] { width:70px; accent-color:var(--accent); }
         #viewHint { color:var(--muted); max-width:330px; }
@@ -408,8 +375,6 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         #obs-title { position:absolute; top:0; left:0; right:0; z-index:2; display:flex; gap:6px; align-items:center; padding:6px 10px; background:var(--surface); border-bottom:1px solid var(--border); color:var(--muted); font-size:10px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; cursor:grab; }
         #obs-title span { flex:1; }
         .obs-tool { padding:3px 8px; border:1px solid var(--border); border-radius:5px; background:transparent; color:var(--muted); font-size:9.5px; font-weight:600; letter-spacing:.05em; cursor:pointer; }
-        .obs-tool:hover { color:var(--accent); border-color:var(--accent); }
-        .obs-tool.on { color:var(--accent); border-color:var(--accent); }
         #obs-canvas { width:100%; height:100%; background:#fff; }
     </style>
 </head>
@@ -428,8 +393,6 @@ def _render_interactive_replay_payload(compressed_payload, filename):
                 <div class="perturbation-key"><span class="perturbation-line collision-onset"></span><span>Collision: sharp box = sim footprint, dashed = pose one step before the onset</span></div>
                 <div class="perturbation-key" id="ghost-key" style="display:none"><span class="perturbation-line human-log"></span><span>Human driver (log) &middot; G toggles</span></div>
             </div>
-            <button type="button" class="toggle-header is-collapsed" id="overrides-header" data-target="overrides-body"><span>Eval overrides</span><span>&#9662;</span></button>
-            <div id="overrides-body" class="grid toggle-body is-collapsed"></div>
             <button class="btn" onclick="toggleTheme()" style="width:100%; margin-top:12px">Toggle theme</button>
         </div>
         <div id="hud-telemetry" class="panel">
@@ -478,8 +441,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
 __PAYLOAD_CHUNKS__
     <script>
         const METRIC_LABELS = __METRIC_LABELS__;
-        const VEHICLE_COLORS = __VEHICLE_COLORS__;
-        // Order must match the REWARD_COEF_* indices in constants.h.
+        const VEHICLE_COLORS = ["#681D00","#1F77B4","#FF7F0E","#2CA02C","#9467BD","#8C564B","#D47CBA","#BCBD22","#17BECF","#AEC7E8","#FFBB78","#98DF8A","#FF9896","#C5B0D5","#C49C94","#F7B6D2","#DBDB8D","#9EDAE5"];
         const COEF_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","throttle","steer","acc","speed"];
         const REWARD_LABELS = ["collision","offroad","red light","stop sign","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed"];
         const EGO_OBS_LABELS = ["speed","width","length","steer","accel lon","accel lat","lane dist","lane angle (err/pi)","speed limit","stopped","lane curvature"];
@@ -510,14 +472,8 @@ __PAYLOAD_CHUNKS__
         let expertAgentIndices = new Set();
         const OBS_MODES = ["ALL","POOL","BOTH"];
         const EGO_LANE_SPEED_LIMIT_FEATURE = 8, MPS_TO_KMH = 3.6, SAME_LIMIT_LABEL_SPACING_PX = 100;
+        const TYPED_ARRAYS = {float32:Float32Array, int32:Int32Array, int16:Int16Array};
 
-        function chunk(name) {
-            const m = H.chunks[name], start = H.dataStart + m.offset, n = m.nbytes / ({float32:4,int32:4,int16:2,uint8:1}[m.dtype]);
-            if (m.dtype === "float32") return new Float32Array(H.buffer, start, n);
-            if (m.dtype === "int32") return new Int32Array(H.buffer, start, n);
-            if (m.dtype === "int16") return new Int16Array(H.buffer, start, n);
-            return new Uint8Array(H.buffer, start, n);
-        }
         function frameMax() { return Math.max(0, (H ? H.frames : 1) - 1); }
         async function decodeReplayPayload() {
             const nodes = Array.from(document.querySelectorAll('.payload-chunk'));
@@ -603,10 +559,9 @@ self.onmessage = async event => {
         }
         async function initReplay() {
             const buf = await decodeReplayPayload();
-            const view = new DataView(buf), headerLen = view.getUint32(0, true);
+            const headerLen = new DataView(buf).getUint32(0, true), dataStart = 4 + headerLen + ((-(4 + headerLen)) & 3);
             H = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, headerLen)));
-            H.buffer = buf; H.dataStart = 4 + headerLen + ((-(4 + headerLen)) & 3);
-            for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
+            for (const [name, m] of Object.entries(H.chunks)) { const ArrayType = TYPED_ARRAYS[m.dtype]; C[name] = ArrayType ? new ArrayType(buf, dataStart + m.offset, m.nbytes / ArrayType.BYTES_PER_ELEMENT) : new Uint8Array(0); } // unknown dtype: empty chunk
             if (C.obs && !C.obs_scale) C.obs_scale = new Float32Array(H.obs_dim).fill(H.obs_scale === undefined ? 1 : H.obs_scale); // pre-per-dim replays
             if (C.obs && H.obs_layout === "agent_dim_frame_delta") { const T = H.frames, o = C.obs; for (let row = 0; row < o.length; row += T) for (let t = row + 1; t < row + T; t++) o[t] += o[t-1]; }
             F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], tf:H.chunks.traffic_i16.shape[2], gf:H.chunks.goals_f32 ? H.chunks.goals_f32.shape[2] : 0, rf:H.chunks.rewards_f32 ? H.chunks.rewards_f32.shape[2] : 0, cf:H.chunks.coefs_f32 ? H.chunks.coefs_f32.shape[2] : 0};
@@ -618,9 +573,6 @@ self.onmessage = async event => {
             const hasGhost = ghostPaths.length > 0 && C.ghost_f32.some((v, i) => i % 5 === 4 && v > 0);
             showGhost = (H.active_count === 1) && hasGhost;
             document.getElementById('ghost-key').style.display = hasGhost ? '' : 'none';
-            const ov = H.eval_overrides || {}, ovKeys = Object.keys(ov);
-            if (ovKeys.length) document.getElementById('overrides-body').innerHTML = ovKeys.map(k=>`<div class="item"><span class="name">${k}</span><span class="num">${ov[k]}</span></div>`).join('');
-            else document.getElementById('overrides-header').style.display = 'none';
             document.getElementById('sld').max = frameMax();
             document.getElementById('stepTotal').textContent = frameMax();
             updateBtn();
@@ -637,28 +589,23 @@ self.onmessage = async event => {
             RP = (H.chunks.road_points && H.chunks.road_points.shape && H.chunks.road_points.shape[1]) || 2;
             let p = 0, zSum = 0, zCount = 0;
             for (let i=0;i<H.road_polyline_count;i++) {
-                const len = C.road_lengths[i], type = C.road_types[i], path = paths[type], roadId = C.road_ids[i];
+                const len = C.road_lengths[i];
                 if (len <= 0) continue;
                 const roadPath = new Path2D();
-                path.moveTo(C.road_points[p*RP], C.road_points[p*RP+1]);
                 roadPath.moveTo(C.road_points[p*RP], C.road_points[p*RP+1]);
-                for (let j=1;j<len;j++) {
-                    path.lineTo(C.road_points[(p+j)*RP], C.road_points[(p+j)*RP+1]);
-                    roadPath.lineTo(C.road_points[(p+j)*RP], C.road_points[(p+j)*RP+1]);
-                }
+                for (let j=1;j<len;j++) roadPath.lineTo(C.road_points[(p+j)*RP], C.road_points[(p+j)*RP+1]);
+                paths[C.road_types[i]].addPath(roadPath);
                 if (RP > 2) for (let j=0;j<len;j++) { zSum += C.road_points[(p+j)*RP+2]; zCount++; }
-                roadPathsById.set(roadId, roadPath); roadRangesById.set(roadId, [p, len]);
+                if (C.road_ids) { roadPathsById.set(C.road_ids[i], roadPath); roadRangesById.set(C.road_ids[i], [p, len]); } // replays before road_ids: no current-lane highlight
                 p += len;
             }
             mapZMean = zCount ? zSum / zCount : 0; mapLayerKey = '';
             updateViewBar();
         }
-        function colorFor(id, isActive, isExpert) {
+        function colorForAgent(id, isActive, isExpert, hasInfraction) {
+            if (hasInfraction) return INFRACTION_AGENT_COLOR;
             if (isActive) return VEHICLE_COLORS[Math.abs(id) % VEHICLE_COLORS.length];
             return isExpert ? DYNAMIC_EXPERT_COLOR : STATIC_AGENT_COLOR;
-        }
-        function colorForAgent(id, isActive, isExpert, hasInfraction) {
-            return hasInfraction ? INFRACTION_AGENT_COLOR : colorFor(id, isActive, isExpert);
         }
         function agentHasInfraction(frame, idx) {
             const metricsBase = (frame * H.agent_cap + idx) * F.mf;
@@ -797,7 +744,7 @@ self.onmessage = async event => {
         function toggleObsLimits(e){ if(e) e.stopPropagation(); obsShowLimits=!obsShowLimits; document.getElementById('obsLimitBtn').classList.toggle('on', obsShowLimits); draw(true); }
         function toggleObsSize(e){ if(e) e.stopPropagation(); const p=document.getElementById('obs-container'), b=e ? e.currentTarget : null; obsExpanded=!obsExpanded; p.style.width=obsExpanded?'680px':'390px'; p.style.height=obsExpanded?'680px':'390px'; if(b) b.textContent=obsExpanded?'Collapse':'Expand'; resizeObsCanvas(); draw(true); }
         function searchAgent(){ const id=parseInt(document.getElementById('agentSearch').value); if(!isNaN(id)){ followedId=id; play=false; updateBtn(); draw(true); } }
-        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } if(e.code === 'KeyV'){ toggleView(); } if(e.code === 'KeyR'){ toggleRotateMode(); } if(e.code === 'KeyT'){ topView(); } if(is3D() && (e.code === 'KeyQ' || e.code === 'KeyE')){ cam.yaw += (e.code === 'KeyQ' ? -1 : 1) * KEY_ROTATE_STEP; updateViewBar(); draw(true); } if(is3D() && (e.code === 'KeyW' || e.code === 'KeyS')){ cam.pitch = Math.max(0, Math.min(MAX_PITCH, cam.pitch + (e.code === 'KeyW' ? 1 : -1) * KEY_ROTATE_STEP)); updateViewBar(); draw(true); } });
+        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; draw(true); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } if(e.code === 'KeyV'){ toggleView(); } if(e.code === 'KeyR'){ toggleRotateMode(); } if(e.code === 'KeyT'){ topView(); } if(is3D() && (e.code === 'KeyQ' || e.code === 'KeyE')){ cam.yaw += (e.code === 'KeyQ' ? -1 : 1) * KEY_ROTATE_STEP; updateViewBar(); draw(true); } if(is3D() && (e.code === 'KeyW' || e.code === 'KeyS')){ cam.pitch = Math.max(0, Math.min(MAX_PITCH, cam.pitch + (e.code === 'KeyW' ? 1 : -1) * KEY_ROTATE_STEP)); updateViewBar(); draw(true); } });
         c.addEventListener('contextmenu', e => e.preventDefault());
         c.onwheel = e => { e.preventDefault(); const factor = Math.exp(-e.deltaY * .001); if (is3D()) { const r=c.getBoundingClientRect(), sx=e.clientX-r.left, sy=e.clientY-r.top; setProjection(lastTarget); const before = groundOffset(sx, sy); cam.z *= factor; const after = groundOffset(sx, sy); if (before && after && followedId === null) { cam.x += before[0]-after[0]; cam.y += before[1]-after[1]; } } else cam.z *= factor; draw(true); };
         c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), sx=e.clientX-r.left, sy=e.clientY-r.top; const orbit = e.button === 1 || e.button === 2 || e.shiftKey || (rotateMode && e.button === 0); if (orbit) { e.preventDefault(); if (!is3D()) enter3D(); dragMode='orbit'; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; draw(true); return; } if (e.button !== 0) return; const hit = pickAgent(sx, sy); if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; dragMode='pan'; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; if (is3D()) { setProjection(null); cam.g0 = groundOffset(sx, sy); cam.t0 = [cam.x, cam.y]; } } draw(true); };
@@ -825,9 +772,8 @@ self.onmessage = async event => {
         }
         const POOL_STOPS = [[56,189,248],[34,197,94],[250,204,21],[239,68,68]];
         const HEAT_STOPS = [[40,48,62],[36,99,196],[77,196,255],[235,248,255]];
-        function heatColor(t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); const f = t * (HEAT_STOPS.length - 1), i = Math.floor(f), k = f - i, a = HEAT_STOPS[i], b = HEAT_STOPS[Math.min(i + 1, HEAT_STOPS.length - 1)]; return `rgb(${Math.round(a[0]+(b[0]-a[0])*k)},${Math.round(a[1]+(b[1]-a[1])*k)},${Math.round(a[2]+(b[2]-a[2])*k)})`; }
-        function poolColor(t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); const f = t * (POOL_STOPS.length - 1), i = Math.floor(f), k = f - i, a = POOL_STOPS[i], b = POOL_STOPS[Math.min(i + 1, POOL_STOPS.length - 1)]; return `rgb(${Math.round(a[0]+(b[0]-a[0])*k)},${Math.round(a[1]+(b[1]-a[1])*k)},${Math.round(a[2]+(b[2]-a[2])*k)})`; }
-        function drawPoolLegend(maxN) { const w = 116*dpr, h = 9*dpr, x = obsC.width - w - 12*dpr, y = obsC.height - 20*dpr, grad = obsCtx.createLinearGradient(x, 0, x+w, 0); for (let i=0;i<=10;i++) grad.addColorStop(i/10, poolColor(i/10)); obsCtx.fillStyle = grad; obsCtx.fillRect(x, y, w, h); obsCtx.strokeStyle = "rgba(0,0,0,.45)"; obsCtx.lineWidth = dpr; obsCtx.strokeRect(x, y, w, h); obsCtx.fillStyle = "#111"; obsCtx.font = `bold ${9.5*dpr}px system-ui`; obsCtx.textAlign = "left"; obsCtx.fillText("pool wins  1", x, y - 4*dpr); obsCtx.textAlign = "right"; obsCtx.fillText(maxN, x+w, y - 4*dpr); }
+        function rampColor(stops, t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); const f = t * (stops.length - 1), i = Math.floor(f), k = f - i, a = stops[i], b = stops[Math.min(i + 1, stops.length - 1)]; return `rgb(${Math.round(a[0]+(b[0]-a[0])*k)},${Math.round(a[1]+(b[1]-a[1])*k)},${Math.round(a[2]+(b[2]-a[2])*k)})`; }
+        function drawPoolLegend(maxN) { const w = 116*dpr, h = 9*dpr, x = obsC.width - w - 12*dpr, y = obsC.height - 20*dpr, grad = obsCtx.createLinearGradient(x, 0, x+w, 0); for (let i=0;i<=10;i++) grad.addColorStop(i/10, rampColor(POOL_STOPS, i/10)); obsCtx.fillStyle = grad; obsCtx.fillRect(x, y, w, h); obsCtx.strokeStyle = "rgba(0,0,0,.45)"; obsCtx.lineWidth = dpr; obsCtx.strokeRect(x, y, w, h); obsCtx.fillStyle = "#111"; obsCtx.font = `bold ${9.5*dpr}px system-ui`; obsCtx.textAlign = "left"; obsCtx.fillText("pool wins  1", x, y - 4*dpr); obsCtx.textAlign = "right"; obsCtx.fillText(maxN, x+w, y - 4*dpr); }
         const LIMIT_PILL_STYLES = {same: ["rgba(255,255,255,.55)", "rgba(0,0,0,.2)", "#444"], differs: ["rgba(255,237,213,.6)", "rgba(194,65,12,.8)", "#9a3412"], ego: ["rgba(255,255,255,.95)", "rgba(0,0,0,.45)", "#111"]};
         function drawLimitPill(x, y, w, h, text, style) {
             const [fill, stroke, ink] = LIMIT_PILL_STYLES[style];
@@ -873,7 +819,7 @@ self.onmessage = async event => {
         }
         function selectedGoals(frame, agent) {
             // World-frame goals from the replay log, so goals render without captured observations.
-            if (!C.goals_f32 || !agent || agent.slot < 0) return [];
+            if (!C.goals_f32 || agent.slot < 0) return [];
             const base = (frame * H.agent_cap + agent.idx) * F.gf, stride = F.gf / H.num_goals, goals = C.goals_f32, out = [];
             for (let i=0;i<H.num_goals;i++) {
                 const o = base + i * stride;
@@ -899,9 +845,8 @@ self.onmessage = async event => {
         }
         function decodeObs(frame, slot) {
             if (!C.obs || slot < 0 || slot >= H.active_count) return null;
-            const base = 0, obs = obsRow(frame, slot), LF = H.lane_features, BF = H.boundary_features, TF = H.traffic_features;
-            const v = (o) => obs[o];
-            let p = base; const egoStart = p; p += H.ego_dim;
+            const obs = obsRow(frame, slot), LF = H.lane_features, BF = H.boundary_features, TF = H.traffic_features;
+            let p = H.ego_dim;
             if (H.reward_conditioning) p += H.reward_coef_count;
             const targetStart = p; p += H.num_goals * H.goal_features;
             const partnersStart = p; p += H.obs_slots_partners_n * H.partner_features;
@@ -911,66 +856,53 @@ self.onmessage = async event => {
             const rot = (x,y) => [-y,x];
             const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
             const limitIdx = H.lane_speed_limit_idx, speedScale = H.scales.speed_to_mps;
-            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(v(o),v(o+1)), cs=rot(v(o+4),v(o+5)); out.push([xy[0],xy[1],2*v(o+3)*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i),feat===LF?v(o+6)*(H.scales.road_width_to_position||0):0,feat===LF && limitIdx >= 0 ? v(o+limitIdx)*speedScale : null]); } return out; };
-            const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(v(o),v(o+1)), h=Math.atan2(v(o+6),v(o+5)); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:v(o+3)*H.scales.veh_len_to_position,w:v(o+4)*H.scales.veh_width_to_position,h:h,pool:poolAt("pool_partner",frame,slot,i)}); }
-            const gps = []; for(let i=0;i<H.num_goals;i++){ const o=targetStart+i*H.goal_features; if(zero(o,H.goal_features)) continue; let scale=H.scales.goal_to_position, xy=rot(v(o)*scale, v(o+1)*scale); gps.push(xy); }
-            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(v(o),v(o+1)), b=rot(v(o+2),v(o+3)); controls.push({type:Math.round(v(o+TF-2)), state:Math.round(v(o+TF-1)), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
-            return {ego:{w:v(egoStart+1)*H.scales.veh_width_to_position,l:v(egoStart+2)*H.scales.veh_len_to_position,limit:speedScale ? v(egoStart+EGO_LANE_SPEED_LIMIT_FEATURE)*speedScale : null}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane",LF), bounds:roads(boundsStart,H.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
+            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(obs[o],obs[o+1]), cs=rot(obs[o+4],obs[o+5]); out.push([xy[0],xy[1],2*obs[o+3]*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i),feat===LF?obs[o+6]*(H.scales.road_width_to_position||0):0,feat===LF && limitIdx >= 0 ? obs[o+limitIdx]*speedScale : null]); } return out; };
+            const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(obs[o],obs[o+1]), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*H.scales.veh_len_to_position,w:obs[o+4]*H.scales.veh_width_to_position,h:h,pool:poolAt("pool_partner",frame,slot,i)}); }
+            const gps = []; for(let i=0;i<H.num_goals;i++){ const o=targetStart+i*H.goal_features; if(zero(o,H.goal_features)) continue; let scale=H.scales.goal_to_position, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
+            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(obs[o],obs[o+1]), b=rot(obs[o+2],obs[o+3]); controls.push({type:Math.round(obs[o+TF-2]), state:Math.round(obs[o+TF-1]), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
+            return {ego:{w:obs[1]*H.scales.veh_width_to_position,l:obs[2]*H.scales.veh_len_to_position,limit:speedScale ? obs[EGO_LANE_SPEED_LIMIT_FEATURE]*speedScale : null}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane",LF), bounds:roads(boundsStart,H.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
         }
         function drawObs(frame, trueSize) {
             resizeObsCanvas();
             const scale = (Math.min(obsC.width, obsC.height) / 2) * obsZoom, px = dpr / scale;
             const showAll = obsMode !== 1, showPool = obsMode !== 0, bothMode = obsMode === 2;
-            let poolMax = 1;
-            for(const r of frame.lanes) if(r[5] > poolMax) poolMax = r[5];
-            for(const r of frame.bounds) if(r[5] > poolMax) poolMax = r[5];
-            for(const p of frame.partners) if(p.pool > poolMax) poolMax = p.pool;
-            for(const t of frame.traffic_controls) if(t.pool > poolMax) poolMax = t.pool;
+            const poolMax = Math.max(1, ...frame.lanes.map(r => r[5]), ...frame.bounds.map(r => r[5]), ...frame.partners.map(p => p.pool), ...frame.traffic_controls.map(t => t.pool));
             const pw = t => (2.0 + 2.4*t)*px;
             obsCtx.fillStyle = "#fff"; obsCtx.fillRect(0,0,obsC.width,obsC.height);
             obsCtx.save(); obsCtx.translate(obsC.width/2, obsC.height/2); obsCtx.scale(scale, -scale); obsCtx.lineCap = "round";
             if(showAll){ obsCtx.fillStyle=bothMode?"rgba(0,0,0,.08)":"rgba(120,120,120,.15)"; for(const r of frame.lanes){ if(!(r[6] > 0)) continue; obsCtx.save(); obsCtx.translate(r[0],r[1]); obsCtx.rotate(Math.atan2(r[4],r[3])); obsCtx.fillRect(-r[2]/2,-r[6]/2,r[2],r[6]); obsCtx.restore(); } }
             if(showAll){ obsCtx.strokeStyle=bothMode?"#000":"#bbb"; obsCtx.lineWidth=1.5*px; for(const r of frame.lanes){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } }
             if(showAll){ obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=3*px; for(const r of frame.bounds){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } }
-            if(showPool){ for(const r of frame.lanes.concat(frame.bounds)){ if(r[5] > 0){ obsCtx.strokeStyle=poolColor(r[5]/poolMax); obsCtx.lineWidth=pw(r[5]/poolMax); obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } } }
+            if(showPool){ for(const r of frame.lanes.concat(frame.bounds)){ if(r[5] > 0){ obsCtx.strokeStyle=rampColor(POOL_STOPS, r[5]/poolMax); obsCtx.lineWidth=pw(r[5]/poolMax); obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } } }
             for(const g of frame.gps){ obsCtx.fillStyle="magenta"; obsCtx.beginPath(); obsCtx.arc(g[0],g[1],5*px,0,7); obsCtx.fill(); }
-            for(const t of frame.traffic_controls){ if(showAll){ obsCtx.strokeStyle = bothMode ? "#000" : (t.type === 1 || t.type === 2 ? trafficColor({state:t.state}) : "#ffd700"); obsCtx.lineWidth=2.5*px; obsCtx.setLineDash(t.type === 2 ? [6*px, 4*px] : []); obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); obsCtx.setLineDash([]); } if(showPool && t.pool > 0){ obsCtx.strokeStyle=poolColor(t.pool/poolMax); obsCtx.lineWidth=pw(t.pool/poolMax)+0.8*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } }
-            for(const p of frame.partners){ const win = showPool && p.pool > 0; if(!showAll && !win) continue; obsCtx.save(); obsCtx.translate(p.x,p.y); obsCtx.rotate(p.h); if(showAll){ obsCtx.fillStyle=bothMode?"rgba(0,0,0,.55)":"rgba(136,136,136,.8)"; obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-p.l/2,-p.w/2,p.l,p.w); obsCtx.fill(); obsCtx.stroke(); } if(win){ obsCtx.strokeStyle=poolColor(p.pool/poolMax); obsCtx.lineWidth=pw(p.pool/poolMax); obsCtx.strokeRect(-p.l/2,-p.w/2,p.l,p.w); } obsCtx.restore(); }
-            if(frame.ego){ obsCtx.save(); obsCtx.rotate(Math.PI/2); obsCtx.fillStyle="rgba(0,102,255,.8)"; obsCtx.strokeStyle="#000"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-frame.ego.l/2,-frame.ego.w/2,frame.ego.l,frame.ego.w); obsCtx.fill(); obsCtx.stroke(); if(trueSize){ obsCtx.strokeStyle="#ffd700"; obsCtx.setLineDash([3*px,2*px]); obsCtx.strokeRect(-trueSize.l/2,-trueSize.w/2,trueSize.l,trueSize.w); obsCtx.setLineDash([]); } obsCtx.restore(); }
+            for(const t of frame.traffic_controls){ if(showAll){ obsCtx.strokeStyle = bothMode ? "#000" : (t.type === 1 || t.type === 2 ? trafficColor({state:t.state}) : "#ffd700"); obsCtx.lineWidth=2.5*px; obsCtx.setLineDash(t.type === 2 ? [6*px, 4*px] : []); obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); obsCtx.setLineDash([]); } if(showPool && t.pool > 0){ obsCtx.strokeStyle=rampColor(POOL_STOPS, t.pool/poolMax); obsCtx.lineWidth=pw(t.pool/poolMax)+0.8*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } }
+            for(const p of frame.partners){ const win = showPool && p.pool > 0; if(!showAll && !win) continue; obsCtx.save(); obsCtx.translate(p.x,p.y); obsCtx.rotate(p.h); if(showAll){ obsCtx.fillStyle=bothMode?"rgba(0,0,0,.55)":"rgba(136,136,136,.8)"; obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-p.l/2,-p.w/2,p.l,p.w); obsCtx.fill(); obsCtx.stroke(); } if(win){ obsCtx.strokeStyle=rampColor(POOL_STOPS, p.pool/poolMax); obsCtx.lineWidth=pw(p.pool/poolMax); obsCtx.strokeRect(-p.l/2,-p.w/2,p.l,p.w); } obsCtx.restore(); }
+            obsCtx.save(); obsCtx.rotate(Math.PI/2); obsCtx.fillStyle="rgba(0,102,255,.8)"; obsCtx.strokeStyle="#000"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-frame.ego.l/2,-frame.ego.w/2,frame.ego.l,frame.ego.w); obsCtx.fill(); obsCtx.stroke(); if(trueSize){ obsCtx.strokeStyle="#ffd700"; obsCtx.setLineDash([3*px,2*px]); obsCtx.strokeRect(-trueSize.l/2,-trueSize.w/2,trueSize.l,trueSize.w); obsCtx.setLineDash([]); } obsCtx.restore();
             obsCtx.restore();
             if(showPool && poolMax > 1) drawPoolLegend(poolMax);
             if(obsShowLimits) drawSpeedLimits(frame, scale);
         }
         let panelKey = null, refs = null, lastWarnKey = "";
         function ensurePanels() {
-            // Panel structure is identical across agents/frames — build the DOM once, update textContent per frame.
             // keyed on captured probs: a discrete policy on the continuous env still records them
             const discrete = !!C.policy_probs;
             const actionDims = H.chunks.raw_action.shape.length > 2 ? H.chunks.raw_action.shape[2] : 1;
             const key = (discrete ? 'd' : 'c') + actionDims;
             if (refs && panelKey === key) return;
             panelKey = key;
-            const mg = document.getElementById('metrics-grid');
-            mg.innerHTML = METRIC_LABELS.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('');
-            const rg = document.getElementById('reward-grid');
-            const rewardLabels = ["return (cum)","total (step)"].concat(REWARD_LABELS.slice(0, Math.max(0, F.rf - 1)));
-            rg.innerHTML = C.rewards_f32 ? rewardLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
-            document.getElementById('reward-header').style.display = C.rewards_f32 ? '' : 'none';
-            const eg = document.getElementById('ego-obs-grid');
-            const egoLabels = EGO_OBS_LABELS.slice(0, H.ego_dim);
-            while (egoLabels.length < H.ego_dim) egoLabels.push(`ego[${egoLabels.length}]`);
-            eg.innerHTML = C.obs ? egoLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
-            document.getElementById('ego-obs-header').style.display = C.obs ? '' : 'none';
-            const cg = document.getElementById('cond-obs-grid');
-            const showCond = C.obs && H.reward_conditioning;
-            const condLabels = EGO_COND_LABELS.slice(0, H.reward_coef_count);
-            while (condLabels.length < H.reward_coef_count) condLabels.push(`coef[${condLabels.length}]`);
-            cg.innerHTML = showCond ? condLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
-            document.getElementById('cond-obs-header').style.display = showCond ? '' : 'none';
-            const kg = document.getElementById('coef-grid');
-            const coefLabels = COEF_LABELS.slice(0, F.cf);
-            kg.innerHTML = C.coefs_f32 ? coefLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
-            document.getElementById('coef-header').style.display = C.coefs_f32 ? '' : 'none';
+            const padLabels = (labels, count, name) => { const out = labels.slice(0, count); while (out.length < count) out.push(`${name}[${out.length}]`); return out; };
+            const [mg, rg, eg, cg, kg] = [
+                ['metrics-grid', null, true, METRIC_LABELS],
+                ['reward-grid', 'reward-header', C.rewards_f32, ["return (cum)","total (step)"].concat(REWARD_LABELS.slice(0, Math.max(0, F.rf - 1)))],
+                ['ego-obs-grid', 'ego-obs-header', C.obs, padLabels(EGO_OBS_LABELS, H.ego_dim, 'ego')],
+                ['cond-obs-grid', 'cond-obs-header', C.obs && H.reward_conditioning, padLabels(EGO_COND_LABELS, H.reward_coef_count, 'coef')],
+                ['coef-grid', 'coef-header', C.coefs_f32, COEF_LABELS.slice(0, F.cf)],
+            ].map(([gridId, headerId, shown, labels]) => {
+                const grid = document.getElementById(gridId);
+                grid.innerHTML = shown ? labels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
+                if (headerId) document.getElementById(headerId).style.display = shown ? '' : 'none';
+                return grid;
+            });
             const pol = document.getElementById('policy-grid');
             let html = '<div class="item"><span class="name">value</span><span class="num" data-pol="v">-</span></div><div class="item"><span class="name">entropy</span><span class="num" data-pol="e">-</span></div>';
             let labels = [];
@@ -1018,7 +950,7 @@ self.onmessage = async event => {
                 for (let i=0;i<n;i++){
                     const prob = Math.max(0, Math.min(1, C.policy_probs[pb+i]));
                     const cell = refs.heat[i], t = prob / maxP;
-                    cell.style.background = heatColor(t);
+                    cell.style.background = rampColor(HEAT_STOPS, t);
                     cell.textContent = prob >= 0.04 || i === selected ? Math.round(prob*100) + '%' : '';
                     cell.style.color = t > 0.6 ? '#0d1420' : '#c4cddc';
                     cell.classList.toggle('selected', i===selected);
@@ -1087,7 +1019,7 @@ self.onmessage = async event => {
             if (warnKey !== lastWarnKey) { lastWarnKey = warnKey; warnRow.style.display = warnings.length ? 'flex' : 'none'; warnRow.innerHTML = warnings.map(w=>`<span class="warn-chip">${w}</span>`).join(''); }
             const obs = decodeObs(f, agent.slot); if (obs) { obsBox.style.display='block'; drawObs(obs, {l:agent.l*H.scales.meters_to_position, w:agent.w*H.scales.meters_to_position}); } else obsBox.style.display='none';
         }
-        // ── 3D view: perspective orbit camera around (cam.x, cam.y, cam.cz); cam.z stays the px-per-metre scale at the target ──
+        // 3D: perspective orbit camera around (cam.x, cam.y, cam.cz); cam.z stays the px-per-metre scale at the target
         let P_ca = 1, P_sa = 0, P_cb = 1, P_sb = 0, P_D = 1;
         function is3D() { return viewMode === '3d'; }
         function camDist() { return (c.height / cam.z) / (2 * Math.tan(FOV_DEG * Math.PI / 360)); }
@@ -1111,12 +1043,12 @@ self.onmessage = async event => {
         }
         function groundOffset(sx, sy) { const g = unproj(sx, sy, cam.cz); return g ? [g[0] - cam.x, g[1] - cam.y] : null; }
         function projPoint(idx) { const o = idx * RP; return proj(C.road_points[o], C.road_points[o + 1], RP > 2 ? C.road_points[o + 2] : 0); }
-        function tracePolyline(g, points) { let pen = false; for (const s of points) { if (!s) { pen = false; continue; } if (pen) g.lineTo(s[0], s[1]); else g.moveTo(s[0], s[1]); pen = true; } }
+        function traceRoadPoints(g, start, count) { let pen = false; for (let j = 0; j < count; j++) { const s = projPoint(start + j); if (!s) { pen = false; continue; } if (pen) g.lineTo(s[0], s[1]); else g.moveTo(s[0], s[1]); pen = true; } }
         function traceRoads(g, type) {
             let p = 0;
             for (let i = 0; i < H.road_polyline_count; i++) {
                 const len = C.road_lengths[i];
-                if (C.road_types[i] === type) { let pen = false; for (let j = 0; j < len; j++) { const s = projPoint(p + j); if (!s) { pen = false; continue; } if (pen) g.lineTo(s[0], s[1]); else g.moveTo(s[0], s[1]); pen = true; } }
+                if (C.road_types[i] === type) traceRoadPoints(g, p, len);
                 p += len;
             }
         }
@@ -1129,7 +1061,7 @@ self.onmessage = async event => {
             for (const [type, color, widthM, dash] of styles) { g.strokeStyle = color; g.lineWidth = Math.max(1, widthM * cam.z); g.setLineDash(dash.map(d => Math.max(2, d * cam.z))); g.beginPath(); traceRoads(g, type); g.stroke(); }
             g.setLineDash([]); mapLayerKey = key; return mapLayer;
         }
-        function strokeRoad3D(roadId, color, widthPx) { const range = roadRangesById.get(roadId); if (!range) return; const pts = []; for (let j = 0; j < range[1]; j++) pts.push(projPoint(range[0] + j)); ctx.strokeStyle = color; ctx.lineWidth = widthPx; ctx.beginPath(); tracePolyline(ctx, pts); ctx.stroke(); }
+        function strokeRoad3D(roadId, color, widthPx) { const range = roadRangesById.get(roadId); if (!range) return; ctx.strokeStyle = color; ctx.lineWidth = widthPx; ctx.beginPath(); traceRoadPoints(ctx, range[0], range[1]); ctx.stroke(); }
         function boxCorners(x, y, z, h, l, w, pad) { const ch = Math.cos(h), sh = Math.sin(h), hl = l / 2 + pad, hw = w / 2 + pad; return [[-hl, -hw], [hl, -hw], [hl, hw], [-hl, hw]].map(([u, v]) => proj(x + u * ch - v * sh, y + u * sh + v * ch, z)); }
         function circlePoints(x, y, z, r) { const out = []; for (let k = 0; k < 16; k++) { const t = k / 16 * 2 * Math.PI; out.push(proj(x + r * Math.cos(t), y + r * Math.sin(t), z)); } return out; }
         function tracePolygon(pts) { if (pts.some(s => !s)) return false; ctx.beginPath(); pts.forEach((s, i) => i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1])); ctx.closePath(); return true; }
@@ -1241,19 +1173,17 @@ self.onmessage = async event => {
 </body>
 </html>
     """
-    html_template = html_template.replace(
-        "__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":"))
-    ).replace("__VEHICLE_COLORS__", json.dumps(VEHICLE_COLORS, separators=(",", ":")))
+    html_template = html_template.replace("__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":")))
     html_head, html_tail = html_template.split("__PAYLOAD_CHUNKS__")
     # Streamed per chunk: a whole-page string would be several copies of a multi-hundred-MB payload
-    raw_chunk_size = PAYLOAD_CHUNK_SIZE // 4 * 3
     with open(filename, "w") as f:
         f.write(html_head)
-        for chunk_start in range(0, len(compressed_payload), raw_chunk_size):
+        for chunk_start in range(0, len(compressed_payload), PAYLOAD_CHUNK_RAW_BYTES):
             if chunk_start:
                 f.write("\n")
             f.write('    <script type="application/octet-stream" class="payload-chunk">')
-            f.write(base64.b64encode(compressed_payload[chunk_start : chunk_start + raw_chunk_size]).decode("ascii"))
+            raw_chunk = compressed_payload[chunk_start : chunk_start + PAYLOAD_CHUNK_RAW_BYTES]
+            f.write(base64.b64encode(raw_chunk).decode("ascii"))
             f.write("</script>")
         f.write(html_tail)
 
@@ -1277,11 +1207,6 @@ def read_replay_source(path):
     return b"".join(base64.b64decode(chunk) for chunk in chunks)
 
 
-def render_interactive_replay_zlib(replay_path, filename):
-    """replay_path: a .replay.zlib, or a rendered page whose embedded payload is rendered again."""
-    _render_interactive_replay_payload(read_replay_source(replay_path), filename)
-
-
 def replay_step_link(step, seconds=None):
     """Link for a panel injected into an interactive replay page: clicking seeks the viewer to `step`."""
     label = f"step {int(step)}" + ("" if seconds is None else f" ({seconds:.1f} s)")
@@ -1292,8 +1217,7 @@ def replay_step_link(step, seconds=None):
 
 
 def replay_agent_marks(marks):
-    """<script> for a panel injected ahead of the viewer: marks = [(agent idx, first frame, frame count, name)] draws
-    the agent as infringing on those frames, with `name` as its warning chip, whatever the env's own metrics say."""
+    """<script> making the viewer flag each (agent idx, first frame, frame count, name) mark as an infraction `name`."""
     rows = [[int(agent_idx), int(first), int(first) + int(count), str(name)] for agent_idx, first, count, name in marks]
     return f"<script>window.REPLAY_AGENT_MARKS={json.dumps(rows, separators=(',', ':'))};</script>"
 
@@ -1320,8 +1244,7 @@ def _inflate_replay_prefix(compressed, chunk_names):
 
 
 def read_replay_zlib(replay_path, chunk_names=None):
-    """-> (header dict, chunk name -> ndarray view) of a saved .replay.zlib or of a rendered page; chunk_names
-    limits the chunks returned and the inflated prefix of the stream."""
+    """-> (header, {chunk name: ndarray view}) of a .replay.zlib or page; chunk_names limits chunks and inflation."""
     compressed = read_replay_source(replay_path)
     raw = zlib.decompress(compressed) if chunk_names is None else _inflate_replay_prefix(compressed, chunk_names)
     header_len = struct.unpack("<I", raw[:4])[0]
@@ -1338,48 +1261,16 @@ def read_replay_zlib(replay_path, chunk_names=None):
     return header, chunks
 
 
-def set_replay_ghost(replay_path, ghost_f32):
-    """Overwrite the ghost (logged trajectory) chunk of a saved .replay.zlib in place; shape must match."""
-    header, chunks = read_replay_zlib(replay_path)
-    ghost_f32 = np.asarray(ghost_f32, dtype=np.float32)
-    if "ghost_f32" not in chunks or chunks["ghost_f32"].shape != ghost_f32.shape:
-        raise ValueError(
-            f"{replay_path}: ghost chunk shape {chunks.get('ghost_f32', np.empty(0)).shape} != {ghost_f32.shape}"
-        )
-    chunks["ghost_f32"] = ghost_f32
-    header = {key: value for key, value in header.items() if key != "chunks"}
-    with open(replay_path, "wb") as replay_file:
-        replay_file.write(_pack_replay_binary(header, chunks))
-
-
 def build_gallery_index(folder_path=".", file_metrics=None, links=None):
-    """Build an index.html navigator for per-episode replay HTMLs in folder_path.
-
-    If `file_metrics` is a dict mapping `<html basename> -> {metric_name: value}`,
-    the index exposes a filter for each supported infraction present in the
-    metrics. Previous/next navigation follows the active filtered list.
-    `links` ([(label, href), ...]) are shown under the title, e.g. a run's report.
-    """
-    files = [f for f in os.listdir(folder_path) if f != "index.html" and f.endswith(".html")]
+    """folder_path/index.html over its replay pages: file_metrics {page: {metric: value}} adds infraction filters."""
+    files = sorted(f for f in os.listdir(folder_path) if f != "index.html" and f.endswith(".html"))
 
     if not files:
         print("No matching .html files found in this directory.")
         return
 
-    files.sort()
-
     metrics_map = file_metrics or {}
-    present_metrics = set()
-    for metrics in metrics_map.values():
-        present_metrics.update(metrics.keys())
-
-    FAILURE_FILTERS = (
-        ("offroad", "offroad_rate", "Off-road"),
-        ("collision", "collision_rate", "Collisions"),
-        ("atfault", "at_fault_collision_rate", "At-fault collisions"),
-        ("redlight", "red_light_violation_rate", "Red-light violations"),
-        ("stopsign", "stop_sign_violation_rate", "Stop-sign violations"),
-    )
+    present_metrics = {metric_name for metrics in metrics_map.values() for metric_name in metrics}
     available_failure_filters = [
         failure_filter for failure_filter in FAILURE_FILTERS if failure_filter[1] in present_metrics
     ]
@@ -1442,413 +1333,77 @@ def build_gallery_index(folder_path=".", file_metrics=None, links=None):
     <title>OpenGigaFlow Replay Gallery</title>
     <style>
         :root {
-            color-scheme: light;
-            --background: #f3f4f6;
-            --surface: #ffffff;
-            --surface-muted: #f8f9fb;
-            --border: #d7dce2;
-            --border-strong: #aeb6c2;
-            --text: #1f2933;
-            --muted: #667085;
-            --accent: #2563eb;
-            --offroad: #b45309;
-            --collision: #b42318;
-            --atfault: #7e22ce;
-            --redlight: #d92d20;
-            --stopsign: #0e7490;
+            color-scheme: light; --background: #f3f4f6; --surface: #ffffff; --surface-muted: #f8f9fb; --border: #d7dce2;
+            --border-strong: #aeb6c2; --text: #1f2933; --muted: #667085; --accent: #2563eb; --offroad: #b45309;
+            --collision: #b42318; --atfault: #7e22ce; --redlight: #d92d20; --stopsign: #0e7490;
         }
-
         * { box-sizing: border-box; }
-
-        body {
-            margin: 0;
-            height: 100vh;
-            overflow: hidden;
-            background: var(--background);
-            color: var(--text);
-            font-family: Arial, system-ui, sans-serif;
-        }
-
-        .app-shell {
-            display: flex;
-            flex-direction: column;
-            width: 100%;
-            height: 100%;
-        }
-
-        .top-header {
-            display: grid;
-            flex: 0 0 auto;
-            grid-template-columns: 170px minmax(0, 1fr) minmax(360px, 450px);
-            border-bottom: 1px solid var(--border);
-            background: var(--surface);
-        }
-
-        .brand {
-            display: flex;
-            grid-column: 1;
-            flex-direction: column;
-            justify-content: center;
-            padding: 8px 18px;
-        }
-
-        .brand-kicker {
-            margin-bottom: 4px;
-            color: var(--muted);
-            font-size: 12px;
-            font-weight: 600;
-        }
-
-        .brand-title {
-            font-size: 20px;
-            font-weight: 700;
-        }
-
-        .brand-link {
-            margin-top: 2px;
-            color: var(--accent);
-            font-size: 12px;
-            font-weight: 600;
-            text-decoration: none;
-        }
-
+        body { margin: 0; height: 100vh; overflow: hidden; background: var(--background); color: var(--text); font-family: Arial, system-ui, sans-serif; }
+        .app-shell { display: flex; flex-direction: column; width: 100%; height: 100%; }
+        .top-header { display: grid; flex: 0 0 auto; grid-template-columns: 170px minmax(0, 1fr) minmax(360px, 450px); border-bottom: 1px solid var(--border); background: var(--surface); }
+        .brand { display: flex; grid-column: 1; flex-direction: column; justify-content: center; padding: 8px 18px; }
+        .brand-kicker { margin-bottom: 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
+        .brand-title { font-size: 20px; font-weight: 700; }
+        .brand-link { margin-top: 2px; color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: none; }
         .brand-link:hover { text-decoration: underline; }
-
-        .top-section {
-            min-width: 0;
-            padding: 8px 12px;
-            border-left: 1px solid var(--border);
-        }
-
-        .browse-section {
-            display: flex;
-            align-items: center;
-            grid-column: 3;
-            width: min(100%, 450px);
-            justify-self: end;
-        }
-
-        button, select {
-            min-height: 36px;
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            outline: none;
-            color: var(--text);
-            font: inherit;
-        }
-
-        button {
-            cursor: pointer;
-        }
-
-        button:focus-visible, select:focus-visible {
-            outline: 2px solid var(--accent);
-            outline-offset: 1px;
-        }
-
-        button:disabled {
-            cursor: not-allowed;
-            opacity: 0.38;
-        }
-
-        .filter-dot {
-            flex: 0 0 auto;
-            width: 8px;
-            height: 8px;
-            border-radius: 1px;
-            background: var(--muted);
-        }
-
+        .top-section { min-width: 0; padding: 8px 12px; border-left: 1px solid var(--border); }
+        .browse-section { display: flex; align-items: center; grid-column: 3; width: min(100%, 450px); justify-self: end; }
+        button, select { min-height: 36px; border: 1px solid var(--border); border-radius: 4px; outline: none; color: var(--text); font: inherit; }
+        button { cursor: pointer; }
+        button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+        button:disabled { cursor: not-allowed; opacity: 0.38; }
+        .filter-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 1px; background: var(--muted); }
         .all-dot { background: var(--accent); }
         .offroad-dot { background: var(--offroad); }
         .collision-dot { background: var(--collision); }
         .atfault-dot { background: var(--atfault); }
         .redlight-dot { background: var(--redlight); }
         .stopsign-dot { background: var(--stopsign); }
-
-        select {
-            cursor: pointer;
-            width: 100%;
-            padding: 0 28px 0 10px;
-            background: var(--surface);
-            font-size: 12px;
-            font-weight: 400;
-        }
-
+        select { cursor: pointer; width: 100%; padding: 0 28px 0 10px; background: var(--surface); font-size: 12px; font-weight: 400; }
         select:hover { border-color: var(--border-strong); }
-
-        .replay-picker {
-            display: flex;
-            flex-direction: column;
-        }
-
-        #fileSelect {
-            width: 100%;
-            min-width: 0;
-            border-color: var(--border);
-            background: var(--surface);
-        }
-
-        .browse-controls {
-            display: grid;
-            grid-template-columns: minmax(180px, 1fr) auto;
-            align-items: end;
-            gap: 8px;
-        }
-
-        .navigation {
-            display: grid;
-            grid-template-columns: 1fr auto 1fr;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .nav-button {
-            min-height: 30px;
-            padding: 0 8px;
-            background: var(--surface);
-            color: var(--text);
-            font-size: 11px;
-            font-weight: 600;
-        }
-
-        .nav-button:not(:disabled):hover {
-            border-color: var(--accent);
-            background: var(--surface-muted);
-        }
-
-        #position {
-            min-width: 52px;
-            color: var(--muted);
-            font-size: 11px;
-            font-variant-numeric: tabular-nums;
-            font-weight: 600;
-            text-align: center;
-        }
-
-        .category-bar {
-            display: flex;
-            grid-column: 2;
-            flex: 0 0 auto;
-            min-width: 0;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 12px;
-            border-left: 1px solid var(--border);
-            background: var(--surface);
-        }
-
-        .category-filters {
-            display: flex;
-            min-width: 0;
-            flex-wrap: wrap;
-            gap: 7px;
-        }
-
-        .category-button {
-            display: inline-flex;
-            align-items: center;
-            gap: 7px;
-            min-height: 34px;
-            padding: 0 8px;
-            border: 2px solid var(--border);
-            background: var(--surface);
-            color: var(--text);
-            font-size: 12px;
-            font-weight: 600;
-        }
-
-        .category-button:not(:disabled):not(.is-active):hover {
-            border-color: var(--border-strong);
-            background: var(--surface-muted);
-        }
-
-        .category-button.is-active {
-            border-color: var(--text);
-            background: var(--text);
-            color: var(--surface);
-        }
-
-        .category-button.is-active .filter-dot {
-            outline: 1px solid rgba(255, 255, 255, 0.65);
-            outline-offset: 1px;
-        }
-
-        .selection-mark {
-            display: none;
-            font-size: 13px;
-            font-weight: 700;
-            line-height: 1;
-        }
-
-        .category-button.is-active .selection-mark {
-            display: inline;
-        }
-
-        .category-count {
-            display: inline-flex;
-            min-width: 21px;
-            height: 21px;
-            align-items: center;
-            justify-content: center;
-            padding-inline: 5px;
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            background: var(--surface-muted);
-            color: var(--text);
-            font-size: 11px;
-            font-variant-numeric: tabular-nums;
-            line-height: 1;
-        }
-
-        .category-button.is-active .category-count {
-            border-color: #647080;
-            background: #374151;
-            color: var(--surface);
-        }
-
-        .replay-stage {
-            display: flex;
-            flex: 1 1 auto;
-            flex-direction: column;
-            min-height: 0;
-            min-width: 0;
-            background: var(--background);
-        }
-
-        .scenario-header {
-            display: flex;
-            flex: 0 0 auto;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px 16px;
-            min-height: 52px;
-            margin: 8px 12px 0;
-            padding: 7px 12px;
-            border: 1px solid var(--border);
-            border-left: 4px solid var(--accent);
-            border-bottom: 1px solid var(--border);
-            background: var(--surface);
-        }
-
-        .scenario-identity {
-            min-width: 0;
-            flex: 1 1 280px;
-        }
-
-        .scenario-eyebrow {
-            display: block;
-            margin-bottom: 2px;
-            color: var(--muted);
-            font-size: 11px;
-            font-weight: 600;
-        }
-
-        #currentReplayName {
-            display: block;
-            overflow: hidden;
-            font-size: 14px;
-            font-weight: 700;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        #currentFailures {
-            display: flex;
-            flex: 0 1 auto;
-            flex-wrap: wrap;
-            justify-content: flex-end;
-            gap: 5px;
-            margin-left: auto;
-        }
-
-        .scenario-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            padding: 2px 5px;
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            background: var(--surface-muted);
-            color: var(--muted);
-            font-size: 10px;
-            font-weight: 600;
-        }
-
-        .scenario-badge.offroad {
-            border-left: 3px solid var(--offroad);
-            color: var(--offroad);
-        }
-
-        .scenario-badge.collision {
-            border-left: 3px solid var(--collision);
-            color: var(--collision);
-        }
-
-        .scenario-badge.atfault {
-            border-left: 3px solid var(--atfault);
-            color: var(--atfault);
-        }
-
-        .scenario-badge.redlight {
-            border-left: 3px solid var(--redlight);
-            color: var(--redlight);
-        }
-
-        .scenario-badge.stopsign {
-            border-left: 3px solid var(--stopsign);
-            color: var(--stopsign);
-        }
-
-        #viewer {
-            flex: 1 1 auto;
-            width: 100%;
-            min-height: 0;
-            border: 0;
-            background: var(--surface);
-        }
-
+        .replay-picker { display: flex; flex-direction: column; }
+        #fileSelect { min-width: 0; border-color: var(--border); }
+        .browse-controls { display: grid; grid-template-columns: minmax(180px, 1fr) auto; align-items: end; gap: 8px; }
+        .navigation { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
+        .nav-button { min-height: 30px; padding: 0 8px; background: var(--surface); color: var(--text); font-size: 11px; font-weight: 600; }
+        .nav-button:not(:disabled):hover { border-color: var(--accent); background: var(--surface-muted); }
+        #position { min-width: 52px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; font-weight: 600; text-align: center; }
+        .category-bar { display: flex; grid-column: 2; flex: 0 0 auto; min-width: 0; align-items: center; gap: 10px; padding: 8px 12px; border-left: 1px solid var(--border); background: var(--surface); }
+        .category-filters { display: flex; min-width: 0; flex-wrap: wrap; gap: 7px; }
+        .category-button { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 8px; border: 2px solid var(--border); background: var(--surface); color: var(--text); font-size: 12px; font-weight: 600; }
+        .category-button:not(:disabled):not(.is-active):hover { border-color: var(--border-strong); background: var(--surface-muted); }
+        .category-button.is-active { border-color: var(--text); background: var(--text); color: var(--surface); }
+        .category-button.is-active .filter-dot { outline: 1px solid rgba(255, 255, 255, 0.65); outline-offset: 1px; }
+        .selection-mark { display: none; font-size: 13px; font-weight: 700; line-height: 1; }
+        .category-button.is-active .selection-mark { display: inline; }
+        .category-count { display: inline-flex; min-width: 21px; height: 21px; align-items: center; justify-content: center; padding-inline: 5px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface-muted); color: var(--text); font-size: 11px; font-variant-numeric: tabular-nums; line-height: 1; }
+        .category-button.is-active .category-count { border-color: #647080; background: #374151; color: var(--surface); }
+        .replay-stage { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; min-width: 0; background: var(--background); }
+        .scenario-header { display: flex; flex: 0 0 auto; align-items: center; flex-wrap: wrap; gap: 8px 16px; min-height: 52px; margin: 8px 12px 0; padding: 7px 12px; border: 1px solid var(--border); border-left: 4px solid var(--accent); background: var(--surface); }
+        .scenario-identity { min-width: 0; flex: 1 1 280px; }
+        .scenario-eyebrow { display: block; margin-bottom: 2px; color: var(--muted); font-size: 11px; font-weight: 600; }
+        #currentReplayName { display: block; overflow: hidden; font-size: 14px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+        #currentFailures { display: flex; flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; gap: 5px; margin-left: auto; }
+        .scenario-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 5px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface-muted); color: var(--muted); font-size: 10px; font-weight: 600; }
+        .scenario-badge.offroad { border-left: 3px solid var(--offroad); color: var(--offroad); }
+        .scenario-badge.collision { border-left: 3px solid var(--collision); color: var(--collision); }
+        .scenario-badge.atfault { border-left: 3px solid var(--atfault); color: var(--atfault); }
+        .scenario-badge.redlight { border-left: 3px solid var(--redlight); color: var(--redlight); }
+        .scenario-badge.stopsign { border-left: 3px solid var(--stopsign); color: var(--stopsign); }
+        #viewer { flex: 1 1 auto; width: 100%; min-height: 0; border: 0; background: var(--surface); }
         @media (max-width: 1200px) {
-            body {
-                overflow: auto;
-            }
-
-            .app-shell {
-                min-height: 100%;
-                height: auto;
-            }
-
-            .top-header {
-                grid-template-columns: 170px minmax(0, 1fr);
-            }
-
-            .category-bar {
-                grid-column: 2;
-            }
-
-            .browse-section {
-                grid-column: 1 / -1;
-                width: 100%;
-                border-top: 1px solid var(--border);
-                border-left: 0;
-            }
-
-            .category-bar {
-                border-left: 1px solid var(--border);
-            }
-
+            body { overflow: auto; }
+            .app-shell { min-height: 100%; height: auto; }
+            .top-header { grid-template-columns: 170px minmax(0, 1fr); }
+            .browse-section { grid-column: 1 / -1; width: 100%; border-top: 1px solid var(--border); border-left: 0; }
             .replay-stage { min-height: 72vh; }
         }
-
         @media (max-width: 720px) {
             .top-header { display: flex; flex-direction: column; }
             .brand { padding-block: 16px; }
             .brand-title { font-size: 18px; }
-            .top-section { border-top: 1px solid var(--border); border-left: 0; }
-            .category-bar { border-top: 1px solid var(--border); border-left: 0; }
-            .browse-section { width: 100%; }
+            .category-bar { padding: 12px; border-top: 1px solid var(--border); border-left: 0; }
             .browse-controls { grid-template-columns: 1fr; }
-            .category-bar { padding: 12px; }
             .category-filters { width: 100%; }
             .scenario-header { align-items: flex-start; }
             #currentFailures { margin-left: 0; justify-content: flex-start; }
@@ -1906,21 +1461,8 @@ def build_gallery_index(folder_path=".", file_metrics=None, links=None):
         const currentFailures = document.getElementById('currentFailures');
         const filterButtons = Array.from(document.querySelectorAll('.filter-button'));
         const allOptions = Array.from(select.options);
+        const FAILURE_BADGES = [['offroad', 'Off-road'], ['collision', 'Collision'], ['atfault', 'At-fault collision'], ['redlight', 'Red-light violation'], ['stopsign', 'Stop-sign violation']];
         let activeFilter = 'all';
-
-        function optionMatchesActiveFilter(option) {
-            if (activeFilter === 'all') return true;
-            return option.dataset[activeFilter] === 'true';
-        }
-
-        function addFailureBadge(label, failureClass) {
-            const badge = document.createElement('span');
-            badge.className = `scenario-badge ${failureClass}`;
-            const dot = document.createElement('span');
-            dot.className = `filter-dot ${failureClass}-dot`;
-            badge.append(dot, label);
-            currentFailures.appendChild(badge);
-        }
 
         function updateScenarioSummary() {
             const selectedOption = select.options[select.selectedIndex];
@@ -1933,11 +1475,15 @@ def build_gallery_index(folder_path=".", file_metrics=None, links=None):
 
             const filename = selectedOption.dataset.name;
             currentReplayName.textContent = filename.replace(/\\.html$/, '');
-            if (selectedOption.dataset.offroad === 'true') addFailureBadge('Off-road', 'offroad');
-            if (selectedOption.dataset.collision === 'true') addFailureBadge('Collision', 'collision');
-            if (selectedOption.dataset.atfault === 'true') addFailureBadge('At-fault collision', 'atfault');
-            if (selectedOption.dataset.redlight === 'true') addFailureBadge('Red-light violation', 'redlight');
-            if (selectedOption.dataset.stopsign === 'true') addFailureBadge('Stop-sign violation', 'stopsign');
+            for (const [failureClass, label] of FAILURE_BADGES) {
+                if (selectedOption.dataset[failureClass] !== 'true') continue;
+                const badge = document.createElement('span');
+                badge.className = `scenario-badge ${failureClass}`;
+                const dot = document.createElement('span');
+                dot.className = `filter-dot ${failureClass}-dot`;
+                badge.append(dot, label);
+                currentFailures.appendChild(badge);
+            }
             if (!currentFailures.childElementCount) {
                 const badge = document.createElement('span');
                 badge.className = 'scenario-badge';
@@ -1956,18 +1502,14 @@ def build_gallery_index(folder_path=".", file_metrics=None, links=None):
         }
 
         function loadSelected() {
-            if (select.selectedIndex < 0) {
-                viewer.removeAttribute('src');
-                updateControls();
-                return;
-            }
-            viewer.src = select.value;
+            if (select.selectedIndex < 0) viewer.removeAttribute('src');
+            else viewer.src = select.value;
             updateControls();
         }
 
         function renderOptions(loadReplay) {
             const currentFilename = select.value;
-            const matchingOptions = allOptions.filter(optionMatchesActiveFilter);
+            const matchingOptions = allOptions.filter(option => activeFilter === 'all' || option.dataset[activeFilter] === 'true');
             select.replaceChildren(...matchingOptions);
 
             const currentOption = matchingOptions.find(option => option.value === currentFilename);

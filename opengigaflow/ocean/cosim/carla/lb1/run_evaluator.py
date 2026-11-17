@@ -1,16 +1,9 @@
-"""Run carla_garage's leaderboard_evaluator_local.py (Leaderboard 1.0, CARLA 0.9.10) for one model directory,
-with all outputs under its eval folder; the Leaderboard 1.0 twin of ../run_evaluator.py. Runs in the `garage`
-conda env (Python 3.7), so nothing from opengigaflow is imported here.
+"""Run carla_garage's leaderboard_evaluator_local.py (via GARAGE_WORK_DIR) for one model directory, Python 3.7.
 
-usage: run_evaluator.py --model-dir <dir> [evaluator args...]
-
-<dir> holds final_model.pt + config.yaml (blank -> DEFAULT_MODEL_DIR). The launcher adds --agent-config
-<dir>/final_model.pt, --checkpoint <dir>/eval/carla_leaderboard_v1/result.json (the evaluator opens the
-result file before any agent code runs) and --scenarios eval_scenarios.json, points COSIM_TELEMETRY /
-COSIM_WORLD_LOG / COSIM_OBS_HTML / COSIM_DEBUG_CARLA_VIEW into the eval folder unless already set, and
-exports what the garage evaluator reads from the environment: ROUTES (the --routes file, it names the
-route records after it) and BENCHMARK=longest6 (all spawn points of background traffic, stop-sign
-penalty 1.0). The evaluator is located through GARAGE_WORK_DIR.
+usage: run_evaluator.py --model-dir <dir holding final_model.pt + config.yaml> --routes <xml> [evaluator args...]
+Adds --agent-config, --checkpoint <dir>/eval/carla_leaderboard_v1/result.json and --scenarios eval_scenarios.json,
+points unset COSIM_TELEMETRY/WORLD_LOG/OBS_HTML/DEBUG_CARLA_VIEW into that folder and exports ROUTES (names the
+route records) and BENCHMARK=longest6 (background traffic on every spawn point, stop-sign penalty 1.0).
 """
 
 import os

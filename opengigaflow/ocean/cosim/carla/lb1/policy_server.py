@@ -1,13 +1,5 @@
-"""Shadow env + policy process behind lb1/leaderboard_agent.py (CARLA Leaderboard 1.0, CARLA 0.9.10).
-
-Started by the agent in the OpenGigaFlow venv, one process per route, talking lb1_protocol over an
-inherited socket: `init` builds the ShadowEgo for the route, every `tick` runs one policy step and
-answers with the ego command (teleport pose or control values),
-`finish` flushes the per-route outputs. Options come from the COSIM_* environment variables
-(shadow_ego.py), inherited from the evaluator.
-
-usage: policy_server.py --checkpoint <.pt or run dir> --socket-fd <fd> --route-tag <name>
-"""
+"""Shadow env + policy process behind lb1/leaderboard_agent.py: one route per process, lb1_protocol on an inherited
+socket, options from the inherited COSIM_* environment (shadow_ego.py)."""
 
 import argparse
 import socket
@@ -43,7 +35,6 @@ def serve(sock, shadow):
             "partner_slots": shadow.partner_slots,
             "partner_max_abs_dz_m": PARTNER_MAX_ABS_DZ_M,
             "light_probe_steps_m": list(cb.LIGHT_PROBE_STEPS_M),
-            "dynamics_source": shadow.dynamics_source,
         },
     )
     ground_truth = None
@@ -60,7 +51,7 @@ def serve(sock, shadow):
                 ground_truth = LeaderboardOneGroundTruth(
                     route["lights"], route["stop_signs"], route["ego"]["extent"][0]
                 )
-            lb1_protocol.send_message(sock, {"type": "ready", "num_traffic": shadow.num_traffic})
+            lb1_protocol.send_message(sock, {"type": "ready"})
         elif kind == "tick":
             snapshot = message["snapshot"]
             result = shadow.step(snapshot)
@@ -81,7 +72,7 @@ def serve(sock, shadow):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
-        "--checkpoint", required=True, help="OpenGigaFlow checkpoint .pt or run dir (config.yaml beside)"
+        "--checkpoint", required=True, help="OpenGigaFlow checkpoint .pt (config.yaml beside it or one level up)"
     )
     parser.add_argument("--socket-fd", type=int, required=True, help="inherited socket to the leaderboard agent")
     parser.add_argument("--route-tag", required=True, help="per-route file stem for every output")

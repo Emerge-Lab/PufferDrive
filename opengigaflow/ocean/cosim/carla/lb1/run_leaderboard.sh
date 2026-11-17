@@ -7,7 +7,7 @@
 #   CKPT=experiments/<run>/final_model.pt bash opengigaflow/ocean/cosim/carla/lb1/run_leaderboard.sh
 #
 # Required env:
-#   CKPT             OpenGigaFlow checkpoint .pt (config.yaml beside it or one level up) or an experiment dir
+#   CKPT             OpenGigaFlow checkpoint .pt (config.yaml beside it or one level up)
 # Optional env:
 #   ROUTES           routes xml. Default: longest6_split/longest_weathers_0.xml (one Town01 route).
 #   SCENARIOS        scenario json. Default: eval_scenarios.json (the benchmark); no_scenarios.json = empty.
@@ -20,11 +20,8 @@
 #   GARAGE_PY        python of the `garage` conda env.  Default: ~/miniconda3/envs/garage/bin/python
 #   COSIM_SERVER_PYTHON  python of the OpenGigaFlow venv for policy_server.py. Default: $PD/.venv/bin/python
 #   PD               OpenGigaFlow checkout. Default: the one holding this script.
-#   LIBTIFF5_COMPAT  1 (default): the 0.9.10 egg links libtiff.so.5. When `import carla` fails, the garage env's
-#                    own lib dir is tried first (`conda install -n garage "libtiff<4.5"` puts one there), then
-#                    the system libtiff.so.6 is linked under that name inside $OUT's folder (0 = never link).
-#   COSIM_*          forwarded to the agent / policy server as-is (see lb1/leaderboard_agent.py, shadow_ego.py);
-#                    COSIM_DEBUG_CARLA_VIEW defaults to "$(dirname "$OUT")/carla_view" (empty disables).
+#   LIBTIFF5_COMPAT  1 (default): no libtiff.so.5 for the egg, not even the garage env's: link libtiff.so.6; 0 = never
+#   COSIM_*          forwarded to the agent / policy server; COSIM_DEBUG_CARLA_VIEW defaults to $OUT's folder/carla_view
 set -u
 
 : "${CKPT:?set CKPT=/path/to/final_model.pt}"

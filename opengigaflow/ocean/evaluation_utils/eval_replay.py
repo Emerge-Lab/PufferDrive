@@ -49,19 +49,9 @@ class EvalReplayCapture:
             raise opengigaflow.APIUsageError(
                 f"eval.capture_observations_agents must be one of {OBSERVATION_AGENT_MODES}, got {self.observation_agents!r}"
             )
-        self.replay_writer_count = num_workers
-        if self.capture_observations:
-            observation_replay_writer_count = args["eval"]["observation_replay_writer_count"]
-            if (
-                isinstance(observation_replay_writer_count, bool)
-                or not isinstance(observation_replay_writer_count, int)
-                or observation_replay_writer_count <= 0
-            ):
-                raise opengigaflow.APIUsageError(
-                    "eval.observation_replay_writer_count must be a positive integer when rendering observations"
-                )
-            self.replay_writer_count = min(num_workers, observation_replay_writer_count)
-
+        self.replay_writer_count = (
+            min(num_workers, args["eval"]["observation_replay_writer_count"]) if capture_observations else num_workers
+        )
         self.env_config = dict(args["env"])
         self.replay_output_dir = replay_output_dir
         self.num_workers = num_workers
@@ -69,11 +59,7 @@ class EvalReplayCapture:
         self.agents_per_worker = agents_per_batch // num_workers
         self.capture_batch_steps = capture_batch_steps
         self.episode_id_offset = episode_id_offset
-        self.pool_slot_counts = None
-        if self.capture_observations:
-            self.pool_slot_counts = getattr(policy, "pool_slot_counts", None)
-            if self.pool_slot_counts is None and getattr(policy, "policy", None) is not None:
-                self.pool_slot_counts = getattr(policy.policy, "pool_slot_counts", None)
+        self.pool_slot_counts = getattr(policy, "pool_slot_counts", None) if capture_observations else None
         self.policy_history = {}
         self.policy_history_frame_count = 0
         self.pending_replays = []
@@ -177,8 +163,7 @@ class EvalReplayCapture:
 
 
 def keep_observations_of_infracting_agents(replay):
-    """Zero the observations and encoder pool winners of every agent without an infraction in the episode (the
-    zeros deflate to nothing: a 50-agent page shrinks about 4x), listing the kept agents as replay["obs_agents"]."""
+    """Zero obs and pool winners of agents without an infraction (~4x smaller page); kept: replay["obs_agents"]."""
     metrics = np.asarray(replay["metrics_f32"])
     infracting = np.any(metrics[:, :, list(INFRACTION_METRIC_INDICES)] > 0, axis=(0, 2))
     replay["obs_agents"] = np.flatnonzero(infracting).tolist()

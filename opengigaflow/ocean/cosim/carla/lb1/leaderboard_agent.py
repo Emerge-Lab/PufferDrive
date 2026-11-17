@@ -1,33 +1,15 @@
-"""OpenGigaFlow policy as a CARLA Leaderboard 1.0 agent (carla_garage's leaderboard_evaluator_local.py,
-CARLA 0.9.10.1, longest6 v1).
+"""OpenGigaFlow policy as a carla_garage Leaderboard 1.0 agent (CARLA 0.9.10.1, Python 3.7, no opengigaflow imports):
+the CARLA side, talking lb1_protocol to lb1/policy_server.py, which runs ShadowEgo in the OpenGigaFlow venv per route.
 
-The leaderboard runs in carla_garage's `garage` conda env: Python 3.7, the only Python the CARLA 0.9.10
-egg supports, and one that cannot import OpenGigaFlow (Python >= 3.9). This file is therefore the CARLA
-side only -- the counterpart of ../leaderboard_agent.py's CARLA code: it reads ground truth (ego, nearby
-actors, lights, stop signs, the route), ships it over a socket to lb1/policy_server.py (started here in
-the OpenGigaFlow venv, one process per route, shadow_ego.ShadowEgo inside) and moves the ego the way the
-reply says. Nothing from `opengigaflow` is imported here; lb1_protocol.py is a sibling module.
-
-Usage (BENCHMARK=longest6 and ROUTES=<xml> exported, see run_leaderboard.sh / 14_carla_longest6_v1.sh):
-
-  python $GARAGE_WORK_DIR/leaderboard/leaderboard/leaderboard_evaluator_local.py \
-      --routes $GARAGE_WORK_DIR/leaderboard/data/longest6_split/longest_weathers_0.xml \
+  python $GARAGE_WORK_DIR/leaderboard/leaderboard/leaderboard_evaluator_local.py --routes <routes.xml> \
       --scenarios $GARAGE_WORK_DIR/leaderboard/data/scenarios/eval_scenarios.json \
-      --agent /path/to/opengigaflow/ocean/cosim/carla/lb1/leaderboard_agent.py \
-      --agent-config /path/to/experiments/<run>/final_model.pt \
-      --checkpoint /path/to/results/result.json --track MAP --timeout 600
+      --agent opengigaflow/ocean/cosim/carla/lb1/leaderboard_agent.py --agent-config experiments/<run>/final_model.pt \
+      --checkpoint <result.json> --track MAP --timeout 600      (with BENCHMARK=longest6 and ROUTES=<routes.xml>)
 
-Environment variables (this process; the shadow env's COSIM_DEVICE ... COSIM_WORLD_LOG are read by
-policy_server.py from the inherited environment, see shadow_ego.py):
-  SCENARIO_RUNNER_ROOT         REQUIRED: carla_garage's scenario_runner checkout
-  COSIM_SERVER_PYTHON          python of the OpenGigaFlow venv that runs policy_server.py
-                               (default: <repo>/.venv/bin/python)
-  COSIM_DEBUG_CARLA_VIEW=/dir  write a CARLA chase-camera mp4 per route (native tick rate)
-
-CARLA 0.9.10 differences handled here: no World.cast_ray (the ego's body chord rests on the lane's OpenDRIVE
-height profile, lifted by the road mesh's offset from it as probed by a downward semantic lidar; the egg's
-Rotation.get_up_vector() points down, so the pitch comes from the profile too); stop waypoints come from the
-trigger volume with RunningRedLightTest's own recipe on both sides (carla_bridge.light_stop_waypoints).
+Environment variables (policy_server.py reads the shadow env's COSIM_* from the inherited environment):
+  SCENARIO_RUNNER_ROOT         required: carla_garage's scenario_runner checkout
+  COSIM_SERVER_PYTHON          python of the OpenGigaFlow venv (default: <repo>/.venv/bin/python)
+  COSIM_DEBUG_CARLA_VIEW=/dir  CARLA chase-camera mp4 per route
 """
 
 import math
@@ -144,9 +126,8 @@ def driving_waypoint_samples(carla_map):
 
 
 def light_stop_waypoints(light, carla_map):
-    """Stop waypoints of a traffic light from its trigger volume: one waypoint per lane the volume spans,
-    advanced to the junction entry (RunningRedLightTest.get_traffic_light_waypoints): the py3.7 copy of
-    carla_bridge.light_stop_waypoints. TrafficLight.get_stop_waypoints is NOT that list in Town01/02."""
+    """One waypoint per lane the light's trigger volume spans, advanced to the junction entry: the py3.7 copy of
+    carla_bridge.light_stop_waypoints (RunningRedLightTest's line)."""
     base_transform = light.get_transform()
     trigger = light.trigger_volume
     lane_waypoints = []
@@ -378,7 +359,6 @@ class OpenGigaFlowAgentLB1(autonomous_agent.AutonomousAgent):
         self.partner_max_abs_dz_m = float(self.server.config["partner_max_abs_dz_m"])
         self.light_probe_steps_m = [float(v) for v in self.server.config["light_probe_steps_m"]]
         self.dense_global_plan_world_coord = None
-        self.step = -1
         self.initialized = False
         self.carla_view_writer = None
         self._collision_sensor = None
@@ -472,8 +452,6 @@ class OpenGigaFlowAgentLB1(autonomous_agent.AutonomousAgent):
     def _on_collision(self, event):
         self._collision_events.append(event.other_actor.type_id)
 
-    # --- CARLA ground truth for the shadow env (read-only w.r.t. CARLA) ----
-
     def _nearby_actors(self):
         ego_loc = self.vehicle.get_location()
         candidates = []
@@ -536,9 +514,7 @@ class OpenGigaFlowAgentLB1(autonomous_agent.AutonomousAgent):
             math.sin(yaw_rad) * math.cos(pitch_rad),
             math.sin(pitch_rad),
         )
-        # Zero momentum before the teleport: CARLA's collision resolver reacts violently to a
-        # physics body carrying velocity into a new pose (carla issue #8076).
-        # One ordered batch: the server reorders async actor commands, and a late zero left the ego reading 0 m/s on 3 % of ticks
+        # one ordered batch, zero momentum first: CARLA's resolver reacts violently to velocity carried into a new pose
         zero = carla.Vector3D(x=0.0, y=0.0, z=0.0)
         CarlaDataProvider.get_client().apply_batch_sync(
             [
@@ -573,16 +549,13 @@ class OpenGigaFlowAgentLB1(autonomous_agent.AutonomousAgent):
             self.mesh_offset_m += max(-MESH_OFFSET_MAX_STEP_M, min(MESH_OFFSET_MAX_STEP_M, step_m))
 
     def run_step(self, input_data, timestamp, sensors=None):
-        self.step += 1
         if not self.initialized:
             self._init_on_first_step()
             return carla.VehicleControl(steer=0.0, throttle=0.0, brake=1.0)
 
         if CARLA_VIEW_SENSOR_ID in input_data:
             _, bgra = input_data[CARLA_VIEW_SENSOR_ID]  # (H, W, 4) uint8, leaderboard's CallBack format
-            rgb = bgra[:, :, [2, 1, 0]]
-            if self.carla_view_writer is not None:
-                self.carla_view_writer.append_data(rgb)
+            self.carla_view_writer.append_data(bgra[:, :, [2, 1, 0]])
 
         message = {"type": "tick", "snapshot": self._snapshot(), "ground_truth": None}
         if self.ground_truth:
@@ -592,8 +565,8 @@ class OpenGigaFlowAgentLB1(autonomous_agent.AutonomousAgent):
             self._teleport_carla_ego(reply["motion"])
         if reply.get("control") is None:
             return carla.VehicleControl()
-        steer, throttle, brake, reverse = reply["control"]
-        return carla.VehicleControl(steer=steer, throttle=throttle, brake=brake, reverse=bool(reverse))
+        steer, throttle, brake = reply["control"]
+        return carla.VehicleControl(steer=steer, throttle=throttle, brake=brake)
 
     def destroy(self, results=None):
         if not hasattr(self, "server"):

@@ -3,19 +3,7 @@ import torch
 from torch.distributions.utils import logits_to_probs
 
 
-numpy_to_torch_dtype_dict = {
-    np.dtype("float64"): torch.float64,
-    np.dtype("float32"): torch.float32,
-    np.dtype("float16"): torch.float16,
-    np.dtype("uint64"): torch.uint64,
-    np.dtype("uint32"): torch.uint32,
-    np.dtype("uint16"): torch.uint16,
-    np.dtype("uint8"): torch.uint8,
-    np.dtype("int64"): torch.int64,
-    np.dtype("int32"): torch.int32,
-    np.dtype("int16"): torch.int16,
-    np.dtype("int8"): torch.int8,
-}
+numpy_to_torch_dtype_dict = {np.dtype("float32"): torch.float32}
 
 ACTION_SELECT_SAMPLE = "sample"
 ACTION_SELECT_MODE = "mode"  # argmax
@@ -23,10 +11,9 @@ ACTION_SELECT_MEAN = "mean"  # probability-weighted continuous mean
 FLOPS_PER_MULTIPLY_ADD = 2.0
 
 
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    """CleanRL's default layer initialization"""
+def layer_init(layer, std=np.sqrt(2)):
     torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
+    torch.nn.init.zeros_(layer.bias)
     return layer
 
 
@@ -47,12 +34,8 @@ def load_policy_weights(policy, checkpoint):
     return policy
 
 
-# taken from torch.distributions.Categorical
 def log_prob(logits, value):
-    value = value.long().unsqueeze(-1)
-    value, log_pmf = torch.broadcast_tensors(value, logits)
-    value = value[..., :1]
-    return log_pmf.gather(-1, value).squeeze(-1)
+    return logits.gather(-1, value.long().unsqueeze(-1)).squeeze(-1)
 
 
 # taken from torch.distributions.Categorical

@@ -1,16 +1,9 @@
-"""Route goal windows for a co-sim ego (Drive goal_source="external").
-
-The shadow env consumes the goals of its window itself, exactly like training
-with goal_regen_mode=finite (consumed slots are zeroed in the obs, the window
-is replaced only once every goal in it was reached). The co-sim only decides
-WHICH `num_goals` route goals form the next window. A sliding window instead
-refills to `num_goals` goals ahead after every consumed goal, so the ego sees a
-window-final (speed-gated) goal only at the true route end.
-"""
+"""Route goal windows for a co-sim ego (goal_source="external"): the shadow env consumes them, the co-sim picks them."""
 
 import math
 
 import numpy as np
+
 
 ROUTE_GOAL_COLUMNS = 5  # x, y, z, dir_x, dir_y in the bin frame
 ROUTE_MAX_LATERAL_M = 8.0  # farther from the goal polyline the ego is off-route: never skip goals then
@@ -18,10 +11,8 @@ ROUTE_MAX_LATERAL_M = 8.0  # farther from the goal polyline the ego is off-route
 
 class RouteGoalWindow:
     def __init__(self, env, route_goals, agent_idx=0, sliding=False):
-        """route_goals: (N, 5) float32 (x, y, z, dir_x, dir_y), bin frame, in
-        travel order. dir_* is the local route direction at the goal, used by
-        set_agent_goals' route-aligned lane snapping. sliding: advance the
-        window past every consumed goal instead of replacing it once exhausted."""
+        """route_goals: (N, 5) [x, y, z, dir_x, dir_y] in the bin frame, travel order (dir: local route direction).
+        sliding: refill to num_goals goals ahead after every consumed goal instead of once the window is exhausted."""
         self.env = env
         self.goals = np.ascontiguousarray(route_goals, dtype=np.float32).reshape(-1, ROUTE_GOAL_COLUMNS)
         if len(self.goals) == 0:
@@ -36,30 +27,9 @@ class RouteGoalWindow:
         self.current_index = 0  # route index of the goal the ego is heading for
         self.pushed = False
 
-    @property
-    def window(self):
-        return self.goals[self.window_start : self.window_start + self.num_goals]
-
-    @property
-    def consumed_count(self):
-        """Goals of the current window the shadow env has already consumed (zeroed in the obs)."""
-        if not self.pushed:
-            return 0
-        current_goal_idx, goal_count = self.env.get_agent_goal_progress(self.agent_idx)
-        return min(current_goal_idx, goal_count)
-
-    @property
-    def exhausted(self):
-        return self.pushed and self.window_start + self.num_goals >= len(self.goals) and self._consumed_all()
-
-    def _consumed_all(self):
-        current_goal_idx, goal_count = self.env.get_agent_goal_progress(self.agent_idx)
-        return current_goal_idx >= goal_count
-
     def route_progress(self, ego_x, ego_y, first_goal=0, last_goal=None):
-        """(arc length of the ego projected onto the goal polyline between two goal indices, lateral
-        distance to it). Restricting the goal range keeps a route that loops back near the ego from
-        projecting onto its far end."""
+        """(arc length, lateral distance) of the ego on the goal polyline between two goal indices; the range keeps
+        a route that loops back near the ego from projecting onto its far end."""
         pts = self.goals[:, :2].astype(np.float64)
         last_goal = len(pts) - 1 if last_goal is None else min(last_goal, len(pts) - 1)
         if last_goal <= first_goal:
@@ -76,11 +46,8 @@ class RouteGoalWindow:
         return float(self.arc_length[first_goal + k] + t[k] * math.sqrt(length_sq[k])), float(dist[k])
 
     def sync(self, ego_x, ego_y, ego_heading):
-        """Push the next window when the current one is exhausted (sliding: when any goal was
-        consumed), or when the ego has driven past its current goal along the route (e.g. in the
-        adjacent lane) without consuming it. An ego far off the route keeps its window: skipping
-        goals there cascades through the whole route. Returns True when a window was pushed (the
-        env's observations are stale until recomputed)."""
+        """Push the next window once the current one is exhausted (sliding: once a goal was consumed) or the ego
+        passed its current goal along the route; off the route it keeps the window. True when a window was pushed."""
         if not self.pushed:
             self._push(0)
             return True
@@ -114,9 +81,8 @@ class RouteGoalWindow:
 
 
 def route_goals_from_xy(goals_xy, goals_z=None, origin_xy=None):
-    """(N, 2) goal points -> (N, 5) route goals; dir = previous goal -> goal. origin_xy (the ego
-    position) gives the first goal its direction too; without it the first dir is zero and the
-    env snaps that goal to the nearest lane by distance alone (wrong branch at junctions)."""
+    """(N, 2) goal points -> (N, 5) route goals, dir = previous goal -> goal; without origin_xy (the ego) the first
+    dir is zero and the env snaps that goal by distance alone (wrong branch at junctions)."""
     xy = np.asarray(goals_xy, dtype=np.float64).reshape(-1, 2)
     z = np.zeros(len(xy)) if goals_z is None else np.asarray(goals_z, dtype=np.float64).reshape(-1)
     first_prev = xy[:1] if origin_xy is None else np.asarray(origin_xy, dtype=np.float64).reshape(1, 2)
@@ -125,10 +91,8 @@ def route_goals_from_xy(goals_xy, goals_z=None, origin_xy=None):
 
 
 def route_goals_from_target_points(target_points_xyz, dense_route_xyz, to_bin, start_xy_bin, skip_radius):
-    """Leaderboard target points (junction entries/exits, lane changes, every 200 m) -> (N, 5) route
-    goals in the bin frame. Each target point is a point of the dense route; its direction is the dense
-    route's local direction there. Leading points within skip_radius of start_xy_bin are dropped (the
-    route starts under the ego, and a goal there would be consumed on the first step)."""
+    """Leaderboard target points -> (N, 5) bin-frame route goals with the dense route's local direction; leading
+    points within skip_radius of start_xy_bin (under the ego) are dropped."""
     targets = np.asarray(target_points_xyz, dtype=np.float64).reshape(-1, 3)
     dense = np.asarray(dense_route_xyz, dtype=np.float64).reshape(-1, 3)
     if len(targets) == 0 or len(dense) < 2:

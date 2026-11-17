@@ -1,10 +1,7 @@
-# Cluster detection for the scripts in this folder, sourced from the checkout root after the #SBATCH block:
+# Cluster detection for jobs submitted from the checkout root (create experiments/logs once), after the #SBATCH block:
 #   source scripts/kesai/cluster_env.sh || exit 1
-# Always submit from the checkout root (sbatch keeps it as the job's working directory) and create experiments/logs once.
-# Sets CLUSTER (kesai | scaleway | local), HOME_BASE (where user homes live; other users' paths are $HOME_BASE/<user>/...),
-# SHARED_DATA (the shared datasets: nuplan, nurec, ... live directly below it), PD (this checkout) and SLURM_CPUS_PER_TASK
-# (whole-node jobs carry #SBATCH --exclusive instead of a per-cluster CPU count; srun steps and scripts/parallel_eval.py
-# read the count from here). Your own paths stay $HOME/..., which is /home/<user> on scaleway and /cephfs/home/<user> on kesai.
+# Sets CLUSTER (kesai | scaleway | local), HOME_BASE (other users' homes: $HOME_BASE/<user>), SHARED_DATA (nuplan,
+# nurec, ...), PD (this checkout) and SLURM_CPUS_PER_TASK (the node's CPUs: whole-node jobs carry --exclusive).
 if [ -d /cephfs/data ]; then
     CLUSTER=kesai
     HOME_BASE=/cephfs/home
@@ -40,4 +37,22 @@ numa_pin_for_gpu() {
     bus=$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader -i "$1" 2>/dev/null | tr 'A-F' 'a-f')
     node=$(cat "/sys/bus/pci/devices/${bus:4}/numa_node" 2>/dev/null) || return 0
     [ "$node" -ge 0 ] 2>/dev/null && echo "taskset -c $(cat "/sys/devices/system/node/node${node}/cpulist")"
+}
+
+# first of the port bases $2... whose rpc (base+50w), streaming (rpc+1) and TM (rpc+6000) ports of $1 workers are all free
+pick_port_base() {
+    local worker_count=$1 listening base w port busy
+    shift
+    listening=" $(ss -ltun 2>/dev/null | awk 'NR > 1 {sub(/.*:/, "", $5); print $5}' | sort -u | tr '\n' ' ') "
+    for base in "$@"; do
+        busy=0
+        for ((w = 0; w < worker_count; w++)); do
+            for port in $((base + 50 * w)) $((base + 50 * w + 1)) $((base + 6000 + 50 * w)); do
+                [[ "$listening" == *" $port "* ]] && { busy=$port; break 2; }
+            done
+        done
+        [ "$busy" = 0 ] && { echo "$base"; return 0; }
+        echo "port base $base: port $busy is in use, trying the next range" >&2
+    done
+    return 1
 }

@@ -1,14 +1,9 @@
-"""Length-prefixed JSON messages between lb1/leaderboard_agent.py (CARLA 0.9.10, Python 3.7) and
-lb1/policy_server.py (OpenGigaFlow venv). Standard library only: the agent imports this file as a
-sibling module (the leaderboard puts the agent's directory on sys.path), the server as a package module.
-
-Handshake, then one request/reply pair per CARLA tick:
-  server -> client  {"type": "config", "partner_slots", "partner_max_abs_dz_m", "light_probe_steps_m",
-                     "dynamics_source"}
-  client -> server  {"type": "init", "route": shadow_ego.init_route dict}        -> {"type": "ready"}
-  client -> server  {"type": "tick", "snapshot": shadow_ego.step dict,
-                     "ground_truth": lb1/ground_truth.py observation or null}     -> {"type": "control",
-                     "motion": [...] | null, "control": [steer, throttle, brake, reverse] | null}
+"""Length-prefixed JSON messages between lb1/leaderboard_agent.py (Python 3.7) and lb1/policy_server.py; standard
+library only (the agent imports it as a sibling module). Handshake, then one request/reply pair per CARLA tick:
+  server -> client  {"type": "config", "partner_slots", "partner_max_abs_dz_m", "light_probe_steps_m"}
+  client -> server  {"type": "init", "route": ShadowEgo.init_route dict}         -> {"type": "ready"}
+  client -> server  {"type": "tick", "snapshot": ShadowEgo.step dict, "ground_truth": ground_truth.py observation
+                     or null}                    -> {"type": "control", "motion": [...] | null, "control": [...] | null}
   client -> server  {"type": "finish"}                                            -> {"type": "done"}
 """
 

@@ -1,8 +1,4 @@
-"""Where the files of a nuPlan closed-loop run of the OpenGigaFlow planner live. A fresh run is nuPlan's own tree,
-simulation/<challenge>/<timestamp>/{aggregator_metric,metrics,simulation_log}; after scripts/eval/tidy_nuplan_run.py
-the run holds overview.csv, scenarios.csv, obs_html/, simulation_log/ and details/{aggregated_metrics.csv,metrics}
-(runs tidied before 2026-11-09 keep their logs under details/simulation_log/).
-Every lookup raises FileNotFoundError when the run has neither layout."""
+"""File layout of a nuPlan planner run, fresh or tidied; every lookup raises FileNotFoundError when neither exists."""
 
 import glob
 from pathlib import Path
@@ -57,11 +53,8 @@ def scenarios_csv(group_dir):
 
 def simulation_log_dir(group_dir):
     """-> the directory holding the <token>.msgpack.xz logs: simulation_log/ once tidied, else nuPlan's nested tree."""
-    group_dir = Path(group_dir)
-    for tidied in (group_dir / SIMULATION_LOG_DIR, group_dir / DETAILS_DIR / SIMULATION_LOG_DIR):
-        if tidied.is_dir():
-            return tidied
-    return details_dir(group_dir) / SIMULATION_LOG_DIR
+    tidied = Path(group_dir) / SIMULATION_LOG_DIR
+    return tidied if tidied.is_dir() else details_dir(group_dir) / SIMULATION_LOG_DIR
 
 
 def simulation_logs(group_dir):

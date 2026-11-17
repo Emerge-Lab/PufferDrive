@@ -1,10 +1,6 @@
 #ifndef OPENGIGAFLOW_OCEAN_DRIVE_MAP_DATA_H
 #define OPENGIGAFLOW_OCEAN_DRIVE_MAP_DATA_H
 
-// ========================================
-// Grid Map Functions
-// ========================================
-
 // Odd grid width covering the furthest configured road-observation distance.
 static int compute_vision_range(Drive *env) {
     int vision_half_range = (int) ceilf(
@@ -36,16 +32,6 @@ static void add_entity_to_grid(
     int obs_kind,
     int *cell_entities_insert_index) {
     int count = cell_entities_insert_index[grid_index];
-    if (count >= env->grid_map->cell_entities_count[grid_index]) {
-        printf(
-            "Error: Exceeded precomputed entity count for grid cell %d. Current count: %d, Max count(Precomputed): "
-            "%d\n",
-            grid_index,
-            count,
-            env->grid_map->cell_entities_count[grid_index]);
-        return;
-    }
-
     int pool_idx = (int) (env->grid_map->cells[grid_index] - env->grid_map->entity_pool) + count;
     env->grid_map->cells[grid_index][count].entity_idx = entity_idx;
     env->grid_map->cells[grid_index][count].geometry_idx = geometry_idx;
@@ -390,7 +376,6 @@ static int init_grid_map(Drive *env) {
     int grid_cell_count = (int) grid_cell_count_wide;
     env->grid_map->cells = (GridMapEntity **) calloc(grid_cell_count, sizeof(GridMapEntity *));
     env->grid_map->cell_entities_count = (int *) calloc(grid_cell_count, sizeof(int));
-    // First pass to count entities in each grid cell
     for (int i = 0; i < env->num_road_elements; i++) {
         if (!is_road_grid_candidate(env->road_elements[i].type)) {
             continue;
@@ -428,7 +413,6 @@ static int init_grid_map(Drive *env) {
             return 1;
         }
     }
-    // Allocate grid cells based on counts
     int *cell_entities_insert_index = (int *) calloc(grid_cell_count, sizeof(int));
     for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
         env->grid_map->total_entities += env->grid_map->cell_entities_count[grid_index];
@@ -442,7 +426,6 @@ static int init_grid_map(Drive *env) {
         env->grid_map->cells[grid_index] = count > 0 ? &env->grid_map->entity_pool[pool_offset] : NULL;
         pool_offset += count;
     }
-    // Track which grid cells have drivable lanes
     bool *drivable_grid_seen = (bool *) calloc(grid_cell_count, sizeof(bool));
     for (int i = 0; i < env->num_road_elements; i++) {
         if (!is_road_grid_candidate(env->road_elements[i].type)) {
@@ -465,7 +448,6 @@ static int init_grid_map(Drive *env) {
             }
         }
     }
-    // Create a compact array of drivable grid cell indices for quick access
     env->grid_map->grid_index_drivable = (int *) malloc(env->grid_map->num_drivable_grid_cell * sizeof(int));
     int drivable_idx = 0;
     for (int i = 0; i < grid_cell_count; i++) {
@@ -482,7 +464,6 @@ static int init_grid_map(Drive *env) {
 static void init_neighbor_offsets(Drive *env) {
     int vr = env->grid_map->vision_range;
     env->neighbor_offsets = (int *) calloc(vr * vr * 2, sizeof(int));
-    // Spiral pattern generation
     int dx[] = {1, 0, -1, 0};
     int dy[] = {0, 1, 0, -1};
     int x = 0, y = 0, dir = 0, steps_taken = 0, segments_completed = 0, total = 0, curr_idx = 0;
@@ -491,7 +472,6 @@ static void init_neighbor_offsets(Drive *env) {
     env->neighbor_offsets[curr_idx++] = 0;
     env->neighbor_offsets[curr_idx++] = 0;
     total++;
-    // Generate spiral pattern
     while (total < max_offsets) {
         x += dx[dir];
         y += dy[dir];
@@ -505,7 +485,7 @@ static void init_neighbor_offsets(Drive *env) {
             continue;
         }
         steps_taken = 0;
-        dir = (dir + 1) % 4; // Change direction (clockwise: right->up->left->down)
+        dir = (dir + 1) % 4; // counter-clockwise on the y-up grid: right, up, left, down
         segments_completed++;
         if (segments_completed % 2 == 0) {
             steps_to_take++;
@@ -513,8 +493,7 @@ static void init_neighbor_offsets(Drive *env) {
     }
 }
 
-// Spiral-order entity_pool indices of a cell's vision window, observed lanes first then edges; NULL dest only counts.
-// lane_count is written by the counting call and read by the filling call to place the edge block.
+// Spiral-order pool indices of a cell's window, lanes before edges; a NULL-dest call counts and sets lane_count first.
 static int collect_neighbor_pool_indices(Drive *env, int cell_idx, uint16_t *dest, int *lane_count) {
     GridMap *grid = env->grid_map;
     int cell_x = cell_idx % grid->grid_cols;
@@ -558,21 +537,17 @@ static void cache_neighbor_offsets(Drive *env) {
             grid->total_entities);
     }
     grid->neighbor_cache_pool_idx = (uint16_t **) calloc(cell_count, sizeof(uint16_t *));
-    grid->neighbor_cache_count = (int *) calloc(cell_count + 1, sizeof(int));
+    grid->neighbor_cache_count = (int *) calloc(cell_count, sizeof(int));
     grid->neighbor_cache_lane_count = (int *) calloc(cell_count, sizeof(int));
-    int total_count = 0;
     for (int i = 0; i < cell_count; i++) {
         int neighbor_count = collect_neighbor_pool_indices(env, i, NULL, &grid->neighbor_cache_lane_count[i]);
         grid->neighbor_cache_count[i] = neighbor_count;
-        total_count += neighbor_count;
         if (neighbor_count == 0) {
-            grid->neighbor_cache_pool_idx[i] = NULL;
             continue;
         }
         grid->neighbor_cache_pool_idx[i] = (uint16_t *) malloc(neighbor_count * sizeof(uint16_t));
         collect_neighbor_pool_indices(env, i, grid->neighbor_cache_pool_idx[i], &grid->neighbor_cache_lane_count[i]);
     }
-    grid->neighbor_cache_count[cell_count] = total_count;
 }
 
 static int get_neighbors_entities(
@@ -587,22 +562,18 @@ static int get_neighbors_entities(
     if (index == -1) {
         return 0;
     }
-    // Calculate 2D grid coordinates
     int cols = env->grid_map->grid_cols;
     int cell_x = index % cols;
     int cell_y = index / cols;
     int entity_list_count = 0;
-    // Fill the provided array
     for (int i = 0; i < offset_size; i++) {
         int nx = cell_x + local_offsets[i][0];
         int ny = cell_y + local_offsets[i][1];
-        // Ensure the neighbor is within grid bounds
         if (nx < 0 || nx >= env->grid_map->grid_cols || ny < 0 || ny >= env->grid_map->grid_rows) {
             continue;
         }
         int neighbor_idx = ny * env->grid_map->grid_cols + nx;
         int count = env->grid_map->cell_entities_count[neighbor_idx];
-        // Add entities from this cell to the list
         for (int j = 0; j < count && entity_list_count < max_size; j++) {
             entity_list[entity_list_count++] = env->grid_map->cells[neighbor_idx][j];
         }
@@ -610,8 +581,7 @@ static int get_neighbors_entities(
     return entity_list_count;
 }
 
-// Walks one obs kind of the spiral neighborhood of a query point: the kind's block of cached pool indices, or the
-// scratch list filtered by kind.
+// Walks one obs kind of a query point's spiral neighborhood: cached pool indices, or the scratch list filtered by kind.
 typedef struct NeighborCursor {
     const GridMapEntity *entities;
     const uint16_t *pool_indices;
@@ -644,7 +614,7 @@ static NeighborCursor neighbor_cursor_begin(Drive *env, float x, float y, int ob
         return cursor;
     }
     int grid_idx = get_grid_index(env, x, y);
-    if (grid_idx < 0 || grid_idx >= env->grid_map->grid_cols * env->grid_map->grid_rows) {
+    if (grid_idx < 0) {
         return cursor;
     }
     int lane_count = env->grid_map->neighbor_cache_lane_count[grid_idx];
@@ -668,29 +638,28 @@ static inline const GridMapEntity *neighbor_cursor_next(Drive *env, NeighborCurs
     return NULL;
 }
 
-// ========================================
-// Map Loading Functions
-// ========================================
-
+#define MAP_SECTION_TAG_LEN 8
 #define TRAFFIC_PHASE_SECTION_TAG "TLPHASE1"
-#define TRAFFIC_PHASE_SECTION_TAG_LEN 8
 #define LANE_WIDTH_SECTION_TAG "LANEWID1"
-#define LANE_WIDTH_SECTION_TAG_LEN 8
 #define SPEED_ZONE_SECTION_TAG "SPDZONE1"
-#define SPEED_ZONE_SECTION_TAG_LEN 8
+// x, y, z, heading, vx, vy, length, width, height; the int valid array follows them
+#define TRAJECTORY_FLOAT_ARRAY_COUNT 9
+// bytes of one trajectory step: the float arrays plus the int valid flag
+#define TRAJECTORY_STEP_BYTES (TRAJECTORY_FLOAT_ARRAY_COUNT * sizeof(float) + sizeof(int))
+// x, y, z, heading
+#define ROAD_POINT_ARRAY_COUNT 4
 
 // Optional tail section; files written before it existed end right after the metadata.
 static int load_traffic_phase_section(FILE *file, Drive *drive) {
-    char tag[TRAFFIC_PHASE_SECTION_TAG_LEN];
-    size_t tag_bytes_read = fread(tag, sizeof(char), TRAFFIC_PHASE_SECTION_TAG_LEN, file);
+    char tag[MAP_SECTION_TAG_LEN];
+    size_t tag_bytes_read = fread(tag, sizeof(char), MAP_SECTION_TAG_LEN, file);
     if (tag_bytes_read == 0) {
         for (int i = 0; i < drive->num_traffic_elements; i++) {
             drive->traffic_elements[i].junction_id = -1;
         }
         return 0;
     }
-    if (tag_bytes_read != TRAFFIC_PHASE_SECTION_TAG_LEN
-        || memcmp(tag, TRAFFIC_PHASE_SECTION_TAG, TRAFFIC_PHASE_SECTION_TAG_LEN) != 0) {
+    if (tag_bytes_read != MAP_SECTION_TAG_LEN || memcmp(tag, TRAFFIC_PHASE_SECTION_TAG, MAP_SECTION_TAG_LEN) != 0) {
         printf(
             "[ERROR] -> Unexpected bytes after map metadata (expected EOF or %s section).\n",
             TRAFFIC_PHASE_SECTION_TAG);
@@ -719,10 +688,10 @@ static int load_traffic_phase_section(FILE *file, Drive *drive) {
 
 // Optional tail section; files without it get LANE_WIDTH for every lane point.
 static int load_lane_width_section(FILE *file, Drive *drive) {
-    char tag[LANE_WIDTH_SECTION_TAG_LEN];
-    size_t tag_bytes_read = fread(tag, sizeof(char), LANE_WIDTH_SECTION_TAG_LEN, file);
-    int has_section = tag_bytes_read == LANE_WIDTH_SECTION_TAG_LEN
-        && memcmp(tag, LANE_WIDTH_SECTION_TAG, LANE_WIDTH_SECTION_TAG_LEN) == 0;
+    char tag[MAP_SECTION_TAG_LEN];
+    size_t tag_bytes_read = fread(tag, sizeof(char), MAP_SECTION_TAG_LEN, file);
+    int has_section
+        = tag_bytes_read == MAP_SECTION_TAG_LEN && memcmp(tag, LANE_WIDTH_SECTION_TAG, MAP_SECTION_TAG_LEN) == 0;
     if (tag_bytes_read != 0 && !has_section) {
         printf(
             "[ERROR] -> Unexpected bytes after %s section (expected EOF or %s).\n",
@@ -760,10 +729,10 @@ static int load_lane_width_section(FILE *file, Drive *drive) {
 
 // Optional tail section; files without it get -1 (no zone) for every lane.
 static int load_speed_zone_section(FILE *file, Drive *drive) {
-    char tag[SPEED_ZONE_SECTION_TAG_LEN];
-    size_t tag_bytes_read = fread(tag, sizeof(char), SPEED_ZONE_SECTION_TAG_LEN, file);
-    int has_section = tag_bytes_read == SPEED_ZONE_SECTION_TAG_LEN
-        && memcmp(tag, SPEED_ZONE_SECTION_TAG, SPEED_ZONE_SECTION_TAG_LEN) == 0;
+    char tag[MAP_SECTION_TAG_LEN];
+    size_t tag_bytes_read = fread(tag, sizeof(char), MAP_SECTION_TAG_LEN, file);
+    int has_section
+        = tag_bytes_read == MAP_SECTION_TAG_LEN && memcmp(tag, SPEED_ZONE_SECTION_TAG, MAP_SECTION_TAG_LEN) == 0;
     if (tag_bytes_read != 0 && !has_section) {
         printf(
             "[ERROR] -> Unexpected bytes after %s section (expected EOF or %s).\n",
@@ -802,34 +771,239 @@ static int load_speed_zone_section(FILE *file, Drive *drive) {
     return 0;
 }
 
-int load_map_binary(const char *filename, Drive *drive) {
-    FILE *file = fopen(filename, "rb");
-    if (!file) {
+// A count read from the file is usable when it is non-negative and its items are still in the file.
+static int count_fits_file(FILE *file, long long count, long long bytes_per_item) {
+    struct stat file_stat;
+    long position = ftell(file);
+    if (count < 0 || position < 0 || fstat(fileno(file), &file_stat) != 0) {
+        return 0;
+    }
+    return count <= ((long long) file_stat.st_size - position) / bytes_per_item;
+}
+
+// Reads an int count, then that many ints into a fresh array; NULL when the count is not positive.
+static int read_counted_int_array(FILE *file, int *count, int **values) {
+    if (fread(count, sizeof(int), 1, file) != 1) {
         return -1;
     }
+    if (*count <= 0) {
+        *values = NULL;
+        return 0;
+    }
+    if (!count_fits_file(file, *count, sizeof(int))) {
+        return -1;
+    }
+    *values = (int *) malloc(*count * sizeof(int));
+    if (*values == NULL || fread(*values, sizeof(int), *count, file) != (size_t) *count) {
+        return -1;
+    }
+    return 0;
+}
 
+static int load_agent_record(FILE *file, Agent *agent, int agent_idx) {
+    if (fread(&agent->id, sizeof(int), 1, file) != 1) {
+        return -1;
+    }
+    if (agent->id != agent_idx) {
+        printf("[ERROR] -> Agent id %d != idx %d. Binary must be reindexed (id == idx).\n", agent->id, agent_idx);
+        return -1;
+    }
+    if (fread(&agent->type, sizeof(int), 1, file) != 1 || fread(&agent->trajectory_size, sizeof(int), 1, file) != 1) {
+        return -1;
+    }
+    int trajectory_size = agent->trajectory_size;
+    if (!count_fits_file(file, trajectory_size, TRAJECTORY_STEP_BYTES)) {
+        printf("[ERROR] -> Agent %d trajectory size %d does not fit the file.\n", agent_idx, trajectory_size);
+        return -1;
+    }
+    float **log_float_arrays[TRAJECTORY_FLOAT_ARRAY_COUNT]
+        = {&agent->log_trajectory_x,
+           &agent->log_trajectory_y,
+           &agent->log_trajectory_z,
+           &agent->log_heading,
+           &agent->log_velocity_x,
+           &agent->log_velocity_y,
+           &agent->log_length,
+           &agent->log_width,
+           &agent->log_height};
+    for (int array_idx = 0; array_idx < TRAJECTORY_FLOAT_ARRAY_COUNT; array_idx++) {
+        *log_float_arrays[array_idx] = (float *) malloc(trajectory_size * sizeof(float));
+    }
+    agent->log_valid = (int *) malloc(trajectory_size * sizeof(int));
+    for (int array_idx = 0; array_idx < TRAJECTORY_FLOAT_ARRAY_COUNT; array_idx++) {
+        float *log_values = *log_float_arrays[array_idx];
+        if (trajectory_size > 0
+            && (log_values == NULL
+                || fread(log_values, sizeof(float), trajectory_size, file) != (size_t) trajectory_size)) {
+            return -1;
+        }
+    }
+    if (trajectory_size > 0
+        && (agent->log_valid == NULL
+            || fread(agent->log_valid, sizeof(int), trajectory_size, file) != (size_t) trajectory_size)) {
+        return -1;
+    }
+    int route_gt_length; // stored in the bin, unused by the sim
+    if (read_counted_int_array(file, &agent->route_length, &agent->route) != 0
+        || fread(&route_gt_length, sizeof(int), 1, file) != 1 || fread(&agent->gt_goal_x, sizeof(float), 1, file) != 1
+        || fread(&agent->gt_goal_y, sizeof(float), 1, file) != 1
+        || fread(&agent->gt_goal_z, sizeof(float), 1, file) != 1
+        || fread(&agent->mark_as_expert, sizeof(int), 1, file) != 1) {
+        return -1;
+    }
+    return 0;
+}
+
+static int load_road_record(FILE *file, RoadMapElement *road, int road_idx) {
+    int road_id;
+    if (fread(&road_id, sizeof(int), 1, file) != 1) {
+        return -1;
+    }
+    if (road_id != road_idx) {
+        printf("[ERROR] -> Road element id %d != idx %d. Binary must be reindexed (id == idx).\n", road_id, road_idx);
+        return -1;
+    }
+    if (fread(&road->type, sizeof(int), 1, file) != 1 || fread(&road->segment_size, sizeof(int), 1, file) != 1) {
+        return -1;
+    }
+    int point_count = road->segment_size;
+    if (!count_fits_file(file, point_count, ROAD_POINT_ARRAY_COUNT * sizeof(float))) {
+        printf("[ERROR] -> Road %d point count %d does not fit the file.\n", road_idx, point_count);
+        return -1;
+    }
+    float **point_arrays[ROAD_POINT_ARRAY_COUNT] = {&road->x, &road->y, &road->z, &road->headings};
+    for (int array_idx = 0; array_idx < ROAD_POINT_ARRAY_COUNT; array_idx++) {
+        *point_arrays[array_idx] = (float *) malloc(point_count * sizeof(float));
+    }
+    for (int array_idx = 0; array_idx < ROAD_POINT_ARRAY_COUNT; array_idx++) {
+        float *point_values = *point_arrays[array_idx];
+        if (point_count > 0
+            && (point_values == NULL
+                || fread(point_values, sizeof(float), point_count, file) != (size_t) point_count)) {
+            return -1;
+        }
+    }
+    for (int p = 0; p < point_count; p++) {
+        if (!isfinite(road->x[p]) || !isfinite(road->y[p]) || !isfinite(road->z[p]) || !isfinite(road->headings[p])) {
+            printf("[ERROR] -> Road %d point %d has a non-finite coordinate or heading.\n", road_idx, p);
+            return -1;
+        }
+    }
+    if (!is_road_lane(road->type)) {
+        return 0;
+    }
+    if (read_counted_int_array(file, &road->num_entries, &road->entry_lanes) != 0
+        || read_counted_int_array(file, &road->num_exits, &road->exit_lanes) != 0
+        || fread(&road->speed_limit, sizeof(float), 1, file) != 1
+        || fread(&road->length, sizeof(float), 1, file) != 1) {
+        return -1;
+    }
+    road->cum_lengths = (float *) malloc(point_count * sizeof(float));
+    if (point_count > 0
+        && (road->cum_lengths == NULL
+            || fread(road->cum_lengths, sizeof(float), point_count, file) != (size_t) point_count)) {
+        return -1;
+    }
+    return 0;
+}
+
+static int load_traffic_record(FILE *file, TrafficControlElement *traffic, int traffic_idx) {
+    int traffic_id;
+    if (fread(&traffic_id, sizeof(int), 1, file) != 1) {
+        return -1;
+    }
+    if (traffic_id != traffic_idx) {
+        printf(
+            "[ERROR] -> Traffic element id %d != idx %d. Binary must be reindexed (id == idx).\n",
+            traffic_id,
+            traffic_idx);
+        return -1;
+    }
+    if (fread(&traffic->type, sizeof(int), 1, file) != 1 || fread(traffic->stop_line, sizeof(float), 6, file) != 6
+        || fread(&traffic->heading, sizeof(float), 1, file) != 1
+        || fread(&traffic->state_size, sizeof(int), 1, file) != 1) {
+        return -1;
+    }
+    int state_count = traffic->state_size;
+    if (!count_fits_file(file, state_count, sizeof(int))) {
+        printf("[ERROR] -> Traffic element %d state count %d does not fit the file.\n", traffic_idx, state_count);
+        return -1;
+    }
+    traffic->states = (int *) malloc(state_count * sizeof(int));
+    if (state_count > 0
+        && (traffic->states == NULL
+            || fread(traffic->states, sizeof(int), state_count, file) != (size_t) state_count)) {
+        return -1;
+    }
+    return read_counted_int_array(file, &traffic->num_controlled_lanes, &traffic->controlled_lanes);
+}
+
+static int load_lane_graph_section(FILE *file, Drive *drive) {
+    struct LaneGraph *graph = &drive->lane_graph;
+    int lane_count;
+    if (fread(&lane_count, sizeof(int), 1, file) != 1) {
+        return -1;
+    }
+    graph->n_lanes = lane_count;
+    graph->lane_ids = NULL;
+    graph->distances = NULL;
+    graph->lane_to_graph_idx = NULL;
+    if (lane_count <= 0) {
+        return 0;
+    }
+    size_t distance_count = (size_t) lane_count * (size_t) lane_count;
+    if (!count_fits_file(file, (long long) lane_count + (long long) distance_count, sizeof(float))) {
+        printf("[ERROR] -> lane_graph with %d lanes does not fit the file.\n", lane_count);
+        return -1;
+    }
+    graph->lane_ids = (int *) malloc(lane_count * sizeof(int));
+    if (graph->lane_ids == NULL || fread(graph->lane_ids, sizeof(int), lane_count, file) != (size_t) lane_count) {
+        return -1;
+    }
+    graph->distances = (float *) malloc(distance_count * sizeof(float));
+    if (graph->distances == NULL || fread(graph->distances, sizeof(float), distance_count, file) != distance_count) {
+        return -1;
+    }
+    // File stores [from][to]; the lane observations read one goal row per ego, so keep [to][from].
+    for (int from = 0; from < lane_count; from++) {
+        for (int to = from + 1; to < lane_count; to++) {
+            float from_to = graph->distances[from * lane_count + to];
+            graph->distances[from * lane_count + to] = graph->distances[to * lane_count + from];
+            graph->distances[to * lane_count + from] = from_to;
+        }
+    }
+    graph->lane_to_graph_idx = (int *) malloc(drive->num_road_elements * sizeof(int));
+    for (int road_idx = 0; road_idx < drive->num_road_elements; road_idx++) {
+        graph->lane_to_graph_idx[road_idx] = -1;
+    }
+    for (int graph_idx = 0; graph_idx < lane_count; graph_idx++) {
+        int lane_idx = graph->lane_ids[graph_idx];
+        if (lane_idx < 0 || lane_idx >= drive->num_road_elements) {
+            printf("[ERROR] -> lane_graph lane_id %d out of range [0,%d).\n", lane_idx, drive->num_road_elements);
+            return -1;
+        }
+        graph->lane_to_graph_idx[lane_idx] = graph_idx;
+    }
+    return 0;
+}
+
+static int load_map_sections(FILE *file, Drive *drive) {
     int num_total_agents, num_roads, num_traffic, num_objects;
-    if (fread(&num_total_agents, sizeof(int), 1, file) != 1) {
-        fclose(file);
+    if (fread(&num_total_agents, sizeof(int), 1, file) != 1 || fread(&num_roads, sizeof(int), 1, file) != 1
+        || fread(&num_traffic, sizeof(int), 1, file) != 1 || fread(&num_objects, sizeof(int), 1, file) != 1) {
         return -1;
     }
-    if (fread(&num_roads, sizeof(int), 1, file) != 1) {
-        fclose(file);
+    // every record starts with its int id, so a count beyond the remaining ints cannot be real
+    if (!count_fits_file(file, num_total_agents, sizeof(int)) || !count_fits_file(file, num_roads, sizeof(int))
+        || !count_fits_file(file, num_traffic, sizeof(int)) || !count_fits_file(file, num_objects, sizeof(int))) {
+        printf(
+            "[ERROR] -> Map header counts (%d agents, %d roads, %d traffic, %d objects) do not fit the file.\n",
+            num_total_agents,
+            num_roads,
+            num_traffic,
+            num_objects);
         return -1;
     }
-    if (fread(&num_traffic, sizeof(int), 1, file) != 1) {
-        fclose(file);
-        return -1;
-    }
-    if (fread(&num_objects, sizeof(int), 1, file) != 1) {
-        fclose(file);
-        return -1;
-    }
-
-    drive->num_total_agents = num_total_agents;
-    drive->num_road_elements = num_roads;
-    drive->num_traffic_elements = num_traffic;
-
     if (num_total_agents > 0) {
         drive->agents = (Agent *) calloc(num_total_agents, sizeof(Agent));
     }
@@ -839,410 +1013,66 @@ int load_map_binary(const char *filename, Drive *drive) {
     if (num_traffic > 0) {
         drive->traffic_elements = (TrafficControlElement *) calloc(num_traffic, sizeof(TrafficControlElement));
     }
-
+    if ((num_total_agents > 0 && drive->agents == NULL) || (num_roads > 0 && drive->road_elements == NULL)
+        || (num_traffic > 0 && drive->traffic_elements == NULL)) {
+        return -1;
+    }
+    drive->num_total_agents = num_total_agents;
+    drive->num_road_elements = num_roads;
+    drive->num_traffic_elements = num_traffic;
     for (int i = 0; i < num_total_agents; i++) {
-        Agent *agent = &drive->agents[i];
-
-        if (fread(&agent->id, sizeof(int), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-        if (agent->id != i) {
-            printf("[ERROR] -> Agent id %d != idx %d. Binary must be reindexed (id == idx).\n", agent->id, i);
-            fclose(file);
-            return -1;
-        }
-        if (fread(&agent->type, sizeof(int), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-        if (fread(&agent->trajectory_size, sizeof(int), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-
-        int tlen = agent->trajectory_size;
-        agent->log_trajectory_x = (float *) malloc(tlen * sizeof(float));
-        agent->log_trajectory_y = (float *) malloc(tlen * sizeof(float));
-        agent->log_trajectory_z = (float *) malloc(tlen * sizeof(float));
-        agent->log_heading = (float *) malloc(tlen * sizeof(float));
-        agent->log_velocity_x = (float *) malloc(tlen * sizeof(float));
-        agent->log_velocity_y = (float *) malloc(tlen * sizeof(float));
-        agent->log_length = (float *) malloc(tlen * sizeof(float));
-        agent->log_width = (float *) malloc(tlen * sizeof(float));
-        agent->log_height = (float *) malloc(tlen * sizeof(float));
-        agent->log_valid = (int *) malloc(tlen * sizeof(int));
-
-        if ((size_t) tlen > 0 && fread(agent->log_trajectory_x, sizeof(float), tlen, file) != (size_t) tlen) {
-            fclose(file);
-            return -1;
-        }
-        if ((size_t) tlen > 0 && fread(agent->log_trajectory_y, sizeof(float), tlen, file) != (size_t) tlen) {
-            fclose(file);
-            return -1;
-        }
-        if ((size_t) tlen > 0 && fread(agent->log_trajectory_z, sizeof(float), tlen, file) != (size_t) tlen) {
-            fclose(file);
-            return -1;
-        }
-        if ((size_t) tlen > 0 && fread(agent->log_heading, sizeof(float), tlen, file) != (size_t) tlen) {
-            fclose(file);
-            return -1;
-        }
-        if ((size_t) tlen > 0 && fread(agent->log_velocity_x, sizeof(float), tlen, file) != (size_t) tlen) {
-            fclose(file);
-            return -1;
-        }
-        if ((size_t) tlen > 0 && fread(agent->log_velocity_y, sizeof(float), tlen, file) != (size_t) tlen) {
-            fclose(file);
-            return -1;
-        }
-        if ((size_t) tlen > 0 && fread(agent->log_length, sizeof(float), tlen, file) != (size_t) tlen) {
-            fclose(file);
-            return -1;
-        }
-        if ((size_t) tlen > 0 && fread(agent->log_width, sizeof(float), tlen, file) != (size_t) tlen) {
-            fclose(file);
-            return -1;
-        }
-        if ((size_t) tlen > 0 && fread(agent->log_height, sizeof(float), tlen, file) != (size_t) tlen) {
-            fclose(file);
-            return -1;
-        }
-        if ((size_t) tlen > 0 && fread(agent->log_valid, sizeof(int), tlen, file) != (size_t) tlen) {
-            fclose(file);
-            return -1;
-        }
-
-        if (fread(&agent->route_length, sizeof(int), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-
-        if (agent->route_length > 0) {
-            agent->route = (int *) malloc(agent->route_length * sizeof(int));
-            if (fread(agent->route, sizeof(int), agent->route_length, file) != (size_t) agent->route_length) {
-                fclose(file);
-                return -1;
-            }
-        } else {
-            agent->route = NULL;
-        }
-
-        if (fread(&agent->route_gt_len, sizeof(int), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-
-        if (fread(&agent->gt_goal_x, sizeof(float), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-        if (fread(&agent->gt_goal_y, sizeof(float), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-        if (fread(&agent->gt_goal_z, sizeof(float), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-        if (fread(&agent->mark_as_expert, sizeof(int), 1, file) != 1) {
-            fclose(file);
+        if (load_agent_record(file, &drive->agents[i], i) != 0) {
             return -1;
         }
     }
-
     for (int i = 0; i < num_roads; i++) {
-        RoadMapElement *road = &drive->road_elements[i];
-        int road_id;
-
-        if (fread(&road_id, sizeof(int), 1, file) != 1) {
-            fclose(file);
+        if (load_road_record(file, &drive->road_elements[i], i) != 0) {
             return -1;
-        }
-        if (road_id != i) {
-            printf("[ERROR] -> Road element id %d != idx %d. Binary must be reindexed (id == idx).\n", road_id, i);
-            fclose(file);
-            return -1;
-        }
-        if (fread(&road->type, sizeof(int), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-        if (fread(&road->segment_size, sizeof(int), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-
-        int slen = road->segment_size;
-
-        road->x = (float *) malloc(slen * sizeof(float));
-        road->y = (float *) malloc(slen * sizeof(float));
-        road->z = (float *) malloc(slen * sizeof(float));
-
-        if ((size_t) slen > 0 && fread(road->x, sizeof(float), slen, file) != (size_t) slen) {
-            fclose(file);
-            return -1;
-        }
-        if ((size_t) slen > 0 && fread(road->y, sizeof(float), slen, file) != (size_t) slen) {
-            fclose(file);
-            return -1;
-        }
-        if ((size_t) slen > 0 && fread(road->z, sizeof(float), slen, file) != (size_t) slen) {
-            fclose(file);
-            return -1;
-        }
-
-        road->headings = (float *) malloc(slen * sizeof(float));
-        if ((size_t) slen > 0 && fread(road->headings, sizeof(float), slen, file) != (size_t) slen) {
-            fclose(file);
-            return -1;
-        }
-        for (int p = 0; p < slen; p++) {
-            if (!isfinite(road->x[p]) || !isfinite(road->y[p]) || !isfinite(road->z[p])
-                || !isfinite(road->headings[p])) {
-                printf("[ERROR] -> Road %d point %d has a non-finite coordinate or heading.\n", i, p);
-                fclose(file);
-                return -1;
-            }
-        }
-
-        if (is_road_lane(road->type)) {
-            if (fread(&road->num_entries, sizeof(int), 1, file) != 1) {
-                fclose(file);
-                return -1;
-            }
-            if (road->num_entries > 0) {
-                road->entry_lanes = (int *) malloc(road->num_entries * sizeof(int));
-                if (fread(road->entry_lanes, sizeof(int), road->num_entries, file) != (size_t) road->num_entries) {
-                    fclose(file);
-                    return -1;
-                }
-            } else {
-                road->entry_lanes = NULL;
-            }
-
-            if (fread(&road->num_exits, sizeof(int), 1, file) != 1) {
-                fclose(file);
-                return -1;
-            }
-            if (road->num_exits > 0) {
-                road->exit_lanes = (int *) malloc(road->num_exits * sizeof(int));
-                if (fread(road->exit_lanes, sizeof(int), road->num_exits, file) != (size_t) road->num_exits) {
-                    fclose(file);
-                    return -1;
-                }
-            } else {
-                road->exit_lanes = NULL;
-            }
-
-            if (fread(&road->speed_limit, sizeof(float), 1, file) != 1) {
-                fclose(file);
-                return -1;
-            }
-            if (fread(&road->length, sizeof(float), 1, file) != 1) {
-                fclose(file);
-                return -1;
-            }
-            road->cum_lengths = (float *) malloc(slen * sizeof(float));
-            if ((size_t) slen > 0 && fread(road->cum_lengths, sizeof(float), slen, file) != (size_t) slen) {
-                fclose(file);
-                return -1;
-            }
-        } else {
-            road->num_entries = 0;
-            road->num_exits = 0;
-            road->entry_lanes = NULL;
-            road->exit_lanes = NULL;
-            road->speed_limit = 0.0f;
-            road->length = 0.0f;
-            road->cum_lengths = NULL;
         }
     }
-
     for (int i = 0; i < num_traffic; i++) {
-        TrafficControlElement *tc = &drive->traffic_elements[i];
-        int traffic_id;
-
-        if (fread(&traffic_id, sizeof(int), 1, file) != 1) {
-            fclose(file);
+        if (load_traffic_record(file, &drive->traffic_elements[i], i) != 0) {
             return -1;
-        }
-        if (traffic_id != i) {
-            printf(
-                "[ERROR] -> Traffic element id %d != idx %d. Binary must be reindexed (id == idx).\n",
-                traffic_id,
-                i);
-            fclose(file);
-            return -1;
-        }
-        if (fread(&tc->type, sizeof(int), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-        if (fread(tc->stop_line, sizeof(float), 6, file) != 6) {
-            fclose(file);
-            return -1;
-        }
-        if (fread(&tc->heading, sizeof(float), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-        if (fread(&tc->state_size, sizeof(int), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-
-        int state_len = tc->state_size;
-
-        tc->states = (int *) malloc(state_len * sizeof(int));
-        if ((size_t) state_len > 0 && fread(tc->states, sizeof(int), state_len, file) != (size_t) state_len) {
-            fclose(file);
-            return -1;
-        }
-
-        if (fread(&tc->num_controlled_lanes, sizeof(int), 1, file) != 1) {
-            fclose(file);
-            return -1;
-        }
-        if (tc->num_controlled_lanes > 0) {
-            tc->controlled_lanes = (int *) malloc(tc->num_controlled_lanes * sizeof(int));
-            if (fread(tc->controlled_lanes, sizeof(int), tc->num_controlled_lanes, file)
-                != (size_t) tc->num_controlled_lanes) {
-                fclose(file);
-                return -1;
-            }
-        } else {
-            tc->controlled_lanes = NULL;
         }
     }
-
-    // Skip objects section
-    int num_objects_features = 9; // x,y,z,heading,vx,vy,length,width,height (9 float arrays) + valid (1 int array)
+    // Objects share the agents' trajectory layout and are skipped
     for (int i = 0; i < num_objects; i++) {
-        int obj_id, obj_type, traj_len;
-        if (fread(&obj_id, sizeof(int), 1, file) != 1 || fread(&obj_type, sizeof(int), 1, file) != 1
-            || fread(&traj_len, sizeof(int), 1, file) != 1) {
-            fclose(file);
+        int object_id, object_type, trajectory_size;
+        if (fread(&object_id, sizeof(int), 1, file) != 1 || fread(&object_type, sizeof(int), 1, file) != 1
+            || fread(&trajectory_size, sizeof(int), 1, file) != 1) {
             return -1;
         }
-        // Skip: x,y,z,heading,vx,vy,length,width,height (9 float arrays) + valid (1 int array)
-        fseek(file, num_objects_features * traj_len * sizeof(float) + traj_len * sizeof(int), SEEK_CUR);
-    }
-
-    // Lane graph section
-    int n_lanes_graph;
-    if (fread(&n_lanes_graph, sizeof(int), 1, file) != 1) {
-        fclose(file);
-        return -1;
-    }
-    drive->lane_graph.n_lanes = n_lanes_graph;
-    drive->lane_graph.lane_ids = NULL;
-    drive->lane_graph.distances = NULL;
-    drive->lane_graph.lane_to_graph_idx = NULL;
-    if (n_lanes_graph > 0) {
-        drive->lane_graph.lane_ids = (int *) malloc(n_lanes_graph * sizeof(int));
-        if (fread(drive->lane_graph.lane_ids, sizeof(int), n_lanes_graph, file) != (size_t) n_lanes_graph) {
-            fclose(file);
+        if (!count_fits_file(file, trajectory_size, TRAJECTORY_STEP_BYTES)
+            || fseek(file, (long) trajectory_size * (long) TRAJECTORY_STEP_BYTES, SEEK_CUR) != 0) {
+            printf("[ERROR] -> Object %d trajectory size %d does not fit the file.\n", i, trajectory_size);
             return -1;
         }
-        drive->lane_graph.distances = (float *) malloc(n_lanes_graph * n_lanes_graph * sizeof(float));
-        if (fread(drive->lane_graph.distances, sizeof(float), n_lanes_graph * n_lanes_graph, file)
-            != (size_t) (n_lanes_graph * n_lanes_graph)) {
-            fclose(file);
-            return -1;
-        }
-        // File stores [from][to]; the lane observations read one goal row per ego, so keep [to][from].
-        for (int from = 0; from < n_lanes_graph; from++) {
-            for (int to = from + 1; to < n_lanes_graph; to++) {
-                float from_to = drive->lane_graph.distances[from * n_lanes_graph + to];
-                drive->lane_graph.distances[from * n_lanes_graph + to]
-                    = drive->lane_graph.distances[to * n_lanes_graph + from];
-                drive->lane_graph.distances[to * n_lanes_graph + from] = from_to;
-            }
-        }
-
-        // Build reverse lookup road-element idx -> graph idx
-        int num_roads = drive->num_road_elements;
-        drive->lane_graph.lane_to_graph_idx = (int *) malloc(num_roads * sizeof(int));
-        for (int r = 0; r < num_roads; r++) {
-            drive->lane_graph.lane_to_graph_idx[r] = -1;
-        }
-        for (int g = 0; g < n_lanes_graph; g++) {
-            int lane_idx = drive->lane_graph.lane_ids[g];
-            if (lane_idx < 0 || lane_idx >= num_roads) {
-                printf("[ERROR] -> lane_graph lane_id %d out of range [0,%d).\n", lane_idx, num_roads);
-                fclose(file);
-                return -1;
-            }
-            drive->lane_graph.lane_to_graph_idx[lane_idx] = g;
-        }
     }
-
-    // Metadata
-    if (fread(drive->scenario_id, sizeof(char), 128, file) != 128) {
-        fclose(file);
+    if (load_lane_graph_section(file, drive) != 0
+        || fread(drive->scenario_id, sizeof(char), sizeof(drive->scenario_id), file) != sizeof(drive->scenario_id)
+        || fread(drive->dataset_name, sizeof(char), sizeof(drive->dataset_name), file) != sizeof(drive->dataset_name)
+        || fread(&drive->log_length, sizeof(int), 1, file) != 1 || fread(&drive->log_dt, sizeof(float), 1, file) != 1
+        || read_counted_int_array(file, &drive->num_objects_of_interest, &drive->objects_of_interest) != 0
+        || read_counted_int_array(file, &drive->num_tracks_to_predict, &drive->tracks_to_predict) != 0) {
         return -1;
     }
-    if (fread(drive->dataset_name, sizeof(char), 32, file) != 32) {
-        fclose(file);
+    drive->scenario_id[sizeof(drive->scenario_id) - 1] = '\0';
+    drive->dataset_name[sizeof(drive->dataset_name) - 1] = '\0';
+    if (load_traffic_phase_section(file, drive) != 0 || load_lane_width_section(file, drive) != 0
+        || load_speed_zone_section(file, drive) != 0) {
         return -1;
     }
-    if (fread(&drive->log_length, sizeof(int), 1, file) != 1) {
-        fclose(file);
-        return -1;
-    }
-    if (fread(&drive->log_dt, sizeof(float), 1, file) != 1) {
-        fclose(file);
-        return -1;
-    }
-    if (fread(&drive->num_objects_of_interest, sizeof(int), 1, file) != 1) {
-        fclose(file);
-        return -1;
-    }
-
-    if (drive->num_objects_of_interest > 0) {
-        drive->objects_of_interest = (int *) malloc(drive->num_objects_of_interest * sizeof(int));
-        if (fread(drive->objects_of_interest, sizeof(int), drive->num_objects_of_interest, file)
-            != (size_t) drive->num_objects_of_interest) {
-            fclose(file);
-            return -1;
-        }
-    } else {
-        drive->objects_of_interest = NULL;
-    }
-
-    if (fread(&drive->num_tracks_to_predict, sizeof(int), 1, file) != 1) {
-        fclose(file);
-        return -1;
-    }
-
-    if (drive->num_tracks_to_predict > 0) {
-        drive->tracks_to_predict = (int *) malloc(drive->num_tracks_to_predict * sizeof(int));
-        if (fread(drive->tracks_to_predict, sizeof(int), drive->num_tracks_to_predict, file)
-            != (size_t) drive->num_tracks_to_predict) {
-            fclose(file);
-            return -1;
-        }
-    } else {
-        drive->tracks_to_predict = NULL;
-    }
-
-    if (load_traffic_phase_section(file, drive) != 0) {
-        fclose(file);
-        return -1;
-    }
-    if (load_lane_width_section(file, drive) != 0) {
-        fclose(file);
-        return -1;
-    }
-    if (load_speed_zone_section(file, drive) != 0) {
-        fclose(file);
-        return -1;
-    }
-
-    fclose(file);
     return 0;
+}
+
+int load_map_binary(const char *filename, Drive *drive) {
+    FILE *file = fopen(filename, "rb");
+    if (!file) {
+        return -1;
+    }
+    int status = load_map_sections(file, drive);
+    fclose(file);
+    return status;
 }
 
 static struct SharedMapData *map_cache_lookup(Drive *env) {
@@ -1250,7 +1080,8 @@ static struct SharedMapData *map_cache_lookup(Drive *env) {
         if (g_map_cache[i] != NULL && strcmp(g_map_cache[i]->map_name, env->map_name) == 0
             && g_map_cache[i]->obs_lane_stride == env->obs_lane_stride
             && g_map_cache[i]->obs_boundary_stride == env->obs_boundary_stride
-            && g_map_cache[i]->obs_stride_merge_segments == env->obs_stride_merge_segments) {
+            && g_map_cache[i]->obs_stride_merge_segments == env->obs_stride_merge_segments
+            && g_map_cache[i]->grid_map->vision_range == compute_vision_range(env)) {
             return g_map_cache[i];
         }
     }
@@ -1311,8 +1142,7 @@ static void free_grid_map(GridMap *grid_map) {
     free(grid_map);
 }
 
-// Free a shared geometry entry and everything it owns, and clear its cache slot.
-// Only call in the building process.
+// Frees a shared geometry entry with everything it owns and clears its cache slot; building process only.
 static void free_shared_map_data(struct SharedMapData *shared) {
     if (shared == NULL) {
         return;

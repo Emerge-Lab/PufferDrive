@@ -1,11 +1,9 @@
-# Test entry points. Run `make help` (or bare `make`) for usage.
-# Targets call .venv/bin/python directly — no venv activation needed.
+# Test entry points (`make help`); targets call .venv/bin/python directly, no venv activation needed.
 PYTHON := .venv/bin/python
 
 .DEFAULT_GOAL := help
 
-# The compiled C extension the Python tests import. It depends on the sim
-# sources, so `make test` rebuilds it only when a .c/.h file actually changed.
+# the C extension the Python tests import: rebuilt only when a sim source changed
 EXT_SUFFIX := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))" 2>/dev/null)
 BINDING := opengigaflow/ocean/drive/binding$(EXT_SUFFIX)
 DRIVE_SOURCES := $(wildcard opengigaflow/ocean/drive/*.c) $(wildcard opengigaflow/ocean/drive/*.h) opengigaflow/ocean/env_binding.h setup.py
@@ -28,8 +26,7 @@ help:
 $(BINDING): $(DRIVE_SOURCES)
 	$(PYTHON) setup.py build_ext --inplace --force
 
-# Local suites, fast-failing first: Python unit tests, eval integration, C sim tests.
-# The Docker smoke suite stays opt-in — it needs a Docker daemon.
+# fast-failing first; the Docker smoke suite stays opt-in since it needs a Docker daemon
 test: test-unit test-eval test-c
 
 rebuild:

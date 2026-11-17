@@ -13,9 +13,10 @@ set -u
 source scripts/kesai/cluster_env.sh || exit 1
 
 export PY=$(conda info --base)/envs/carl_nuplan/bin/python
-# Overridable env: RUN_DIR (3_train_64GPU_multinode_slurm.sh submits this job with RUN_DIR=<its run dir>), CHALLENGES,
-# WANDB_REPORT (1, default: the CLS becomes the training run's final_eval/nuplan_{reactive,nonreactive}_CLS in wandb,
-# replacing an earlier report of that challenge; 0 for ablations, so the run keeps the number of its standard eval)
+# Overridable env (default):
+#   RUN_DIR           the training run (3_train submits this job with RUN_DIR=<its run dir>)
+#   CHALLENGES        closed_loop_reactive_agents_opengigaflow | closed_loop_nonreactive_agents_opengigaflow
+#   WANDB_REPORT (1)  the CLS -> the run's final_eval/nuplan_{reactive,nonreactive}_CLS in wandb; 0 for ablations
 RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0059_1000}
 case "$RUN_DIR" in /*) ;; *) RUN_DIR=$PD/$RUN_DIR ;; esac # relative to the checkout: $PD is only defined inside the job
 # the planner finds config.yaml next to final_model.pt (or one level above a models/*.pt)
@@ -37,55 +38,37 @@ export NUPLAN_DATA_ROOT=$SHARED_DATA/nuplan
 export NUPLAN_MAPS_ROOT=$SHARED_DATA/nuplan/maps
 # the runner's default would mkdir a /scratch path of the old cluster (harmless, but a Permission denied line in every kesai log)
 export NUPLAN_EXP_ROOT=${NUPLAN_EXP_ROOT:-$HOME/nuplan_exp}
-# PD first, and drop inherited entries from other OpenGigaFlow checkouts (the login shell still exports
-# $HOME/cosim_Puffer): Python would otherwise import that checkout's opengigaflow package.
+# PD first; drop inherited entries of other OpenGigaFlow checkouts, whose opengigaflow Python would import instead
 INHERITED_PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
 export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${INHERITED_PYTHONPATH:+:$INHERITED_PYTHONPATH}
 cd "$PD" || exit 1
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 export COSIM_OBS_HTML=infractions  # obs replays (what the policy saw) only for collision/offroad/wrong-way/no-progress scenarios; all|failures|infractions|0
-# one simulation log per scenario; the tidy keeps those of the COSIM_OBS_HTML scenarios in simulation_log/. Adding
-# carl_visualization_callback renders nuPlan's ground-truth video of every scenario (1118 .avi, 14 GB, a matplotlib
-# frame per step; set OPENCV_FOR_THREADS_NUM=1 against its thread pool) for the few the tidy keeps as details/videos/.
+# + carl_visualization_callback: ground-truth videos of every scenario (14 GB; set OPENCV_FOR_THREADS_NUM=1)
 export CALLBACKS="[simulation_log_callback]"
 export WORKER=ray_distributed
-# Per-worker memory is small now (1 policy agent + partner slots, light buffers sized to the scenario), so this is CPU-bound.
-# 128 fits the 144-CPU scaleway nodes. A kesai RTX node gives the job 480 CPUs on 256 physical cores and a worker plateaus
-# at ~2.0 GB once it has cached all four city maps (256 workers = 509 GB, 30 Oct): 384 fills half the hyperthreads and
-# stays under ~770 GB of the 1 TB, leaving the rest to the page cache of the logs.
+# CPU-bound; a worker plateaus at ~2 GB with every city map cached: 384 stay under ~770 GB of a kesai node's 1 TB
 export THREADS_PER_NODE=${THREADS_PER_NODE:-$([ "$CLUSTER" = kesai ] && echo 384 || echo 128)}
-# Ablations (see run_nuplan_planner.sh): refill the goal window after every consumed goal; cap the ego's
-# accelerating / braking jerk [m/s^3] for the first 1.5 s of each scenario (0 = off).
+# refill the goal window after every consumed goal; ego accel / brake jerk caps [m/s^3] for the first 1.5 s (0 = off)
 export SLIDING_GOAL_WINDOW=true
 export STARTUP_ACCEL_JERK_CAP=2
 export STARTUP_BRAKE_JERK_CAP=2
-# pedestrian and bicycle partner boxes grow by this much in length and width in the policy's obs (0 = off): 0.8 puts them strictly above the smallest training vehicle
+# added to the length and width of pedestrian and bicycle boxes in the policy's obs (0 = off)
 export VRU_SIZE_PAD_M=0.8
-# Shadow-env obs overrides: partner slots (training 20, GIGAFLOW eval 40; 40 real partners max-pooled is OOD in
-# sidewalk crowds) and the ego perceived-size margin [m per side] (0.2 = native eval; nuPlan's 2.3 x 5.2 m ego
-# reads as 2.7 x 5.6 m). Unset = planner yaml / arch.py defaults (40 / 0.2).
+# shadow-env obs: partner slots (training 20, GIGAFLOW eval 40) and the ego's perceived-size margin [m per side]
 export OBS_SLOTS_PARTNERS_N=40
 export EVAL_PERCEIVED_SIZE_MARGIN_M=0.2
-# overspeed conditioning alpha (unset = arch.py 0.1 = max of the U(0, 0.1) training range; 0.05 kept the ego at the limit, 0.005 let it speed)
+# overspeed conditioning alpha: the max of the U(0, 0.1) training range
 export REWARD_OVERSPEED=0.1
-# Lane-width clip [m]: the policy observes lane widths clipped to the training range (CARLA maps 2.85-4.4 m; nuPlan
-# city bins have 22% of segments wider than 5 m, up to 50 m). LANE_WIDTH_CLIP_MAX_M=0 turns it off (pre-2026-10-29 evals).
+# observed lane widths [m] clipped to the CARLA training range (nuPlan lanes reach 50 m); LANE_WIDTH_CLIP_MAX_M=0 = off
 export LANE_WIDTH_CLIP_MIN_M=${LANE_WIDTH_CLIP_MIN_M:-2.85}
 export LANE_WIDTH_CLIP_MAX_M=${LANE_WIDTH_CLIP_MAX_M:-4.4}
-# Ego plant: nuPlan's KinematicBicycleModel via CaRL's one_stage_controller, driven exactly as CaRL drives it, with the
-# model's own actuator lag (it realises dt/(dt+tau) of each command; run 431 = 93.01). The policy's integrated accel is
-# zeroed while the plant sits on the speed floor. Ablated: BICYCLE_MIN_SPEED_MPS -2 (Drive's floor) costs ~0.9 on every
-# safety metric.
+# speed floor [m/s] of the ego plant, nuPlan's KinematicBicycleModel driven as CaRL drives it (-2 = Drive's floor)
 export BICYCLE_MIN_SPEED_MPS=${BICYCLE_MIN_SPEED_MPS:-0}
-# Comfort: nuPlan scores the center accel (rear + d*yaw_rate^2 + d*yaw_accel), which the bicycle plant exposes.
-# BICYCLE_CENTER_ACCEL_CAP=true reduces the plant's accel while turning (CaRL clip_angular_adjustment; 248 -> 20
-# positive lon-accel fails), MARGIN 0.95 takes the Savitzky-Golay overshoot residual (+0.2 CLS, run 426).
+# cap the plant's center accel (nuPlan's comfort input) while turning: CaRL's clip_angular_adjustment at MARGIN x bound
 export BICYCLE_CENTER_ACCEL_CAP=${BICYCLE_CENTER_ACCEL_CAP:-true}
 export BICYCLE_CENTER_ACCEL_CAP_MARGIN=${BICYCLE_CENTER_ACCEL_CAP_MARGIN:-0.95}
-# Run-426 anatomy arm: STANDSTILL_JERK_DEADBAND=0 (five stalls were the policy's 0-1.5 m/s^3 start intent being zeroed;
-# the floor now does the deadband's anti-reverse job). Drive's jerk model keeps its axle at the box centre while
-# nuPlan's sits 1.46 m behind (four inside-rear corner collisions in run 426): a training-side item, no eval-side
-# conversion.
+# shadow-env standstill jerk deadband [m/s^3]; empty = the planner's 1.5, 0 = off
 export STANDSTILL_JERK_DEADBAND=${STANDSTILL_JERK_DEADBAND:-}
 # The standard eval's folder is nuplan_val14[_nonreactive]_<date>_<job>; a setting that differs from the values above adds its tag.
 ABLATION_TAG=""
@@ -108,8 +91,7 @@ ABLATION_TAG=""
 # results: the model's own eval folder, next to the OpenGigaFlow benchmark evals (overview.csv, scenarios.csv, obs_html/, simulation_log/, details/)
 export GROUP=$RUN_DIR/eval/nuplan_val14${CHALLENGE_TAG}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
-# NO_TRAIN skips the training-only CUDA extension (_C, never imported by the planner): the cp39 nuPlan env builds only
-# the C binding, so nvcc 13.4 on kesai never meets this env's cu128 torch (script 12 builds the same way)
+# NO_TRAIN: the cp39 nuPlan env builds only the C binding, so nvcc never meets this env's cu128 torch
 NO_TRAIN=1 PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
 
 # The planner must come from this checkout (needs the freshly built C extension above).

@@ -1,12 +1,8 @@
-"""Run CaRL's leaderboard_evaluator.py for one model directory, with all outputs under its eval folder.
+"""Run CaRL's leaderboard_evaluator.py (via CARL_WORK_DIR) for one model directory, outputs under its eval folder.
 
-usage: run_evaluator.py --model-dir <dir> [evaluator args...]
-
-<dir> holds final_model.pt + config.yaml (blank -> DEFAULT_MODEL_DIR). The launcher adds
---agent-config <dir>/final_model.pt and --checkpoint <dir>/eval/carla_leaderboard/result.json,
-creates that directory (the evaluator opens the result file before any agent code runs), and
-points COSIM_TELEMETRY / COSIM_WORLD_LOG / COSIM_OBS_HTML / COSIM_DEBUG_CARLA_VIEW into it unless
-they are already set. Remaining arguments go to the evaluator, located through CARL_WORK_DIR.
+usage: run_evaluator.py --model-dir <dir holding final_model.pt + config.yaml> [evaluator args...]
+Adds --agent-config and --checkpoint <dir>/eval/carla_leaderboard/result.json (created first: the evaluator opens it
+before any agent code runs) and points unset COSIM_TELEMETRY/WORLD_LOG/OBS_HTML/DEBUG_CARLA_VIEW into that folder.
 """
 
 import os

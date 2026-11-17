@@ -53,6 +53,14 @@ benchmarks:
       scenario_length: 9000  # 600 s at dt 0.0667, GIGAFLOW Table A4
       control_mode: control_vehicles
       map_dir: opengigaflow/resources/carla
+      reward_lane_center: 0.0038  # the paper's value; the co-sims keep the shared 0.0075
+      min_goal_spacing: 20.0
+      max_goal_spacing: 200.0
+      obs_slots_partners_n: 40
+      eval_perceived_size_margin_m: 0.2
+      eval_standstill_jerk_deadband_mps3: 1.5
+      disable_red_light_infractions: true
+      disable_stop_sign_infractions: true
 
   - name: carla_fast
     seed: 42
@@ -65,6 +73,14 @@ benchmarks:
       scenario_length: 500
       control_mode: control_vehicles
       map_dir: opengigaflow/resources/carla
+      reward_lane_center: 0.0038  # the paper's value; the co-sims keep the shared 0.0075
+      min_goal_spacing: 20.0
+      max_goal_spacing: 200.0
+      obs_slots_partners_n: 40
+      eval_perceived_size_margin_m: 0.2
+      eval_standstill_jerk_deadband_mps3: 1.5
+      disable_red_light_infractions: true
+      disable_stop_sign_infractions: true
 
   - name: carla_render
     seed: 42

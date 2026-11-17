@@ -41,7 +41,6 @@ static Agent drive_test_driving_agent(float prev_front_x, float cur_front_x, flo
     Agent agent = drive_test_agent(prev_front_x - TEST_HALF_LENGTH_M, y, 0.0f);
     agent.sim_x = cur_front_x - TEST_HALF_LENGTH_M;
     agent.current_lane_idx = 100;
-    agent.previous_lane_idx = 100;
     return agent;
 }
 
@@ -211,7 +210,6 @@ static int test_no_lane_assignment_still_flags(void) {
     set_light(TRAFFIC_CONTROL_STATE_RED);
     Agent agent = drive_test_driving_agent(-0.5f, 0.5f, 0.0f);
     agent.current_lane_idx = -1;
-    agent.previous_lane_idx = -1;
     env.agents = &agent;
     EXPECT_TRUE(check_red_light_violation(&env, 0));
     return 0;

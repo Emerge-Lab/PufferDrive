@@ -1,29 +1,4 @@
-"""Tidy a nuPlan closed-loop run of the OpenGigaFlow planner (the run_simulation.py `group` directory that
-scripts/kesai/9_nuPlan.sh writes under <run>/eval) down to what is read after the run:
-
-  overview.csv    CLS, the eight sub-metrics and the loss_* importance of each (CaRL's csv_main_callback)
-  scenarios.csv   per-scenario scores, worst first (compare_nuplan_evals.py)
-  obs_html/       the observation replay pages render_obs_html.py rendered before this script ran
-  simulation_log/<token>.msgpack.xz  nuPlan's simulation logs of the kept scenarios
-  details/
-    aggregated_metrics.csv  the aggregator's full table: scenario type, comfort sub-metrics, per-type and final rows
-    metrics/                nuPlan's per-metric parquets with the per-step series of every scenario
-    runner_report.parquet, config.yaml, overrides.yaml
-    videos/<token>.mp4      carl_visualization_callback's ground-truth view of the kept scenarios, when it ran
-
-usage: python scripts/eval/tidy_nuplan_run.py <group_dir> [--keep infractions] [--max-score 0.9] [--strip-planner]
-
---keep selects the scenarios whose simulation log and video survive, with render_obs_html.py's rules: infractions
-(an at-fault collision, drivable-area or driving-direction violation, or no progress), failures (score below
---max-score), all, none. Everything else nuPlan wrote is deleted: the other logs and videos, the aggregator parquet,
-hydra.yaml, log.txt (hydra's job log, repeated in the SLURM log), the nuBoard descriptor, and every
-obs_html/*.replay.zlib whose page exists (the page embeds it).
-Videos are re-encoded with ffmpeg (imageio-ffmpeg's binary or the system's; h264, ~1.3 MB each) or, without one,
-with OpenCV (mp4v, ~4.4 MB). --strip-planner rewrites the kept logs of runs recorded before the planner stopped
-pickling its policy into them (28 MB -> 0.2 MB each; needs the nuPlan devkit env). A run that was never scored
-keeps nuPlan's tree, as does a group holding both challenges; an already tidied run is left alone, an interrupted
-tidy resumes.
-"""
+"""Tidy a nuPlan planner run down to overview.csv, scenarios.csv, obs_html/, simulation_log/ and details/."""
 
 import argparse
 import shutil
@@ -34,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nuplan_run_layout  # noqa: E402
 from render_obs_html import FLAG_METRICS, GALLERY_INDEX, REPLAY_SUFFIX, page_token, scenario_rows, selected_tokens  # noqa: E402
-from tidy_alpasim_run import remove_empty_dirs  # noqa: E402
+from tidy_alpasim_run import move, remove, remove_empty_dirs  # noqa: E402
 
 KEEP_MODES = ("infractions", "failures", "all", "none")
 SIMULATION_LOG_SUFFIX = nuplan_run_layout.SIMULATION_LOG_SUFFIX
@@ -53,25 +28,6 @@ def kept_tokens(rows, keep, max_score):
     if keep == "failures":
         return selected_tokens(rows, max_score, [])
     return selected_tokens(rows, 0.0, [metric for _, metric in FLAG_METRICS])
-
-
-def move(src, dst):
-    """Rename src to dst; a src that an interrupted earlier tidy already moved is skipped."""
-    if not src.exists():
-        return
-    if dst.exists():
-        raise SystemExit(f"{dst} already exists, not overwriting it with {src}")
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    src.rename(dst)
-
-
-def remove(path):
-    """-> bytes freed by deleting the file, 0 when it does not exist."""
-    if not path.is_file():
-        return 0
-    size = path.stat().st_size
-    path.unlink()
-    return size
 
 
 def ffmpeg_executable():

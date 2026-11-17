@@ -19,7 +19,6 @@ def _make_env(**overrides):
         "min_agents_per_env": 1,
         "max_agents_per_env": 16,
         "num_maps": 1,
-        "allow_map_subset": True,
         "map_dir": MAP_DIR,
         "simulation_mode": "gigaflow",
         "scenario_length": 120,
@@ -40,9 +39,7 @@ def _make_env(**overrides):
 
 
 def _num_traffic(env):
-    state = env.get_state()
-    scenario = state[0] if isinstance(state, list) else state
-    return int(scenario["num_traffic_elements"])
+    return int(env.get_state()[0]["num_traffic_elements"])
 
 
 def _light_rows(env):

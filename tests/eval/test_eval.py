@@ -1,10 +1,9 @@
+"""Benchmark evaluation end to end: multiprocess self-play and SDC-replay evals, replays, wandb reporting."""
+
 import json
-import struct
 import sys
 import types
-import zlib
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -13,12 +12,12 @@ import torch
 import yaml
 
 import opengigaflow
-from opengigaflow import rl
+from opengigaflow import rl, viz
 from opengigaflow.config_schema import validate_opengigaflow_config
 from opengigaflow.ocean.drive import binding
 from opengigaflow.ocean.drive.drive import Drive
-from opengigaflow.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from opengigaflow.ocean.evaluation_utils import eval_replay as drive_eval_replay
+from opengigaflow.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 
 
 SEED = 42
@@ -26,7 +25,6 @@ CARLA_SCENARIO_COUNT = 7
 CARLA_WORKER_COUNT = 2
 CARLA_MAP_COUNT = 4
 CARLA_SCENARIO_LENGTH = 32
-BENCHMARK_SCENARIO_LENGTH = 48
 WANDB_RUN_NAME = "k_exp_0002_1000"
 WANDB_PROJECT = "nightly-multi-long"
 WANDB_TRAINING_SUMMARY = {"environment/collision_rate": 0.0123}
@@ -63,8 +61,7 @@ class ZeroPolicy(torch.nn.Module):
 
 
 def _load_config():
-    with patch.object(sys, "argv", ["rl.py"]):
-        return rl.load_config("opengigaflow")
+    return rl.load_config("opengigaflow", overrides=[])
 
 
 def _set_small_observation_config(args):
@@ -90,7 +87,6 @@ def _write_benchmark_config(
     scenario_length,
     max_agents_per_env,
     control_mode,
-    use_neighbor_cache,
     max_scenarios_per_batch=None,
 ):
     output_path.write_text(
@@ -117,7 +113,6 @@ def _write_benchmark_config(
                             "scenario_length": scenario_length,
                             "max_agents_per_env": max_agents_per_env,
                             "control_mode": control_mode,
-                            "use_neighbor_cache": use_neighbor_cache,
                             "max_scenarios_per_batch": max_scenarios_per_batch,
                         },
                     }
@@ -136,41 +131,17 @@ def _write_checkpoint_run_dir(run_dir, args):
     args["load_model_path"] = str(run_dir / "final_model.pt")
 
 
-def _standalone_eval_args(benchmark_config_path):
+def _eval_args(benchmark_config_path, benchmark_name, worker_count, eval_agent_count, env_overrides):
     args = _load_config()
-    args["train"].update(
-        {
-            "seed": SEED,
-            "device": "cpu",
-            "compile": False,
-            "torch_deterministic": True,
-        }
-    )
-    args["vec"].update(
-        {
-            "seed": SEED,
-            "num_envs": CARLA_WORKER_COUNT,
-            "num_workers": CARLA_WORKER_COUNT,
-        }
-    )
-    args["env"].update(
-        {
-            "num_agents": 8,
-            "min_agents_per_env": 8,
-            "max_agents_per_env": 8,
-            "num_maps": CARLA_MAP_COUNT,
-            "map_dir": str(CARLA_MAP_DIR),
-            "use_map_cache": True,
-            "scenario_length": CARLA_SCENARIO_LENGTH,
-            "resample_frequency": CARLA_SCENARIO_LENGTH,
-        }
-    )
+    args["train"].update({"seed": SEED, "device": "cpu", "compile": False, "torch_deterministic": True})
+    args["vec"].update({"seed": SEED, "num_envs": worker_count, "num_workers": worker_count})
+    args["env"].update(env_overrides)
     _set_small_observation_config(args)
     args["eval"].update(
         {
             "benchmark_config": str(benchmark_config_path),
-            "benchmarks": "carla_test",
-            "num_agents": 8,
+            "benchmarks": benchmark_name,
+            "num_agents": eval_agent_count,
             "render_scenarios": False,
             "render_filter": None,
             "failure_replay_csv": None,
@@ -181,6 +152,20 @@ def _standalone_eval_args(benchmark_config_path):
     args["wandb"] = False
     args["tb"] = False
     return args
+
+
+def _standalone_eval_args(benchmark_config_path):
+    carla_env = {
+        "num_agents": 8,
+        "min_agents_per_env": 8,
+        "max_agents_per_env": 8,
+        "num_maps": CARLA_MAP_COUNT,
+        "map_dir": str(CARLA_MAP_DIR),
+        "use_map_cache": True,
+        "scenario_length": CARLA_SCENARIO_LENGTH,
+        "resample_frequency": CARLA_SCENARIO_LENGTH,
+    }
+    return _eval_args(benchmark_config_path, "carla_test", CARLA_WORKER_COUNT, 8, carla_env)
 
 
 @pytest.fixture(scope="module")
@@ -196,7 +181,6 @@ def carla_evaluation(tmp_path_factory):
         scenario_length=CARLA_SCENARIO_LENGTH,
         max_agents_per_env=8,
         control_mode="control_vehicles",
-        use_neighbor_cache=True,
     )
     args = _standalone_eval_args(benchmark_config_path)
     _write_checkpoint_run_dir(output_root / "checkpoint", args)
@@ -303,8 +287,7 @@ def test_eval_report_reduces_distance_per_infraction_from_raw_totals():
 
 
 def _run_standalone_eval_with_wandb(tmp_path, monkeypatch, benchmark_name):
-    """Evaluate a checkpoint folder with wandb=True against a stub wandb
-    -> (run dir, stored summary, stored history rows, requested run paths)."""
+    """Eval a checkpoint folder against a stub wandb -> (run dir, stored summary, history rows, requested run paths)."""
     run_dir = tmp_path / WANDB_RUN_NAME
     benchmark_config_path = _write_benchmark_config(
         tmp_path / "benchmark.yaml",
@@ -316,7 +299,6 @@ def _run_standalone_eval_with_wandb(tmp_path, monkeypatch, benchmark_name):
         scenario_length=CARLA_SCENARIO_LENGTH,
         max_agents_per_env=8,
         control_mode="control_vehicles",
-        use_neighbor_cache=True,
     )
     args = _standalone_eval_args(benchmark_config_path)
     args["eval"]["benchmarks"] = benchmark_name
@@ -432,7 +414,6 @@ def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
 
     replay_summaries = rl._run_eval_rollout(
         replay_args,
-        "opengigaflow",
         worker_env_kwargs,
         total_steps,
         "Seed replay",
@@ -496,28 +477,6 @@ def _replay_render_args():
     return args
 
 
-def _read_replay_header(replay_path):
-    payload = zlib.decompress(replay_path.read_bytes())
-    header_length = struct.unpack_from("<I", payload)[0]
-    return json.loads(payload[4 : 4 + header_length])
-
-
-def _read_replay_float32_chunk(replay_path, chunk_name):
-    payload = zlib.decompress(replay_path.read_bytes())
-    header_length = struct.unpack_from("<I", payload)[0]
-    header = json.loads(payload[4 : 4 + header_length])
-    chunk = header["chunks"][chunk_name]
-    assert chunk["dtype"] == "float32"
-    data_start = 4 + header_length + (-(4 + header_length) % 4)
-    values = np.frombuffer(
-        payload,
-        dtype=np.float32,
-        count=chunk["nbytes"] // np.dtype(np.float32).itemsize,
-        offset=data_start + chunk["offset"],
-    )
-    return values.reshape(chunk["shape"])
-
-
 @pytest.mark.parametrize("capture_observations", [False, True], ids=["without_observations", "with_observations"])
 def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch, capture_observations):
     args = _replay_render_args()
@@ -539,7 +498,6 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
     replay_output_dir = tmp_path / drive_eval_replay.ZLIB_REPLAY_DIR_NAME
     summaries = rl._run_eval_rollout(
         args,
-        "opengigaflow",
         worker_env_kwargs,
         total_steps,
         "Replay capture",
@@ -570,7 +528,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
     if capture_observations:
         required_chunks.add("obs")
     for replay_path in replay_paths:
-        header = _read_replay_header(replay_path)
+        header, chunks = viz.read_replay_zlib(replay_path)
         assert header["frames"] == 64
         assert header["active_count"] == 1
         assert (header["obs_dim"] > 0) is capture_observations
@@ -578,13 +536,15 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
         assert header["agent_goal_radius_field"] == 12
         assert header["chunks"]["agent_f32"]["shape"][2] == 13
         assert header["chunks"]["rewards_f32"]["shape"][2] == binding.REWARD_F32_FIELDS
-        agent_frames = _read_replay_float32_chunk(replay_path, "agent_f32")
+        for float_chunk_name in ("agent_f32", "rewards_f32", "coefs_f32"):
+            assert header["chunks"][float_chunk_name]["dtype"] == "float32"
+        agent_frames = chunks["agent_f32"]
         assert np.any(agent_frames[..., header["agent_goal_radius_field"]] > 0.0)
-        rewards = _read_replay_float32_chunk(replay_path, "rewards_f32")
+        rewards = chunks["rewards_f32"]
         assert np.any(rewards[..., 0] != 0.0)
         np.testing.assert_allclose(rewards[..., 0], rewards[..., 1:].sum(axis=-1), atol=1e-4)
 
-        coefs = _read_replay_float32_chunk(replay_path, "coefs_f32")
+        coefs = chunks["coefs_f32"]
         assert header["chunks"]["coefs_f32"]["shape"][2] == binding.NUM_REWARD_COEFS
         goal_radius_coefs = coefs[..., 0]
         agent_goal_radii = agent_frames[..., header["agent_goal_radius_field"]]
@@ -615,9 +575,7 @@ SDC_BATCH_CAP = 2
 
 @pytest.fixture(scope="module")
 def sdc_replay_map_dir(tmp_path_factory):
-    """A replay map dir with several distinctly named maps. The checked-in
-    fixture ships one, and a batch cap only bites when maps outnumber it, so copy
-    it under distinct names -- the name is what the map cache keys on."""
+    """The one checked-in replay map under SDC_SCENARIO_COUNT names: the map cache keys on the name."""
     map_dir = tmp_path_factory.mktemp("sdc_replay_maps")
     source_map = sorted(REPLAY_MAP_DIR.glob("*.bin"))[0]
     map_bytes = source_map.read_bytes()
@@ -627,52 +585,20 @@ def sdc_replay_map_dir(tmp_path_factory):
 
 
 def _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir):
-    args = _load_config()
-    args["train"].update(
-        {
-            "seed": SEED,
-            "device": "cpu",
-            "compile": False,
-            "torch_deterministic": True,
-        }
-    )
-    args["vec"].update(
-        {
-            "seed": SEED,
-            "num_envs": SDC_WORKER_COUNT,
-            "num_workers": SDC_WORKER_COUNT,
-        }
-    )
-    args["env"].update(
-        {
-            "num_agents": SDC_SCENARIO_COUNT,
-            "min_agents_per_env": 1,
-            "max_agents_per_env": SDC_MAX_AGENTS_PER_ENV,
-            "num_maps": SDC_SCENARIO_COUNT,
-            "map_dir": str(map_dir),
-            "use_map_cache": True,
-            "simulation_mode": "replay",
-            "control_mode": "control_sdc_only",
-            "scenario_length": SDC_SCENARIO_LENGTH,
-            "resample_frequency": SDC_SCENARIO_LENGTH,
-        }
-    )
-    _set_small_observation_config(args)
-    args["eval"].update(
-        {
-            "benchmark_config": str(benchmark_config_path),
-            "benchmarks": benchmark_name,
-            "num_agents": SDC_SCENARIO_COUNT,
-            "max_sdc_replay_workers": SDC_WORKER_COUNT,
-            "render_scenarios": False,
-            "render_filter": None,
-            "failure_replay_csv": None,
-            "capture_observations": False,
-            "action_selection": "mode",
-        }
-    )
-    args["wandb"] = False
-    args["tb"] = False
+    sdc_env = {
+        "num_agents": SDC_SCENARIO_COUNT,
+        "min_agents_per_env": 1,
+        "max_agents_per_env": SDC_MAX_AGENTS_PER_ENV,
+        "num_maps": SDC_SCENARIO_COUNT,
+        "map_dir": str(map_dir),
+        "use_map_cache": True,
+        "simulation_mode": "replay",
+        "control_mode": "control_sdc_only",
+        "scenario_length": SDC_SCENARIO_LENGTH,
+        "resample_frequency": SDC_SCENARIO_LENGTH,
+    }
+    args = _eval_args(benchmark_config_path, benchmark_name, SDC_WORKER_COUNT, SDC_SCENARIO_COUNT, sdc_env)
+    args["eval"]["max_sdc_replay_workers"] = SDC_WORKER_COUNT
     return args
 
 
@@ -687,7 +613,6 @@ def _run_sdc_eval(output_root, map_dir, benchmark_name, max_scenarios_per_batch)
         scenario_length=SDC_SCENARIO_LENGTH,
         max_agents_per_env=None,
         control_mode="control_sdc_only",
-        use_neighbor_cache=True,
         max_scenarios_per_batch=max_scenarios_per_batch,
     )
     args = _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir)
@@ -744,15 +669,7 @@ def test_batch_cap_rejects_non_positive_values():
 
 
 def test_batch_cap_preserves_scenario_coverage(tmp_path, sdc_replay_map_dir):
-    """Smaller batches must still cover the window exactly once: nothing dropped
-    or replayed at a batch boundary.
-
-    Metrics are not compared against the uncapped run: binding.shared draws its
-    seed from the same stream as the per-env seeds, once per batch, so more
-    batches shift each scenario's seed. That predates the cap -- eval.num_agents
-    or the worker count already move seeds -- so runs are reproducible for a
-    fixed batch layout, not across layouts.
-    """
+    """Smaller batches cover the window exactly once; metrics differ since every batch draws its own seed."""
     uncapped_metrics = _run_sdc_eval(tmp_path, sdc_replay_map_dir, "sdc_uncapped", None)
     capped_metrics = _run_sdc_eval(tmp_path, sdc_replay_map_dir, "sdc_capped", SDC_BATCH_CAP)
 
@@ -771,12 +688,8 @@ def test_batch_cap_evaluation_is_reproducible(tmp_path, sdc_replay_map_dir):
 
 
 def test_policy_builds_from_the_released_driver_env(sdc_replay_map_dir):
-    """load_policy constructs the policy from vecenv.driver_env, which the
-    Multiprocessing backend releases once it has read the spaces off it. The
-    policy only reads Python config attributes, which outlive close() -- but
-    eval runs this path on every benchmark, so pin it."""
-    with patch.object(sys, "argv", ["rl.py"]):
-        args = rl.load_config("opengigaflow")
+    """load_policy reads only config attributes off vecenv.driver_env, which the Multiprocessing backend closed."""
+    args = _load_config()
     args["train"]["device"] = "cpu"
     env_kwargs = {
         "num_agents": SDC_SCENARIO_COUNT,
@@ -803,7 +716,7 @@ def test_policy_builds_from_the_released_driver_env(sdc_replay_map_dir):
         batch_size=SDC_WORKER_COUNT,
     )
     try:
-        assert rl.load_policy(args, vecenv, "opengigaflow") is not None
+        assert rl.load_policy(args, vecenv) is not None
         obs, _ = vecenv.reset(SEED)
         assert obs.shape[0] == vecenv.agents_per_batch
     finally:

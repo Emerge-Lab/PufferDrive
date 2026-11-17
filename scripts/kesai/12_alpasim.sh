@@ -9,35 +9,23 @@
 #SBATCH --output experiments/logs/alpasim_%j.out
 #SBATCH --error experiments/logs/alpasim_%j.err
 #SBATCH --partition dev
-# AlpaSim closed-loop evaluation of an OpenGigaFlow checkpoint on NuRec scenes, the AlpaSim counterpart of 9_nuPlan.sh:
-# alpasim-training's teacher driver runs the policy in a shadow env of this checkout (PUFFERDRIVE_ROOT=$PD) on the
-# scenes converted to OpenGigaFlow bins; AlpaSim renders, simulates the ego and replays the logged traffic. AlpaSim's
-# services run as containers: docker compose on scaleway; on kesai, which has no docker, as enroot containers started
-# straight from squashfs images inside this job (CONTAINER_RUNTIME=enroot) or as pyxis job steps (pyxis; every step first
-# unpacks its image to node-local disk, ~300 GB per run with this topology).
-#
-# One-time setup: alpasim-training at ALPAGYM_ROOT (`uv sync --all-packages`), the AlpaSim fork at ALPASIM_ROOT, the NuRec
-# scenes as real files at USDZ_DIR, their bins with 130 km/h lane limits at BINS (alpasim-training README step 4) and the
-# AlpaSim base image plus the NRE renderer image:
-#   docker: the base image archived in ALPASIM_IMAGE_DIR (cd $ALPAGYM_ROOT && ALPASIM_ROOT=$ALPASIM_ROOT
-#     OUT_DIR=$ALPASIM_IMAGE_DIR sbatch scripts/build_alpasim_image.sbatch; ~3 h on a dev node, ~31 GB archive), readable
-#     by this user; the renderer is pulled from nvcr.io.
-#   enroot/pyxis: both as squashfs files in SQSH_DIR, named the way the wizard looks them up (image basename with ':'
-#     and '-' replaced by '_'):
-#       enroot import -o $SQSH_DIR/nre_ga_26.04.sqsh docker://nvcr.io#nvidia/nre/nre-ga:26.04
-#       python scripts/kesai/docker_archive_to_sqsh.py alpasim-base-<version>.tar.zst $SQSH_DIR/alpasim_base_<version>.sqsh
-#     the archive being build_alpasim_image.sbatch's, copied over from a docker host (~100 GB of scratch, see the script).
-#
-# Settings are the plain assignments below. Only RUN_DIR, TOPOLOGY and N_SCENES are also read from the environment: 3_train
-# and 18_train chain this eval after their own by exporting RUN_DIR. The topology follows the GPUs the job holds (8, 2 or 1),
-# so a run on two GPUs of a shared node (12 scenes in flight instead of 32) is
+# AlpaSim closed-loop eval of an OpenGigaFlow checkpoint on NuRec scenes: alpasim-training's teacher drives the policy
+# in a shadow env of this checkout (PUFFERDRIVE_ROOT=$PD) on the scenes' OpenGigaFlow bins. AlpaSim's services run as
+# docker compose containers (scaleway) or, on kesai, as enroot containers inside this job or as pyxis job steps.
+# One-time setup: ALPAGYM_ROOT (alpasim-training, `uv sync --all-packages`), ALPASIM_ROOT (the AlpaSim fork), USDZ_DIR
+# (the NuRec scenes as real files), BINS (their bins with 130 km/h lane limits), the AlpaSim base + NRE renderer images:
+#   docker: the base image archived in ALPASIM_IMAGE_DIR, the renderer pulled from nvcr.io:
+#     cd $ALPAGYM_ROOT && ALPASIM_ROOT=$ALPASIM_ROOT OUT_DIR=$ALPASIM_IMAGE_DIR sbatch scripts/build_alpasim_image.sbatch
+#   enroot/pyxis: both in SQSH_DIR as <image basename with ':' and '-' replaced by '_'>.sqsh:
+#     enroot import -o $SQSH_DIR/nre_ga_26.04.sqsh docker://nvcr.io#nvidia/nre/nre-ga:26.04
+#     python scripts/kesai/docker_archive_to_sqsh.py alpasim-base-<version>.tar.zst $SQSH_DIR/alpasim_base_<version>.sqsh
+# Settings are the plain assignments below; RUN_DIR, TOPOLOGY and N_SCENES are also read from the environment
+# (3_train and 18_train submit this eval with RUN_DIR=<run> sbatch). The topology follows the job's GPUs (8, 2 or 1), e.g.
 #   sbatch --gres gpu:2 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
-# and a smoke test is
-#   N_SCENES=2 sbatch --gres gpu:1 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh
+#   N_SCENES=2 sbatch --gres gpu:1 --mem 200G --cpus-per-task 48 scripts/kesai/12_alpasim.sh   # smoke test
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
-# 18_train submits this eval from inside an array job and sbatch hands its SLURM_ARRAY_* down: the wizard then
-# splits the scenes as if this were array task N and skips the aggregation (k_scaled_0074_2000: no official score)
+# a submission from an array job (18_train) inherits SLURM_ARRAY_*: the wizard would split scenes and skip aggregation
 unset SLURM_ARRAY_TASK_COUNT SLURM_ARRAY_TASK_ID SLURM_ARRAY_TASK_MIN SLURM_ARRAY_TASK_MAX SLURM_ARRAY_JOB_ID
 
 TOPOLOGY=${TOPOLOGY:-}  # empty = from the GPU count below: 8gpu_64rollouts, 2gpu or 1gpu
@@ -57,7 +45,7 @@ SIM_TIMEOUT_S=3600   # per batch of PARALLEL scenes
 ALPASIM_LOG_LEVEL=WARNING  # AlpaSim services; INFO also keeps the per-event INFO lines runtime workers and renderer print anyway (~110 MB per 400 scenes)
 PROMETHEUS=0         # AlpaSim performance telemetry (~80 MB per run); only alpagym_runtime.perf reads it
 KEEP_ROLLOUT_LOGS=none  # rollout.asl (~36 MB per scene, offline re-scoring/failure analysis only): all | imperfect (score < 1) | failed | none (never written)
-WANDB_REPORT=1       # the official score and km per at-fault incident become the training run's final_eval/alpasim_score and final_eval/alpasim_km_per_at_fault_incident in wandb, replacing an earlier report; 0 for ablations
+WANDB_REPORT=1       # official score and km per at-fault incident -> the run's final_eval/alpasim_* in wandb; 0 for ablations
 ALPAGYM_ROOT=$HOME/alpasim-training
 # held-out split Damiano evaluates on; empty = every converted scene that passed the checks (2149 on the cluster, 1584 of them train)
 SCENE_LIST=$ALPAGYM_ROOT/scene_splits/eval_405.txt
@@ -139,7 +127,6 @@ echo "Evaluating checkpoint: $CKPT"
 # drop inherited entries from other OpenGigaFlow checkouts: the teacher would import their opengigaflow instead of $PD's
 export PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
 export PUFFERDRIVE_ROOT=$PD
-mkdir -p "$PD/experiments/logs"  # the build helper keeps its source hash there
 # cp312 binding for the alpasim-training venv; NO_TRAIN skips the training-only CUDA extension
 NO_TRAIN=1 PATH="$ALPAGYM_ROOT/.venv/bin:$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
 IMPORTED_OPENGIGAFLOW=$("$ALPAGYM_PY" -c "import alpagym_distill.teacher, opengigaflow; from opengigaflow.ocean.drive import binding; print(opengigaflow.__file__)") \
@@ -171,8 +158,7 @@ EOF
 )
 [ ${#SCENES[@]} -gt 0 ] || { echo "no scenes to evaluate"; exit 1; }
 
-# results live in the model's own eval folder, next to the OpenGigaFlow benchmark evals
-# The standard eval's folder is alpasim_<date>_<job>; a setting that differs from the values above adds its tag.
+# results in the model's own eval folder, alpasim_<date>_<job> plus a tag for every setting that differs from the above
 FOLDER_TAG=$([ "$GOAL_MODE" = "gt_time:5" ] || echo "_${GOAL_MODE//:/}")$([ "$GOAL_RADIUS_M" = "2" ] || echo "_r$GOAL_RADIUS_M")
 FOLDER_TAG=$FOLDER_TAG$([ "$VRU_SIZE_PAD_M" = "0.8" ] || echo "_vrupad$VRU_SIZE_PAD_M")$([ "$PARTNER_SPLIT_LENGTH_M" = "7" ] || echo "_split$PARTNER_SPLIT_LENGTH_M")
 FOLDER_TAG=$FOLDER_TAG$([ "$(basename "$CKPT" .pt)" = "final_model" ] || echo "_$(basename "$CKPT" .pt)")
@@ -369,7 +355,7 @@ cleanup
 TIDY_FLAGS=""
 { [ "$ALPASIM_LOG_LEVEL" = "INFO" ] || [ $EVAL_STATUS -ne 0 ]; } && TIDY_FLAGS="--keep_container_info"
 "$ALPAGYM_PY" "$PD/scripts/eval/tidy_alpasim_run.py" "$OUT" --keep_rollout_logs "$KEEP_ROLLOUT_LOGS" $TIDY_FLAGS || echo "tidy failed"
-# score-named pages of the OBS_REPLAY scenes with the AlpaSim score panel + index.html gallery, as 9_nuPlan.sh and 11_carla_longest6_v2.sh
+# score-named pages of the OBS_REPLAY scenes with the AlpaSim score panel + index.html gallery
 if [ -d "$OUT/obs_html" ] && [ -f "$OUT/details/results-summary.json" ]; then
     "$ALPAGYM_PY" "$PD/scripts/eval/render_alpasim_obs_html.py" "$OUT" --select "$OBS_REPLAY" --prune || echo "obs replay gallery failed"
 fi

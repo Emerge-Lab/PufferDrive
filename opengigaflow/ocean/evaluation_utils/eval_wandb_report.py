@@ -63,8 +63,7 @@ class EvalReportError(Exception):
 
 
 def longest6_route_record_paths(results_csv_path):
-    """The route records results.csv summarizes: routes/*.result.json of a run tidy_carla_run.py flattened (results.csv
-    at its top), else every json next to a fresh run's aggregate/results.csv (the parser's copies of the records)."""
+    """Route records behind results.csv: routes/*.result.json of a tidied run, else every json in its folder tree."""
     results_dir = os.path.dirname(results_csv_path)
     flat_records = glob.glob(os.path.join(results_dir, LONGEST6_ROUTES_DIR_NAME, f"*{LONGEST6_RECORD_SUFFIX}"))
     return flat_records or glob.glob(os.path.join(results_dir, "**", "*.json"), recursive=True)
@@ -277,8 +276,7 @@ def log_run_metrics(run_identity, metric_values, result_source):
 
 
 def report_headline_metric(eval_type, result_path, run_dir, expected_episode_count=None):
-    """Report one evaluation's headline metric (AlpaSim: and its km per at-fault incident); a repeated report
-    becomes the run's value for that eval type."""
+    """Log an eval's headline metric (AlpaSim: + km per at-fault incident); a repeated report replaces the value."""
     headline_value = read_headline_value(eval_type, result_path, expected_episode_count)
     metric_values = {HEADLINE_METRIC_KEYS[eval_type]: headline_value}
     if eval_type == EVAL_TYPE_ALPASIM:
@@ -293,7 +291,6 @@ def report_headline_metric(eval_type, result_path, run_dir, expected_episode_cou
 
     reported_text = ", ".join(f"{metric_key} = {metric_value}" for metric_key, metric_value in metric_values.items())
     print(f"wandb run {run_identity['wandb_project']}/{run_identity['run_name']}: {reported_text} ({result_source})")
-    return {**metric_values, **{metric_key + SOURCE_KEY_SUFFIX: result_source for metric_key in metric_values}}
 
 
 def parse_arguments():

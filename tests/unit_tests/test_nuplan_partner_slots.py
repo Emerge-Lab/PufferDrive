@@ -1,13 +1,8 @@
 """nearest_partner_slots: nuPlan partners keep the devkit order until the shadow env's slots run out."""
 
-import os
-import sys
-
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-from opengigaflow.ocean.cosim import nuplan_bridge as nb  # noqa: E402
+from opengigaflow.ocean.cosim import nuplan_bridge as nb
 
 
 def test_nearest_partner_slots_keeps_the_devkit_order_until_the_slots_run_out():

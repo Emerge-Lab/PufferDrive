@@ -1,22 +1,24 @@
 """match_connectors_to_stop_lines: nearest co-directional traffic light by stop-line segment distance."""
 
-import os
-import sys
-
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-nuplan = pytest.importorskip("nuplan")
+pytest.importorskip("nuplan")
 
 from opengigaflow.ocean.cosim import nuplan_bridge as nb
 
+
 SOUTH = -np.pi / 2
 IDENTITY = nb.NuPlanTransform(0.0, 0.0)
-# element 0: 25 m stop line across a seven-lane southbound approach (y = -1), midpoint at x = 12.5
-# element 1: 6 m oncoming stop line 8 m away, element 2: cross-street light 5 m away, element 3: stop sign on top of the entry
-STOP_LINES = np.array([[0.0, -1.0, 25.0, -1.0], [-5.0, 8.0, 1.0, 8.0], [-5.0, -3.0, -5.0, 3.0], [-1.0, 0.0, 3.0, 0.0]])
+STOP_LINES = np.array(
+    [
+        [0.0, -1.0, 25.0, -1.0],  # 25 m line across a seven-lane southbound approach (y = -1), midpoint at x = 12.5
+        [-5.0, 8.0, 1.0, 8.0],  # 6 m oncoming stop line 8 m away
+        [-5.0, -3.0, -5.0, 3.0],  # cross-street light 5 m away
+        [-1.0, 0.0, 3.0, 0.0],  # stop sign on top of the entry
+    ]
+)
 HEADINGS = np.array([SOUTH, np.pi / 2, 0.0, SOUTH])
 TYPES = np.array([nb.TRAFFIC_TYPE_LIGHT, nb.TRAFFIC_TYPE_LIGHT, nb.TRAFFIC_TYPE_LIGHT, 2], np.int32)
 

@@ -1,71 +1,33 @@
 #!/bin/bash
-# Run opengigaflow/ocean/cosim/nuplan/planner.py under nuPlan's unmodified
-# closed-loop run_simulation.py: BOTH agent-reactivity challenges (nonreactive
-# log-replay + reactive IDM). See README.md "How to run" and planner.py's
-# module docstring.
+# Run opengigaflow/ocean/cosim/nuplan/planner.py under nuPlan's unmodified closed-loop run_simulation.py for both
+# agent-reactivity challenges (nonreactive log replay + reactive IDM).
 #
-# Usage (from a compute-node allocation's job id -- squeue -u $USER to find it):
-#   CKPT=/path/to/model_opengigaflow_xxxxxx.pt \
-#     srun --jobid=<job> --overlap bash run_nuplan_planner.sh
+# Usage: CKPT=/path/to/final_model.pt srun --jobid=<job> --overlap bash run_nuplan_planner.sh
 #
-# Required env:
-#   CKPT     OpenGigaFlow checkpoint .pt.
-# Optional env:
-#   SPLIT     carl_nuplan scenario_filter. Default: val14_split (the full
-#             closed-loop Val14 benchmark -- ~900 scenarios, "all the
-#             scenarios"). filter_pgh is a much smaller Pittsburgh-only
-#             filter, useful to validate a new checkpoint quickly first.
-#   CHALLENGES  space-separated challenge list. Default: both
-#             "closed_loop_nonreactive_agents_opengigaflow
-#              closed_loop_reactive_agents_opengigaflow" (log-replay + IDM).
-#   THREADS_PER_NODE  caps worker.threads_per_node. ray_distributed sizes its
-#             pool from the NODE's cpu count (128 on cs), not the slurm
-#             allocation -- 128 nuPlan workers OOMed a 160G job in 34 min
-#             (2026-08-09); size this to job_mem / ~12G per worker.
-#   WORKER    nuPlan worker config. Default: unset -> falls through to the
-#             devkit's own default (ray_distributed), matching
-#             scripts/eval/sim_opengigaflow.sh's established convention for a
-#             full-benchmark run. NOT verified in this container this
-#             session -- only worker=sequential has been exercised end-to-end
-#             (one scenario). If ray_distributed misbehaves here, retry with
-#             WORKER=sequential (much slower, but proven) while investigating.
-#   CALLBACKS  nuPlan simulation callbacks (default "[simulation_log_callback]": one
-#             msgpack.xz log per scenario). Add carl_visualization_callback for nuPlan's
-#             ground-truth .avi of every scenario; the tidy keeps the selected ones as
-#             details/videos/<token>.mp4.
-#   LIMIT_TOTAL_SCENARIOS  caps scenario_filter.limit_total_scenarios (unset =
-#             no cap, SPLIT's own scenario count applies). Handy for a quick
-#             sanity check before committing to the full SPLIT.
-#   GROUP     output group dir. Default: runs/nuplan_leaderboard_<timestamp>.
-#   SLIDING_GOAL_WINDOW=true|false  refill the goal window after every consumed goal (default false).
-#   STARTUP_ACCEL_JERK_CAP / STARTUP_BRAKE_JERK_CAP  [m/s^3] ego jerk caps for the first
-#             STARTUP_JERK_CAP_SECONDS (default 1.5) of every scenario; unset/0 = off.
-#   VRU_SIZE_PAD_M  [m] add this to pedestrian and bicycle partner boxes' length and width in the policy's
-#             observation (training never spawns below 0.8 m; 0.8 = strictly above the smallest training
-#             vehicle); unset/0 = off.
-#   BICYCLE_MIN_SPEED_MPS  [m/s, <= 0: 0 = no reverse driving, -2 = Drive's floor] speed floor of the ego plant
-#             (nuPlan's KinematicBicycleModel through CaRL's one_stage_controller); unset = planner yaml.
-#             BICYCLE_CENTER_ACCEL_CAP=true|false: reduce the plant's accel while turning so nuPlan's center accel
-#             (rear accel + d*yaw_rate^2 + d*yaw_accel) stays under the accel cap (CaRL clip_angular_adjustment);
-#             BICYCLE_CENTER_ACCEL_CAP_MARGIN (factor on the cap, savgol headroom) tunes comfort.
-#   STANDSTILL_JERK_DEADBAND  [m/s^3] shadow-env standstill jerk deadband (unset = arch.py, 1.5; 0 = off: with the
-#             bicycle plant's speed floor the deadband's anti-reverse-creep job is done by the floor).
-#   OBS_SLOTS_PARTNERS_N  shadow-env partner obs slots (unset = planner yaml, 40).
-#   EVAL_PERCEIVED_SIZE_MARGIN_M  [m per side] ego box inflation in the policy's obs (unset = arch.py, 0.2).
-#   REWARD_OVERSPEED  overspeed conditioning alpha fed to the policy (unset = arch.py, 0.1).
-#   LANE_WIDTH_CLIP_MIN_M / LANE_WIDTH_CLIP_MAX_M  [m] clip the lane widths the policy observes to this
-#             range (training maps span 2.85-4.4 m; nuPlan city bins reach 50 m); unset = off.
-#   COSIM_OBS_HTML=all|failures|infractions|0   interactive observation replay (exact policy
-#             input/outputs per step, opengigaflow.viz HTML) -> $GROUP/obs_html. all: every
-#             scenario. failures (default): only scenarios scoring below
-#             COSIM_OBS_HTML_MAX_SCORE (default 0.9). infractions: only scenarios with an
-#             at-fault collision, drivable-area or driving-direction violation, or no
-#             progress. Every .replay.zlib is deleted after rendering (the pages embed them). 0: off.
-#   TIDY=1    scripts/eval/tidy_nuplan_run.py then flattens $GROUP to overview.csv, scenarios.csv, obs_html/,
-#             simulation_log/ (the logs of the scenarios COSIM_OBS_HTML selects, infractions when it is 0) and
-#             details/ (metrics, the aggregator table, hydra config, runner report; the selected scenarios'
-#             videos as .mp4 when carl_visualization_callback ran). TIDY=0 leaves nuPlan's
-#             simulation/<challenge>/<run_ts> tree with every log (2300 files in 2000 folders per Val14 run).
+#   CKPT                   OpenGigaFlow checkpoint .pt (required)
+#   SPLIT                  carl_nuplan scenario_filter (default val14_split; filter_pgh = quick Pittsburgh-only check)
+#   CHALLENGES             challenge list (default: closed_loop_{nonreactive,reactive}_agents_opengigaflow)
+#   THREADS_PER_NODE       caps worker.threads_per_node (ray sizes its pool from the node's CPUs; ~12 GB per worker)
+#   WORKER                 nuPlan worker config (default: the devkit's ray_distributed; sequential = one process)
+#   CALLBACKS              simulation callbacks (default [simulation_log_callback]; + carl_visualization_callback)
+#   LIMIT_TOTAL_SCENARIOS  caps scenario_filter.limit_total_scenarios (unset: the whole SPLIT)
+#   SCENARIO_TOKENS        scenario_filter.scenario_tokens
+#   GROUP                  output group dir (default $NUPLAN_EXP_ROOT/nuplan_leaderboard_<timestamp>)
+#   SLIDING_GOAL_WINDOW    true|false: refill the goal window after every consumed goal (default false)
+#   STARTUP_ACCEL_JERK_CAP / STARTUP_BRAKE_JERK_CAP / STARTUP_JERK_CAP_SECONDS  ego jerk caps [m/s^3] at the start
+#   VRU_SIZE_PAD_M         [m] added to pedestrian and bicycle partner boxes in the policy's obs (unset/0 = off)
+#   BICYCLE_MIN_SPEED_MPS  [m/s] speed floor of the ego plant (0 = no reverse driving, -2 = Drive's floor)
+#   BICYCLE_CENTER_ACCEL_CAP / BICYCLE_CENTER_ACCEL_CAP_MARGIN  CaRL's clip_angular_adjustment and its cap factor
+#   STANDSTILL_JERK_DEADBAND  [m/s^3] shadow-env standstill jerk deadband (unset = arch.py's 1.5, 0 = off)
+#   OBS_SLOTS_PARTNERS_N   shadow-env partner obs slots (unset = planner yaml, 40)
+#   EVAL_PERCEIVED_SIZE_MARGIN_M  [m per side] ego box inflation in the policy's obs (unset = arch.py, 0.2)
+#   REWARD_OVERSPEED       overspeed conditioning alpha fed to the policy (unset = arch.py, 0.1)
+#   LANE_WIDTH_CLIP_MIN_M / LANE_WIDTH_CLIP_MAX_M  [m] clip the observed lane widths (unset = off)
+#   EXTRA_HYDRA            extra Hydra overrides, space-separated
+#   COSIM_OBS_HTML         all|failures (default)|infractions|0: observation replay pages -> $GROUP/obs_html
+#   COSIM_OBS_HTML_MAX_SCORE  failures: render scenarios scoring below this (default 0.9)
+#   TIDY                   1 (default): scripts/eval/tidy_nuplan_run.py flattens $GROUP; 0 keeps nuPlan's tree
+#   PY, PD, NUPLAN_{DATA,MAPS,EXP,DEVKIT}_ROOT, NUPLAN_VAL_DB_DIR, CITY_BIN_DIR  paths (defaults: the cluster layout)
 if [ -z "$INSIDE_OPENGIGAFLOW_CONTAINER" ] && [ -f /share/apps/images/slurm-ib-bind-apptainer.sh ]; then
     source /share/apps/images/slurm-ib-bind-apptainer.sh
     export APPTAINERENV_PREPEND_PATH=/share/apps/apptainer/bin:$APPTAINERENV_PREPEND_PATH
@@ -118,12 +80,7 @@ EXTRA_ARGS+=("planner.opengigaflow_planner.city_bin_dir=$CITY_BIN_DIR")
 
 cd "$PD"
 declare -A STATUS
-# main_callback below omits metric_summary_callback (PDF histograms): it
-# crashes on a read-only numpy array from pyarrow-backed parquet columns in
-# this nuplan-devkit checkout (nuboard_histogram_utils.py), which aborts the
-# whole main_callback chain and skips csv_main_callback -- the actual
-# results. csv_main_callback reads aggregator parquet files directly and
-# doesn't need metric_summary_callback's output.
+# no metric_summary_callback: it crashes on read-only pyarrow arrays and would skip csv_main_callback (the results)
 for CHALLENGE in $CHALLENGES; do
     echo "[run_nuplan_planner] challenge=$CHALLENGE split=$SPLIT group=$GROUP"
     "$PY" "$NUPLAN_DEVKIT_ROOT/nuplan/planning/script/run_simulation.py" \

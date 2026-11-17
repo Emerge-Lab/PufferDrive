@@ -1,18 +1,8 @@
 #include "include/drive_fixture.h"
 #include "include/test.h"
 
-// Covers the goal-system rewrite paths: the commit_goals slot layout (front/back align + lane=-1
-// padding), map goal_source spawn/regen carrying lane indices (the GPS lane-distance precondition),
-// the route full-set invariant and front-alignment, roll_goals window slide plus its refusal to roll
-// trajectory-pinned replay goals, and ground-truth goals placed along the logged trajectory.
-
-// ---------------------------------------------------------------------------
-// commit_goals: pure slot-layout logic (reads only env->num_goals).
-// ---------------------------------------------------------------------------
-
 static int test_commit_goals_front_align_fills_every_slot(void) {
-    // Front-align (start_slot 0) with a full set: all num_goals slots carry a placed goal, goal_count
-    // is the full set, and the current_goal_* alias tracks slot 0.
+    // a full front-aligned set fills every slot and the current_goal_* alias tracks slot 0
     Drive env = {0};
     env.num_goals = 3;
     Agent agent = {0};
@@ -38,8 +28,7 @@ static int test_commit_goals_front_align_fills_every_slot(void) {
 }
 
 static int test_commit_goals_back_align_pads_front_with_lane_minus_one(void) {
-    // Back-align a partial set (route/replay exhaustion path): the placed goals sit at the tail, the
-    // leading unused slots are zeroed with lane = -1, and current_goal_idx points at the first placed slot.
+    // a back-aligned partial set: zeroed lane -1 slots first, current_goal_idx on the first placed goal
     Drive env = {0};
     env.num_goals = 3;
     Agent agent = {0};
@@ -66,13 +55,8 @@ static int test_commit_goals_back_align_pads_front_with_lane_minus_one(void) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Map goal source (free-roam walk, no route).
-// ---------------------------------------------------------------------------
-
 static int test_map_goal_source_no_attrition(void) {
-    // Map source used to remove any agent whose single seed draw dead-ended, permanently
-    // for the env lifetime. With the fresh-cell retry, every active agent spawns.
+    // with the fresh-cell retry every active agent spawns, none is removed for a dead-ended seed draw
     srand(7);
     Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     env.goal_source = GOAL_SOURCE_MAP;
@@ -89,9 +73,7 @@ static int test_map_goal_source_no_attrition(void) {
 }
 
 static int test_map_goals_carry_lane_and_track_slot_zero(void) {
-    // Map goals must record a lane index for every goal in the obs window so the GPS lane-distance
-    // feature can look them up; a -1 there would silently zero-fill it. current_goal_idx front-aligns
-    // at 0 and the current_goal_* alias must mirror slot 0.
+    // every map goal carries a lane for the GPS lane-distance feature; the alias mirrors slot 0
     srand(3);
     Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     env.goal_source = GOAL_SOURCE_MAP;
@@ -160,8 +142,7 @@ static int count_goal_heading_violations(Drive *env, float max_heading_deg, int 
 }
 
 static int test_map_goal_heading_constraint_reduces_turns(void) {
-    // goal_heading_max_deg re-samples spacings whose landing heading turns more than the limit; with the
-    // constraint on, successive goals should turn >60 deg far less often than with it off (0 = disabled).
+    // with goal_heading_max_deg successive goals turn > 60 deg far less often than without (0 = disabled)
     srand(11);
     Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     env.goal_source = GOAL_SOURCE_MAP;
@@ -187,13 +168,8 @@ static int test_map_goal_heading_constraint_reduces_turns(void) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Route goal source (walks the agent's own route).
-// ---------------------------------------------------------------------------
-
 static int test_route_goals_full_set_or_removed(void) {
-    // The route path front-aligns the full num_goals set or (after a route retry) removes the
-    // agent; it must never leave a live agent with a partial set.
+    // a live route agent always holds the full front-aligned set; a failed retry removes the agent
     srand(5);
     Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     for (int i = 0; i < env.active_agent_count; i++) {
@@ -230,13 +206,8 @@ static int test_route_goals_front_aligned_with_lanes(void) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// roll_goals: rolling-window regen.
-// ---------------------------------------------------------------------------
-
 static int test_roll_goals_slides_window_and_appends(void) {
-    // Rolling regen drops the reached goal, shifts every later goal one slot toward the front, and
-    // appends a fresh frontier goal in the last slot while keeping current_goal_idx pinned to 0.
+    // rolling regen shifts the goals one slot forward and appends one, current_goal_idx stays 0
     srand(13);
     Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     int rolled = 0;
@@ -274,9 +245,7 @@ static int test_roll_goals_slides_window_and_appends(void) {
 }
 
 static int test_roll_goals_bails_on_replay_pins(void) {
-    // Replay goals track the logged trajectory and carry list_goal_lane = -1. roll_goals cannot
-    // seed a frontier walk from a laneless goal, so it must bail (return 0) rather than fabricate
-    // one; the goal-update loop then routes replay away from rolling entirely.
+    // laneless replay goals cannot seed a frontier walk, so roll_goals refuses instead of fabricating one
     Drive env = {0};
     env.goal_source = GOAL_SOURCE_ROUTE;
     Agent agent = {0};
@@ -288,14 +257,8 @@ static int test_roll_goals_bails_on_replay_pins(void) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Ground-truth goal source (replay: goals sampled off the logged trajectory).
-// ---------------------------------------------------------------------------
-
 static int test_gt_goals_along_trajectory_are_laneless(void) {
-    // GT source spaces num_goals goals along the logged trajectory. They carry no lane (list_goal_lane
-    // = -1, so no GPS lane-distance) and every coordinate is finite. current_goal_idx starts at 0 but
-    // may already have advanced if the agent spawns inside the first goal's radius (metrics run in reset).
+    // GT goals: finite, laneless, along the log; a spawn inside the first goal radius may advance the index
     srand(17);
     Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1, 0);
     env.goal_source = GOAL_SOURCE_GT;
@@ -319,9 +282,7 @@ static int test_gt_goals_along_trajectory_are_laneless(void) {
 }
 
 static int test_gt_map_goals_snap_to_lane_centers(void) {
-    // GT_MAP places goals at the GT timesteps but projected onto the nearest co-directional lane: a snapped
-    // goal carries a lane idx and moved at most the snap radius; goals farther from any lane keep the raw
-    // logged point without a lane.
+    // GT_MAP goals snap within the snap radius onto a co-directional lane, the others keep the raw point
     srand(17);
     Drive raw_env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1, 0);
     raw_env.goal_source = GOAL_SOURCE_GT;

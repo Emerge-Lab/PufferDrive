@@ -1,18 +1,4 @@
-"""Render the interactive observation replays (obs_html/<token>.replay.zlib) of a nuPlan run into HTML
-pages plus an index.html gallery (same navigator as the self-play eval replays), only for the
-scenarios worth looking at.
-
-usage: python scripts/eval/render_obs_html.py <group_dir> [--max-score 0.9] [--metric no_ego_at_fault_collisions ...]
-       [--tokens tok1 tok2 ...] [--prune] [--workers N]
-
-Selection: aggregated score < --max-score OR any --metric < 1 OR explicitly listed --tokens.
-Pages are named s<score>_<flags>_<scenario_type>_<token>.html so the gallery lists the worst first
-(flags: COL at-fault collision, OFF drivable area, DIR driving direction, STALL no progress). Every violated
-metric links to the replay step of its first violation (collisions: the shadow env's own flag).
---prune deletes every .replay.zlib afterwards: a rendered page embeds the same bytes and is the source of a
-later re-render (e.g. after a viewer change), the other replays belong to unselected scenarios. Works on fresh
-runs and on runs tidied by tidy_nuplan_run.py.
-"""
+"""Render the obs replay pages + index.html gallery of a nuPlan run's selected scenarios, each with its score panel."""
 
 import argparse
 import os
@@ -48,14 +34,6 @@ SCORED_METRICS = (
     ("ego_progress_along_expert_route", "progress along expert route", "weight 5"),
     ("speed_limit_compliance", "speed limit", "weight 4"),
     ("ego_is_comfortable", "comfort", "weight 2"),
-)
-COMFORT_METRICS = (
-    "ego_lon_acceleration",
-    "ego_lon_jerk",
-    "ego_jerk",
-    "ego_lat_acceleration",
-    "ego_yaw_acceleration",
-    "ego_yaw_rate",
 )
 COMFORT_BOUNDS = {  # (lower, upper, label): nuPlan's within-bound thresholds
     "ego_lon_acceleration": (-4.05, 2.40, "-4.05..2.40 m/s^2"),
@@ -133,7 +111,7 @@ def comfort_failures(group_dir):
     """token -> ['ego_lon_jerk -2.7..5.0', ...]: nuPlan's own out-of-bound comfort sub-metrics."""
     metrics_dir = nuplan_run_layout.metrics_dir(group_dir)
     out = {}
-    for name in COMFORT_METRICS:
+    for name, (lower, upper, bound_label) in COMFORT_BOUNDS.items():
         f = metrics_dir / f"{name}.parquet"
         if not f.exists():
             continue
@@ -141,7 +119,6 @@ def comfort_failures(group_dir):
         flag = [c for c in df.columns if c.endswith("within_bounds_stat_value")]
         if not flag:
             continue
-        lower, upper, bound_label = COMFORT_BOUNDS[name]
         for _, r in df[~df[flag[0]].astype(bool)].iterrows():
             step = first_out_of_bounds(r["time_series_values"], lower, upper)
             step_html = "" if step is None else f" &middot; {step_link(step)}"
@@ -153,8 +130,7 @@ def comfort_failures(group_dir):
 
 
 def score_panel(token, row, comfort, steps):
-    """Fixed panel injected into the viewer: nuPlan score, every scored sub-metric, violated ones highlighted
-    with the replay step of their first violation."""
+    """Fixed panel injected into the viewer: nuPlan score and every scored sub-metric with its first violating step."""
     if row is None:
         return ""
     lines = []
@@ -190,11 +166,9 @@ def render_page(zlib_path, html_path, panel):
 
 
 def selected_tokens(rows, max_score, metrics):
-    tokens = set()
-    for token, row in rows.items():
-        if row["score"] < max_score or any(row[metric] < 1.0 for metric in metrics):
-            tokens.add(token)
-    return tokens
+    return {
+        token for token, row in rows.items() if row["score"] < max_score or any(row[metric] < 1.0 for metric in metrics)
+    }
 
 
 def page_name(token, row):
@@ -223,7 +197,6 @@ def gallery_metrics(row):
     if row is None:
         return {}
     return {
-        "score": float(row["score"]),
         "at_fault_collision_rate": 1.0 - float(row["no_ego_at_fault_collisions"]),
         "offroad_rate": 1.0 - float(row["drivable_area_compliance"]),
         "collision_rate": 1.0 - float(row["no_ego_at_fault_collisions"]),

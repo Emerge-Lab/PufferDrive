@@ -1,16 +1,8 @@
-#!/usr/bin/env python3
-"""OpenGigaFlow schema and final resolved-config checker tests.
+"""OpenGigaFlow config schema and final resolved-config checks."""
 
-Run: python -m unittest tests.unit_tests.test_config_schema
-"""
-
-import os
 import re
-import sys
 import unittest
 from unittest.mock import patch
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import opengigaflow
 from opengigaflow.config_schema import (
@@ -33,28 +25,13 @@ def _screaming_snake(name):
     return re.sub(r"(?<!^)(?=[A-Z])", "_", name).upper()
 
 
-# Enum classes checked against binding, and how to turn a member's Python
-# name into the suffix of its C constant. Every class defaults to its member
-# name verbatim; ControlMode's members stutter the group name in Python
-# (control_vehicles, not vehicles) so the leading "control_" is stripped
-# before joining, matching drive.h's CONTROL_MODE_VEHICLES etc.
-_DRIFT_CHECKED_ENUMS = [
-    (SimulationMode, lambda member: member.name),
-    (InfractionBehavior, lambda member: member.name),
-    (ControlMode, lambda member: member.name.removeprefix("control_")),
-    (Controller, lambda member: member.name),
-    (InitMode, lambda member: member.name),
-    (GoalRegen, lambda member: member.name),
-    (GoalSource, lambda member: member.name),
-]
+_DRIFT_CHECKED_ENUMS = (SimulationMode, InfractionBehavior, ControlMode, Controller, InitMode, GoalRegen, GoalSource)
 
 
 class TestConfigSchema(unittest.TestCase):
-    @patch("sys.argv", ["rl.py"])
     def test_valid_config_loads_with_plain_strings(self):
-        """Final validation must not change the plain-dict contract: enum
-        fields come back as their string names, not Enum members."""
-        args = load_config("opengigaflow")
+        """Final validation keeps the plain-dict contract: enum fields come back as strings, not Enum members."""
+        args = load_config("opengigaflow", overrides=[])
         self.assertIsNone(validate_opengigaflow_config(args, "test"))
         self.assertIsInstance(args["env"]["collision_behavior"], str)
         self.assertIn(args["env"]["collision_behavior"], ("ignore", "stop"))
@@ -73,9 +50,8 @@ class TestConfigSchema(unittest.TestCase):
 
         self.assertIs(args["env"]["use_map_cache"], False)
 
-    @patch("sys.argv", ["rl.py"])
     def test_legacy_zero_or_one_values_normalize_to_booleans(self):
-        args = load_config("opengigaflow")
+        args = load_config("opengigaflow", overrides=[])
         args["env"].update(
             {
                 "use_map_cache": 1,
@@ -110,8 +86,7 @@ class TestConfigSchema(unittest.TestCase):
 
     @patch("sys.argv", ["rl.py", "+env.collission_behavior=stop"])
     def test_unknown_env_key_fails_at_load(self):
-        """Keys force-added with + that the schema doesn't declare are
-        rejected as soon as Hydra composition finishes."""
+        """Keys force-added with + that the schema lacks are rejected as soon as Hydra composition finishes."""
         with self.assertRaisesRegex(
             opengigaflow.APIUsageError,
             r"at env\.collission_behavior while loading: Key 'collission_behavior'",
@@ -124,16 +99,12 @@ class TestConfigSchema(unittest.TestCase):
         self.assertEqual(args["env"]["collision_behavior"], "stop")
 
     def test_schema_enums_match_binding_constants(self):
-        """drive.h #defines are the source of truth for the ints. Naming
-        convention (see config_schema.py docstring): every C constant is
-        `<ENUM_CLASS_SCREAMING_SNAKE>_<MEMBER_UPPER>`. This walks every enum
-        class instead of hand-picking members, so an enum added to
-        config_schema.py without a matching binding constant — or with a
-        mismatched value — fails here without needing a new assert line."""
-        for enum_cls, member_suffix in _DRIFT_CHECKED_ENUMS:
+        """constants.h #defines own the ints; each is `<ENUM_CLASS_SCREAMING_SNAKE>_<MEMBER_UPPER>`."""
+        for enum_cls in _DRIFT_CHECKED_ENUMS:
             group = _screaming_snake(enum_cls.__name__)
             for member in enum_cls:
-                const_name = f"{group}_{member_suffix(member).upper()}"
+                # ControlMode members repeat the group name: control_vehicles -> CONTROL_MODE_VEHICLES
+                const_name = f"{group}_{member.name.removeprefix('control_').upper()}"
                 self.assertTrue(
                     hasattr(binding, const_name),
                     f"binding.{const_name} not found for {enum_cls.__name__}.{member.name} "
@@ -147,18 +118,15 @@ class TestConfigSchema(unittest.TestCase):
                 )
 
     def test_non_vehicle_controller_matches_controller_constants(self):
-        """NonVehicleController reuses Controller's C constants; only its
-        config-only 'auto' sentinel (-1) has no C counterpart (drive.py
-        resolves it to a concrete Controller before it reaches C)."""
+        """NonVehicleController reuses Controller's C constants; only its config-only 'auto' (-1) has none."""
         for member in NonVehicleController:
             if member.name == "auto":
                 continue
             const_name = f"CONTROLLER_{member.name.upper()}"
             self.assertEqual(getattr(binding, const_name), member.value)
 
-    @patch("sys.argv", ["rl.py"])
     def test_training_batch_relationships_are_checked(self):
-        args = load_config("opengigaflow")
+        args = load_config("opengigaflow", overrides=[])
 
         invalid = {**args, "train": {**args["train"], "batch_size": "auto", "bptt_horizon": "auto"}}
         with self.assertRaisesRegex(opengigaflow.APIUsageError, "batch_size and bptt_horizon"):
@@ -217,9 +185,8 @@ class TestConfigSchema(unittest.TestCase):
         with self.assertRaisesRegex(opengigaflow.APIUsageError, "total agents .* must be <= segments"):
             validate_opengigaflow_config(invalid, "test")
 
-    @patch("sys.argv", ["rl.py"])
     def test_semantic_error_separates_field_path_from_context(self):
-        args = load_config("opengigaflow")
+        args = load_config("opengigaflow", overrides=[])
         args["env"]["obs_lane_stride"] = 0
 
         with self.assertRaisesRegex(
@@ -228,9 +195,8 @@ class TestConfigSchema(unittest.TestCase):
         ):
             validate_opengigaflow_config(args, "training")
 
-    @patch("sys.argv", ["rl.py"])
     def test_failure_replay_rejects_scenario_rendering(self):
-        args = load_config("opengigaflow")
+        args = load_config("opengigaflow", overrides=[])
         args["eval"]["failure_replay_csv"] = "failures.csv"
         args["eval"]["render_filter"] = "collision"
         args["eval"]["render_scenarios"] = True
@@ -238,26 +204,16 @@ class TestConfigSchema(unittest.TestCase):
         with self.assertRaisesRegex(opengigaflow.APIUsageError, "scenario rendering"):
             validate_opengigaflow_config(args, "test")
 
-    @patch("sys.argv", ["rl.py"])
-    def test_remote_load_id_requires_tracker(self):
-        args = load_config("opengigaflow")
-        args["load_id"] = "remote-run"
-
-        with self.assertRaisesRegex(opengigaflow.APIUsageError, "load_id"):
-            validate_opengigaflow_config(args, "test")
-
-    @patch("sys.argv", ["rl.py"])
     def test_preload_map_cache_requires_use_map_cache(self):
-        args = load_config("opengigaflow")
+        args = load_config("opengigaflow", overrides=[])
         args["env"]["preload_map_cache"] = True
         args["env"]["use_map_cache"] = False
 
         with self.assertRaisesRegex(opengigaflow.APIUsageError, "preload_map_cache"):
             validate_opengigaflow_config(args, "test")
 
-    @patch("sys.argv", ["rl.py"])
     def test_partner_blindness_prob_min_must_not_exceed_max(self):
-        args = load_config("opengigaflow")
+        args = load_config("opengigaflow", overrides=[])
         args["env"]["partner_blindness_prob_min"] = 0.5
         args["env"]["partner_blindness_prob"] = 0.1
 

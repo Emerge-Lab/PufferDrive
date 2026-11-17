@@ -11,17 +11,14 @@ HEADING_RAD = 0.3
 RESIDUAL_SPEED_MPS = 0.02
 
 
-def _shadow(intent_accel_mps2=0.0, held=False, moving_direction=1.0, intent_steering_rad=0.0, pedal_reverse=True):
+def _shadow(intent_accel_mps2=0.0, held=False, intent_steering_rad=0.0):
     return SimpleNamespace(
         controller=SimpleNamespace(gains=GAINS, observe=lambda speed_mps, yaw_rate_radps, tick_dt: None),
         tick_dt=0.05,
         ego_extent=[EGO_HALF_LENGTH_M, 1.0, 0.75],
-        pedal_reverse=pedal_reverse,
-        _standing=False,
         _intent_accel_mps2=intent_accel_mps2,
         _intent_steering_rad=intent_steering_rad,
         _held=held,
-        _moving_direction=moving_direction,
         _plant_speed_mps=0.0,
     )
 
@@ -46,48 +43,32 @@ def test_braking_to_a_stop_holds_the_car_and_starts_the_acceleration_from_zero()
     assert shadow._held
 
 
-def test_stopping_from_reverse_holds_the_car_too():
-    shadow = _shadow(intent_accel_mps2=1.5, moving_direction=-1.0)
-    _, _, _, _, vx, vy, _, accel_mps2 = _plant_state(shadow, -RESIDUAL_SPEED_MPS)
-    assert (vx, vy, accel_mps2) == (0.0, 0.0, 0.0)
+def test_a_launch_from_the_hold_keeps_its_acceleration():
+    shadow = _shadow(intent_accel_mps2=0.4, held=True)
+    accel_mps2 = _plant_state(shadow, 0.0)[7]
+    assert accel_mps2 == 0.4
     assert shadow._held
 
 
-def test_a_launch_from_the_hold_keeps_its_acceleration_in_either_direction():
-    for launch_accel_mps2 in (0.4, -0.4):
-        shadow = _shadow(intent_accel_mps2=launch_accel_mps2, held=True)
-        accel_mps2 = _plant_state(shadow, 0.0)[7]
-        assert accel_mps2 == launch_accel_mps2
-        assert shadow._held
-
-
-def test_without_reverse_a_request_to_go_backwards_never_builds_up():
-    shadow = _shadow(intent_accel_mps2=-0.4, held=True, pedal_reverse=False)
+def test_a_request_to_go_backwards_never_builds_up():
+    shadow = _shadow(intent_accel_mps2=-0.4, held=True)
     accel_mps2 = _plant_state(shadow, 0.0)[7]
     assert accel_mps2 == 0.0
     assert shadow._held
 
 
-def test_without_reverse_a_car_that_rolls_backwards_is_held_like_a_standing_one():
-    shadow = _shadow(intent_accel_mps2=-1.0, pedal_reverse=False)
-    _, _, _, _, vx, vy, _, accel_mps2 = _plant_state(shadow, -0.5)
-    assert (vx, vy, accel_mps2) == (0.0, 0.0, 0.0)
-    assert shadow._standing and shadow._held
-
-
-def test_with_reverse_a_car_that_rolls_backwards_counts_as_moving():
+def test_a_car_that_rolls_backwards_is_held_like_a_standing_one():
     shadow = _shadow(intent_accel_mps2=-1.0)
     _, _, _, _, vx, vy, _, accel_mps2 = _plant_state(shadow, -0.5)
-    assert math.isclose(math.hypot(vx, vy), 0.5)
-    assert accel_mps2 == -1.0
-    assert not shadow._standing and shadow._moving_direction == -1.0
+    assert (vx, vy, accel_mps2) == (0.0, 0.0, 0.0)
+    assert shadow._held
 
 
 def test_a_standing_car_reads_stopped_even_when_it_creeps_against_the_launch():
-    shadow = _shadow(intent_accel_mps2=-0.4, held=True)
-    _, _, _, _, vx, vy, _, accel_mps2 = _plant_state(shadow, RESIDUAL_SPEED_MPS)
+    shadow = _shadow(intent_accel_mps2=0.4, held=True)
+    _, _, _, _, vx, vy, _, accel_mps2 = _plant_state(shadow, -RESIDUAL_SPEED_MPS)
     assert (vx, vy) == (0.0, 0.0)
-    assert accel_mps2 == -0.4
+    assert accel_mps2 == 0.4
 
 
 def test_a_car_that_creeps_in_the_direction_of_its_launch_keeps_its_velocity():

@@ -18,7 +18,6 @@ def shared_vector():
     vector = Multiprocessing.__new__(Multiprocessing)
     vector.processes = [Mock()]
     vector.buf = {"observations": np.arange(32, dtype=np.float32).reshape(2, 4, 4)}
-    vector.zero_copy = True
     vector._driver_env_open = False
     vector._observation_registration = None
     return vector
@@ -58,15 +57,6 @@ def test_registration_failure_does_not_unregister_unowned_memory(shared_vector, 
         shared_vector.pin_observations()
     shared_vector.close()
     runtime.cudaHostUnregister.assert_not_called()
-
-
-def test_copying_vector_does_not_register_unused_shared_buffer(shared_vector, monkeypatch):
-    shared_vector.zero_copy = False
-    runtime = Mock()
-    monkeypatch.setattr(torch.cuda, "cudart", runtime)
-    shared_vector.pin_observations()
-    shared_vector.close()
-    runtime.assert_not_called()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for host registration")

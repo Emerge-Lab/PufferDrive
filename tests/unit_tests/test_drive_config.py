@@ -1,54 +1,39 @@
-#!/usr/bin/env python3
-"""
-Test script for OpenGigaFlow configuration loading.
-
-Details:
-Running the test: python -m unittest tests/test_drive_config.py
-"""
+"""OpenGigaFlow config loading: Hydra CLI overrides and the env-side validation of loaded values."""
 
 import io
-import os
-import sys
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import opengigaflow
 from opengigaflow.config_schema import validate_opengigaflow_config
 from opengigaflow.ocean.drive import binding
 from opengigaflow.ocean.drive.drive import Drive
-from opengigaflow.rl import known_cli_overrides, load_config, opengigaflow
+from opengigaflow.rl import known_cli_overrides, load_config
+
 
 VERBOSITY = 0
 
 
 class TestDriveConfig(unittest.TestCase):
-    @patch("sys.argv", ["rl.py"])
-    def test_load_config(self):
-        """
-        Tests that load_config correctly loads the monolithic Hydra config
-        for the env, without being affected by unittest's command-line
-        arguments.
-        """
-        try:
-            # The ENV_NAME 'opengigaflow' loads opengigaflow/config/opengigaflow.yaml
-            args = load_config("opengigaflow")
-
-            # load_config should return a populated config dict without raising.
-            self.assertIsInstance(args, dict)
-            self.assertTrue(len(args) > 0)
-        except Exception as err:
-            self.fail(f"load_config failed with an unexpected exception: {err}")
-
-    @patch("sys.argv", ["rl.py", "env.obs_lane_stride=3", "env.obs_boundary_stride=4"])
-    def test_obs_stride_cli_override(self):
+    @patch(
+        "sys.argv",
+        [
+            "rl.py",
+            "env.obs_lane_stride=3",
+            "env.obs_boundary_stride=4",
+            "env.obs_traffic_light_yellow_remaining=false",
+            "train.learning_rate=0.5",
+        ],
+    )
+    def test_cli_overrides_win_over_the_config_file(self):
         args = load_config("opengigaflow")
         self.assertEqual(args["env"]["obs_lane_stride"], 3)
         self.assertEqual(args["env"]["obs_boundary_stride"], 4)
+        self.assertFalse(args["env"]["obs_traffic_light_yellow_remaining"])
+        self.assertEqual(args["train"]["learning_rate"], 0.5)
 
     def test_obs_stride_validation(self):
-        with patch.object(sys, "argv", ["rl.py"]):
-            args = load_config("opengigaflow")
+        args = load_config("opengigaflow", overrides=[])
         args["env"]["obs_lane_stride"] = 0
         with self.assertRaisesRegex(opengigaflow.APIUsageError, "obs_lane_stride"):
             validate_opengigaflow_config(args, "test")
@@ -69,11 +54,6 @@ class TestDriveConfig(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "conditioning_speed_scale"):
             Drive(conditioning_speed_scale=0.9)
 
-    @patch("sys.argv", ["rl.py", "env.obs_traffic_light_yellow_remaining=false"])
-    def test_yellow_remaining_cli_override(self):
-        args = load_config("opengigaflow")
-        self.assertFalse(args["env"]["obs_traffic_light_yellow_remaining"])
-
     def test_yellow_remaining_obs_widens_traffic_control_rows(self):
         plain = Drive(config_only=True)
         with_yellow = Drive(config_only=True, obs_traffic_light_yellow_remaining=True)
@@ -86,15 +66,8 @@ class TestDriveConfig(unittest.TestCase):
             plain.obs_slots_traffic_controls_n * binding.TRAFFIC_CONTROL_YELLOW_REMAINING_FEATURES,
         )
 
-    @patch("sys.argv", ["rl.py", "train.learning_rate=0.5"])
-    def test_cli_override(self):
-        """Test that Hydra CLI overrides win over the config file values."""
-        args = load_config("opengigaflow")
-        self.assertEqual(args["train"]["learning_rate"], 0.5)
-
-    @patch("sys.argv", ["rl.py"])
     def test_training_performance_defaults(self):
-        args = load_config("opengigaflow")
+        args = load_config("opengigaflow", overrides=[])
         self.assertTrue(args["train"]["compile"])
         self.assertEqual(args["train"]["precision"], "bfloat16")
 

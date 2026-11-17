@@ -1,8 +1,4 @@
-"""Tensor-core peak of a GPU, measured instead of looked up.
-
-Every warp multiplies register-held fragments with mma.sync and nothing is loaded or stored inside the loop, so the
-rate is the card's ceiling for bf16 inputs with fp32 accumulation at the clock it runs, not what a real kernel reaches.
-"""
+"""Measured bf16 tensor-core peak of a GPU: mma.sync on register-held fragments, no memory traffic in the loop."""
 
 import time
 

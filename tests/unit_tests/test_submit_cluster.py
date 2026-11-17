@@ -36,42 +36,32 @@ def test_symlinks_top_level_and_hard_copies_opengigaflow(tmp_path):
     isolated = Path(submit_cluster.isolate_code(str(project), str(save_dir)))
 
     assert isolated == save_dir / "code"
-    # Top-level entries are symlinks into the real tree
     assert (isolated / "data").is_symlink()
     assert (isolated / "setup.py").is_symlink()
     assert (isolated / "data").resolve() == (project / "data").resolve()
-    # opengigaflow is a hard copy, not a link
     assert (isolated / "opengigaflow").is_dir()
     assert not (isolated / "opengigaflow").is_symlink()
     assert (isolated / "opengigaflow" / "__init__.py").is_file()
     assert not (isolated / "opengigaflow" / "__init__.py").is_symlink()
-    # ...except resources/, which is symlinked back to the shared data
     assert (isolated / "opengigaflow" / "resources").is_symlink()
     assert (isolated / "opengigaflow" / "resources" / "drive" / "map.bin").read_text() == "data"
 
 
 def test_save_dir_inside_project_creates_no_symlink_cycle(tmp_path):
-    """Regression test: --save_dir inside the repo used to link experiments/
-    into the snapshot, creating experiments/code/experiments -> experiments.
-    setuptools package discovery follows symlinks, so that cycle made every
-    later build walk an effectively infinite tree."""
+    """A --save_dir inside the repo must not link its ancestor into the snapshot: setuptools would walk the cycle."""
     project = make_project(tmp_path)
     save_dir = project / "experiments" / "run1"
     save_dir.mkdir(parents=True)
 
     isolated = Path(submit_cluster.isolate_code(str(project), str(save_dir)))
 
-    # The ancestor entry is skipped entirely
     assert not (isolated / "experiments").exists()
     assert not (isolated / "experiments").is_symlink()
-    # No symlink in the snapshot points at any ancestor of the snapshot
     isolated_real = isolated.resolve()
     for entry in isolated.iterdir():
         if entry.is_symlink():
             assert not isolated_real.is_relative_to(entry.resolve())
-    # Sibling entries are still linked
     assert (isolated / "data").is_symlink()
-    # A symlink-following walk over the snapshot terminates
     dir_count = 0
     for _root, _dirs, _files in os.walk(isolated, followlinks=True):
         dir_count += 1

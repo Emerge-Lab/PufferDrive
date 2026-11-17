@@ -1,11 +1,8 @@
-"""Commands for nuPlan's KinematicBicycleModel from the shadow Drive env's post-step ego targets.
-
-The devkit model low-passes acceleration and steering with gain dt/(dt+tau) before a forward Euler step and
-has neither a speed floor nor a stop snap: both are enforced here on the realised (low-passed) acceleration.
-"""
+"""Commands for nuPlan's KinematicBicycleModel (low-pass dt/(dt+tau), no speed floor, no stop snap) from Drive."""
 
 import math
 from dataclasses import dataclass
+
 
 DEVKIT_ACCEL_TIME_CONSTANT_S = 0.2
 DEVKIT_STEERING_TIME_CONSTANT_S = 0.05
@@ -75,10 +72,8 @@ def bicycle_commands(
     yaw_rate_radps: float = 0.0,
     stop_this_step: bool = False,
 ):
-    """-> (acceleration [m/s^2], steering rate [rad/s]) for a CaRL ActionTrajectory over the next dt.
-    stop_this_step: the shadow env snapped its speed to zero this step, so the realised acceleration brings
-    the model to exactly zero speed too. With center_accel_cap_mps2 the realised acceleration is reduced
-    while turning so the center acceleration nuPlan scores stays under the cap (CaRL clip_angular_adjustment)."""
+    """-> (acceleration [m/s^2], steering rate [rad/s]) for a CaRL ActionTrajectory over the next dt; stop_this_step
+    (the shadow env snapped to zero speed) lands the model on zero too, center_accel_cap_mps2 trims turning accel."""
     accel_gain = low_pass_gain(cfg.dt_s, cfg.accel_time_constant_s)
     steering_gain = low_pass_gain(cfg.dt_s, cfg.steering_time_constant_s)
     accel_cmd = target_accel_mps2

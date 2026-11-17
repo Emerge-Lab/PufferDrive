@@ -1,15 +1,14 @@
-"""Static nuPlan clutter (cones, poles, barriers) reaches the shadow env only when its box overlaps a lane
-or lane-connector polygon; intersection corners and crosswalks (drivable area) do not count."""
+"""Static nuPlan clutter reaches the shadow env only when its box overlaps a lane or lane-connector polygon."""
 
 from enum import Enum
 from types import SimpleNamespace
 
 import pytest
 
-nuplan = pytest.importorskip("nuplan")  # noqa: F841  (partner_tracked_objects imports nuPlan datatypes)
-from shapely.geometry import LineString, box  # noqa: E402
+pytest.importorskip("nuplan")  # partner_tracked_objects imports nuPlan datatypes
+from shapely.geometry import LineString, box
 
-from opengigaflow.ocean.cosim import nuplan_bridge as nb  # noqa: E402
+from opengigaflow.ocean.cosim import nuplan_bridge as nb
 
 
 class FakeType(Enum):
@@ -45,8 +44,7 @@ class ConnectorWithoutPolygon:
 
 
 class FakeMap:
-    """Devkit proximity semantics: the square query patch is matched against lane polygons but against lane
-    connector centerlines."""
+    """Devkit proximity semantics: the square query patch meets lane polygons but lane-connector centerlines."""
 
     def __init__(self, lane_polygons, connectors=()):
         self.lanes = [SimpleNamespace(polygon=p) for p in lane_polygons]

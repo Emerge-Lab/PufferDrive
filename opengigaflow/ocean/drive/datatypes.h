@@ -22,7 +22,6 @@ struct Agent {
     int id;
     int type;
 
-    // Log trajectory
     int trajectory_size;
     float *log_trajectory_x;
     float *log_trajectory_y;
@@ -35,7 +34,6 @@ struct Agent {
     float *log_height;
     int *log_valid;
 
-    // Simulation state
     float sim_x;       // Bounding box center x
     float sim_y;       // Bounding box center y
     float sim_z;       // Bounding box center z
@@ -44,7 +42,6 @@ struct Agent {
     float sin_heading;
     float sim_vx;           // Bounding box velocity x
     float sim_vy;           // Bounding box velocity y
-    float yaw_rate;         // Angular velocity used to convert between rear and center velocity
     float sim_speed;        // Bounding box center speed magnitude
     float sim_speed_signed; // Bounding box center signed longitudinal speed
     float sim_length;       // Bounding box length
@@ -57,20 +54,12 @@ struct Agent {
     float prev_sin_heading;
     int sim_valid;
 
-    // Route information
     int route_length;
     int *route;
-    int route_gt_len;      // Number of leading route lanes supported by GT before extension
     int current_route_idx; // Tracks progress through route array
 
-    // Metrics and status tracking (size must match NUM_METRICS in drive.h)
-    float metrics_array[NUM_METRICS]; // [collision, offroad, red_light, stop_sign, reached_goal, lane_dist, lane_angle,
-                                      // comfort_violation, velocity_progress, speed_limit, avg_displacement_error,
-                                      // unused, at_fault_collision, ttc, distance_to_collision, unused,
-                                      // multi_lane_time, multi_lane_score]
+    float metrics_array[NUM_METRICS];
     int current_lane_idx;
-    int previous_lane_idx;
-    int num_goals_reached;
     int active_agent;
     int mark_as_expert;
     int controller;
@@ -82,7 +71,6 @@ struct Agent {
     float lane_heading_error_rad; // agent heading minus lane heading, positive = agent points left of lane
     int comfort_violation_last_window_idx;
 
-    // Goal positions
     float list_goal_x[MAX_GOALS];
     float list_goal_y[MAX_GOALS];
     float list_goal_z[MAX_GOALS];
@@ -105,7 +93,6 @@ struct Agent {
     int stop_sign_standstill_idx;    // element whose trigger box the agent last stood still in, -1 if none
     int red_light_latched_idx;       // light whose line the footprint has sat on since the violation, -1 if none
 
-    // Jerk dynamics
     float accel_long;
     float accel_lat;
     float jerk_long;
@@ -113,7 +100,6 @@ struct Agent {
     float steering_angle;
     float wheelbase;
 
-    // Reward conditioning coefficients (per-agent, randomized at spawn)
     float reward_coefs[NUM_REWARD_COEFS];
 
     int phantom_braking_counter;     // >0 means currently phantom braking

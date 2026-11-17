@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
-# Regenerate the smoke goldens inside the pinned QEMU image so the values match CI.
-# Run from the repo root. Optionally pass specific test files; defaults to all.
-#
-#   tests/smoke_tests/update_goldens.sh
-#   tests/smoke_tests/update_goldens.sh tests/smoke_tests/test_drive_rollout.py
-#
-# Review `git diff` afterwards, then commit (rollout golden needs -f, it's under
-# the gitignored data/):
-#   git add tests/smoke_tests/data/drive_smoke_golden.json
-#   git add -f tests/smoke_tests/data/drive_rollout_golden.json
+# Regenerate the smoke goldens inside the pinned QEMU image, the only place they are bit-reproducible:
+#   tests/smoke_tests/update_goldens.sh [test file ...]   (default: both smoke tests)
+# then review `git diff tests/smoke_tests/data` and commit the goldens.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"

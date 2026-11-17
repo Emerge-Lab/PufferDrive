@@ -18,8 +18,8 @@ integration is therefore a client/server pair around the shared core:
 - `../shadow_ego.py` — `ShadowEgo`, the carla-free core used by both leaderboards: loads the checkpoint
   and its `config.yaml`, builds the shadow `Drive` env (clean-eval profile, `cosim/arch.py`), calibrates
   the bin frame against CARLA's driving waypoints, maps CARLA lights/stop signs onto the bin, turns the
-  leaderboard's target points into route goals, and per tick overwrites ALL shadow agents from the
-  snapshot, runs the policy and integrates one dt. All inputs/outputs are CARLA-frame plain data.
+  leaderboard's target points into route goals, and per tick overwrites the partners (and, in `carla_pedals`
+  mode, the ego) from the snapshot, runs the policy and integrates one dt. All inputs/outputs are CARLA-frame plain data.
 - `leaderboard_agent.py` (this directory) — the `AutonomousAgent` for the garage evaluator (entry point
   `OpenGigaFlowAgentLB1`), Python 3.7, imports nothing from `opengigaflow`. On the first tick it reads the town, the
   ego's box, the route (`set_global_plan` sparse target points + the dense 1 m route), the driving

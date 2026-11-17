@@ -1,8 +1,4 @@
-"""CUDA (NVRTC) kernels of the fused slot encoder: the Linear -> LayerNorm -> ReLU -> Linear -> masked max-pool
-forward and its backward behind the custom ops in fused_slot_encoder.py, written with mma.sync tensor-core
-instructions, smem-staged LayerNorm and cp.async weight streaming. The second layer's weight gradient has its own
-kernel that visits only the arg-max slot of every pooled feature.
-"""
+"""NVRTC tensor-core kernels behind the fused slot encoder custom ops: forward, backward and arg-max W2 gradient."""
 
 import functools
 
@@ -20,19 +16,14 @@ except ImportError:  # cuda-python < 12.6 kept the modules at the package root
             "install it or set policy.fused_slot_encoder=false"
         ) from import_error
 
-CUDA_SRC_FWD = r"""
+CUDA_TYPEDEFS = r"""
 typedef unsigned char uint8_t;
 typedef unsigned short uint16_t;
 typedef unsigned int uint32_t;
 typedef long long int64_t;
-#define NEG_INF __int_as_float(0xff800000)
-#define BLOCK_B 64
-#define WARP_M 16
-#define WARP_N 64
-#define NWARPS_M 4
-#define MT (WARP_M / 16)
+"""
 
-__device__ __forceinline__ uint32_t smem_u32(const void *p) { return (uint32_t) __cvta_generic_to_shared(p); }
+CUDA_MMA_HELPERS = r"""__device__ __forceinline__ uint32_t smem_u32(const void *p) { return (uint32_t) __cvta_generic_to_shared(p); }
 __device__ __forceinline__ uint32_t f32_to_bf16_bits(float f) { uint16_t r; asm("cvt.rn.bf16.f32 %0, %1;" : "=h"(r) : "f"(f)); return r; }
 __device__ __forceinline__ float bf16_bits_to_f32(uint32_t b) { return __uint_as_float(b << 16); }
 __device__ __forceinline__ float bf16_round(float f) { return bf16_bits_to_f32(f32_to_bf16_bits(f)); }
@@ -44,12 +35,28 @@ __device__ __forceinline__ void mma_16816(float c[4], const uint32_t a[4], uint3
 __device__ __forceinline__ void ldmatrix_x4(uint32_t r[4], uint32_t addr) {
     asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];" : "=r"(r[0]), "=r"(r[1]), "=r"(r[2]), "=r"(r[3]) : "r"(addr));
 }
-__device__ __forceinline__ void cp_async16(uint32_t smem_addr, const void *gptr) {
+"""
+
+CUDA_CP_ASYNC_HELPERS = r"""__device__ __forceinline__ void cp_async16(uint32_t smem_addr, const void *gptr) {
     asm volatile("cp.async.ca.shared.global [%0], [%1], 16;" :: "r"(smem_addr), "l"(gptr));
 }
 __device__ __forceinline__ void cp_async_commit() { asm volatile("cp.async.commit_group;"); }
 template <int N> __device__ __forceinline__ void cp_async_wait() { asm volatile("cp.async.wait_group %0;" :: "n"(N)); }
+"""
 
+CUDA_SRC_FWD = (
+    CUDA_TYPEDEFS
+    + r"""#define NEG_INF __int_as_float(0xff800000)
+#define BLOCK_B 64
+#define WARP_M 16
+#define WARP_N 64
+#define NWARPS_M 4
+#define MT (WARP_M / 16)
+
+"""
+    + CUDA_MMA_HELPERS
+    + CUDA_CP_ASYNC_HELPERS
+    + r"""
 // D: encoder width (64/128/256), F_PAD: padded input features (16/32), STORE: write per-slot activations
 template <int D, int F_PAD, bool STORE>
 __global__ void __launch_bounds__(32 * NWARPS_M * (D / WARP_N), 1)
@@ -355,6 +362,7 @@ fused_slot_encoder_fwd_cuda(
         }
 }
 """
+)
 
 
 def _check(res):
@@ -376,10 +384,9 @@ def _build_kernel(source, kernel_name, device_index):
         b"--extra-device-vectorization",
     ]
     (err,) = nvrtc.nvrtcCompileProgram(prog, len(opts), opts)
-    log_size = _check(nvrtc.nvrtcGetProgramLogSize(prog))
-    log = b" " * log_size
-    nvrtc.nvrtcGetProgramLog(prog, log)
     if int(err) != 0:
+        log = b" " * _check(nvrtc.nvrtcGetProgramLogSize(prog))
+        nvrtc.nvrtcGetProgramLog(prog, log)
         raise RuntimeError("NVRTC failed:\n" + log.decode())
     lowered = _check(nvrtc.nvrtcGetLoweredName(prog, kernel_name.encode()))
     cubin_size = _check(nvrtc.nvrtcGetCUBINSize(prog))
@@ -388,14 +395,23 @@ def _build_kernel(source, kernel_name, device_index):
     torch.cuda.init()
     torch.zeros(1, device=f"cuda:{device_index}")
     module = _check(cu.cuModuleLoadData(cubin))
-    func = _check(cu.cuModuleGetFunction(module, lowered))
-    regs = _check(cu.cuFuncGetAttribute(cu.CUfunction_attribute.CU_FUNC_ATTRIBUTE_NUM_REGS, func))
-    local = _check(cu.cuFuncGetAttribute(cu.CUfunction_attribute.CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, func))
-    return func, regs, local, log.decode()
+    return _check(cu.cuModuleGetFunction(module, lowered))
 
 
-def _instantiate_name(D, F_PAD, store):
-    return f"fused_slot_encoder_fwd_cuda<{D},{F_PAD},{'true' if store else 'false'}>"
+def _int32(*values):
+    return [np.array([value], dtype=np.int32) for value in values]
+
+
+def _int64(*values):
+    return [np.array([value], dtype=np.int64) for value in values]
+
+
+def _launch(func, grid, threads, smem, device, tensors, scalars):
+    """Launch on the device's current stream; kernel arguments are the tensors' data pointers, then the scalars."""
+    args = [np.array([tensor.data_ptr()], dtype=np.uint64) for tensor in tensors] + scalars
+    arg_ptrs = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
+    stream = torch.cuda.current_stream(device).cuda_stream
+    _check(cu.cuLaunchKernel(func, grid, 1, 1, threads, 1, 1, smem, stream, arg_ptrs.ctypes.data, 0))
 
 
 FWD_BLOCK_ROWS = 64
@@ -405,20 +421,17 @@ W2_CHUNK_COLUMNS = 32
 
 @functools.lru_cache(maxsize=None)
 def _compile(D, F_PAD, store, device_index):
-    func, regs, local, log = _build_kernel(CUDA_SRC_FWD, _instantiate_name(D, F_PAD, store), device_index)
+    kernel_name = f"fused_slot_encoder_fwd_cuda<{D},{F_PAD},{'true' if store else 'false'}>"
+    func = _build_kernel(CUDA_SRC_FWD, kernel_name, device_index)
     threads = 32 * (FWD_BLOCK_ROWS // FWD_WARP_ROWS) * (D // 64)
     w2_stage_elements = D * (W2_CHUNK_COLUMNS + 8)
     smem = (FWD_BLOCK_ROWS * (F_PAD + 8) + D * (F_PAD + 8) + 2 * w2_stage_elements + FWD_BLOCK_ROWS * (D + 8)) * 2
     smem += 4 * D * 4
     _check(cu.cuFuncSetAttribute(func, cu.CUfunction_attribute.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, smem))
-    return func, threads, smem, regs, local, log
+    return func, threads, smem
 
 
 MAX_SLOTS = 255
-
-
-def feature_pad(F):
-    return 16 if F <= 16 else 32
 
 
 def cuda_slot_encoder_fwd(x, counts, w1_padded, b1, gamma, beta, w2, b2, store_acts):
@@ -427,7 +440,7 @@ def cuda_slot_encoder_fwd(x, counts, w1_padded, b1, gamma, beta, w2, b2, store_a
     D, F_PAD = w1_padded.shape
     assert x.dtype == torch.float32 and w1_padded.dtype == torch.bfloat16 and w2.dtype == torch.bfloat16
     assert w1_padded.is_contiguous() and w2.is_contiguous() and x.stride(2) == 1
-    func, threads, smem, _, _, _ = _compile(D, F_PAD, bool(store_acts), x.device.index or 0)
+    func, threads, smem = _compile(D, F_PAD, bool(store_acts), x.device.index or 0)
     if S > MAX_SLOTS:
         raise ValueError(f"fused slot encoder stores the arg-max slot as uint8: {S} slots > {MAX_SLOTS}")
     rows = B * S if store_acts else 0
@@ -437,29 +450,9 @@ def cuda_slot_encoder_fwd(x, counts, w1_padded, b1, gamma, beta, w2, b2, store_a
     counts = counts.contiguous()
     assert counts.dtype == torch.int64
     w2 = w2.view(D, D // W2_CHUNK_COLUMNS, W2_CHUNK_COLUMNS).permute(1, 0, 2).contiguous()
-    args = [
-        np.array([x.data_ptr()], dtype=np.uint64),
-        np.array([counts.data_ptr()], dtype=np.uint64),
-        np.array([w1_padded.data_ptr()], dtype=np.uint64),
-        np.array([b1.data_ptr()], dtype=np.uint64),
-        np.array([gamma.data_ptr()], dtype=np.uint64),
-        np.array([beta.data_ptr()], dtype=np.uint64),
-        np.array([w2.data_ptr()], dtype=np.uint64),
-        np.array([b2.data_ptr()], dtype=np.uint64),
-        np.array([normed.data_ptr()], dtype=np.uint64),
-        np.array([pooled.data_ptr()], dtype=np.uint64),
-        np.array([argmax.data_ptr()], dtype=np.uint64),
-        np.array([B], dtype=np.int32),
-        np.array([S], dtype=np.int32),
-        np.array([F], dtype=np.int32),
-        np.array([x.stride(0)], dtype=np.int64),
-        np.array([x.stride(1)], dtype=np.int64),
-        np.array([x.stride(2)], dtype=np.int64),
-    ]
-    arg_ptrs = np.array([a.ctypes.data for a in args], dtype=np.uint64)
     grid = (B + FWD_BLOCK_ROWS - 1) // FWD_BLOCK_ROWS
-    stream = torch.cuda.current_stream(x.device).cuda_stream
-    _check(cu.cuLaunchKernel(func, grid, 1, 1, threads, 1, 1, smem, stream, arg_ptrs.ctypes.data, 0))
+    tensors = [x, counts, w1_padded, b1, gamma, beta, w2, b2, normed, pooled, argmax]
+    _launch(func, grid, threads, smem, x.device, tensors, _int32(B, S, F) + _int64(*x.stride()))
     return pooled, argmax, normed
 
 
@@ -467,37 +460,21 @@ TILE_ROWS = 64
 MAX_ROWS_PER_BLOCK = 1024
 BLOCKS_PER_SM_TARGET = 4
 
-CUDA_SRC_BWD = r"""
-typedef unsigned char uint8_t;
-typedef unsigned short uint16_t;
-typedef unsigned int uint32_t;
-typedef long long int64_t;
-#define TILE_ROWS 64
+CUDA_SRC_BWD = (
+    CUDA_TYPEDEFS
+    + r"""#define TILE_ROWS 64
 #define WARP_M 32
 #define WARP_N 64
 #define NWARPS_M 2
 
-__device__ __forceinline__ uint32_t smem_u32(const void *p) { return (uint32_t) __cvta_generic_to_shared(p); }
-__device__ __forceinline__ uint32_t f32_to_bf16_bits(float f) { uint16_t r; asm("cvt.rn.bf16.f32 %0, %1;" : "=h"(r) : "f"(f)); return r; }
-__device__ __forceinline__ float bf16_bits_to_f32(uint32_t b) { return __uint_as_float(b << 16); }
-__device__ __forceinline__ float bf16_round(float f) { return bf16_bits_to_f32(f32_to_bf16_bits(f)); }
-__device__ __forceinline__ uint32_t pack_bf16x2(float lo, float hi) { uint32_t r; asm("cvt.rn.bf16x2.f32 %0, %1, %2;" : "=r"(r) : "f"(hi), "f"(lo)); return r; }
-__device__ __forceinline__ void mma_16816(float c[4], const uint32_t a[4], uint32_t b0, uint32_t b1) {
-    asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};"
-        : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3]) : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1));
-}
-__device__ __forceinline__ void ldmatrix_x4(uint32_t r[4], uint32_t addr) {
-    asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];" : "=r"(r[0]), "=r"(r[1]), "=r"(r[2]), "=r"(r[3]) : "r"(addr));
-}
-__device__ __forceinline__ void ldmatrix_x4_trans(uint32_t r[4], uint32_t addr) {
+"""
+    + CUDA_MMA_HELPERS
+    + r"""__device__ __forceinline__ void ldmatrix_x4_trans(uint32_t r[4], uint32_t addr) {
     asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];" : "=r"(r[0]), "=r"(r[1]), "=r"(r[2]), "=r"(r[3]) : "r"(addr));
 }
-__device__ __forceinline__ void cp_async16(uint32_t smem_addr, const void *gptr) {
-    asm volatile("cp.async.ca.shared.global [%0], [%1], 16;" :: "r"(smem_addr), "l"(gptr));
-}
-__device__ __forceinline__ void cp_async_commit() { asm volatile("cp.async.commit_group;"); }
-template <int N> __device__ __forceinline__ void cp_async_wait() { asm volatile("cp.async.wait_group %0;" :: "n"(N)); }
-
+"""
+    + CUDA_CP_ASYNC_HELPERS
+    + r"""
 // Row-wise sum over the mma C layout: lane partial over its 16 columns -> 4-lane shuffle -> cross-warp smem.
 // vals[i][j][e]; result per (i, h) row in row_sum[i][h]. sRed: [NWARPS_N][TILE_ROWS] floats.
 template <int NWARPS_N>
@@ -925,13 +902,11 @@ fused_slot_encoder_bwd_cuda(
     }
 }
 """
+)
 
-CUDA_SRC_W2 = r"""
-typedef unsigned char uint8_t;
-typedef unsigned short uint16_t;
-typedef unsigned int uint32_t;
-typedef long long int64_t;
-#define FEATURES_PER_BLOCK 64
+CUDA_SRC_W2 = (
+    CUDA_TYPEDEFS
+    + r"""#define FEATURES_PER_BLOCK 64
 #define FEATURES_PER_THREAD 8
 #define INPUTS_PER_THREAD 8
 
@@ -999,11 +974,12 @@ fused_slot_encoder_w2_cuda(
     }
 }
 """
+)
 
 
 @functools.lru_cache(maxsize=None)
 def _compile_bwd(D, F_PAD, device_index):
-    func, regs, local, _ = _build_kernel(CUDA_SRC_BWD, f"fused_slot_encoder_bwd_cuda<{D},{F_PAD}>", device_index)
+    func = _build_kernel(CUDA_SRC_BWD, f"fused_slot_encoder_bwd_cuda<{D},{F_PAD}>", device_index)
     nwarps_n = D // 64
     threads = 32 * 2 * nwarps_n
     rows_per_pass = threads // (D // 8)
@@ -1011,7 +987,7 @@ def _compile_bwd(D, F_PAD, device_index):
         nwarps_n * 64 + max(4, rows_per_pass, F_PAD) * D + 3 * D
     ) * 4
     _check(cu.cuFuncSetAttribute(func, cu.CUfunction_attribute.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, smem))
-    return func, threads, smem, regs, local
+    return func, threads, smem
 
 
 @functools.lru_cache(maxsize=None)
@@ -1034,26 +1010,14 @@ def cuda_slot_encoder_w2_grad(normed_relu, counts, argmax, grad_pooled, slot_cou
     """Second-layer weight gradient from the arg-max slots only; returns grad_w2 [D][D] (bf16-rounded values)."""
     B, D = argmax.shape
     device_index = argmax.device.index or 0
-    func, _, _, _ = _build_kernel(CUDA_SRC_W2, f"fused_slot_encoder_w2_cuda<{D}>", device_index)
+    func = _build_kernel(CUDA_SRC_W2, f"fused_slot_encoder_w2_cuda<{D}>", device_index)
     target_blocks = W2_ROW_BLOCKS_PER_SM * _sm_count(device_index)
     rows_per_block = max(W2_MIN_ROWS_PER_BLOCK, (B + target_blocks - 1) // target_blocks)
     row_blocks = (B + rows_per_block - 1) // rows_per_block
     partial = torch.empty(row_blocks, D, D, dtype=torch.float32, device=argmax.device)
-    args = [
-        np.array([normed_relu.data_ptr()], dtype=np.uint64),
-        np.array([counts.data_ptr()], dtype=np.uint64),
-        np.array([argmax.data_ptr()], dtype=np.uint64),
-        np.array([grad_pooled.data_ptr()], dtype=np.uint64),
-        np.array([partial.data_ptr()], dtype=np.uint64),
-        np.array([B], dtype=np.int32),
-        np.array([slot_count], dtype=np.int32),
-        np.array([grad_pooled.stride(0)], dtype=np.int64),
-        np.array([rows_per_block], dtype=np.int32),
-    ]
-    arg_ptrs = np.array([a.ctypes.data for a in args], dtype=np.uint64)
-    stream = torch.cuda.current_stream(argmax.device).cuda_stream
     grid = row_blocks * (D // W2_FEATURES_PER_BLOCK)
-    _check(cu.cuLaunchKernel(func, grid, 1, 1, D, 1, 1, 0, stream, arg_ptrs.ctypes.data, 0))
+    scalars = _int32(B, slot_count) + _int64(grad_pooled.stride(0)) + _int32(rows_per_block)
+    _launch(func, grid, D, 0, argmax.device, [normed_relu, counts, argmax, grad_pooled, partial], scalars)
     return partial.sum(0).to(torch.bfloat16).float()
 
 
@@ -1061,7 +1025,7 @@ def cuda_slot_encoder_bwd(x, counts, w1_padded, b1, gamma, beta, w2, normed_relu
     """Fused backward: returns grad_w1, grad_b1, grad_gamma, grad_beta, grad_w2, grad_b2."""
     B, S, F = x.shape
     D, F_PAD = w1_padded.shape
-    func, threads, smem, _, _ = _compile_bwd(D, F_PAD, x.device.index or 0)
+    func, threads, smem = _compile_bwd(D, F_PAD, x.device.index or 0)
     rows = B * S
     if grad_pooled.stride(1) != 1:
         grad_pooled = grad_pooled.contiguous()
@@ -1070,34 +1034,9 @@ def cuda_slot_encoder_bwd(x, counts, w1_padded, b1, gamma, beta, w2, normed_relu
     blocks = (rows + rows_per_block - 1) // rows_per_block
     grad_w1_partial = torch.empty(blocks, D, F_PAD, dtype=torch.float32, device=x.device)
     partials = torch.empty(4, blocks, D, dtype=torch.float32, device=x.device)
-    p = lambda t: np.array([t.data_ptr()], dtype=np.uint64)
-    args = [
-        p(x),
-        p(counts),
-        p(w1_padded),
-        p(b1),
-        p(gamma),
-        p(beta),
-        p(w2),
-        p(argmax),
-        p(grad_pooled),
-        p(grad_w1_partial),
-        p(partials[0]),
-        p(partials[1]),
-        p(partials[2]),
-        p(partials[3]),
-        np.array([B], dtype=np.int32),
-        np.array([S], dtype=np.int32),
-        np.array([F], dtype=np.int32),
-        np.array([x.stride(0)], dtype=np.int64),
-        np.array([x.stride(1)], dtype=np.int64),
-        np.array([x.stride(2)], dtype=np.int64),
-        np.array([grad_pooled.stride(0)], dtype=np.int64),
-        np.array([rows_per_block], dtype=np.int32),
-    ]
-    arg_ptrs = np.array([a.ctypes.data for a in args], dtype=np.uint64)
-    stream = torch.cuda.current_stream(x.device).cuda_stream
-    _check(cu.cuLaunchKernel(func, blocks, 1, 1, threads, 1, 1, smem, stream, arg_ptrs.ctypes.data, 0))
+    tensors = [x, counts, w1_padded, b1, gamma, beta, w2, argmax, grad_pooled, grad_w1_partial, *partials]
+    scalars = _int32(B, S, F) + _int64(*x.stride(), grad_pooled.stride(0)) + _int32(rows_per_block)
+    _launch(func, blocks, threads, smem, x.device, tensors, scalars)
     grad_w2 = cuda_slot_encoder_w2_grad(normed_relu, counts, argmax, grad_pooled, S)
     grad_w1 = grad_w1_partial[:, :, :F].sum(0).to(torch.bfloat16).float()
     grad_b2 = partials[0].sum(0).to(torch.bfloat16).float()

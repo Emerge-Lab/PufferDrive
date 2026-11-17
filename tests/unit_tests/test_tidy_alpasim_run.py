@@ -1,24 +1,16 @@
-"""tidy_alpasim_run.py flattens an AlpaSim run to results.txt, run_info.txt, obs_html/ and details/, migrates the
-2026-10-12 layout and leaves an unaggregated run's wizard tree; render_alpasim_obs_html.py pages the imperfect
-scenes by default and re-renders a pruned run from its pages."""
+"""tidy_alpasim_run.py flattens an AlpaSim run; render_alpasim_obs_html.py pages its imperfect scenes, pruned or not."""
 
 import json
-import os
 import sys
 
 import numpy as np
 import pandas as pd
-import yaml
-
-from opengigaflow import viz
-
-
-sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "eval")
-)
-
 import render_alpasim_obs_html as render
 import tidy_alpasim_run as tidy
+import yaml
+from replay_fixtures import blank_replay, relative_tree
+
+from opengigaflow import viz
 
 
 FRAMES, AGENT_CAP = 20, 2
@@ -36,26 +28,7 @@ HOST_LINE = b"[2026-11-08 08:29:11][alpasim_wizard][WARNING] - host line\n"
 
 
 def _replay():
-    replay = {
-        "env": {
-            "num_goals": 2,
-            "goal_radius": 2.0,
-            "reward_conditioning": False,
-            "obs_slots_partners_n": 4,
-            "obs_slots_lane_n": 4,
-            "obs_slots_boundary_n": 4,
-            "obs_slots_traffic_controls_n": 1,
-        },
-        "agent_f32": np.zeros((FRAMES, AGENT_CAP, 13), np.float32),
-        "agent_i32": np.zeros((FRAMES, AGENT_CAP, 10), np.int32),
-        "metrics_f32": np.zeros((FRAMES, AGENT_CAP, len(viz.METRIC_LABELS)), np.float32),
-        "traffic_i16": np.zeros((FRAMES, 1, 3), np.int16),
-        "raw_action": np.ones((FRAMES, 1, 2), np.float32),
-        "clipped_action": np.ones((FRAMES, 1, 2), np.float32),
-        "value": np.zeros((FRAMES, 1), np.float32),
-        "entropy": np.zeros((FRAMES, 1), np.float32),
-        "obs": None,
-    }
+    replay = blank_replay(FRAMES, AGENT_CAP)
     replay["agent_f32"][:, 0, 0] = np.arange(FRAMES)
     return replay
 
@@ -162,10 +135,6 @@ def _write_fresh_run(root, aggregated=True, source_exists=True):
     return run
 
 
-def _tree(root):
-    return sorted(str(path.relative_to(root)) for path in root.rglob("*"))
-
-
 def _tidy(run, *args, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["tidy_alpasim_run", str(run), *args])
     tidy.main()
@@ -198,9 +167,9 @@ def test_tidy_flattens_a_fresh_run(tmp_path, monkeypatch):
     assert sorted(path.name for path in (run / "obs_html").iterdir()) == sorted(
         [f"{c}.replay.zlib" for c in SCENES] + [f"{c}.html" for c in SCENES]
     )
-    before = _tree(run)
+    before = relative_tree(run)
     _tidy(run, monkeypatch=monkeypatch)
-    assert _tree(run) == before
+    assert relative_tree(run) == before
 
 
 def test_tidy_keeps_the_checkpoint_copy_when_its_source_is_gone(tmp_path, monkeypatch):
@@ -224,35 +193,6 @@ def test_tidy_keeps_the_wizard_tree_of_an_unaggregated_run(tmp_path, monkeypatch
     assert len(list(wizard.rglob("metrics.parquet"))) == 3 and (wizard / "eval-config.yaml").is_file()
     assert not (wizard / "controller").exists() and not (wizard / "txt-logs").exists()
     assert (run / "details" / "services.log").is_file() and not (run / "details" / "results-summary.json").exists()
-
-
-def test_tidy_migrates_the_2026_10_layout(tmp_path, monkeypatch):
-    run = tmp_path / "alpasim_gt_time5_r2_final_model_20261012_120000_1"
-    (run / "obs_replays").mkdir(parents=True)
-    (run / "obs_replays" / f"s0.00_COL_{FAIL}.html").write_text("page")
-    (run / "logs" / "txt-logs").mkdir(parents=True)
-    for name in ("evaluate.log", "config.json", "evaluation.yaml", "evaluation.log", "run_info.txt"):
-        (run / "logs" / name).write_text(name)
-    (run / "logs" / "txt-logs" / "runtime_worker_3.log").write_text("copy")
-    (run / "logs" / "txt-logs" / "out-1-attempt-0-renderer-0-log.txt").write_text("renderer line\n")
-    (run / "alpasim").mkdir()
-    for name in ("results-summary.json", "metrics_unprocessed.parquet", "eval-config.yaml", "wizard-config.yaml"):
-        (run / "alpasim" / name).write_text(name)
-    (run / "results.txt").write_text("official_score 0.7\n")
-    _tidy(run, monkeypatch=monkeypatch)
-    assert sorted(path.name for path in run.iterdir()) == ["details", "obs_html", "results.txt", "run_info.txt"]
-    assert sorted(path.name for path in (run / "details").iterdir()) == [
-        "config.json",
-        "eval-config.yaml",
-        "evaluate.log",
-        "evaluation.log",
-        "evaluation.yaml",
-        "metrics_unprocessed.parquet",
-        "results-summary.json",
-        "services.log",
-        "wizard-config.yaml",
-    ]
-    assert "renderer line" in (run / "details" / "services.log").read_text()
 
 
 def test_gallery_pages_the_imperfect_scenes_and_prunes_the_replays(tmp_path, monkeypatch):

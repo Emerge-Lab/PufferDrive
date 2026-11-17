@@ -236,7 +236,7 @@ static int test_stagger_first_episode(void) {
 }
 
 static int test_eval_spawn_keeps_edge_clearance(void) {
-    const char *town04_map = DRIVE_TEST_REPO_ROOT "/opengigaflow/resources/carla/opendrive__Town04.bin";
+    const char *town04_map = "./opengigaflow/resources/carla/opendrive__Town04.bin";
     const int reset_count = 8;
     const int agent_count = 50;
     Drive env = drive_test_env_config(town04_map, SIMULATION_MODE_GIGAFLOW, agent_count, 0);

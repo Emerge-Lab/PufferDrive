@@ -8,13 +8,12 @@ from opengigaflow.ocean.drive import binding
 
 MAP_SPREAD_STEP = 0.6180339887498949  # golden ratio: any run of maps in this order is spread over the sorted list
 LOG_MIN_AGENT_EPISODES = 1  # emit env logs as soon as any episode completed; the trainer weights them by n
+# binding.vec_get_obs_html_frame argument order
+REPLAY_FRAME_KEYS = ("agent_f32", "agent_i32", "metrics_f32", "traffic_i16", "goals_f32", "rewards_f32", "coefs_f32")
 
 
 def compute_effective_road_obs_count(max_count, dropout):
-    if max_count <= 0:
-        return 0
-    clipped_dropout = min(max(float(dropout), 0.0), 1.0)
-    return int(max_count * (1.0 - clipped_dropout))
+    return int(max_count * (1.0 - float(dropout)))
 
 
 def cache_domain_map_files(map_files, cache_domain_share):
@@ -28,7 +27,6 @@ def cache_domain_map_files(map_files, cache_domain_share):
 class Drive(opengigaflow.VecEnv):
     def __init__(
         self,
-        report_interval=1,
         reward_goal=1.0,
         reward_collision=3.0,
         reward_offroad=3.0,
@@ -183,10 +181,10 @@ class Drive(opengigaflow.VecEnv):
                 f"got {speed_limit_random_min_mps} / {speed_limit_random_max_mps}"
             )
         self.goal_speed = float(goal_speed)
-        # Eval-time C_acc conditioning coefficient (training samples it in REWARD_BOUNDS[REWARD_COEF_ACC]).
         self.conditioning_speed_scale = float(conditioning_speed_scale)
         if not np.isfinite(self.conditioning_speed_scale) or self.conditioning_speed_scale < 1.0:
             raise ValueError(f"conditioning_speed_scale must be finite and >= 1, got {conditioning_speed_scale}")
+        # Eval-time C_acc conditioning coefficient (training samples it in REWARD_BOUNDS[REWARD_COEF_ACC]).
         self.conditioning_accel_scale = float(conditioning_accel_scale)
         if not (binding.CONDITIONING_ACC_MIN <= self.conditioning_accel_scale <= binding.CONDITIONING_ACC_MAX):
             raise ValueError(
@@ -198,8 +196,6 @@ class Drive(opengigaflow.VecEnv):
         self.reward_randomization = reward_randomization
         self.compute_eval_metrics = compute_eval_metrics
         self.num_maps = num_maps
-        self.allow_map_subset = bool(allow_map_subset)
-        self.report_interval = report_interval
         self.reward_goal = reward_goal
         self.reward_collision = reward_collision
         self.reward_offroad = reward_offroad
@@ -257,7 +253,6 @@ class Drive(opengigaflow.VecEnv):
         self.preload_map_cache = bool(preload_map_cache)
         if self.preload_map_cache and not self.use_map_cache:
             raise ValueError("preload_map_cache requires use_map_cache to be true")
-        self._map_cache_preloaded = False
         self._preloaded_map_cache_kwargs = None
         self.capture_replay = bool(capture_replay)
         self.replay_worker_idx = replay_worker_idx
@@ -288,8 +283,7 @@ class Drive(opengigaflow.VecEnv):
             raise ValueError(f"cosim_partner_slots must be >= 0. Got: {cosim_partner_slots}")
         if self.cosim_partner_slots > 0 and simulation_mode != "gigaflow":
             raise ValueError("cosim_partner_slots is only supported in gigaflow simulation_mode")
-        # Co-sim envs stay out of eval_mode (its scenario batching needs a full agent pool) but still want the
-        # eval-only observation/action semantics: perceived-size margin and standstill jerk deadband.
+        # Co-sim stays out of eval_mode (its batching needs a full agent pool) but keeps eval's obs/action semantics.
         self.cosim_eval_semantics = int(bool(cosim_eval_semantics))
         # Scripted crossing walkers per env = ceil(ratio * agents in the env); static partners, never policy-controlled.
         self.scripted_pedestrian_ratio = float(scripted_pedestrian_ratio)
@@ -302,7 +296,6 @@ class Drive(opengigaflow.VecEnv):
 
         self.ego_features = binding.EGO_FEATURES
 
-        # Extract observation shapes from constants
         self.obs_slots_lane_n = obs_slots_lane_n
         self.obs_slots_boundary_n = obs_slots_boundary_n
         self.obs_lane_stride = obs_lane_stride
@@ -356,6 +349,10 @@ class Drive(opengigaflow.VecEnv):
         self.obs_range_road_side_m = float(obs_range_road_side_m)
         self.obs_dropout_lane = float(obs_dropout_lane)
         self.obs_dropout_boundary = float(obs_dropout_boundary)
+        if not (0.0 <= self.obs_dropout_lane <= 1.0 and 0.0 <= self.obs_dropout_boundary <= 1.0):
+            raise ValueError("obs_dropout_lane and obs_dropout_boundary must be within [0, 1]")
+        if self.obs_slots_lane_n < 0 or self.obs_slots_boundary_n < 0:
+            raise ValueError("obs_slots_lane_n and obs_slots_boundary_n must be >= 0")
         self.obs_slots_lane_kept = compute_effective_road_obs_count(
             self.obs_slots_lane_n,
             self.obs_dropout_lane,
@@ -384,7 +381,7 @@ class Drive(opengigaflow.VecEnv):
         self.goal_features = binding.GOAL_FEATURES
         self.goal_dim = self.num_goals * self.goal_features
 
-        # GPS goal-distance (abs + rel) columns are lane-only (LANE_FEATURES); zero-filled when flag off.
+        # GPS goal-distance (abs + rel) columns are lane-only (LANE_FEATURES).
         self.num_obs = (
             self.ego_features
             + self.num_reward_coefs
@@ -402,15 +399,7 @@ class Drive(opengigaflow.VecEnv):
         # shortest first episode when stagger_first_episode is on
         self.init_step_min_horizon = int(init_step_min_horizon)
         self.stagger_first_episode = int(bool(stagger_first_episode))
-        self.init_mode_str = init_mode
-        self.control_mode_str = control_mode
-        self.sdc_controller_str = sdc_controller
-        self.non_sdc_controller_str = non_sdc_controller
-        self.non_vehicle_controller_str = non_vehicle_controller
-        self.simulation_mode_str = simulation_mode
-        self.map_dir = map_dir
-        # map_dir may point either at a directory containing .bin files or at
-        # a single .bin file (to pin training/eval to one specific map).
+        # map_dir: a directory of .bin maps, or one .bin file to pin training / eval to that map
         if isinstance(map_dir, str) and os.path.isfile(map_dir) and map_dir.endswith(".bin"):
             self.map_files = [map_dir]
         else:
@@ -423,11 +412,11 @@ class Drive(opengigaflow.VecEnv):
         self.simulation_mode = {
             "gigaflow": binding.SIMULATION_MODE_GIGAFLOW,
             "replay": binding.SIMULATION_MODE_REPLAY,
-        }[self.simulation_mode_str]
+        }[simulation_mode]
         self.control_mode = {
             "control_vehicles": binding.CONTROL_MODE_VEHICLES,
             "control_sdc_only": binding.CONTROL_MODE_SDC_ONLY,
-        }[self.control_mode_str]
+        }[control_mode]
 
         controller_values = {
             "static": binding.CONTROLLER_STATIC,
@@ -435,19 +424,16 @@ class Drive(opengigaflow.VecEnv):
             "replay": binding.CONTROLLER_REPLAY,
             "idm": binding.CONTROLLER_IDM,
         }
-        if self.non_vehicle_controller_str == "auto":
-            if self.non_sdc_controller_str == "idm":
-                self.non_vehicle_controller_str = "replay"
-            else:
-                self.non_vehicle_controller_str = self.non_sdc_controller_str
-        self.sdc_controller = controller_values[self.sdc_controller_str]
-        self.non_sdc_controller = controller_values[self.non_sdc_controller_str]
-        self.non_vehicle_controller = controller_values[self.non_vehicle_controller_str]
+        if non_vehicle_controller == "auto":
+            non_vehicle_controller = "replay" if non_sdc_controller == "idm" else non_sdc_controller
+        self.sdc_controller = controller_values[sdc_controller]
+        self.non_sdc_controller = controller_values[non_sdc_controller]
+        self.non_vehicle_controller = controller_values[non_vehicle_controller]
 
         self.init_mode = {
             "create_all_valid": binding.INIT_MODE_CREATE_ALL_VALID,
             "create_controllable_types": binding.INIT_MODE_CREATE_CONTROLLABLE_TYPES,
-        }[self.init_mode_str]
+        }[init_mode]
 
         self.single_action_space = opengigaflow.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
         self.starting_map_counter = starting_map
@@ -460,60 +446,58 @@ class Drive(opengigaflow.VecEnv):
         if config_only:
             return
 
-        # Iterate through all maps to count total agents that can be initialized for each map
-        agent_offsets, map_ids, num_envs, maps_consumed = binding.shared(
+        # A worker that evaluated its whole map window stops stepping and emitting, so nothing is counted twice.
+        self._eval_exhausted = self.eval_mode and self.current_num_eval_scenarios == 0
+        super().__init__(buf=buf)
+        self._create_env_batch()
+
+    def _create_env_batch(self):
+        # Pairs this eval sweep already replayed: a deferred scene resumes where the previous batch stopped.
+        pair_start = self.starting_map_counter - self.starting_map_counter_init
+        agent_offsets, map_ids, self.num_envs, maps_consumed = binding.shared(
             map_files=self.map_files,
-            num_agents=num_agents,
-            num_maps=num_maps,
+            num_agents=self.num_agents,
+            num_maps=self.num_maps,
             starting_map_counter=self.starting_map_counter,
             eval_mode=self.eval_mode,
             eval_training_render=self.eval_training_render,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
-            sdc_controller=self.sdc_controller,
-            non_sdc_controller=self.non_sdc_controller,
-            non_vehicle_controller=self.non_vehicle_controller,
             replay_expert_agents=self.replay_expert_agents,
             simulation_mode=self.simulation_mode,
             init_step=self.init_step,
+            goal_source=self.goal_source,
+            goal_radius=self.goal_radius,
             seed=self.random_seed,
             min_agents_per_env=self.min_agents_per_env,
             max_agents_per_env=self.max_agents_per_env,
             num_eval_scenarios=self.current_num_eval_scenarios,
-            eval_map_indices=self.eval_map_indices,
-            goal_radius=self.goal_radius,
+            eval_map_indices=None if self.eval_map_indices is None else self.eval_map_indices[pair_start:],
         )
-        # In eval mode, don't wrap counter - allows termination condition to work correctly
-        self.starting_map_counter = self.starting_map_counter + maps_consumed
-        # Set once a worker has evaluated its whole map window; a frozen worker
-        # stops stepping and emitting so it can't re-process or double-count.
-        self._eval_exhausted = self.eval_mode and self.current_num_eval_scenarios == 0
-
         self.agent_offsets = agent_offsets
-        self.map_ids = map_ids
-        self.num_envs = num_envs
-        super().__init__(buf=buf)
+        self.starting_map_counter += maps_consumed
         env_ids = []
-        for i in range(num_envs):
-            cur = agent_offsets[i]
-            nxt = agent_offsets[i + 1]
-            env_seed = self.eval_scenario_seeds[i] if self.eval_scenario_seeds is not None else self.random_seed
+        for env_idx in range(self.num_envs):
+            agent_start, agent_end = agent_offsets[env_idx], agent_offsets[env_idx + 1]
+            if self.eval_scenario_seeds is None:
+                env_seed = self.random_seed
+            else:
+                env_seed = self.eval_scenario_seeds[pair_start + env_idx]
             env_id = binding.env_init(
-                self.observations[cur:nxt],
-                self.actions[cur:nxt],
-                self.rewards[cur:nxt],
-                self.terminals[cur:nxt],
-                self.truncations[cur:nxt],
-                self.masks[cur:nxt],
+                self.observations[agent_start:agent_end],
+                self.actions[agent_start:agent_end],
+                self.rewards[agent_start:agent_end],
+                self.terminals[agent_start:agent_end],
+                self.truncations[agent_start:agent_end],
+                self.masks[agent_start:agent_end],
                 env_seed,
-                **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
+                **self._env_init_kwargs(self.map_files[map_ids[env_idx]], agent_end - agent_start),
             )
             env_ids.append(env_id)
-
         self.c_envs = binding.vectorize(*env_ids)
 
     def preload_shared_resources(self):
-        if not self.preload_map_cache or self._map_cache_preloaded:
+        if not self.preload_map_cache or self._preloaded_map_cache_kwargs is not None:
             return 0
         preload_kwargs = {
             "map_files": self.map_files[: self.num_maps],
@@ -527,7 +511,6 @@ class Drive(opengigaflow.VecEnv):
         }
         cached = binding.map_cache_preload(**preload_kwargs)
         self._preloaded_map_cache_kwargs = preload_kwargs
-        self._map_cache_preloaded = True
         return cached
 
     def _env_init_kwargs(self, map_file, max_agents):
@@ -649,10 +632,7 @@ class Drive(opengigaflow.VecEnv):
         return int(math.ceil(round(self.scripted_pedestrian_ratio * agents_in_env, 6)))
 
     def _next_eval_batch_size(self):
-        """Scenarios the next eval batch instantiates: whatever is left of this
-        worker's map window, clamped by max_scenarios_per_batch. The clamp bounds
-        peak memory, since each scenario in a batch is a live C env owning its
-        map geometry (hundreds of MB on large maps)."""
+        """Rest of this worker's eval window, capped by max_scenarios_per_batch (each live scenario owns its map)."""
         if not self.eval_mode:
             return self.num_eval_scenarios
         consumed = self.starting_map_counter - self.starting_map_counter_init
@@ -692,117 +672,49 @@ class Drive(opengigaflow.VecEnv):
             binding.vec_step(self.c_envs)
             self.tick += 1
         info = []
-        # vec_log is the training aggregate; it resets env->log, which eval reads
-        # per episode, so it must not run in eval mode.
-        if not self.eval_mode and not self._resample_pending and self.tick % self.report_interval == 0:
+        # vec_log resets env->log, which eval reads per episode.
+        if not self.eval_mode and not self._resample_pending:
             log = binding.vec_log(self.c_envs, LOG_MIN_AGENT_EPISODES)
             if log:
                 info.append(log)
-        if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
-            if not self.eval_mode and not self._resample_pending:
-                # Training resample is a truncation: expose the pre-resample state for the value bootstrap first.
-                self._resample_pending = True
-                self.truncations[:] = 1
-                self.masks[:] = 0
-                return (self.observations, self.rewards, self.terminals, self.truncations, info)
-            self._resample_pending = False
-            self.tick = 0
-            will_resample = 1
-            if will_resample:
-                # Read this batch's finished episodes before the envs are resampled/closed.
-                if self.eval_mode:
-                    for summary in binding.vec_per_episode_log(self.c_envs):
-                        summary["summary_type"] = "evaluation_episode"
-                        if self.capture_replay:
-                            summary["replay_environment_bundle"] = self._build_replay_environment_bundle(summary)
-                        info.append(summary)
-                self.current_num_eval_scenarios = self._next_eval_batch_size()
-                if self.current_num_eval_scenarios == 0:
-                    self._eval_exhausted = True
-                    return (self.observations, self.rewards, self.terminals, self.truncations, info)
-                binding.vec_close(self.c_envs)
-                # Pairs already replayed this sweep; slice the rest so a deferred
-                # scene resumes exactly where the previous batch stopped.
-                pair_start = self.starting_map_counter - self.starting_map_counter_init
-                remaining_map_indices = (
-                    self.eval_map_indices[pair_start:] if self.eval_map_indices is not None else None
-                )
-                agent_offsets, map_ids, num_envs, maps_consumed = binding.shared(
-                    num_agents=self.num_agents,
-                    num_maps=self.num_maps,
-                    starting_map_counter=self.starting_map_counter,
-                    eval_mode=self.eval_mode,
-                    eval_training_render=self.eval_training_render,
-                    init_mode=self.init_mode,
-                    control_mode=self.control_mode,
-                    sdc_controller=self.sdc_controller,
-                    non_sdc_controller=self.non_sdc_controller,
-                    non_vehicle_controller=self.non_vehicle_controller,
-                    replay_expert_agents=self.replay_expert_agents,
-                    simulation_mode=self.simulation_mode,
-                    init_step=self.init_step,
-                    map_files=self.map_files,
-                    seed=self.random_seed,
-                    min_agents_per_env=self.min_agents_per_env,
-                    max_agents_per_env=self.max_agents_per_env,
-                    num_eval_scenarios=self.current_num_eval_scenarios,  # Use the dynamic size here
-                    eval_map_indices=remaining_map_indices,
-                    goal_radius=self.goal_radius,
-                )
-                self.agent_offsets = agent_offsets
-                self.map_ids = map_ids
-                self.num_envs = num_envs
-                # In eval mode, don't wrap counter - allows termination condition to work correctly
-                self.starting_map_counter = self.starting_map_counter + maps_consumed
-                env_ids = []
-                for i in range(num_envs):
-                    cur = agent_offsets[i]
-                    nxt = agent_offsets[i + 1]
-                    env_seed = (
-                        self.eval_scenario_seeds[pair_start + i]
-                        if self.eval_scenario_seeds is not None
-                        else self.random_seed
-                    )
-                    env_id = binding.env_init(
-                        self.observations[cur:nxt],
-                        self.actions[cur:nxt],
-                        self.rewards[cur:nxt],
-                        self.terminals[cur:nxt],
-                        self.truncations[cur:nxt],
-                        self.masks[cur:nxt],
-                        env_seed,
-                        **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
-                    )
-                    env_ids.append(env_id)
-                self.c_envs = binding.vectorize(*env_ids)
-
-                binding.vec_reset(self.c_envs)
-                if self.capture_replay:
-                    self._initialize_replay_captures()
-                # Eval reads the map switch as a truncation on the post-reset step; training already emitted it.
-                self.truncations[:] = self.eval_mode
-                if not self.eval_mode:
-                    self.rewards[:] = 0
-                    self.terminals[:] = 0
+        if self.tick <= 0 or self.resample_frequency <= 0 or self.tick % self.resample_frequency != 0:
+            return (self.observations, self.rewards, self.terminals, self.truncations, info)
+        if not self.eval_mode and not self._resample_pending:
+            # Training resample is a truncation: expose the pre-resample state for the value bootstrap first.
+            self._resample_pending = True
+            self.truncations[:] = 1
+            self.masks[:] = 0
+            return (self.observations, self.rewards, self.terminals, self.truncations, info)
+        self._resample_pending = False
+        self.tick = 0
+        # Read this batch's finished episodes before the envs are resampled/closed.
+        episode_summaries = binding.vec_per_episode_log(self.c_envs) if self.eval_mode else []
+        for summary in episode_summaries:
+            summary["summary_type"] = "evaluation_episode"
+            if self.capture_replay:
+                summary["replay_environment_bundle"] = self._build_replay_environment_bundle(summary)
+            info.append(summary)
+        self.current_num_eval_scenarios = self._next_eval_batch_size()
+        if self.current_num_eval_scenarios == 0:
+            self._eval_exhausted = True
+            return (self.observations, self.rewards, self.terminals, self.truncations, info)
+        binding.vec_close(self.c_envs)
+        self._create_env_batch()
+        binding.vec_reset(self.c_envs)
+        if self.capture_replay:
+            self._initialize_replay_captures()
+        # Eval reads the map switch as a truncation on the post-reset step; training already emitted it.
+        self.truncations[:] = self.eval_mode
+        if not self.eval_mode:
+            self.rewards[:] = 0
+            self.terminals[:] = 0
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self, include_static=False):
-        """Get current global state of all active agents.
-
-        include_static: also return the static slots (co-sim partners, scripted pedestrians) after the
-        active agents, in env order.
-
-        Returns:
-            dict with keys 'x', 'y', 'z', 'heading', 'id', 'length', 'width' containing numpy arrays
-            of shape (num_active_agents,)
-        """
-        static_slots = 0
+        """World-frame pose, id and size, env by env: its active agents, then (include_static) its static agents."""
+        num_agents = self.num_agents
         if include_static:
-            env_agent_counts = np.diff(np.asarray(self.agent_offsets))
-            static_slots = sum(
-                self.cosim_partner_slots + self._scripted_pedestrian_slots(int(count)) for count in env_agent_counts
-            )
-        num_agents = self.num_agents + static_slots
+            num_agents += binding.vec_get_static_agent_count(self.c_envs)
 
         states = {
             "x": np.zeros(num_agents, dtype=np.float32),
@@ -831,19 +743,8 @@ class Drive(opengigaflow.VecEnv):
     def set_agent_states(
         self, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long, seconds_stopped=None, steering=None
     ):
-        """Co-sim: overwrite the sim state of agents at global indices `idx`
-        (e.g. CARLA background) with world-frame pose/velocity. The C side
-        subtracts world_mean, recaches heading trig and recomputes speed.
-        `yaw_rate` (rad/s) and `accel_long` (m/s^2) must come from the external
-        sim's own physics (e.g. CARLA's get_angular_velocity()/get_acceleration(),
-        nuPlan's EgoState.dynamic_car_state) -- not finite-differenced here, since
-        this agent's previous state may already have been overwritten this tick by
-        env.step()'s own dynamics before this call runs.
-        `seconds_stopped` (seconds each agent's speed has been below
-        binding.AGENT_STOPPED_SPEED_THRESHOLD) is optional: pass it when the
-        external sim owns the agent's kinematics every tick, so stopped-time is
-        injected as state instead of derived from the dummy in-sim rollout;
-        leave it None to keep c_step's own per-tick accumulation."""
+        """Co-sim: agents idx take the external sim's world-frame state (yaw_rate rad/s and accel_long m/s^2 from its
+        physics, not finite differences); seconds_stopped / steering None keep the sim's own values."""
         binding.vec_set_agent_states(
             self.c_envs,
             np.ascontiguousarray(idx, dtype=np.int32),
@@ -859,11 +760,8 @@ class Drive(opengigaflow.VecEnv):
             None if steering is None else np.ascontiguousarray(steering, dtype=np.float32),
         )
 
-    # ── Co-simulation external-state setters ─────────────────────────────────────
     def set_agent_sizes(self, idx, length, width):
-        """overwrite the bounding-box length/width (meters) of agents at
-        global indices `idx`, so the ego observes/collides against a CARLA
-        actor's true size instead of the gigaflow-spawned default."""
+        """Co-sim: bounding-box length and width (m) of agents idx."""
         binding.vec_set_agent_sizes(
             self.c_envs,
             np.ascontiguousarray(idx, dtype=np.int32),
@@ -872,18 +770,12 @@ class Drive(opengigaflow.VecEnv):
         )
 
     def recompute_observations(self):
-        """recompute observations from current state without stepping
-        dynamics or advancing the timestep (call after set_agent_states)."""
+        """Observations of the current state, without stepping dynamics or time (after the co-sim setters)."""
         binding.vec_recompute_observations(self.c_envs)
         return self.observations
 
     def set_traffic_light_states(self, states, yellow_remaining_s=None):
-        """override each traffic-light element's state at the current
-        timestep (states length == num_traffic_elements). yellow_remaining_s
-        (same length, seconds each light stays yellow from now, 0 unless
-        yellow) feeds the obs_traffic_light_yellow_remaining column and is
-        required when that flag is set; the co-sim's value is clipped to the
-        training max traffic_light_yellow_max_s."""
+        """One state per traffic element; yellow_remaining_s (s, 0 unless yellow) is clipped to the training max."""
         states = np.ascontiguousarray(states, dtype=np.int32)
         if yellow_remaining_s is None:
             binding.vec_set_traffic_light_states(self.c_envs, states)
@@ -895,40 +787,23 @@ class Drive(opengigaflow.VecEnv):
         binding.vec_set_traffic_light_states(self.c_envs, states, np.ascontiguousarray(remaining))
 
     def set_stop_signs(self, lines, headings):
-        """replace every stop-sign element with the external sim's own (co-sim):
-        lines (K, 6) world-frame endpoints [x1, y1, z1, x2, y2, z2], headings (K,)
-        travel direction across each line. The map's stop signs are retired in
-        place, so light element indices stay valid; returns the new element
-        count (the length set_traffic_light_states expects from now on)."""
+        """Swap in world-frame stop lines (K, 6) crossed along headings (K,); returns the new traffic element count."""
         lines = np.ascontiguousarray(np.asarray(lines, dtype=np.float32).reshape(-1, 6))
         headings = np.ascontiguousarray(np.asarray(headings, dtype=np.float32).reshape(-1))
         return int(binding.vec_set_stop_signs(self.c_envs, lines, headings))
 
     def set_traffic_light_lines(self, indices, lines):
-        """move traffic-light elements' stop lines onto the external sim's own
-        (co-sim): indices (K,) element indices, lines (K, 6) world-frame
-        endpoints [x1, y1, z1, x2, y2, z2]."""
+        """Move the stop lines of traffic elements `indices` to world-frame lines (K, 6): x1, y1, z1, x2, y2, z2."""
         indices = np.ascontiguousarray(np.asarray(indices, dtype=np.int32).reshape(-1))
         lines = np.ascontiguousarray(np.asarray(lines, dtype=np.float32).reshape(-1, 6))
         binding.vec_set_traffic_light_lines(self.c_envs, indices, lines)
 
-    def set_agent_goals(self, agent_idx, gx, gy, gz, gdir_x=None, gdir_y=None):
-        """set an agent's goal waypoints (e.g. the ego's route) in world
-        coords (C subtracts world_mean). Each waypoint is snapped to its
-        nearest route-aligned drivable lane (find_goal_lane) so the GPS
-        lane-distance observation columns stay live when the map carries a
-        lane graph; waypoints off the drivable network keep lane -1
-        (columns zero-filled). gdir_x/gdir_y: per-waypoint local route travel
-        direction (need not be normalized) used to reject crossing-road lanes
-        at junctions; omit (or pass zeros) to snap by distance alone."""
-        gx = np.ascontiguousarray(gx, dtype=np.float32)
-        if gdir_x is None or gdir_y is None:
-            gdir_x = np.zeros_like(gx)
-            gdir_y = np.zeros_like(gx)
+    def set_agent_goals(self, agent_idx, gx, gy, gz, gdir_x, gdir_y):
+        """World-frame goals, snapped to the nearest lane along their travel direction gdir (zero: distance only)."""
         binding.vec_set_agent_goals(
             self.c_envs,
             int(agent_idx),
-            gx,
+            np.ascontiguousarray(gx, dtype=np.float32),
             np.ascontiguousarray(gy, dtype=np.float32),
             np.ascontiguousarray(gz, dtype=np.float32),
             np.ascontiguousarray(gdir_x, dtype=np.float32),
@@ -936,18 +811,10 @@ class Drive(opengigaflow.VecEnv):
         )
 
     def get_agent_goal_progress(self, agent_idx):
-        """Co-sim: (current_goal_idx, goal_count) of one agent. current_goal_idx == goal_count
-        means every goal of the current window has been consumed."""
+        """Co-sim: (current_goal_idx, goal_count) of one agent; equal values mean its goal window is consumed."""
         return binding.vec_get_agent_goal_progress(self.c_envs, int(agent_idx))
 
-    # ───────────────────────────────────────
-
     def get_ground_truth_trajectories(self):
-        """Get ground truth trajectories for all active agents.
-
-        Returns:
-            dict with keys 'x', 'y', 'z', 'heading', 'valid', 'id' containing numpy arrays.
-        """
         num_agents = self.num_agents
 
         trajectories = {
@@ -974,118 +841,45 @@ class Drive(opengigaflow.VecEnv):
 
         return trajectories
 
-    # ====== Replay capture (active when capture_replay=True) ======
-
-    def _normalize_scenarios(self, state):
-        if isinstance(state, list):
-            return state
-        if isinstance(state, dict):
-            return [state]
-        raise RuntimeError(f"Unexpected Drive state type for replay capture: {type(state).__name__}")
-
     def _create_replay_capture(self, scenario, active_agent_offset):
-        map_path = scenario.get("map_name")
-        if not isinstance(map_path, str) or not map_path:
-            raise RuntimeError("Replay capture requires a non-empty scenario map_name")
-        active_agent_count = int(scenario["active_agent_count"])
         return {
             "metadata": {
-                "map_name": os.path.basename(map_path).split(".")[0],
-                "map_path": map_path,
-                "scenario_id": scenario.get("scenario_id"),
-                "goal_source": self.goal_source,
-                "goal_regen_mode": self.goal_regen_mode,
-                "num_goals": self.num_goals,
                 "worker_idx": self.replay_worker_idx,
                 "active_agent_offset": active_agent_offset,
-                "active_agent_count": active_agent_count,
+                "active_agent_count": int(scenario["active_agent_count"]),
             },
             "scenario": scenario,
             "agent_capacity": len(scenario["agents"] or []),
-            "traffic_capacity": len(scenario["traffic_elements"] or []),
-            "frames": {
-                key: []
-                for key in (
-                    "agent_f32",
-                    "agent_i32",
-                    "metrics_f32",
-                    "traffic_i16",
-                    "goals_f32",
-                    "rewards_f32",
-                    "coefs_f32",
-                )
-            },
+            "traffic_capacity": max(len(scenario["traffic_elements"] or []), 1),
+            "frames": {key: [] for key in REPLAY_FRAME_KEYS},
         }
 
     def _initialize_replay_captures(self):
-        scenarios = self._normalize_scenarios(self.get_state())
         active_agent_offset = 0
         self._replay_captures = []
-        for scenario in scenarios:
+        for scenario in self.get_state():
             self._replay_captures.append(self._create_replay_capture(scenario, active_agent_offset))
             active_agent_offset += int(scenario["active_agent_count"])
         env_count = len(self._replay_captures)
         agent_capacity = max((capture["agent_capacity"] for capture in self._replay_captures), default=0)
-        traffic_capacity = max(
-            (max(capture["traffic_capacity"], 1) for capture in self._replay_captures),
-            default=1,
-        )
+        traffic_capacity = max((capture["traffic_capacity"] for capture in self._replay_captures), default=1)
+        goal_fields = self.num_goals * binding.GOAL_XY_FIELDS
         self._replay_frame_arrays = {
-            "agent_f32": np.empty(
-                (env_count, agent_capacity, binding.AGENT_F32_FIELDS),
-                dtype=np.float32,
-            ),
-            "agent_i32": np.empty(
-                (env_count, agent_capacity, binding.AGENT_I32_FIELDS),
-                dtype=np.int32,
-            ),
-            "metrics_f32": np.empty(
-                (env_count, agent_capacity, binding.METRICS_F32_FIELDS),
-                dtype=np.float32,
-            ),
-            "traffic_i16": np.empty(
-                (env_count, traffic_capacity, binding.TRAFFIC_I16_FIELDS),
-                dtype=np.int16,
-            ),
-            "goals_f32": np.empty(
-                (env_count, agent_capacity, self.num_goals * binding.GOAL_XY_FIELDS),
-                dtype=np.float32,
-            ),
-            "rewards_f32": np.empty(
-                (env_count, agent_capacity, binding.REWARD_F32_FIELDS),
-                dtype=np.float32,
-            ),
-            "coefs_f32": np.empty(
-                (env_count, agent_capacity, binding.NUM_REWARD_COEFS),
-                dtype=np.float32,
-            ),
+            "agent_f32": np.empty((env_count, agent_capacity, binding.AGENT_F32_FIELDS), dtype=np.float32),
+            "agent_i32": np.empty((env_count, agent_capacity, binding.AGENT_I32_FIELDS), dtype=np.int32),
+            "metrics_f32": np.empty((env_count, agent_capacity, binding.METRICS_F32_FIELDS), dtype=np.float32),
+            "traffic_i16": np.empty((env_count, traffic_capacity, binding.TRAFFIC_I16_FIELDS), dtype=np.int16),
+            "goals_f32": np.empty((env_count, agent_capacity, goal_fields), dtype=np.float32),
+            "rewards_f32": np.empty((env_count, agent_capacity, binding.REWARD_F32_FIELDS), dtype=np.float32),
+            "coefs_f32": np.empty((env_count, agent_capacity, binding.NUM_REWARD_COEFS), dtype=np.float32),
         }
 
     def _capture_replay_step(self):
-        self.get_obs_html_frame(
-            self._replay_frame_arrays["agent_f32"],
-            self._replay_frame_arrays["agent_i32"],
-            self._replay_frame_arrays["metrics_f32"],
-            self._replay_frame_arrays["traffic_i16"],
-            self._replay_frame_arrays["goals_f32"],
-            self._replay_frame_arrays["rewards_f32"],
-            self._replay_frame_arrays["coefs_f32"],
-        )
+        self.get_obs_html_frame(*(self._replay_frame_arrays[key] for key in REPLAY_FRAME_KEYS))
         for env_idx, capture in enumerate(self._replay_captures):
-            agent_capacity = capture["agent_capacity"]
-            traffic_capacity = max(capture["traffic_capacity"], 1)
-            for key in (
-                "agent_f32",
-                "agent_i32",
-                "metrics_f32",
-                "goals_f32",
-                "rewards_f32",
-                "coefs_f32",
-            ):
-                capture["frames"][key].append(self._replay_frame_arrays[key][env_idx, :agent_capacity].copy())
-            capture["frames"]["traffic_i16"].append(
-                self._replay_frame_arrays["traffic_i16"][env_idx, :traffic_capacity].copy()
-            )
+            for key in REPLAY_FRAME_KEYS:
+                row_count = capture["traffic_capacity"] if key == "traffic_i16" else capture["agent_capacity"]
+                capture["frames"][key].append(self._replay_frame_arrays[key][env_idx, :row_count].copy())
 
     def _build_replay_environment_bundle(self, summary):
         env_slot = int(summary["env_slot"])
@@ -1113,9 +907,8 @@ class Drive(opengigaflow.VecEnv):
         )
 
     def close(self):
-        if self._map_cache_preloaded:
+        if self._preloaded_map_cache_kwargs is not None:
             binding.map_cache_release(**self._preloaded_map_cache_kwargs)
-            self._map_cache_preloaded = False
             self._preloaded_map_cache_kwargs = None
         if self.c_envs is None:
             return
@@ -1123,28 +916,8 @@ class Drive(opengigaflow.VecEnv):
         self.c_envs = None
 
     def get_state(self):
-        try:
-            return binding.vec_get(self.c_envs)
-        except Exception:
-            return binding.env_get(self.c_envs)
+        return binding.vec_get(self.c_envs)
 
-    def get_obs_html_frame(
-        self,
-        agent_f32,
-        agent_i32,
-        metrics_f32,
-        traffic_i16,
-        goals_f32,
-        rewards_f32,
-        coefs_f32,
-    ):
-        binding.vec_get_obs_html_frame(
-            self.c_envs,
-            agent_f32,
-            agent_i32,
-            metrics_f32,
-            traffic_i16,
-            goals_f32,
-            rewards_f32,
-            coefs_f32,
-        )
+    def get_obs_html_frame(self, *frame_arrays):
+        """Fill one (env, row, field) array per REPLAY_FRAME_KEYS entry, in that order, with the current frame."""
+        binding.vec_get_obs_html_frame(self.c_envs, *frame_arrays)

@@ -1,8 +1,4 @@
-"""Driver-side behaviour of the Multiprocessing vecenv.
-
-The driver builds one env of its own purely to read spaces off, which must not
-stay resident for the run.
-"""
+"""Vector env backends: driver env release, worker resets and deaths, observation transport, CPU pinning, seeding."""
 
 import multiprocessing
 import os
@@ -13,6 +9,7 @@ import pytest
 
 import opengigaflow.vector
 from opengigaflow import VecEnv
+
 
 OBSERVATION_SIZE = 4
 ACTION_SIZE = 2
@@ -64,10 +61,6 @@ class PreloadEnv(MinimalEnv):
         return self.observations, []
 
 
-def _make_minimal_env(**kwargs):
-    return MinimalEnv(**kwargs)
-
-
 def _run_preload_from_forkserver(queue):
     vecenv = opengigaflow.vector.make(
         PreloadEnv,
@@ -83,24 +76,18 @@ def _run_preload_from_forkserver(queue):
         vecenv.close()
 
 
-def test_driver_env_is_released_but_stays_readable():
-    """The driver env exists only to report spaces and agent counts -- workers
-    build their own -- so keeping it would cost a whole extra worker's
-    environments for the run. It is closed once during construction, and stays
-    bound because callers read config attributes off vecenv.driver_env."""
-    worker_count = 2
-    vecenv = opengigaflow.vector.make(
-        [_make_minimal_env] * worker_count,
-        env_args=[[]] * worker_count,
-        env_kwargs=[{}] * worker_count,
-        backend="Multiprocessing",
-        num_envs=worker_count,
-        num_workers=worker_count,
-        batch_size=worker_count,
+def _make_multiprocessing(worker_count, batch_size):
+    return opengigaflow.vector.make(
+        MinimalEnv, backend="Multiprocessing", num_envs=worker_count, num_workers=worker_count, batch_size=batch_size
     )
+
+
+def test_driver_env_is_released_but_stays_readable():
+    """The driver env only reports spaces and agent counts: closed once while building, still readable after."""
+    worker_count = 2
+    vecenv = _make_multiprocessing(worker_count, worker_count)
     try:
         assert vecenv.driver_env.close_count == 1
-        # Spaces and counts were harvested before the release.
         assert vecenv.single_observation_space.shape == (OBSERVATION_SIZE,)
         assert vecenv.agents_per_batch == worker_count
         obs, _ = vecenv.reset()
@@ -123,21 +110,8 @@ def test_preloaded_resources_are_inherited_when_default_is_forkserver():
     assert queue.get() == ("forkserver", 1, True)
 
 
-def _make_multiprocessing(worker_count, batch_size):
-    return opengigaflow.vector.make(
-        [_make_minimal_env] * worker_count,
-        env_args=[[]] * worker_count,
-        env_kwargs=[{}] * worker_count,
-        backend="Multiprocessing",
-        num_envs=worker_count,
-        num_workers=worker_count,
-        batch_size=batch_size,
-    )
-
-
 def test_reset_drains_pending_workers_and_steps_again():
-    """A reset issued right after recv() finds half the workers idle and half
-    mid-step; both halves must be reset without hanging and step afterwards."""
+    """A reset right after recv() finds half the workers idle and half mid-step: both reset and step again."""
     worker_count = 4
     vecenv = _make_multiprocessing(worker_count, batch_size=2)
     try:
@@ -162,14 +136,10 @@ class SlowStepEnv(MinimalEnv):
         return super().step(actions)
 
 
-def _make_slow_step_env(**kwargs):
-    return SlowStepEnv(**kwargs)
-
-
 def test_dead_worker_raises_instead_of_hanging(monkeypatch):
     monkeypatch.setattr(opengigaflow.vector, "WORKER_POLL_TIMEOUT_SECONDS", 0.2)
     vecenv = opengigaflow.vector.make(
-        [_make_minimal_env, _make_slow_step_env],
+        [MinimalEnv, SlowStepEnv],
         env_args=[[]] * 2,
         env_kwargs=[{}] * 2,
         backend="Multiprocessing",
@@ -325,6 +295,13 @@ class SeedRecordingEnv(MinimalEnv):
     def __init__(self, buf=None, seed=0):
         self.constructor_seed = seed
         super().__init__(buf=buf, seed=seed)
+
+
+def test_make_rejects_a_worker_count_other_than_the_env_count_and_unknown_backends():
+    with pytest.raises(opengigaflow.APIUsageError, match="must equal num_envs"):
+        opengigaflow.vector.make(MinimalEnv, backend="Multiprocessing", num_envs=2, num_workers=1, batch_size=2)
+    with pytest.raises(opengigaflow.APIUsageError, match="Invalid backend"):
+        opengigaflow.vector.make(MinimalEnv, backend="VecEnv")
 
 
 def test_make_forwards_seed_to_backend():

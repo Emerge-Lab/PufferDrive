@@ -1,28 +1,13 @@
-"""OpenGigaFlow policy as a CARLA leaderboard agent (CaRL original_leaderboard, CARLA 0.9.15).
-
-Usage (CaRL env vars/paths as in CaRL/CARLA/README.md, plus OpenGigaFlow repo
-root on PYTHONPATH for `opengigaflow` and `data_utils`):
+"""OpenGigaFlow policy as a CaRL Leaderboard 2.0 agent (original_leaderboard, CARLA 0.9.15), the CARLA side.
 
   python ${CARL_WORK_DIR}/original_leaderboard/leaderboard/leaderboard/leaderboard_evaluator.py \
-      --routes ${CARL_WORK_DIR}/custom_leaderboard/leaderboard/data/longest6_split/longest6_00.xml \
-      --agent /path/to/opengigaflow/ocean/cosim/carla/leaderboard_agent.py \
-      --agent-config /path/to/experiments/opengigaflow_xxx/models/model_xxx.pt \
-      --checkpoint /path/to/results/result.json --track MAP
+      --routes <routes.xml> --agent opengigaflow/ocean/cosim/carla/leaderboard_agent.py \
+      --agent-config experiments/<run>/final_model.pt --checkpoint <result.json> --track MAP
 
-This file is the CARLA side only: it reads ground truth (ego, nearby actors, lights, stop signs, the
-route), hands it to shadow_ego.ShadowEgo (the shadow Drive env + policy, built from the checkpoint's
-config.yaml) and moves the ego the way the result says. The Leaderboard 1.0 integration (lb1/) runs
-the same core behind a socket.
-
-Environment variables (the shadow env's own, COSIM_DEVICE ... COSIM_WORLD_LOG, are listed in
-shadow_ego.py):
-  SCENARIO_RUNNER_ROOT         REQUIRED: path to the scenario_runner checkout
-                               (route scenarios silently fail to load without it)
-  CARL_WORK_DIR                REQUIRED if COSIM_TELEMETRY is set: path to the
-                               CaRL/CARLA checkout, to import its
-                               reward.criteria collision/offroad detectors
-  COSIM_DEBUG_CARLA_VIEW=/dir  write a CARLA chase-camera mp4 per route (native
-                               tick rate, streamed to disk frame-by-frame)
+Environment variables (the shadow env's COSIM_* are listed in shadow_ego.py):
+  SCENARIO_RUNNER_ROOT         required: the scenario_runner checkout (route scenarios silently fail without it)
+  CARL_WORK_DIR                required with COSIM_TELEMETRY: the CaRL/CARLA checkout, for its reward.criteria
+  COSIM_DEBUG_CARLA_VIEW=/dir  CARLA chase-camera mp4 per route
 """
 
 import math
@@ -39,20 +24,18 @@ from leaderboard.autoagents import autonomous_agent
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 
 from opengigaflow.ocean.cosim import carla_bridge as cb
-from opengigaflow.ocean.cosim.carla.controller import vehicle_geometry_from_wheels, wheel_rows
+from opengigaflow.ocean.cosim.carla.controller import wheel_rows, wheelbase_from_wheels
 from opengigaflow.ocean.cosim.carla.shadow_ego import PARTNER_MAX_ABS_DZ_M, ShadowEgo
 
 RED_LIGHT_CHECK_DISTANCE_M = 30.0  # matches CaRL RunRedLight's own distance_light default
 
-ROAD_RAY_HALF_SPAN_M = (
-    5.0  # vertical ray around the waypoint z; the ego roof and underpass roads are filtered by label/nearest
-)
+# vertical ray around the waypoint z; the ego roof and underpass roads are filtered by label/nearest
+ROAD_RAY_HALF_SPAN_M = 5.0
 ROAD_RAY_LABELS = (carla.CityObjectLabel.Roads, carla.CityObjectLabel.RoadLines, carla.CityObjectLabel.Bridge)
 
 CARLA_VIEW_SENSOR_ID = "opengigaflow_chase_cam"
 CARLA_VIEW_WIDTH, CARLA_VIEW_HEIGHT, CARLA_VIEW_FOV = 960, 540, 90
-# Behind + above the ego, looking forward and down: the leaderboard
-# enforces sqrt(x^2+y^2+z^2) <= agent_wrapper.MAX_ALLOWED_RADIUS_SENSOR (3.0 m)
+# behind and above the ego, within the leaderboard's 3 m MAX_ALLOWED_RADIUS_SENSOR
 CARLA_VIEW_TRANSFORM = dict(x=-2.0, y=0.0, z=2.1, roll=0.0, pitch=-15.0, yaw=0.0)
 
 
@@ -118,18 +101,16 @@ class OpenGigaFlowAgent(autonomous_agent.AutonomousAgent):
         if "SCENARIO_RUNNER_ROOT" not in os.environ:
             raise RuntimeError(
                 "SCENARIO_RUNNER_ROOT is not set. Export it to the scenario_runner checkout "
-                "(see README.md / run_leaderboard.sh); without it route scenarios silently fail to load."
+                "(see README.md); without it route scenarios silently fail to load."
             )
         self.track = autonomous_agent.Track.MAP
         self.route_index = re.sub(r"[^\w.-]", "_", str(route_index)) if route_index else "route"
-        # CaRL's `route_index` is route_date_string = Path(ROUTES).stem, fixed
-        # once per evaluator process unless --collect-dataset is passed.
+        # CaRL's route_index is the routes file's stem for the whole evaluator process
         self.video_tag = f"{self.route_index}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
         self.shadow = ShadowEgo(path_to_conf_file, self.video_tag)
 
         self.debug_carla_view_dir = os.environ.get("COSIM_DEBUG_CARLA_VIEW", None)
 
-        self.step = -1
         self.initialized = False
         self.carla_view_writer = None
         self._carla_collision = None  # set by _init_carla_infraction_detectors when needed
@@ -150,9 +131,7 @@ class OpenGigaFlowAgent(autonomous_agent.AutonomousAgent):
         ]
 
     def _init_on_first_step(self):
-        """Deferred init (the ego and world only exist once the route runs) —
-        same pattern as CaRL's eval_agent.agent_init. Everything here is
-        read-only with respect to CARLA."""
+        """Deferred init: the ego and world only exist once the route runs; read-only with respect to CARLA."""
         self.vehicle = CarlaDataProvider.get_hero_actor()
         self.world = self.vehicle.get_world()
         self.cmap = self.world.get_map()
@@ -163,7 +142,7 @@ class OpenGigaFlowAgent(autonomous_agent.AutonomousAgent):
         body = self.vehicle.bounding_box
         self.body_front_m = body.location.x + body.extent.x
         self.body_rear_m = body.location.x - body.extent.x
-        self.wheelbase_m, _ = vehicle_geometry_from_wheels(wheel_rows(self.vehicle))
+        self.wheelbase_m = wheelbase_from_wheels(wheel_rows(self.vehicle))
         self.shadow.init_route(
             {
                 "town": town,
@@ -192,8 +171,6 @@ class OpenGigaFlowAgent(autonomous_agent.AutonomousAgent):
         if self.shadow.telemetry_dir:
             self._init_carla_infraction_detectors()
         self.initialized = True
-
-    # --- CARLA ground truth for the shadow env (read-only w.r.t. CARLA) ----
 
     def _nearby_actors(self):
         ego_loc = self.vehicle.get_location()
@@ -224,16 +201,12 @@ class OpenGigaFlowAgent(autonomous_agent.AutonomousAgent):
         """Place the CARLA ego at the shadow env's post-step pose (StepResult.motion)."""
         _, _, yaw0_deg, _, x, y, yaw_deg, speed, carla_z = motion
         yaw_delta_deg = cb.wrap_deg_180(yaw_deg - yaw0_deg)
-        # CARLA's live road-mesh height, not the shadow env's lane-averaged sim_z: on graded
-        # multi-level roads the average can land the body mid-structure (measured: 20-100+
-        # road collisions per Town03/04 route). sim_z only off the drivable network.
-        # get_waypoint is nearest-in-3D: without sim_z the z=0 default snaps an overpass ego to the road beneath
+        # CARLA's road height, not the lane-averaged sim_z; sim_z picks the level (get_waypoint is nearest in 3-D)
         wp = self.cmap.get_waypoint(carla.Location(x=x, y=y, z=carla_z))
         z = wp.transform.location.z if wp is not None else carla_z
         road_up = wp.transform.rotation.get_up_vector() if wp is not None else carla.Vector3D(x=0.0, y=0.0, z=1.0)
         pitch_deg, roll_deg, forward = road_aligned_attitude(road_up, yaw_deg)
-        # Waypoint z is quantised in ~0.5 m steps on steep grades (measured 0.32 m low at a Town03
-        # descent); the mesh raycast is exact and resting the body on its bumper chord keeps the overhangs out of sags.
+        # waypoint z is quantised on steep grades; the mesh chord is exact and keeps the overhangs out of sags
         surface = self._road_surface(x, y, z, yaw_deg)
         if surface is not None:
             z, pitch_deg = surface
@@ -244,9 +217,7 @@ class OpenGigaFlowAgent(autonomous_agent.AutonomousAgent):
                 math.sin(yaw_rad) * math.cos(pitch_rad),
                 math.sin(pitch_rad),
             )
-        # Zero momentum before the teleport: CARLA's collision resolver reacts violently to a
-        # physics body carrying velocity into a new pose (carla issue #8076).
-        # One ordered batch: the server reorders async actor commands, and a late zero left the ego reading 0 m/s on 3 % of ticks
+        # one ordered batch, zero momentum first: CARLA's resolver reacts violently to velocity carried into a new pose
         zero = carla.Vector3D(x=0.0, y=0.0, z=0.0)
         CarlaDataProvider.get_client().apply_batch_sync(
             [
@@ -281,13 +252,9 @@ class OpenGigaFlowAgent(autonomous_agent.AutonomousAgent):
         z = max(z_i - slope * s_i for z_i, s_i in zip(sample_z, sample_offsets_m))
         return z, math.degrees(math.atan(slope))
 
-    # --- CARLA ground-truth infraction detectors (CaRL's criteria) -----------
-
     def _init_carla_infraction_detectors(self):
-        """Real CARLA ground truth for collision/offroad/red-light/stop-sign, reusing
-        CaRL's own standalone criteria (CARL_WORK_DIR/team_code/reward).
-        RunRedLight uses _get_traffic_light_waypoints and do
-        RunRedLight's rear-bumper-crossing check in _poll_carla_red_light."""
+        """CaRL's own criteria (CARL_WORK_DIR/team_code) as CARLA ground truth for the carla_* telemetry columns; the
+        red light reuses their stop-line geometry in _poll_carla_red_light."""
         if "CARL_WORK_DIR" not in os.environ:
             raise RuntimeError(
                 "CARL_WORK_DIR is not set; required to import CaRL's reward.criteria "
@@ -322,7 +289,7 @@ class OpenGigaFlowAgent(autonomous_agent.AutonomousAgent):
             self._carla_collision_pending = True
 
     def _poll_carla_red_light(self):
-        """Real CARLA ground truth for 'ran a red light'"""
+        """RunRedLight's rear-bumper crossing of a red light's stop line."""
         import shapely.geometry
 
         ev_tra = self.vehicle.get_transform()
@@ -358,9 +325,7 @@ class OpenGigaFlowAgent(autonomous_agent.AutonomousAgent):
             self._ran_stop_sign_pending = True
 
     def _carla_infractions(self):
-        """{'collision': f, 'offroad': f, 'red_light': f, 'stop_sign': f} from real CARLA
-        ground truth (_init_carla_infraction_detectors) -- contrast with
-        StepResult.pd_flags, which is the shadow env's model of the ego."""
+        """{'collision', 'offroad', 'red_light', 'stop_sign'} flags of the CARLA ego since the last call."""
         collision, self._carla_collision_pending = self._carla_collision_pending, False
         red_light, self._ran_red_light_pending = self._ran_red_light_pending, False
         stop_sign, self._ran_stop_sign_pending = self._ran_stop_sign_pending, False
@@ -374,16 +339,13 @@ class OpenGigaFlowAgent(autonomous_agent.AutonomousAgent):
         }
 
     def run_step(self, input_data, timestamp, sensors=None):
-        self.step += 1
         if not self.initialized:
             self._init_on_first_step()
             return carla.VehicleControl(steer=0.0, throttle=0.0, brake=1.0)
 
         if CARLA_VIEW_SENSOR_ID in input_data:
             _, bgra = input_data[CARLA_VIEW_SENSOR_ID]  # (H, W, 4) uint8, leaderboard's CallBack format
-            rgb = bgra[:, :, [2, 1, 0]]  # BGRA -> RGB
-            if self.carla_view_writer is not None:
-                self.carla_view_writer.append_data(rgb)  # streamed to disk
+            self.carla_view_writer.append_data(bgra[:, :, [2, 1, 0]])
 
         if self._carla_collision is not None:
             self._poll_carla_collision()
@@ -398,8 +360,8 @@ class OpenGigaFlowAgent(autonomous_agent.AutonomousAgent):
 
         if result.control is None:
             return carla.VehicleControl()
-        steer, throttle, brake, reverse = result.control
-        return carla.VehicleControl(steer=steer, throttle=throttle, brake=brake, reverse=reverse)
+        steer, throttle, brake = result.control
+        return carla.VehicleControl(steer=steer, throttle=throttle, brake=brake)
 
     def destroy(self, results=None):
         if not self.initialized:

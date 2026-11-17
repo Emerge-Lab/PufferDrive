@@ -1,18 +1,8 @@
 #include "include/drive_fixture.h"
 #include "include/test.h"
 
-// Defensive coverage for the co-sim external-state setters (drive.h "Co-simulation external-state
-// setters" section). These are called from Python (opengigaflow/ocean/cosim/*) every tick to overwrite
-// agent state from CARLA/nuplan
-
-// ---------------------------------------------------------------------------
-// c_set_agent_sizes
-// ---------------------------------------------------------------------------
-
 static int test_set_agent_sizes_updates_dimensions_radius_and_wheelbase(void) {
-    // Overwriting bounding-box size must also refresh the derived radius (collision broad-phase)
-    // and wheelbase (steering derivation in c_set_agent_states) -- both are easy to forget since
-    // neither is read back in the same function.
+    // a new size also refreshes the derived radius and wheelbase
     Drive env = {0};
     Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f); // spawns at length=4, width=2
     env.agents = &agent;
@@ -31,8 +21,7 @@ static int test_set_agent_sizes_updates_dimensions_radius_and_wheelbase(void) {
 }
 
 static int test_set_agent_sizes_rejects_out_of_range_index_and_bad_size(void) {
-    // External input: an index outside [0, num_total_agents) or a non-positive size fails the whole
-    // call (-1) instead of being clamped or skipped; the agent must not be touched.
+    // a bad index or non-positive size fails the whole call and leaves the agent untouched
     Drive env = {0};
     Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
     env.agents = &agent;
@@ -53,10 +42,6 @@ static int test_set_agent_sizes_rejects_out_of_range_index_and_bad_size(void) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// c_set_traffic_light_states
-// ---------------------------------------------------------------------------
-
 static TrafficControlElement make_traffic_element(int type, int state_size, int *states_storage) {
     TrafficControlElement element = {0};
     element.type = type;
@@ -66,9 +51,7 @@ static TrafficControlElement make_traffic_element(int type, int state_size, int 
 }
 
 static int test_set_traffic_light_states_writes_current_and_next_timestep_for_lights_only(void) {
-    // Only TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT elements are written, at env->timestep and the step after
-    // it (c_step increments the timestep before its metrics and obs read the state, and the next sync
-    // only arrives after that step); every other timestep slot must be left alone.
+    // only lights are written, at the timestep and the next one c_step reads before the next sync
     int light_states[5] = {99, 99, 99, 99, 99};
     int stop_sign_states[5] = {99, 99, 99, 99, 99};
     TrafficControlElement elements[2];
@@ -95,8 +78,7 @@ static int test_set_traffic_light_states_writes_current_and_next_timestep_for_li
 }
 
 static int test_set_traffic_light_states_rejects_out_of_range_timestep_and_state(void) {
-    // A timestep outside [0, state_size) or a state outside the enum fails the call (-1) instead of
-    // being skipped; a NULL states buffer (an element with no schedule) is skipped, never dereferenced.
+    // a bad timestep or state fails the call; a light without a schedule (NULL states) is skipped
     int light_states[3] = {99, 99, 99};
     TrafficControlElement elements[2];
     elements[0] = make_traffic_element(TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT, 3, NULL);
@@ -147,8 +129,7 @@ static Drive make_timing_env(TrafficControlElement *elements, int element_count,
 }
 
 static int test_set_traffic_light_states_yellow_timing_patches_schedule(void) {
-    // A yellow light with r seconds left stays yellow through ts + ceil(r / dt) - 1 and turns red right after;
-    // the held step ts + 1 is always yellow, and non-yellow lights or non-light elements get no patch.
+    // yellow with r s left stays yellow through ts + ceil(r / dt) - 1, then red; other states get no patch
     int storage[3][TIMING_STATE_COUNT];
     TrafficControlElement elements[3];
     Drive env = make_timing_env(elements, 3, storage);
@@ -211,16 +192,8 @@ static int test_set_traffic_light_states_yellow_timing_validation(void) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// c_set_agent_states
-// ---------------------------------------------------------------------------
-
 static int test_set_agent_states_teleport_resets_prev_pose(void) {
-    // An externally-set pose is a teleport: prev_* must follow it. If prev stays at
-    // the old pose, every prev-based swept check (find_lane_and_offroad's road-edge
-    // crossing, compute_metrics' goal-reach segment) sweeps the whole gap and fires
-    // spuriously -- observed as an on-lane teleported ego always classified offroad
-    // with dead lane observations.
+    // a set pose is a teleport: prev follows, or the swept offroad and goal checks would sweep the jump
     Drive env = {0};
     Agent agent = drive_test_agent(500.0f, 500.0f, 1.0f);
     agent.prev_x = 500.0f;
@@ -241,8 +214,7 @@ static int test_set_agent_states_teleport_resets_prev_pose(void) {
 }
 
 static int test_set_agent_states_seconds_stopped_injects_or_preserves(void) {
-    // seconds_stopped is optional: a NULL array leaves c_step's own accumulation untouched
-    // (the co-sim default CARLA/nuPlan rely on), a non-NULL array injects it as state.
+    // NULL seconds_stopped keeps c_step's own accumulation, an array injects it
     Drive env = {0};
     Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
     agent.seconds_stopped = 12.5f;
@@ -267,10 +239,7 @@ static int test_set_agent_states_seconds_stopped_injects_or_preserves(void) {
 }
 
 static int test_set_agent_states_steering_is_state_below_1mps(void) {
-    // A co-sim that tracks steering as state can hand it over exactly: the angle is kept and the
-    // lateral acceleration follows from it as in c_step (v^2 tan(steering) / wheelbase). Without it,
-    // steering is derived from yaw_rate with the speed floored at 1 m/s, so a stopped car that still
-    // holds its wheels turned reads 0 -- the case the steering input exists for.
+    // handed-over steering is kept even at standstill, where the yaw-rate derivation would read 0
     Drive env = {0};
     Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
     env.agents = &agent;
@@ -298,16 +267,8 @@ static int test_set_agent_states_steering_is_state_below_1mps(void) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// c_set_agent_goals
-// ---------------------------------------------------------------------------
-
 static int test_set_agent_goals_sets_positions_lane_and_count(void) {
-    // Externally-set goals must land in the bin frame (world_mean subtracted), report an accurate
-    // goal_count, and reset the current_goal_* window to slot 0 -- all fields that used to be left
-    // stale from whatever a previous internal goal generation wrote. With no grid map (as here),
-    // goal->lane snapping (find_goal_lane) must degrade to list_goal_lane = -1, the "no GPS
-    // lane-distance" convention shared with GOAL_SOURCE_GT -- never read a NULL grid.
+    // goals in the bin frame, goal_count set, window reset to slot 0; without a grid map no lane (-1)
     Drive env = {0};
     env.world_mean_x = 100.0f;
     env.world_mean_y = 200.0f;
@@ -339,8 +300,7 @@ static int test_set_agent_goals_sets_positions_lane_and_count(void) {
 }
 
 static int test_set_agent_goals_rejects_more_than_max_goals(void) {
-    // More waypoints than MAX_GOALS (or none) is invalid external input: the call fails (-1) and the
-    // agent's goal window is left untouched, never silently clamped.
+    // zero or more than MAX_GOALS waypoints fail the call and leave the goal window untouched
     Drive env = {0};
     Agent agent = {0};
     agent.goal_count = 2;
@@ -379,14 +339,8 @@ static int test_set_agent_goals_rejects_out_of_range_agent_idx(void) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// c_set_stop_signs
-// ---------------------------------------------------------------------------
-
 static int test_set_stop_signs_retires_map_signs_and_appends_external_ones(void) {
-    // The map's stop signs become TRAFFIC_CONTROL_TYPE_NONE in place (light indices must survive for
-    // c_set_traffic_light_states), the external lines are appended shifted by world_mean like every other
-    // setter input, and every agent's stop-sign latch resets because element indices changed.
+    // map stop signs retired in place, external ones appended in the bin frame, every stop-sign latch reset
     int light_states[3] = {1, 1, 1};
     TrafficControlElement *elements = (TrafficControlElement *) calloc(2, sizeof(TrafficControlElement));
     elements[0] = make_traffic_element(TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT, 3, light_states);
@@ -426,8 +380,7 @@ static int test_set_stop_signs_retires_map_signs_and_appends_external_ones(void)
 }
 
 static int test_set_stop_signs_rejects_bad_input_untouched(void) {
-    // A negative count, a non-finite coordinate or a zero-length line fails the whole call (-1) and
-    // leaves the element list as it was; zero external signs still retires the map's.
+    // bad input fails the whole call and leaves the elements; zero external signs still retire the map's
     TrafficControlElement *elements = (TrafficControlElement *) calloc(1, sizeof(TrafficControlElement));
     elements[0] = make_traffic_element(TRAFFIC_CONTROL_TYPE_STOP_SIGN, 0, NULL);
     Drive env = {0};
@@ -449,14 +402,8 @@ static int test_set_stop_signs_rejects_bad_input_untouched(void) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// c_set_traffic_light_lines
-// ---------------------------------------------------------------------------
-
 static int test_set_traffic_light_lines_moves_lights_only_and_rejects_bad_input(void) {
-    // Only the addressed light elements move (world_mean subtracted like every setter input), their state
-    // schedule stays; a stop-sign index, an out-of-range index, a non-finite coordinate or a zero-length
-    // line fails the whole call (-1) with every line untouched.
+    // only the addressed lights move (bin frame), schedules stay; any bad input fails the whole call
     int light_states[2] = {1, 1};
     TrafficControlElement elements[2];
     elements[0] = make_traffic_element(TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT, 2, light_states);

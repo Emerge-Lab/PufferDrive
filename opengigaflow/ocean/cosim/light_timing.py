@@ -2,9 +2,7 @@
 
 
 class YellowCountdown:
-    """Remaining yellow seconds for lights whose simulator exposes no usable phase timer: the shortest
-    trained yellow (traffic_light_yellow_min_s) counted down from the first tick the light was seen
-    yellow, never below one env step (a yellow light always has the current step left)."""
+    """Yellow left on lights without a phase timer: shortest trained yellow, counted from first sight, >= one step."""
 
     def __init__(self, assumed_total_s, min_remaining_s):
         if not assumed_total_s > 0.0 or not min_remaining_s > 0.0:
@@ -14,8 +12,7 @@ class YellowCountdown:
         self._onset_s = {}
 
     def tick(self, yellow_keys, now_s):
-        """-> {key: remaining_s} for the lights yellow at now_s; a light absent from a tick restarts its
-        countdown when it is next seen yellow."""
+        """-> {key: remaining_s} for the lights yellow at now_s; a light missing from a tick restarts its countdown."""
         now_s = float(now_s)
         self._onset_s = {key: self._onset_s.get(key, now_s) for key in yellow_keys}
         return {

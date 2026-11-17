@@ -1,23 +1,4 @@
-"""Render the interactive observation replays of a CARLA longest6 run (scripts/kesai/11_carla_longest6_v2.sh,
-14_carla_longest6_v1.sh: <run_dir>/routes/route_XX[_s<seed>]/obs_html/*.replay.zlib) into <run_dir>/obs_html/, one
-page per selected route run plus an index.html gallery (same navigator as the nuPlan and self-play eval replays).
-
-usage: python scripts/eval/render_carla_obs_html.py <run_dir> [--routes <longest6.xml>] [--select failures|all]
-       [--workers N]
-
---select failures (default) renders the route runs with a flagged leaderboard infraction or a failed status
-(carla_run_layout.route_failed; min-speed infractions alone do not count), all renders every route run.
-Pages are named ds<driving score>_<flags>_<town>_route<id>_s<seed>.html so the gallery lists the worst first
-(flags: COL collision, RED red light, STOP stop sign, OFF outside route lanes, DEV route deviation,
-BLOCK blocked, TIMEOUT route/scenario timeout); each page carries the route's leaderboard scores and
-infractions as a panel, every positioned infraction linking to the replay step where the ego was nearest
-(red lights: to the step the route's telemetry flagged, their message carries the light's position); from
-that step on the viewer draws the ego as infringing for MARK_FRAMES, under a LEADERBOARD warning chip.
---routes (the evaluated xml) names the town of every route, else the world log does.
-Retried routes leave the files of crashed attempts behind: the newest files pair with the records. On a run
-tidy_carla_run.py flattened, a route's rendered page is its replay source (the page embeds it); a page whose
-route was driven again under another name is replaced.
-"""
+"""Render the obs replay pages + index.html gallery of a CARLA longest6 run, each with its leaderboard score panel."""
 
 import argparse
 import csv
@@ -141,9 +122,7 @@ def red_light_steps(telemetry_path):
 
 
 def infraction_frames(record, replay_path, town, log_meta, telemetry_path=None):
-    """-> (message -> replay frame of every infraction that can be placed, the replay's frame count): red lights at
-    the frame the telemetry flagged, the other positioned ones where the ego was nearest (CARLA -> bin offset: the
-    world log's, else the town's). A frame at or past the count: the infraction happened after the replay ended."""
+    """-> ({message: frame}, frame count): red lights at the telemetry flag, others at the ego's nearest frame."""
     _, chunks = viz.read_replay_zlib(replay_path, chunk_names=("agent_f32",))
     ego_xy = chunks["agent_f32"][:, 0, :2]
     frame_count = len(ego_xy)
@@ -194,7 +173,6 @@ def render_page(zlib_path, html_path, panel):
 def gallery_metrics(record):
     """Infraction counts under the names the gallery filters on (> 0 = flagged)."""
     return {
-        "driving_score": float(record["scores"]["score_composed"]),
         "collision_rate": float(sum(len(infraction_messages(record, key)) for key in COLLISION_KEYS)),
         "red_light_violation_rate": float(len(infraction_messages(record, "red_light"))),
         "offroad_rate": float(len(infraction_messages(record, "outside_route_lanes"))),
@@ -205,10 +183,6 @@ def route_towns(routes_xml):
     return {
         int(route.attrib["id"]): route.attrib.get("town", "") for route in ET.parse(routes_xml).getroot().iter("route")
     }
-
-
-def world_log_meta(npz_path):
-    return json.loads(str(np.load(npz_path)["meta"]))
 
 
 def rendered_pages(obs_dir):
@@ -222,8 +196,7 @@ def rendered_pages(obs_dir):
 
 
 def collect_jobs(run_dir, towns, select):
-    """-> [(record, replay source, town, world log meta, seed, telemetry csv or None)] over the selected records of
-    every route run: the newest replay of a route folder, or the route run's rendered page once tidied."""
+    """-> [(record, replay or page, town, world log meta, seed, telemetry csv or None)] of the selected records."""
     pages = rendered_pages(Path(run_dir) / layout.OBS_HTML_DIR)
     jobs = []
     for route_run, result_path in layout.route_runs(run_dir):
@@ -238,7 +211,7 @@ def collect_jobs(run_dir, towns, select):
                 print(f"[{route_run}] no replay for {record.get('route_id')}, skipped")
                 continue
             world_log = layout.record_file(result_path, "world_log", ".npz", stem)
-            log_meta = world_log_meta(world_log) if world_log else {}
+            log_meta = json.loads(str(np.load(world_log)["meta"])) if world_log else {}
             town = towns.get(route_index_rep(record)[0]) or log_meta.get("town", "")
             telemetry = layout.record_file(result_path, "telemetry", ".csv", stem)
             jobs.append((record, source, town, log_meta, seed, telemetry))

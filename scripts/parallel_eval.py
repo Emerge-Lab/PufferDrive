@@ -1,21 +1,4 @@
-"""Shard one OpenGigaFlow eval benchmark across GPUs or nodes and aggregate the results.
-
-Each shard runs an independent `opengigaflow eval` process over a disjoint scenario
-window (eval.scenario_offset), then the per-shard episode_metrics.csv files are
-merged into a single report; wandb=True logs its km/infraction to the training
-wandb run (self-play benchmark only). scripts/eval/tidy_selfplay_eval.py
-then folds the shard folders into the aggregate dir (evaluation_summary.json,
-obs_html/ with every shard's failure pages, details/); --keep-shards leaves them.
---num-gpus runs one shard per local GPU; --num-nodes runs the shards as srun steps
-of the surrounding SLURM allocation, --shards-per-node of them per node (default 1),
-each with one GPU and an equal share of the node's CPUs (SLURM_CPUS_PER_TASK).
-
-Usage (from the repo root, venv active):
-    python scripts/parallel_eval.py carla \
-        --total-scenarios 80000 --num-nodes 4 --shards-per-node 8 \
-        load_model_path=experiments/run/final_model.pt \
-        eval.output_name=run vec.num_envs=60 wandb=True
-"""
+"""Shard one OpenGigaFlow eval benchmark over local GPUs or SLURM srun steps and aggregate the episode metrics."""
 
 import argparse
 import os
@@ -58,15 +41,6 @@ def parse_arguments():
     return arguments, overrides
 
 
-def override_value(overrides, key):
-    value = None
-    for override in overrides:
-        override_key, _, override_val = override.partition("=")
-        if override_key == key:
-            value = override_val
-    return value
-
-
 def resolve_gpu_ids(num_gpus):
     visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
     if visible_devices is None:
@@ -88,15 +62,9 @@ def plan_shards(total_scenarios, num_shards):
     return shards
 
 
-def print_log_tail(log_path):
-    with open(log_path, "r", errors="replace") as log_file:
-        tail = log_file.readlines()[-FAILED_LOG_TAIL_LINES:]
-    print(f"--- last {len(tail)} lines of {log_path} ---")
-    print("".join(tail))
-
-
 def main():
     arguments, overrides = parse_arguments()
+    override_values = dict(override.split("=", 1) for override in overrides)
     use_srun = arguments.num_nodes is not None
     num_shards = arguments.num_nodes * arguments.shards_per_node if use_srun else arguments.num_gpus
     if num_shards < 1:
@@ -117,18 +85,18 @@ def main():
             f"{num_shards} shards: {arguments.num_nodes} nodes x {arguments.shards_per_node} per node, "
             f"{cpus_per_shard} CPUs each{numa_note}"
         )
-        num_envs_override = override_value(overrides, "vec.num_envs")
+        num_envs_override = override_values.get("vec.num_envs")
         if num_envs_override is not None and num_envs_override.isdigit() and int(num_envs_override) > cpus_per_shard:
             print(f"Note: vec.num_envs={num_envs_override} blocking workers exceed a shard's {cpus_per_shard} CPUs")
     for override in overrides:
         if override.partition("=")[0] in RESERVED_OVERRIDE_KEYS:
             raise SystemExit(f"Override '{override}' is managed by parallel_eval.py; remove it")
 
-    model_path = override_value(overrides, "load_model_path")
+    model_path = override_values.get("load_model_path")
     if model_path is None:
         raise SystemExit("load_model_path=<checkpoint.pt> override is required")
 
-    report_wandb = str(override_value(overrides, "wandb")).lower() in ("true", "1")
+    report_wandb = str(override_values.get("wandb")).lower() in ("true", "1")
     shard_overrides = [o for o in overrides if o.partition("=")[0] != "wandb"] + ["wandb=False"]
 
     from opengigaflow.ocean.evaluation_utils import eval_wandb_report, evaluation_utils
@@ -140,8 +108,8 @@ def main():
         )
 
     run_dir = evaluation_utils.resolve_run_dir(model_path)
-    output_dir_name = override_value(overrides, "eval.output_dir_name") or "eval"
-    output_name = override_value(overrides, "eval.output_name")
+    output_dir_name = override_values.get("eval.output_dir_name") or "eval"
+    output_name = override_values.get("eval.output_name")
     benchmark_dir_name = arguments.benchmark if output_name is None else f"{arguments.benchmark}_{output_name}"
     benchmark_dir = os.path.join(run_dir, output_dir_name, benchmark_dir_name)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -165,7 +133,7 @@ def main():
             f"eval.output_subdir={shard_subdir}",
         ]
         if use_srun:
-            # --exact keeps the step to its CPU share (default: the whole node); --mem=0 shares the job's memory between steps
+            # --exact limits the step to its CPU share (default: the whole node); --mem=0 shares the job's memory
             command = [
                 "srun",
                 "--nodes=1",
@@ -193,18 +161,21 @@ def main():
             f"{scenario_offset + shard_scenario_count}), log {log_path}"
         )
 
-    failed_shards = []
+    failed_log_paths = []
     for shard_idx, process, log_file, log_path, _ in processes:
         exit_code = process.wait()
         log_file.close()
         status = "done" if exit_code == 0 else f"FAILED (exit {exit_code})"
         print(f"Shard {shard_idx}: {status}")
         if exit_code != 0:
-            failed_shards.append((shard_idx, log_path))
-    if failed_shards:
-        for _, log_path in failed_shards:
-            print_log_tail(log_path)
-        raise SystemExit(f"{len(failed_shards)} of {len(processes)} eval shards failed; not aggregating")
+            failed_log_paths.append(log_path)
+    for log_path in failed_log_paths:
+        with open(log_path, "r", errors="replace") as log_file:
+            tail = log_file.readlines()[-FAILED_LOG_TAIL_LINES:]
+        print(f"--- last {len(tail)} lines of {log_path} ---")
+        print("".join(tail))
+    if failed_log_paths:
+        raise SystemExit(f"{len(failed_log_paths)} of {len(processes)} eval shards failed; not aggregating")
 
     shard_frames = []
     for shard_idx, _, _, _, shard_subdir in processes:

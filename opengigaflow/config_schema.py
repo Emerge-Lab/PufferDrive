@@ -1,22 +1,4 @@
-"""OpenGigaFlow structured schemas and final configuration validation.
-
-The dataclasses in this module define the admissible shape, types, and enum
-values for configuration input. Required fields use ``MISSING`` so absent YAML
-or overlay values fail explicitly. Range, cross-field, and filesystem rules
-that cannot be expressed by OmegaConf's structured configs live alongside the
-schemas below.
-
-Enum int values mirror the #defines in opengigaflow/ocean/drive/drive.h. We enforce
-the match via tests via tests/unit_tests/test_config_schema.py. If a python enum
-class does not have corresponding int-class entries to the respective C enum
-the test fails.
-
-Enums classes are matched to the respective C counterparts via name matching. The
-naming convention is CamelCase for python classes, LowerPascalCase for python values
-and PascalCase for C class names and values: every C #define is
-`<ENUM_CLASS_NAME_IN_SCREAMING_SNAKE>_<MEMBER_NAME_UPPER>`, e.g.
-`InfractionBehavior.stop` <-> `INFRACTION_BEHAVIOR_STOP`.
-"""
+"""OpenGigaFlow config schemas and validation; enums mirrored in C keep the int values of constants.h's #defines."""
 
 import copy
 import inspect
@@ -31,6 +13,7 @@ from omegaconf import MISSING, OmegaConf
 from omegaconf.errors import OmegaConfBaseException
 
 import opengigaflow
+from opengigaflow.core import MAX_C_SEED
 
 
 POSITIVE_INT_CONSTRAINT = 1
@@ -55,12 +38,10 @@ def _raise_config_error(context, path, message):
 
 
 def _constrained_field(constraint_mode, default=MISSING):
-    """Declare a dataclass field carrying a runtime value constraint."""
     return field(default=default, metadata={"constraint_mode": constraint_mode})
 
 
 def _validate_value_constraint(value, constraint_mode, context, path):
-    """Validate one scalar value against its configured constraint."""
     if value is None and constraint_mode in (
         POSITIVE_INT_CONSTRAINT,
         NONNEGATIVE_INT_CONSTRAINT,
@@ -129,8 +110,7 @@ class Controller(Enum):
 
 
 class NonVehicleController(Enum):
-    # "auto" is config-side only: drive.py resolves it to a Controller
-    # (replay when non_sdc_controller is idm, else non_sdc_controller).
+    # config-only "auto": Drive resolves it to replay when non_sdc_controller is idm, else to non_sdc_controller
     auto = -1
     static = 0
     policy = 1
@@ -156,10 +136,6 @@ class GoalSource(Enum):
     gt_map = 4
 
 
-class EnvironmentName(Enum):
-    opengigaflow = 0
-
-
 class PolicyName(Enum):
     Drive = 0
 
@@ -181,7 +157,6 @@ class RolloutDtype(Enum):
 
 
 class VectorBackend(Enum):
-    VecEnv = 0
     Serial = 1
     Multiprocessing = 2
 
@@ -198,7 +173,6 @@ class VectorConfig:
     num_envs: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     num_workers: int | str = MISSING
     batch_size: int | str | None = MISSING
-    zero_copy: bool = MISSING
     seed: int | None = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
 
 
@@ -438,7 +412,6 @@ class EvaluationConfig:
 @dataclass
 class OpenGigaFlowConfig:
     load_model_path: str | None = MISSING
-    load_id: str | None = MISSING
     num_scenarios: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     wandb: bool = MISSING
     wandb_project: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
@@ -446,7 +419,6 @@ class OpenGigaFlowConfig:
     run_name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     tb: bool = MISSING
     tag: str | None = MISSING
-    env_name: EnvironmentName = MISSING
     policy_name: PolicyName = MISSING
     vec: VectorConfig = MISSING
     env: DriveEnvConfig = MISSING
@@ -454,13 +426,9 @@ class OpenGigaFlowConfig:
     train: TrainingConfig = MISSING
     eval: EvaluationConfig | None = None
 
-    # Known runtime metadata/options are optional and are not materialized in
-    # the caller's plain dictionary when absent.
+    # Absent from the YAML; normalization materializes these defaults.
     no_model_upload: bool = False
     git: dict | None = None
-
-
-MAX_C_SEED = 2**31 - 1
 
 
 def normalize_opengigaflow_config(config, context="load"):
@@ -486,7 +454,6 @@ def normalize_opengigaflow_config(config, context="load"):
 
 
 def _validate_field_constraints(config, schema, context):
-    """Apply dataclass field constraints recursively across a normalized config."""
     pending_schemas = [(config, schema, "")]
     for current_config, current_schema, schema_path in pending_schemas:
         if not current_config:
@@ -508,9 +475,9 @@ def _validate_field_constraints(config, schema, context):
                 pending_schemas.append((field_value, nested_schema, field_path))
 
 
-def _validate_string_selection(value, context, path, *, allow_none=True):
+def _validate_string_selection(value, context, path):
     """Validate a string or non-empty list of strings used to select inputs."""
-    if value is None and allow_none:
+    if value is None:
         return
     if isinstance(value, str):
         if not value.strip():
@@ -522,10 +489,6 @@ def _validate_string_selection(value, context, path, *, allow_none=True):
 
 
 def _validate_cross_field_constraints(config, context):
-    """Validate relationships and context-dependent rules spanning config fields."""
-    if config["load_id"] is not None and not config["wandb"]:
-        _raise_config_error(context, "load_id", "requires wandb")
-
     env = config["env"]
     if env["min_agents_per_env"] > env["max_agents_per_env"]:
         _raise_config_error(context, "env.min_agents_per_env", "must not exceed env.max_agents_per_env")
@@ -588,6 +551,7 @@ def _validate_cross_field_constraints(config, context):
         if train["batch_size"] != "auto" and train["batch_size"] < train["minibatch_size"]:
             _raise_config_error(context, "train.batch_size", "must be at least train.minibatch_size")
         effective_minibatch_size = min(train["minibatch_size"], train["max_minibatch_size"])
+        total_agents = config["vec"]["num_envs"] * config["env"]["num_agents"]
         if train["bptt_horizon"] != "auto":
             if effective_minibatch_size % train["bptt_horizon"] != 0:
                 _raise_config_error(
@@ -596,7 +560,6 @@ def _validate_cross_field_constraints(config, context):
                     "the effective minibatch size must be divisible by train.bptt_horizon",
                 )
             if train["batch_size"] == "auto":
-                total_agents = config["vec"]["num_envs"] * config["env"]["num_agents"]
                 derived_batch_size = total_agents * train["bptt_horizon"]
                 if derived_batch_size < train["minibatch_size"]:
                     _raise_config_error(
@@ -605,7 +568,6 @@ def _validate_cross_field_constraints(config, context):
                         f"the derived batch_size ({derived_batch_size}) must be at least train.minibatch_size ({train['minibatch_size']})",
                     )
             else:
-                total_agents = config["vec"]["num_envs"] * config["env"]["num_agents"]
                 segments = train["batch_size"] // train["bptt_horizon"]
                 if total_agents > segments:
                     _raise_config_error(
@@ -614,28 +576,19 @@ def _validate_cross_field_constraints(config, context):
                         f"total agents ({total_agents}) must be <= segments ({segments}) (batch_size {train['batch_size']} // bptt_horizon {train['bptt_horizon']})",
                     )
         else:
-            # bptt_horizon is "auto", so we compute it using batch_size and total_agents
-            total_agents = config["vec"]["num_envs"] * config["env"]["num_agents"]
-            if train["batch_size"] != "auto":
-                if train["batch_size"] < total_agents:
-                    _raise_config_error(
-                        context,
-                        "train.batch_size",
-                        f"batch_size {train['batch_size']} must be at least total agents {total_agents} to automatically derive bptt_horizon",
-                    )
-                horizon = train["batch_size"] // total_agents
-                if horizon == 0:
-                    _raise_config_error(
-                        context,
-                        "train.batch_size",
-                        "batch_size / total agents resulted in a bptt_horizon of 0",
-                    )
-                if effective_minibatch_size % horizon != 0:
-                    _raise_config_error(
-                        context,
-                        "train.minibatch_size",
-                        f"the effective minibatch size ({effective_minibatch_size}) must be divisible by the auto-computed bptt_horizon ({horizon})",
-                    )
+            if train["batch_size"] < total_agents:
+                _raise_config_error(
+                    context,
+                    "train.batch_size",
+                    f"batch_size {train['batch_size']} must be at least total agents {total_agents} to automatically derive bptt_horizon",
+                )
+            horizon = train["batch_size"] // total_agents
+            if effective_minibatch_size % horizon != 0:
+                _raise_config_error(
+                    context,
+                    "train.minibatch_size",
+                    f"the effective minibatch size ({effective_minibatch_size}) must be divisible by the auto-computed bptt_horizon ({horizon})",
+                )
     eval_config = config["eval"]
     if not eval_config:
         if context.startswith("evaluation"):
@@ -669,7 +622,6 @@ def _validate_cross_field_constraints(config, context):
 
 
 def validate_opengigaflow_config(config, context) -> None:
-    """Validate field and cross-field semantics on a normalized OpenGigaFlow config."""
     _validate_field_constraints(config, OpenGigaFlowConfig, context)
     _validate_cross_field_constraints(config, context)
 
@@ -703,13 +655,12 @@ def _validate_map_resources(env, context):
 
 
 def opengigaflow_constructor_keys():
-    """Return keyword arguments accepted by the OpenGigaFlow constructor."""
     from opengigaflow.ocean.drive.drive import Drive
 
     return set(inspect.signature(Drive.__init__).parameters) - {"self"}
 
 
-def normalize_opengigaflow_benchmarks(environment_config, benchmarks, context, validate_resources=True):
+def normalize_opengigaflow_benchmarks(environment_config, benchmarks, context):
     """Validate benchmark definitions and return normalized copies for merging."""
     if not isinstance(environment_config, Mapping):
         _raise_config_error(context, "env", "must be a mapping")
@@ -819,8 +770,6 @@ def normalize_opengigaflow_benchmarks(environment_config, benchmarks, context, v
         if not isinstance(map_dir, str) or not map_dir:
             _raise_config_error(context, f"{benchmark_path}.env.map_dir", "must be a non-empty path")
         normalized_environment["map_dir"] = os.path.abspath(map_dir)
-        if validate_resources:
-            _validate_map_resources(normalized_environment, f"{context}.{benchmark_path}")
         if max_agents_per_env is None:
             normalized_environment.pop("max_agents_per_env", None)
 
@@ -840,7 +789,7 @@ def validate_opengigaflow_resources(config, context):
     _validate_map_resources(config["env"], context)
 
     load_model_path = config.get("load_model_path")
-    if load_model_path not in (None, "latest") and not os.path.isfile(load_model_path):
+    if load_model_path is not None and not os.path.isfile(load_model_path):
         _raise_config_error(context, "load_model_path", f"checkpoint does not exist: {load_model_path}")
 
     eval_config = config.get("eval")

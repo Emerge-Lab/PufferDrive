@@ -1,30 +1,4 @@
-"""Tests that replay-mode waypoint progression burns exactly ONE waypoint per
-goal-reach event, with the goal alias advancing contextually.
-
-Feature under test (drive.h, compute_metrics): when the car spawns on top of a waypoint
-the waypoint is consumed correctly and does not result in multiple ones being consumed
-without updating the waypoint info.
-
-Fixture map
------------
-The first 2 waypoints sit within goal_radius from step 0. This tests that we burn through
-those 2 alone and we don't use the stale alias and burn through the third one as well.
-
-Observability
--------------
-get_state() exposes, per agent: the goal alias (current_goal_x/y), the
-per-step reached-goal flag (metrics_array[REACHED_GOAL_METRIC_IDX], recomputed
-every step), and the full logged trajectory. The expected waypoint list is
-reconstructed with the same sampling formula c_reset uses in replay mode, so
-each observed alias maps to a definite waypoint index k, and "one waypoint per
-step" is asserted as: every fire moves k by exactly +1 (or saturates on the
-final waypoint), and k never moves without a fire.
-
-Note: env construction and env.reset() each run compute_metrics once at reset
-time, and on this fixture each of those calls legitimately consumes one
-waypoint. The tests account for that via the waypoint index of the post-reset
-alias instead of assuming the episode starts at waypoint 0.
-"""
+"""Replay-mode goals: each reached-goal fire consumes exactly one waypoint, and the alias never moves without one."""
 
 import os
 
@@ -39,12 +13,8 @@ SCENARIO_LENGTH = 400
 NUM_GOALS = 3
 GOAL_RADIUS = 2.0
 
-# metrics_array layout (datatypes.h): REACHED_GOAL_IDX
-REACHED_GOAL_METRIC_IDX = 4
-
-# Waypoints on this fixture are distinct at the ~1e-5 m scale; the alias is a
-# bit-exact copy of a trajectory sample, so a much tighter tolerance still
-# identifies it unambiguously.
+REACHED_GOAL_METRIC_IDX = 4  # REACHED_GOAL_IDX of the C metrics_array
+# the alias is a bit-exact copy of a trajectory sample; the fixture's waypoints differ at the ~1e-5 m scale
 WAYPOINT_MATCH_TOLERANCE = 1e-9
 
 
@@ -64,7 +34,6 @@ def _make_sdc_replay_env():
         scenario_length=SCENARIO_LENGTH,
         resample_frequency=1_000_000,
         termination_mode=False,
-        report_interval=1,
         num_goals=NUM_GOALS,
         goal_radius=GOAL_RADIUS,
     )
@@ -78,8 +47,7 @@ def _sdc_state(env):
 
 
 def _expected_waypoints(agent_state):
-    """Reconstruct the replay goal waypoints exactly as c_reset samples them
-    from the logged trajectory (init_step=0): t = (g+1)*(size-1)/N."""
+    """The replay goal waypoints as c_reset samples them from the logged trajectory (init_step=0)."""
     trajectory_size = agent_state["trajectory_size"]
     remaining = max(trajectory_size - 1, 1)
     waypoints = []
@@ -90,8 +58,7 @@ def _expected_waypoints(agent_state):
 
 
 def _alias_waypoint_index(agent_state, waypoints):
-    """Map the current goal alias to its waypoint index; the alias must match
-    exactly one expected waypoint."""
+    """The index of the one expected waypoint the current goal alias matches."""
     alias = (agent_state["current_goal_x"], agent_state["current_goal_y"])
     matches = [
         k
@@ -105,18 +72,14 @@ def _alias_waypoint_index(agent_state, waypoints):
 
 
 def test_each_goal_fire_burns_exactly_one_waypoint():
-    """Full episode: every reached-goal fire must
-    advance the goal alias to the immediately-next waypoint (exactly one
-    burned), the alias must never move without a fire, and once the final
-    waypoint is consumed no further fires may occur (saturation)."""
+    """Every fire advances the alias by one waypoint, none moves it without a fire, none follows the final one."""
     env = _make_sdc_replay_env()
     try:
         env.reset(seed=0)
         state = _sdc_state(env)
         waypoints = _expected_waypoints(state)
         current_wp_idx = _alias_waypoint_index(state, waypoints)
-        # Waypoints consumed so far == index of the waypoint now aliased
-        # (verified below: step 1 still fires, so the env is not saturated).
+        # env construction and reset each consume a waypoint on this fixture: count from the aliased index
         consumed_count = current_wp_idx
         saturated = False
 

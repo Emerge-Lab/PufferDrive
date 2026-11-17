@@ -3,26 +3,22 @@ import itertools
 import os
 import numpy as np
 from multiprocessing import get_all_start_methods, get_context
-from multiprocessing.connection import wait
 
-from opengigaflow import VecEnv, set_buffers
+from opengigaflow import MAX_C_SEED, VecEnv, set_buffers
 import opengigaflow.spaces
 
-VECTOR_OPTIONS = (
-    "num_workers",
-    "batch_size",
-    "zero_copy",
-    "overwork",
-    "backend",
-    "observation_transport_dtype",
-    "pin_workers",
-)
+VECTOR_OPTIONS = ("num_workers", "batch_size", "observation_transport_dtype", "pin_workers")
 RESET = 0
 STEP = 1
 SEND = 2
 RECV = 3
-CLOSE = 4
 WORKER_POLL_TIMEOUT_SECONDS = 5.0
+
+
+def spawn_child_seeds(seed, count):
+    if seed is None:
+        return [None] * count
+    return [int(child.generate_state(1)[0]) & MAX_C_SEED for child in np.random.SeedSequence(seed).spawn(count)]
 
 
 def recv_precheck(vecenv):
@@ -68,15 +64,15 @@ def send_precheck(vecenv, actions):
 
 def reset(vecenv, seed=42):
     vecenv.async_reset(seed)
-    obs, rewards, terminals, truncations, infos, env_ids, masks = vecenv.recv()
+    obs, _, _, _, infos, _, _ = vecenv.recv()
     return obs, infos
 
 
 def step(vecenv, actions):
     actions = np.asarray(actions)
     vecenv.send(actions)
-    obs, rewards, terminals, truncations, infos, env_ids, masks = vecenv.recv()
-    return obs, rewards, terminals, truncations, infos  # include env_ids or no?
+    obs, rewards, terminals, truncations, infos, _, _ = vecenv.recv()
+    return obs, rewards, terminals, truncations, infos
 
 
 def make_config_env(creator, args, kwargs):
@@ -89,10 +85,6 @@ class Serial:
     reset = reset
     step = step
 
-    @property
-    def num_envs(self):
-        return self.agents_per_batch
-
     def __init__(self, env_creators, env_args, env_kwargs, num_envs, buf=None, seed=0, **kwargs):
         driver_env = make_config_env(env_creators[0], env_args[0], env_kwargs[0])
         num_agents_per_env = driver_env.num_agents
@@ -102,7 +94,6 @@ class Serial:
         self.single_observation_space = driver_env.single_observation_space
         self.single_action_space = driver_env.single_action_space
         self.action_space = opengigaflow.spaces.joint_space(self.single_action_space, self.agents_per_batch)
-        self.observation_space = opengigaflow.spaces.joint_space(self.single_observation_space, self.agents_per_batch)
 
         driver_env.close()
 
@@ -110,7 +101,7 @@ class Serial:
 
         self.envs = []
         ptr = 0
-        child_seeds = np.random.SeedSequence(seed).spawn(len(env_creators)) if seed is not None else None
+        env_seeds = spawn_child_seeds(seed, num_envs)
         for i in range(num_envs):
             end = ptr + num_agents_per_env
             buf_i = dict(
@@ -122,15 +113,10 @@ class Serial:
                 actions=self.actions[ptr:end],
             )
             ptr = end
-            if seed is not None:
-                seed_i = int(child_seeds[i].generate_state(1)[0]) & 0x7FFFFFFF
-            else:
-                seed_i = None
-            env = env_creators[i](*env_args[i], buf=buf_i, seed=seed_i, **env_kwargs[i])
+            env = env_creators[i](*env_args[i], buf=buf_i, seed=env_seeds[i], **env_kwargs[i])
             self.envs.append(env)
 
-        self.driver_env = driver = self.envs[0]
-        self.emulated = self.driver_env.emulated
+        self.driver_env = self.envs[0]
         check_envs(self.envs, self.driver_env)
         self.agents_per_env = [env.num_agents for env in self.envs]
         assert sum(self.agents_per_env) == self.agents_per_batch
@@ -138,70 +124,24 @@ class Serial:
         self.initialized = False
         self.flag = RESET
 
-    def _avg_infos(self):
-        infos = {}
-        for e in self.infos:
-            for k, v in opengigaflow.unroll_nested_dict(e):
-                if k not in infos:
-                    infos[k] = []
-
-                if isinstance(v, list):
-                    infos[k].append(np.mean(v))
-                else:
-                    infos[k].append(v)
-
-        for k in list(infos.keys()):
-            try:
-                infos[k] = np.mean(infos[k])
-            except:
-                del infos[k]
-
     def async_reset(self, seed=None):
         self.flag = RECV
-        infos = []
-        child_seeds = np.random.SeedSequence(seed).spawn(len(self.envs)) if seed is not None else None
-        for i, env in enumerate(self.envs):
-            if seed is None:
-                ob, i = env.reset()
-            else:
-                ob, i = env.reset(seed=int(child_seeds[i].generate_state(1)[0]) & 0x7FFFFFFF)
-
-            if isinstance(i, list):
-                infos.extend(i)
-            else:
-                infos.append(i)
-
-        self.infos = infos
-        self._avg_infos()
+        self.infos = []
+        for env, env_seed in zip(self.envs, spawn_child_seeds(seed, len(self.envs))):
+            _, env_infos = env.reset(seed=env_seed)
+            self.infos.extend(env_infos)
 
     def send(self, actions):
         if not actions.flags.contiguous:
             actions = np.ascontiguousarray(actions)
 
         actions = send_precheck(self, actions)
-        rewards, dones, truncateds, self.infos = [], [], [], []
-        ptr = 0
-        for idx, env in enumerate(self.envs):
-            end = ptr + self.agents_per_env[idx]
-            atns = actions[ptr:end]
-            if env.done:
-                o, i = env.reset()
-            else:
-                o, r, d, t, i = env.step(atns)
-
-            if i:
-                if isinstance(i, list):
-                    self.infos.extend(i)
-                else:
-                    self.infos.append(i)
-
-            ptr = end
-
-        self._avg_infos()
-
-    def notify(self):
-        for env in self.envs:
-            env.notify()
+        self.infos = []
+        agent_start = 0
+        for env, env_agent_count in zip(self.envs, self.agents_per_env):
+            _, _, _, _, env_infos = env.step(actions[agent_start : agent_start + env_agent_count])
+            self.infos.extend(env_infos)
+            agent_start += env_agent_count
 
     def recv(self):
         recv_precheck(self)
@@ -214,9 +154,6 @@ class Serial:
             self.agent_ids,
             self.masks,
         )
-
-    def get_state(self):
-        return [env.get_state() for env in self.envs][0]
 
     def close(self):
         for env in self.envs:
@@ -242,10 +179,7 @@ def read_cpu_cores(cpus):
 
 
 def plan_worker_cpus(cores, worker_count):
-    """One hardware thread per worker: first threads of all cores before siblings, cores round-robin over cache domains.
-
-    Consecutive workers form a buffer and step together, so a buffer lands on different cores, evenly over the domains.
-    """
+    """One hardware thread per worker, siblings last, cores round-robin over cache domains: buffers spread evenly."""
     domains = {}
     for cache_domain, core_threads in cores:
         domains.setdefault(cache_domain, []).append(core_threads)
@@ -271,7 +205,7 @@ def cache_domain_shares(worker_cache_domains):
 
 
 def _worker_process(
-    env_creators,
+    env_creator,
     env_args,
     env_kwargs,
     obs_shape,
@@ -279,21 +213,18 @@ def _worker_process(
     transport_dtype,
     atn_shape,
     atn_dtype,
-    num_envs,
     num_agents,
     num_workers,
     worker_idx,
     send_pipe,
     recv_pipe,
     shm,
-    is_native,
     seed,
     worker_cpu,
 ):
     if worker_cpu is not None:
         os.sched_setaffinity(0, {worker_cpu})
-    # Environments read and write directly to shared memory
-    shape = (num_workers, num_envs * num_agents)
+    shape = (num_workers, num_agents)
     atn_arr = np.ndarray((*shape, *atn_shape), dtype=atn_dtype, buffer=shm["actions"])[worker_idx]
     all_observations = np.ndarray((*shape, *obs_shape), dtype=transport_dtype, buffer=shm["observations"])
     shared_observations = all_observations[worker_idx]
@@ -317,27 +248,13 @@ def _worker_process(
     )
     buf["masks"][:] = True
 
-    if is_native and num_envs == 1:
-        envs = env_creators[0](*env_args[0], **env_kwargs[0], buf=buf, seed=seed)
-    else:
-        envs = Serial(env_creators, env_args, env_kwargs, num_envs, buf=buf, seed=seed)
-
-    notify = np.ndarray(num_workers, dtype=bool, buffer=shm["notify"])
+    env = env_creator(*env_args, **env_kwargs, buf=buf, seed=seed)
     while True:
         command = recv_pipe.recv()
-        if notify[worker_idx]:
-            envs.notify()
-            notify[worker_idx] = False
-
         if command == RESET:
-            seed = recv_pipe.recv()
-            _, infos = envs.reset(seed=seed)
+            _, infos = env.reset(seed=recv_pipe.recv())
         elif command == STEP:
-            _, _, _, _, infos = envs.step(atn_arr)
-        elif command == CLOSE:
-            envs.close()
-            send_pipe.send(None)
-            break
+            _, _, _, _, infos = env.step(atn_arr)
 
         if compress_observations:
             transport_tensor.copy_(env_tensor)
@@ -345,17 +262,8 @@ def _worker_process(
 
 
 class Multiprocessing:
-    """Runs environments in parallel using multiprocessing
-
-    Use this vectorization module for most applications
-    """
-
     reset = reset
     step = step
-
-    @property
-    def num_envs(self):
-        return self.agents_per_batch
 
     def __init__(
         self,
@@ -365,56 +273,37 @@ class Multiprocessing:
         num_envs,
         num_workers=None,
         batch_size=None,
-        zero_copy=True,
-        sync_traj=True,
-        overwork=False,
         seed=0,
         observation_transport_dtype=None,
         pin_workers=False,
-        **kwargs,
     ):
         if batch_size is None:
             batch_size = num_envs
         if num_workers is None:
             num_workers = num_envs
+        if num_workers != num_envs:
+            raise opengigaflow.APIUsageError(
+                f"num_workers ({num_workers}) must equal num_envs ({num_envs}): each worker process runs one env"
+            )
 
         import psutil
 
         cpu_threads = psutil.cpu_count(logical=True)
-        if num_workers > cpu_threads and not overwork:
+        if num_workers > cpu_threads:
             raise opengigaflow.APIUsageError(
-                " ".join(
-                    [
-                        f"num_workers ({num_workers}) > hardware threads ({cpu_threads}) is disallowed by default.",
-                        "Idle workers block instead of spinning, so one process per hardware thread is the limit.",
-                        "If you really want to do this, set overwork=True.",
-                    ]
-                )
+                f"num_workers ({num_workers}) > hardware threads ({cpu_threads}) is disallowed."
+                " Idle workers block instead of spinning, so one process per hardware thread is the limit."
             )
+        if num_envs % batch_size != 0:
+            raise opengigaflow.APIUsageError("num_envs must be divisible by batch_size")
 
-        num_batches = num_envs / batch_size
-        if zero_copy and num_batches != int(num_batches):
-            # This is so you can have n equal buffers
-            raise opengigaflow.APIUsageError("zero_copy: num_envs must be divisible by batch_size")
-
-        self.num_environments = num_envs
-        envs_per_worker = num_envs // num_workers
-        self.envs_per_worker = envs_per_worker
-        self.workers_per_batch = batch_size // envs_per_worker
+        self.workers_per_batch = batch_size
         self.num_workers = num_workers
 
-        # I really didn't want to need a driver process... with mp.shared_memory
-        # we can fetch this data from the worker processes and ever perform
-        # additional space checks. Unfortunately, SharedMemory has a janky integration
-        # with the resource tracker that spams warnings and does not work with
-        # forked processes. So for now, RawArray is much more reliable.
-        # You can't send a RawArray through a pipe.
         self.driver_env = driver_env = make_config_env(env_creators[0], env_args[0], env_kwargs[0])
-        is_native = isinstance(driver_env, VecEnv)
-        self.emulated = False if is_native else driver_env.emulated
         self.num_agents = num_agents = driver_env.num_agents * num_envs
         self.agents_per_batch = driver_env.num_agents * batch_size
-        agents_per_worker = driver_env.num_agents * envs_per_worker
+        agents_per_worker = driver_env.num_agents
         obs_space = driver_env.single_observation_space
         obs_shape = obs_space.shape
         obs_dtype = obs_space.dtype
@@ -433,10 +322,7 @@ class Multiprocessing:
         self.single_observation_space = driver_env.single_observation_space
         self.single_action_space = driver_env.single_action_space
         self.action_space = opengigaflow.spaces.joint_space(self.single_action_space, self.agents_per_batch)
-        self.observation_space = opengigaflow.spaces.joint_space(self.single_observation_space, self.agents_per_batch)
         self.agent_ids = np.arange(num_agents).reshape(num_workers, agents_per_worker)
-
-        agents_per_env = driver_env.num_agents
 
         preload_shared_resources = getattr(driver_env, "preload_shared_resources", None)
         self._driver_env_open = False
@@ -446,8 +332,7 @@ class Multiprocessing:
         if not self._driver_env_open:
             driver_env.close()
 
-        # Mac breaks without setting fork... but setting it breaks sweeps on 2nd run
-        # set_start_method('fork')
+        # RawArray, not SharedMemory: SharedMemory's resource tracker spams warnings and breaks forked workers
         self.shm = dict(
             observations=process_context.RawArray(obs_ctype, num_agents * int(np.prod(obs_shape))),
             actions=process_context.RawArray(atn_ctype, num_agents * int(np.prod(atn_shape))),
@@ -455,7 +340,6 @@ class Multiprocessing:
             terminals=process_context.RawArray("b", num_agents),
             truncateds=process_context.RawArray("b", num_agents),
             masks=process_context.RawArray("b", num_agents),
-            notify=process_context.RawArray("b", num_workers),
         )
         shape = (num_workers, agents_per_worker)
         self.obs_batch_shape = (self.agents_per_batch, *obs_shape)
@@ -467,15 +351,12 @@ class Multiprocessing:
             terminals=np.ndarray(shape, dtype=bool, buffer=self.shm["terminals"]),
             truncations=np.ndarray(shape, dtype=bool, buffer=self.shm["truncateds"]),
             masks=np.ndarray(shape, dtype=bool, buffer=self.shm["masks"]),
-            notify=np.ndarray(num_workers, dtype=bool, buffer=self.shm["notify"]),
         )
 
         self.send_pipes, w_recv_pipes = zip(*[process_context.Pipe() for _ in range(num_workers)])
         w_send_pipes, self.recv_pipes = zip(*[process_context.Pipe() for _ in range(num_workers)])
-        self.recv_pipe_dict = {p: i for i, p in enumerate(self.recv_pipes)}
 
-        worker_ss = np.random.SeedSequence(seed).spawn(num_workers) if seed is not None else [None] * num_workers
-        worker_seeds = [int(ss.generate_state(1)[0]) & 0x7FFFFFFF if ss is not None else None for ss in worker_ss]
+        worker_seeds = spawn_child_seeds(seed, num_workers)
         self.worker_cpus = [None] * num_workers
         self.worker_cache_shares = [None] * num_workers
         self.driver_cpus = None
@@ -491,50 +372,39 @@ class Multiprocessing:
             self.worker_cache_shares = cache_domain_shares([cpu_cache_domains[cpu] for cpu in self.worker_cpus])
 
         self.processes = []
-        for i in range(num_workers):
-            start = i * envs_per_worker
-            end = start + envs_per_worker
-            worker_env_kwargs = env_kwargs[start:end]
-            takes_cache_share = "cache_domain_share" in inspect.signature(env_creators[start]).parameters
-            if takes_cache_share and self.worker_cache_shares[i] is not None:
+        for worker_idx in range(num_workers):
+            worker_env_kwargs = env_kwargs[worker_idx]
+            takes_cache_share = "cache_domain_share" in inspect.signature(env_creators[worker_idx]).parameters
+            if takes_cache_share and self.worker_cache_shares[worker_idx] is not None:
                 # envs that keep per-env data hot (maps) partition it so that one cache domain's workers share it
-                cache_share = self.worker_cache_shares[i]
-                worker_env_kwargs = [dict(kwargs, cache_domain_share=cache_share) for kwargs in worker_env_kwargs]
-            p = process_context.Process(
+                worker_env_kwargs = dict(worker_env_kwargs, cache_domain_share=self.worker_cache_shares[worker_idx])
+            process = process_context.Process(
                 target=_worker_process,
                 args=(
-                    env_creators[start:end],
-                    env_args[start:end],
+                    env_creators[worker_idx],
+                    env_args[worker_idx],
                     worker_env_kwargs,
                     obs_shape,
                     obs_dtype,
                     transport_dtype,
                     atn_shape,
                     atn_dtype,
-                    envs_per_worker,
-                    agents_per_env,
+                    agents_per_worker,
                     num_workers,
-                    i,
-                    w_send_pipes[i],
-                    w_recv_pipes[i],
+                    worker_idx,
+                    w_send_pipes[worker_idx],
+                    w_recv_pipes[worker_idx],
                     self.shm,
-                    is_native,
-                    worker_seeds[i],
-                    self.worker_cpus[i],
+                    worker_seeds[worker_idx],
+                    self.worker_cpus[worker_idx],
                 ),
             )
-            p.start()
-            self.processes.append(p)
+            process.start()
+            self.processes.append(process)
 
         self.flag = RESET
         self.initialized = False
-        self.zero_copy = zero_copy
-        self.sync_traj = sync_traj
         self._observation_registration = None
-
-        self.ready_workers = []
-        self.waiting_workers = []
-        self.batch_workers = []
         self.pending_result = np.zeros(num_workers, dtype=bool)
 
     def _check_worker_alive(self, worker):
@@ -552,132 +422,52 @@ class Multiprocessing:
         if infos:
             self.infos[worker] = infos
 
-    def _collect_ready_workers(self):
-        # sync_traj consumes workers in send order so batches stay aligned with the experience buffer
-        if self.sync_traj:
-            worker = self.waiting_workers.pop(0)
-            self._recv_worker_result(worker)
-            self.ready_workers.append(worker)
-            return
-
-        pipes = [self.recv_pipes[worker] for worker in self.waiting_workers]
-        ready_pipes = wait(pipes, WORKER_POLL_TIMEOUT_SECONDS)
-        if not ready_pipes:
-            for worker in self.waiting_workers:
-                self._check_worker_alive(worker)
-            return
-
-        for pipe in ready_pipes:
-            worker = self.recv_pipe_dict[pipe]
-            self._recv_worker_result(worker)
-            self.waiting_workers.remove(worker)
-            self.ready_workers.append(worker)
-
     def recv(self):
         recv_precheck(self)
-        while True:
-            self._collect_ready_workers()
-            if not self.ready_workers:
-                continue
+        # whole worker blocks in send order keep each batch aligned with the experience buffer
+        batch_start = self.next_batch_start
+        batch_end = batch_start + self.workers_per_batch
+        self.batch_workers = range(batch_start, batch_end)
+        self.batch_slice = slice(batch_start, batch_end)
+        self.next_batch_start = batch_end % self.num_workers
+        for worker in self.batch_workers:
+            self._recv_worker_result(worker)
 
-            if self.workers_per_batch == 1:
-                # Fastest path. Zero-copy optimized for batch size 1
-                w_slice = self.ready_workers[0]
-                s_range = [w_slice]
-                self.waiting_workers.append(w_slice)
-                self.ready_workers.pop(0)
-                break
-            elif self.workers_per_batch == self.num_workers:
-                # Slowest path. Zero-copy synchornized for all workers
-                if len(self.ready_workers) < self.num_workers:
-                    continue
-
-                w_slice = slice(0, self.num_workers)
-                s_range = range(0, self.num_workers)
-                self.waiting_workers.extend(s_range)
-                self.ready_workers = []
-                break
-            elif self.zero_copy:
-                # Zero-copy for batch size > 1. Has to wait for
-                # a contiguous block of workers and adds a few
-                # microseconds of extra index processing time
-                completed = np.zeros(self.num_workers, dtype=bool)
-                completed[self.ready_workers] = True
-                buffers = completed.reshape(-1, self.workers_per_batch).all(axis=1)
-                start = buffers.argmax()
-                if not buffers[start]:
-                    continue
-
-                start *= self.workers_per_batch
-                end = start + self.workers_per_batch
-                w_slice = slice(start, end)
-                s_range = range(start, end)
-                self.waiting_workers.extend(s_range)
-                self.ready_workers = [e for e in self.ready_workers if e not in s_range]
-                break
-            elif len(self.ready_workers) >= self.workers_per_batch:
-                # Full async path for batch size > 1. Alawys copies
-                # data because of non-contiguous worker indices
-                # Can be faster for envs with small observations
-                w_slice = self.ready_workers[: self.workers_per_batch]
-                s_range = w_slice
-                self.waiting_workers.extend(s_range)
-                self.ready_workers = self.ready_workers[self.workers_per_batch :]
-                break
-
-        self.w_slice = w_slice
-        self.batch_workers = s_range
         buf = self.buf
-
-        o = buf["observations"][w_slice].reshape(self.obs_batch_shape)
-        r = buf["rewards"][w_slice].ravel()
-        d = buf["terminals"][w_slice].ravel()
-        t = buf["truncations"][w_slice].ravel()
+        observations = buf["observations"][self.batch_slice].reshape(self.obs_batch_shape)
+        rewards = buf["rewards"][self.batch_slice].ravel()
+        terminals = buf["terminals"][self.batch_slice].ravel()
+        truncations = buf["truncations"][self.batch_slice].ravel()
 
         infos = []
-        for i in s_range:
-            if self.infos[i]:
-                infos.extend(self.infos[i])
-                self.infos[i] = []
+        for worker in self.batch_workers:
+            if self.infos[worker]:
+                infos.extend(self.infos[worker])
+                self.infos[worker] = []
 
-        agent_ids = self.agent_ids[w_slice].ravel()
-        m = buf["masks"][w_slice].ravel()
-        self.batch_mask = m
-
-        return o, r, d, t, infos, agent_ids, m
+        agent_ids = self.agent_ids[self.batch_slice].ravel()
+        masks = buf["masks"][self.batch_slice].ravel()
+        return observations, rewards, terminals, truncations, infos, agent_ids, masks
 
     def send(self, actions):
         actions = send_precheck(self, actions).reshape(self.atn_batch_shape)
 
-        self.actions[self.w_slice] = actions
+        self.actions[self.batch_slice] = actions
         for worker in self.batch_workers:
             self.send_pipes[worker].send(STEP)
-        self.pending_result[self.batch_workers] = True
+        self.pending_result[self.batch_slice] = True
 
     def async_reset(self, seed=0):
         for worker in np.flatnonzero(self.pending_result):
             self._recv_worker_result(worker)
 
         self.flag = RECV
-        self.prev_env_id = []
-        self.flag = RECV
-
-        self.ready_workers = []
-        self.ready_next_workers = []  # Used to evenly sample workers
-        self.waiting_workers = list(range(self.num_workers))
+        self.next_batch_start = 0
         self.infos = [[] for _ in range(self.num_workers)]
-
-        worker_ss = (
-            np.random.SeedSequence(seed).spawn(self.num_workers) if seed is not None else [None] * self.num_workers
-        )
-        for i in range(self.num_workers):
-            s = int(worker_ss[i].generate_state(1)[0]) & 0x7FFFFFFF if worker_ss[i] is not None else None
-            self.send_pipes[i].send(RESET)
-            self.send_pipes[i].send(s)
+        for worker, worker_seed in enumerate(spawn_child_seeds(seed, self.num_workers)):
+            self.send_pipes[worker].send(RESET)
+            self.send_pipes[worker].send(worker_seed)
         self.pending_result[:] = True
-
-    def notify(self):
-        self.buf["notify"][:] = True
 
     def bind_driver_thread(self):
         """Move the calling thread onto the core kept free of pinned workers; release_driver_thread undoes it."""
@@ -696,8 +486,7 @@ class Multiprocessing:
         """Register stable shared observations in the trainer's current CUDA context."""
         if self.processes is None:
             raise opengigaflow.APIUsageError("Cannot pin observations after the vector environment is closed")
-        # Non-zero-copy recv() returns newly allocated arrays, not this shared buffer.
-        if not self.zero_copy or self._observation_registration is not None:
+        if self._observation_registration is not None:
             return
 
         import torch
@@ -731,54 +520,28 @@ class Multiprocessing:
         self.processes = None
 
 
-def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=VecEnv, num_envs=1, seed=0, **kwargs):
+VECTOR_BACKENDS = {"Serial": Serial, "Multiprocessing": Multiprocessing}
+
+
+def make(env_creator_or_creators, env_args=None, env_kwargs=None, *, backend, num_envs=1, seed=0, **kwargs):
     if num_envs < 1:
         raise opengigaflow.APIUsageError("num_envs must be at least 1")
     if num_envs != int(num_envs):
         raise opengigaflow.APIUsageError("num_envs must be an integer")
+    if backend not in VECTOR_BACKENDS:
+        raise opengigaflow.APIUsageError(f"Invalid backend: {backend}")
 
-    if isinstance(backend, str):
-        try:
-            backend = getattr(opengigaflow.vector, backend)
-        except:
-            raise opengigaflow.APIUsageError(f"Invalid backend: {backend}")
-
-    if backend == VecEnv:
-        env_args = env_args or []
-        env_kwargs = env_kwargs or {}
-        vecenv = env_creator_or_creators(*env_args, **env_kwargs)
-        if not isinstance(vecenv, VecEnv):
-            raise opengigaflow.APIUsageError(
-                "Native vectorization requires a native VecEnv. Use Serial or Multiprocessing instead."
-            )
-        if num_envs != 1:
-            raise opengigaflow.APIUsageError(
-                "Native vectorization is for VecEnvs that handle all per-process vectorization internally. If you want to run multiple separate Python instances on a single process, use Serial or Multiprocessing instead"
-            )
-
-        return vecenv
-
+    if kwargs.get("num_workers") == "auto":
+        kwargs["num_workers"] = num_envs
+    if kwargs.get("batch_size") == "auto":
+        kwargs["batch_size"] = max(num_envs // 2, 1)
     if "num_workers" in kwargs:
-        if kwargs["num_workers"] == "auto":
-            kwargs["num_workers"] = num_envs
-
         envs_per_worker = num_envs / kwargs["num_workers"]
         if envs_per_worker != int(envs_per_worker):
             raise opengigaflow.APIUsageError("num_envs must be divisible by num_workers")
-
-        if "batch_size" in kwargs:
-            if kwargs["batch_size"] == "auto":
-                if num_envs == 1:
-                    kwargs["batch_size"] = 1
-                else:
-                    kwargs["batch_size"] = num_envs // 2
-
-            batch_size = kwargs["batch_size"]
-            if batch_size is None:
-                batch_size = num_envs
-
-            if batch_size % envs_per_worker != 0:
-                raise opengigaflow.APIUsageError("batch_size must be divisible by (num_envs / num_workers)")
+        batch_size = kwargs.get("batch_size")
+        if batch_size is not None and batch_size % envs_per_worker != 0:
+            raise opengigaflow.APIUsageError("batch_size must be divisible by (num_envs / num_workers)")
 
     if env_args is None:
         env_args = []
@@ -809,15 +572,14 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=VecEnv
             raise opengigaflow.APIUsageError("env_kwargs must be a list of dictionaries")
 
     # Keeps batch size consistent when debugging with Serial backend
-    if backend is Serial and "batch_size" in kwargs:
+    if backend == "Serial" and kwargs.get("batch_size") is not None:
         num_envs = kwargs["batch_size"]
 
-    # Sanity check args
     for k in kwargs:
         if k not in VECTOR_OPTIONS:
             raise opengigaflow.APIUsageError(f"Invalid argument: {k}")
 
-    return backend(env_creators, env_args, env_kwargs, num_envs, seed=seed, **kwargs)
+    return VECTOR_BACKENDS[backend](env_creators, env_args, env_kwargs, num_envs, seed=seed, **kwargs)
 
 
 def check_envs(envs, driver):

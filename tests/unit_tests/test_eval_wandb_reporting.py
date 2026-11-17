@@ -597,8 +597,7 @@ def test_training_logger_opens_the_run_with_its_config(monkeypatch):
 
 
 def test_tidied_longest6_run_reads_its_flat_route_records(tmp_path):
-    """After tidy_carla_run.py results.csv sits at the run's top and the records are routes/*.result.json; other
-    json files under the run are not records."""
+    """A tidied run keeps results.csv on top and its records as routes/*.result.json; other json is no record."""
     run = tmp_path / "carla_longest6_v2_seeds0-1_20261109_120000_7"
     (run / "routes").mkdir(parents=True)
     (run / "details").mkdir()

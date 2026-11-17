@@ -1,5 +1,4 @@
-"""roadblock_centroid_goals: route roadblock centroids become goals from the ego's block on, off-polygon
-centroids snap to a lane baseline, goals behind the ego or too close together are dropped."""
+"""roadblock_centroid_goals: route block centroids ahead of the ego become goals; off-polygon ones snap to a lane."""
 
 from types import SimpleNamespace
 
@@ -7,7 +6,7 @@ import numpy as np
 import pytest
 
 
-nuplan = pytest.importorskip("nuplan")
+pytest.importorskip("nuplan")
 
 from opengigaflow.ocean.cosim import nuplan_bridge as nb
 
@@ -55,8 +54,7 @@ def test_roadblock_centroid_goals_skip_behind_thin_and_snap_off_polygon_centroid
 
 
 def test_roadblock_centroid_goals_follow_the_route_through_turns():
-    # ego at the end of A facing east; a route that turns back west after B keeps its goals (only the ego
-    # block's own centroid is heading-gated), and the repeated block id of a loop is kept as a revisit
+    """Only the ego block's centroid is heading-gated: a route turning back after B keeps its goals, a loop revisits."""
     map_api = _BlockMap()
     goals = nb.roadblock_centroid_goals(
         map_api, ["A", "B", "A", "B"], 30.0, 2.0, 0.0, min_spacing=10.0, min_ahead_m=15.0

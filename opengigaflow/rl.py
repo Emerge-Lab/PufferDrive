@@ -1,9 +1,9 @@
-## opengigaflow [train | eval <benchmark>] [optional args]
-# This is the same as python -m opengigaflow.rl [train | eval <benchmark>] [optional args]
-# Distributed example: torchrun --standalone --nnodes=1 --nproc-per-node=6 -m opengigaflow.rl train
+"""PPO training and benchmarks: python -m opengigaflow.rl train | eval <benchmark> [overrides]; DDP via torchrun."""
 
 import contextlib
 import copy
+import json
+import math
 import warnings
 
 import pandas as pd
@@ -73,9 +73,9 @@ signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
 
 from torch.utils.cpp_extension import CUDA_HOME, ROCM_HOME  # noqa: E402
 
-# Assume advantage kernel has been built if torch has been compiled with CUDA or HIP support
-# and can find CUDA or HIP in the system
+# assumes the op was built with its CUDA kernel whenever torch finds a CUDA / HIP toolkit at import (as setup.py does)
 ADVANTAGE_CUDA = bool(CUDA_HOME or ROCM_HOME)
+TRAINER_STATE_VERSION = 2
 HIDDEN_DASHBOARD_METRICS = {
     "comfort_score",
     "driving_direction_score",
@@ -83,13 +83,38 @@ HIDDEN_DASHBOARD_METRICS = {
     "multi_lane_score",
     "multi_lane_time",
     "speed_limit_compliance",
-    "total_distance_travelled_sum",
-    "total_infraction_count",
 }
 # sums over one logging window: their size follows the logging cadence, so they are not charted
 UNCHARTED_WINDOW_SUM_METRICS = {"n", "total_distance_travelled", "total_infractions"}
 FLOPS_PER_TFLOP = 1e12
 ENV_NAME = "opengigaflow"
+LOG_INTERVAL_SECONDS = 0.25
+MAX_DASHBOARD_USER_STATS = 30
+LABEL_COLOR = "[cyan]"
+UNIT_COLOR = "[dim default]"
+TITLE_COLOR = "[bright_cyan]"
+VALUE_COLOR = "[default]"
+# env settings a train-mode load_model_path run takes from the checkpoint's config.yaml with the network
+FINE_TUNE_ENV_KEYS = {
+    "goal_source",
+    "goal_regen_mode",
+    "num_goals",
+    "min_goal_spacing",
+    "max_goal_spacing",
+    "reward_conditioning",
+    "reward_randomization",
+    "obs_slots_boundary_n",
+    "obs_slots_lane_n",
+    "obs_boundary_stride",
+    "obs_lane_stride",
+    "obs_stride_merge_segments",
+    "obs_dropout_boundary",
+    "obs_dropout_lane",
+    "obs_slots_partners_n",
+    "obs_slots_traffic_controls_n",
+    "traffic_lights_enabled",
+    "stop_signs_enabled",
+}
 
 
 def torch_device(device):
@@ -117,8 +142,7 @@ def logits_to_float(logits):
 
 class PPOTrainer:
     def __init__(self, config, vecenv, policy, logger=None):
-        # Backend perf optimization; tf32=False forces true float32 matmuls/convs
-        allow_tf32 = config.get("tf32", True)
+        allow_tf32 = config["tf32"]
         torch.set_float32_matmul_precision("high" if allow_tf32 else "highest")
         torch.backends.cuda.matmul.allow_tf32 = allow_tf32
         torch.backends.cudnn.allow_tf32 = allow_tf32
@@ -126,20 +150,17 @@ class PPOTrainer:
         torch.backends.cudnn.benchmark = not config["torch_deterministic"]
         torch.use_deterministic_algorithms(config["torch_deterministic"], warn_only=True)
 
-        # Reproducibility
         seed = config["seed"]
         # Decorrelate reset streams across DDP ranks
         if seed is not None and torch.distributed.is_initialized():
             seed = seed * torch.distributed.get_world_size() + torch.distributed.get_rank()
 
-        # Vecenv info
         vecenv.async_reset(seed)
 
-        self.env_continuous = isinstance(vecenv.single_action_space, opengigaflow.spaces.Box)
         obs_space = vecenv.single_observation_space
         # Custom policy attributes live on the base module, not the DDP/compile wrapper.
         unwrapped_policy = base_policy(policy)
-        if self.env_continuous and not unwrapped_policy.is_continuous:
+        if not unwrapped_policy.is_continuous:
             action_shape = ()
             action_dtype = torch.int32
         else:
@@ -148,7 +169,6 @@ class PPOTrainer:
         total_agents = vecenv.num_agents
         self.total_agents = total_agents
 
-        # Experience
         if config["batch_size"] == "auto":
             config["batch_size"] = total_agents * config["bptt_horizon"]
         elif config["bptt_horizon"] == "auto":
@@ -164,26 +184,16 @@ class PPOTrainer:
         use_cuda = is_cuda_device(device)
         if precision == "bfloat16" and use_cuda and not torch.cuda.is_bf16_supported():
             raise opengigaflow.APIUsageError("bfloat16 precision requires a CUDA device with bf16 support")
-        if precision == "bfloat16" and not config.get("amp", True):
-            raise opengigaflow.APIUsageError("bfloat16 precision requires train.amp=True")
-        fp32_heads = getattr(base_policy(policy), "fp32_heads", False)
-        if precision == "bfloat16" and not config.get("tf32", True) and not fp32_heads:
+        fp32_heads = getattr(unwrapped_policy, "fp32_heads", False)
+        if precision == "bfloat16" and not allow_tf32 and not fp32_heads:
             raise opengigaflow.APIUsageError(
                 "train.tf32=False with train.precision=bfloat16 requires policy.fp32_heads=true"
             )
 
-        rollout_dtype = config.get("rollout_dtype", "float32")
-        if rollout_dtype == "float32":
-            obs_dtype = opengigaflow.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
-        elif rollout_dtype == "float16" and np.issubdtype(obs_space.dtype, np.floating):
-            obs_dtype = getattr(torch, rollout_dtype)
-        else:
-            raise opengigaflow.APIUsageError(
-                f"Invalid rollout_dtype {rollout_dtype} for observation dtype {obs_space.dtype}"
-            )
-        self.compress_observations = rollout_dtype != "float32"
+        obs_dtype = getattr(torch, config["rollout_dtype"])
+        compress_observations = config["rollout_dtype"] != "float32"
         transport_dtype = getattr(vecenv, "observation_transport_dtype", obs_space.dtype)
-        if transport_dtype != obs_space.dtype and not self.compress_observations:
+        if transport_dtype != obs_space.dtype and not compress_observations:
             raise opengigaflow.APIUsageError(
                 f"Observations arrive as {transport_dtype}; this needs train.rollout_dtype={transport_dtype}"
             )
@@ -211,16 +221,12 @@ class PPOTrainer:
         self.ep_indices = torch.arange(total_agents, dtype=torch.int32)
         self.free_idx = total_agents
 
-        # Minibatching & gradient accumulation
         minibatch_size = config["minibatch_size"]
         max_minibatch_size = config["max_minibatch_size"]
         self.minibatch_size = min(minibatch_size, max_minibatch_size)
         self.accumulate_minibatches = max(1, minibatch_size // max_minibatch_size)
-        self.total_minibatches = int(config["update_epochs"] * batch_size / self.minibatch_size)
-        self.minibatch_segments = self.minibatch_size // horizon
 
-        # Torch compile
-        self.uncompiled_policy = base_policy(policy)
+        self.uncompiled_policy = unwrapped_policy
         self.policy = policy
         if config["compile"]:
             compile_kwargs = {
@@ -231,7 +237,6 @@ class PPOTrainer:
             self.policy.forward_eval = torch.compile(self.uncompiled_policy.forward_eval, **compile_kwargs)
             opengigaflow.pytorch.sample_logits = torch.compile(opengigaflow.pytorch.sample_logits, **compile_kwargs)
 
-        # Optimizer
         optimizer = torch.optim.AdamW(
             self.policy.parameters(),
             lr=config["learning_rate"],
@@ -248,7 +253,6 @@ class PPOTrainer:
         self.actor_params = actor_params
         self.critic_params = critic_params
 
-        # Logging
         self.logger = logger
         if logger is None:
             self.logger = NoLogger(config)
@@ -272,17 +276,13 @@ class PPOTrainer:
         self.update_seconds = 0.0
         self.trained_transition_count = 0
 
-        # Learning rate scheduler
         epochs = config["total_timesteps"] // config["batch_size"]
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-        self.total_epochs = epochs
 
-        # Automatic mixed precision
         self.amp_context = contextlib.nullcontext()
         if use_cuda and precision == "bfloat16":
             self.amp_context = torch.amp.autocast(device_type="cuda", dtype=getattr(torch, precision))
 
-        # Initializations
         self.config = config
         self.vecenv = vecenv
         # Workers already exist; registration belongs to this rank's CUDA context.
@@ -291,7 +291,6 @@ class PPOTrainer:
                 vecenv.pin_observations()
         self.epoch = 0
         self.global_step = 0
-        self.agent_steps = 0
         self.last_log_step = 0
         self.last_log_time = time.time()
         self.start_time = time.time()
@@ -304,32 +303,23 @@ class PPOTrainer:
         self.best_score = -float("inf")
         self.ema_max = 0.0
 
-        # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
         self.print_dashboard(clear=True)
 
     def load_training_state(self, path):
         device = torch_device(self.config["device"])
         state = torch.load(path, map_location=device, weights_only=False)
-        policy_state = state.get("policy_state_dict")
-        if policy_state is None:
-            model_name = state["model_name"]
-            model_path = os.path.join(os.path.dirname(path), "models", model_name)
-            policy_state = torch.load(model_path, map_location=device)
-
-        policy_state = clean_policy_state_dict(policy_state)
-        self.uncompiled_policy.load_state_dict(policy_state)
+        if state.get("state_version") != TRAINER_STATE_VERSION:
+            raise ValueError(f"{path} is not a state_version {TRAINER_STATE_VERSION} trainer state")
+        self.uncompiled_policy.load_state_dict(clean_policy_state_dict(state["policy_state_dict"]))
         self.optimizer.load_state_dict(state["optimizer_state_dict"])
-
-        if "scheduler_state_dict" in state:
-            self.scheduler.load_state_dict(state["scheduler_state_dict"])
-
-        self.epoch = state.get("epoch", state.get("update", 0))
-        self.global_step = state.get("global_step", state.get("agent_step", 0))
+        self.scheduler.load_state_dict(state["scheduler_state_dict"])
+        self.epoch = state["epoch"]
+        self.global_step = state["global_step"]
         self.last_log_step = self.global_step
-        self.best_score = state.get("best_score", self.best_score)
-        self.ema_max = state.get("ema_max", self.ema_max)
-        restore_rng_state(state)
+        self.best_score = state["best_score"]
+        self.ema_max = state["ema_max"]
+        restore_rng_state(state["rng_state"])
         print(f"Resumed training from {path}: epoch={self.epoch}, global_step={self.global_step}")
 
     @property
@@ -355,8 +345,8 @@ class PPOTrainer:
         if hasattr(self.vecenv, "bind_driver_thread"):
             self.vecenv.bind_driver_thread()
 
-        self.full_rows = 0
-        while self.full_rows < self.segments:
+        full_rows = 0
+        while full_rows < self.segments:
             profile("env", epoch)
             o, r, d, t, info, env_id, mask = self.vecenv.recv()
 
@@ -366,15 +356,12 @@ class PPOTrainer:
             self.global_step += env_id.stop - env_id.start
 
             profile("eval_copy", epoch)
-            o = torch.as_tensor(o)
-            if self.compress_observations:
-                o_device = o.to(device=device, dtype=self.observations.dtype, non_blocking=True).float()
-            else:
-                o_device = o.to(device, non_blocking=True)
-            r = torch.as_tensor(r).to(device)  # , non_blocking=True)
-            d = torch.as_tensor(d).to(device)  # , non_blocking=True)
-            t = torch.as_tensor(t).to(device)  # , non_blocking=True)
-            m = torch.as_tensor(mask).to(device)  # , non_blocking=True)
+            # .float() is a no-op for float32 rollouts and widens float16 ones
+            o_device = torch.as_tensor(o).to(device=device, dtype=self.observations.dtype, non_blocking=True).float()
+            r = torch.as_tensor(r).to(device)
+            d = torch.as_tensor(d).to(device)
+            t = torch.as_tensor(t).to(device)
+            m = torch.as_tensor(mask).to(device)
             done_mask = (d + t).clamp(max=1.0)
 
             profile("eval_forward", epoch)
@@ -382,14 +369,13 @@ class PPOTrainer:
                 logits, value = self.policy.forward_eval(o_device)
                 logits = logits_to_float(logits)
                 action, logprob, _, cont_action = opengigaflow.pytorch.sample_logits(
-                    logits, env_continuous=self.env_continuous, policy=self.uncompiled_policy
+                    logits, env_continuous=True, policy=self.uncompiled_policy
                 )
                 if config["normalize_rewards"]:
                     r = torch.sign(r) * torch.log1p(torch.abs(r))
 
             profile("eval_copy", epoch)
             with torch.no_grad():
-                # Fast path for fully vectorized envs
                 l = self.ep_lengths[env_id.start].item()
                 batch_rows = slice(self.ep_indices[env_id.start].item(), 1 + self.ep_indices[env_id.stop - 1].item())
 
@@ -412,7 +398,7 @@ class PPOTrainer:
                     self.ep_indices[env_id] = self.free_idx + torch.arange(num_full, dtype=torch.int32)
                     self.ep_lengths[env_id] = 0
                     self.free_idx += num_full
-                    self.full_rows += num_full
+                    full_rows += num_full
 
             profile("eval_misc", epoch)
             for i in info:
@@ -423,7 +409,7 @@ class PPOTrainer:
 
             profile("env", epoch)
 
-            if self.env_continuous and not self.uncompiled_policy.is_continuous:
+            if not self.uncompiled_policy.is_continuous:
                 cont_action = cont_action.cpu().numpy()
                 self.vecenv.send(cont_action)
             else:
@@ -441,7 +427,6 @@ class PPOTrainer:
         profile.end()
         # no synchronize needed: the last action copy to the CPU already waited for the GPU
         self.rollout_seconds += time.perf_counter() - rollout_start_time
-        return opengigaflow.utils.finalize_environment_metrics(self.env_metric_sums)
 
     @record
     def train(self):
@@ -461,17 +446,16 @@ class PPOTrainer:
         profile.end()
         # no synchronize needed: the explained-variance read already waited for the GPU
         self.update_seconds += time.perf_counter() - update_start_time
-        logs = None
         self.epoch += 1
         done_training = self.global_step >= config["total_timesteps"]
-        should_log = done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25
+        should_log = done_training or time.time() > self.last_log_time + LOG_INTERVAL_SECONDS
         if torch.distributed.is_initialized():
             should_log_flag = torch.tensor([1 if should_log else 0], device=config["device"], dtype=torch.int32)
             torch.distributed.broadcast(should_log_flag, src=0)
             should_log = bool(should_log_flag.item())
         if should_log:
             self.losses = {k: v.item() if isinstance(v, torch.Tensor) else v for k, v in losses.items()}
-            logs = self.mean_and_log()
+            self.mean_and_log()
             self.print_dashboard()
             self.stats = {}
             self.env_metric_sums = {}
@@ -484,9 +468,6 @@ class PPOTrainer:
 
         if self.epoch % config["checkpoint_interval"] == 0 or done_training:
             self.save_checkpoint()
-            self.msg = f"Checkpoint saved at update {self.epoch}"
-
-        return logs
 
     def _current_ent_coef(self):
         config = self.config
@@ -502,8 +483,7 @@ class PPOTrainer:
 
     def _ppo_loss(self, mb_obs, mb_actions, mb_logprobs, mb_values, mb_returns, mb_adv):
         config = self.config
-        if self.compress_observations:
-            mb_obs = mb_obs.float()
+        mb_obs = mb_obs.float()
         with self.amp_context:
             logits, newvalue = self.policy(mb_obs)
         logits = logits_to_float(logits)
@@ -518,12 +498,9 @@ class PPOTrainer:
         with torch.no_grad():
             approx_kl = ((ratio - 1) - logratio).mean()
             clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
-
-        with torch.no_grad():
             if torch.distributed.is_initialized():
                 # This mean computation assumes that all GPUs use the same batch size. This is currently guaranteed.
                 world_size = torch.distributed.get_world_size()
-                # Distributed mean
                 advantage_mean = mb_adv.mean()
                 torch.distributed.all_reduce(advantage_mean, op=torch.distributed.ReduceOp.SUM)
                 advantage_mean = advantage_mean / world_size
@@ -548,24 +525,18 @@ class PPOTrainer:
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
         else:
-            v_loss = 0.5 * (newvalue - mb_returns) ** 2
-            v_loss = v_loss.mean()
+            v_loss = (0.5 * (newvalue - mb_returns) ** 2).mean()
         entropy_loss = entropy.mean()
         ent_coef = self._current_ent_coef()
         loss = pg_loss + config["vf_coef"] * v_loss - ent_coef * entropy_loss
 
-        return (
-            loss,
-            newvalue,
-            ratio,
-            {
-                "policy_loss": pg_loss.detach(),
-                "value_loss": v_loss.detach(),
-                "entropy": entropy_loss.detach(),
-                "approx_kl": approx_kl,
-                "clipfrac": clipfrac,
-            },
-        )
+        return loss, {
+            "policy_loss": pg_loss.detach(),
+            "value_loss": v_loss.detach(),
+            "entropy": entropy_loss.detach(),
+            "approx_kl": approx_kl,
+            "clipfrac": clipfrac,
+        }
 
     def _clip_gradients(self, losses):
         # train() converts these logging-only scalars after the optimizer updates.
@@ -578,18 +549,9 @@ class PPOTrainer:
 
     def _compute_advantages(self):
         config = self.config
-        device = config["device"]
-
-        masks = self.masks.bool()
+        masks = self.masks
         terminals = (self.terminals | ~masks).float()
-        advantages = compute_puff_advantage(
-            self.values,
-            self.rewards,
-            terminals,
-            torch.zeros_like(self.values, device=device),
-            config["gamma"],
-            config["gae_lambda"],
-        )
+        advantages = compute_puff_advantage(self.values, self.rewards, terminals, config["gamma"], config["gae_lambda"])
         advantages = advantages.masked_fill(~masks, 0.0)
         return advantages, advantages + self.values, masks
 
@@ -606,7 +568,7 @@ class PPOTrainer:
         flat_values = self.values.reshape(-1)
         flat_returns = returns.reshape(-1)
         flat_advantages = advantages.reshape(-1)
-        flat_masks = masks.reshape(-1).bool()
+        flat_masks = masks.reshape(-1)
         total_transitions = flat_masks.numel()
         valid_idx = torch.nonzero(flat_masks, as_tuple=False).flatten()
         valid_abs_adv = flat_advantages[valid_idx].abs()
@@ -626,8 +588,7 @@ class PPOTrainer:
             num_valid, num_kept = valid_idx.numel(), keep_idx.numel()
 
             if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
-                # Filtering keeps a different count per rank, so trim to the global
-                # minimum to keep the number of minibatches synchronized
+                # Ranks keep different counts: trim to the global minimum so minibatch counts stay in sync
                 kept_tensor = torch.tensor([num_kept], device=device)
                 torch.distributed.all_reduce(kept_tensor, op=torch.distributed.ReduceOp.MIN)
                 min_num_kept = kept_tensor.item()
@@ -654,7 +615,6 @@ class PPOTrainer:
         if config["min_batch_size"] is not None:
             num_missing = config["min_batch_size"] - keep_idx.numel()
             if num_missing > 0 and keep_idx.numel() > 0:
-                # Repeat random elements of keep_idx until min_batch_size is reached
                 pad_idx = torch.randint(keep_idx.numel(), (num_missing,), device=keep_idx.device)
                 keep_idx = torch.cat([keep_idx, keep_idx[pad_idx]])
 
@@ -681,7 +641,7 @@ class PPOTrainer:
                 mb_adv = flat_advantages[mb_idx]
 
                 profile("train_forward", epoch)
-                loss, _, _, stats = self._ppo_loss(
+                loss, stats = self._ppo_loss(
                     mb_obs,
                     mb_actions,
                     mb_logprobs,
@@ -764,7 +724,6 @@ class PPOTrainer:
 
         device = config["device"]
         agent_steps = int(dist_sum(self.global_step, device))
-        self.agent_steps = agent_steps
         logs = {
             "SPS": dist_sum(self.sps, device),
             "learning_rate": self.optimizer.param_groups[0]["lr"],
@@ -774,10 +733,9 @@ class PPOTrainer:
         }
 
         if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
-            return None
+            return
 
         self.logger.log(logs, agent_steps)
-        return logs
 
     def close(self):
         self.vecenv.close()
@@ -785,8 +743,7 @@ class PPOTrainer:
         if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
             return
         model_path = self.save_checkpoint()
-        # Fixed, configurable filename so a follow-up eval job can reference the final
-        # model without knowing which epoch training stopped at.
+        # fixed name: a chained eval job finds the final model without knowing the last epoch
         path = os.path.join(self.config["data_dir"], self.config["final_model_name"])
         shutil.copy(model_path, path)
         return path
@@ -797,9 +754,6 @@ class PPOTrainer:
 
         run_id = self.logger.run_id
         path = self.config["data_dir"]
-        if not os.path.exists(path):
-            os.makedirs(path)
-
         models_dir = os.path.join(path, "models")
         os.makedirs(models_dir, exist_ok=True)
         model_name = f"model_{self.config['env']}_{self.epoch:06d}.pt"
@@ -816,7 +770,7 @@ class PPOTrainer:
             self.best_score = current_score
 
         state = {
-            "state_version": 2,
+            "state_version": TRAINER_STATE_VERSION,
             "policy_state_dict": self.uncompiled_policy.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict(),
@@ -846,7 +800,7 @@ class PPOTrainer:
 
         return model_path
 
-    def print_dashboard(self, clear=False, c1="[cyan]", c2="[dim default]", b1="[bright_cyan]", b2="[default]"):
+    def print_dashboard(self, clear=False):
         config = self.config
         sps = dist_sum(self.sps, config["device"])
         agent_steps = dist_sum(self.global_step, config["device"])
@@ -866,55 +820,54 @@ class PPOTrainer:
         table.add_column(justify="right", width=13)
 
         table.add_row(
-            f"{b1}OpenGigaFlow",
-            f"{c1}CPU: {b2}{np.mean(self.utilization.cpu_util):.1f}{c2}%",
-            f"{c1}GPU: {b2}{np.mean(self.utilization.gpu_util):.1f}{c2}%",
-            f"{c1}DRAM: {b2}{np.mean(self.utilization.cpu_mem):.1f}{c2}%",
-            f"{c1}VRAM: {b2}{np.mean(self.utilization.gpu_mem):.1f}{c2}%",
+            f"{TITLE_COLOR}OpenGigaFlow",
+            f"{LABEL_COLOR}CPU: {VALUE_COLOR}{np.mean(self.utilization.cpu_util):.1f}{UNIT_COLOR}%",
+            f"{LABEL_COLOR}GPU: {VALUE_COLOR}{np.mean(self.utilization.gpu_util):.1f}{UNIT_COLOR}%",
+            f"{LABEL_COLOR}DRAM: {VALUE_COLOR}{np.mean(self.utilization.cpu_mem):.1f}{UNIT_COLOR}%",
+            f"{LABEL_COLOR}VRAM: {VALUE_COLOR}{np.mean(self.utilization.gpu_mem):.1f}{UNIT_COLOR}%",
         )
 
-        s = Table(box=None, expand=True)
-        remaining = f"{b2}A hair past a freckle{c2}"
+        summary = Table(box=None, expand=True)
+        remaining = f"{VALUE_COLOR}A hair past a freckle{UNIT_COLOR}"
         if sps != 0:
-            remaining = duration((config["total_timesteps"] - agent_steps) / sps, b2, c2)
+            # total_timesteps is this rank's share; agent_steps and sps are summed over the ranks
+            world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+            remaining = duration((config["total_timesteps"] * world_size - agent_steps) / sps)
 
-        s.add_column(f"{c1}Summary", justify="left", vertical="top", width=10)
-        s.add_column(f"{c1}Value", justify="right", vertical="top", width=14)
-        s.add_row(f"{b2}Env", f"{b2}{config['env']}")
-        s.add_row(f"{b2}Params", abbreviate(self.model_size, b2, c2))
-        s.add_row(f"{b2}Steps", abbreviate(agent_steps, b2, c2))
-        s.add_row(f"{b2}SPS", abbreviate(sps, b2, c2))
-        s.add_row(f"{b2}Epoch", f"{b2}{self.epoch}")
-        s.add_row(f"{b2}Uptime", duration(self.uptime, b2, c2))
-        s.add_row(f"{b2}Remaining", remaining)
+        summary.add_column(f"{LABEL_COLOR}Summary", justify="left", vertical="top", width=10)
+        summary.add_column(f"{LABEL_COLOR}Value", justify="right", vertical="top", width=14)
+        summary.add_row(f"{VALUE_COLOR}Env", f"{VALUE_COLOR}{config['env']}")
+        summary.add_row(f"{VALUE_COLOR}Params", abbreviate(self.model_size))
+        summary.add_row(f"{VALUE_COLOR}Steps", abbreviate(agent_steps))
+        summary.add_row(f"{VALUE_COLOR}SPS", abbreviate(sps))
+        summary.add_row(f"{VALUE_COLOR}Epoch", f"{VALUE_COLOR}{self.epoch}")
+        summary.add_row(f"{VALUE_COLOR}Uptime", duration(self.uptime))
+        summary.add_row(f"{VALUE_COLOR}Remaining", remaining)
 
         delta = profile.eval["buffer"] + profile.train["buffer"]
-        p = Table(box=None, expand=True, show_header=False)
-        p.add_column(f"{c1}Performance", justify="left", width=10)
-        p.add_column(f"{c1}Time", justify="right", width=8)
-        p.add_column(f"{c1}%", justify="right", width=4)
-        p.add_row(*fmt_perf("Evaluate", b1, delta, profile.eval, b2, c2))
-        p.add_row(*fmt_perf("  Forward", b2, delta, profile.eval_forward, b2, c2))
-        p.add_row(*fmt_perf("  Env", b2, delta, profile.env, b2, c2))
-        p.add_row(*fmt_perf("  Copy", b2, delta, profile.eval_copy, b2, c2))
-        p.add_row(*fmt_perf("  Misc", b2, delta, profile.eval_misc, b2, c2))
-        p.add_row(*fmt_perf("Train", b1, delta, profile.train, b2, c2))
-        p.add_row(*fmt_perf("  Forward", b2, delta, profile.train_forward, b2, c2))
-        p.add_row(*fmt_perf("  Learn", b2, delta, profile.learn, b2, c2))
-        p.add_row(*fmt_perf("  Copy", b2, delta, profile.train_copy, b2, c2))
-        p.add_row(*fmt_perf("  Misc", b2, delta, profile.train_misc, b2, c2))
+        performance = Table(box=None, expand=True, show_header=False)
+        performance.add_column(f"{LABEL_COLOR}Performance", justify="left", width=10)
+        performance.add_column(f"{LABEL_COLOR}Time", justify="right", width=8)
+        performance.add_column(f"{LABEL_COLOR}%", justify="right", width=4)
+        performance.add_row(*fmt_perf("Evaluate", TITLE_COLOR, delta, profile.eval))
+        performance.add_row(*fmt_perf("  Forward", VALUE_COLOR, delta, profile.eval_forward))
+        performance.add_row(*fmt_perf("  Env", VALUE_COLOR, delta, profile.env))
+        performance.add_row(*fmt_perf("  Copy", VALUE_COLOR, delta, profile.eval_copy))
+        performance.add_row(*fmt_perf("  Misc", VALUE_COLOR, delta, profile.eval_misc))
+        performance.add_row(*fmt_perf("Train", TITLE_COLOR, delta, profile.train))
+        performance.add_row(*fmt_perf("  Forward", VALUE_COLOR, delta, profile.train_forward))
+        performance.add_row(*fmt_perf("  Learn", VALUE_COLOR, delta, profile.learn))
+        performance.add_row(*fmt_perf("  Copy", VALUE_COLOR, delta, profile.train_copy))
+        performance.add_row(*fmt_perf("  Misc", VALUE_COLOR, delta, profile.train_misc))
 
-        l = Table(
-            box=None,
-            expand=True,
-        )
-        l.add_column(f"{c1}Losses", justify="left", width=16)
-        l.add_column(f"{c1}Value", justify="right", width=8)
+        losses_table = Table(box=None, expand=True)
+        losses_table.add_column(f"{LABEL_COLOR}Losses", justify="left", width=16)
+        losses_table.add_column(f"{LABEL_COLOR}Value", justify="right", width=8)
         for metric, value in self.losses.items():
-            l.add_row(f"{b2}{metric}", f"{b2}{value:.3f}")
+            losses_table.add_row(f"{VALUE_COLOR}{metric}", f"{VALUE_COLOR}{value:.3f}")
 
         monitor = Table(box=None, expand=True, pad_edge=False)
-        monitor.add_row(s, p, l)
+        monitor.add_row(summary, performance, losses_table)
         dashboard.add_row(monitor)
 
         table = Table(box=None, expand=True, pad_edge=False)
@@ -922,28 +875,21 @@ class PPOTrainer:
         left = Table(box=None, expand=True)
         right = Table(box=None, expand=True)
         table.add_row(left, right)
-        left.add_column(f"{c1}User Stats", justify="left", width=20)
-        left.add_column(f"{c1}Value", justify="right", width=10)
-        right.add_column(f"{c1}User Stats", justify="left", width=20)
-        right.add_column(f"{c1}Value", justify="right", width=10)
-        i = 0
+        for user_stats_table in (left, right):
+            user_stats_table.add_column(f"{LABEL_COLOR}User Stats", justify="left", width=20)
+            user_stats_table.add_column(f"{LABEL_COLOR}Value", justify="right", width=10)
 
         if self.stats:
             self.last_stats = self.stats
 
+        shown_count = 0
         for metric, value in (self.stats or self.last_stats).items():
-            if metric in HIDDEN_DASHBOARD_METRICS:
+            if metric in HIDDEN_DASHBOARD_METRICS or not math.isfinite(value):
                 continue
-
-            try:  # Discard non-numeric values
-                int(value)
-            except:
-                continue
-
-            u = left if i % 2 == 0 else right
-            u.add_row(f"{b2}{metric}", f"{b2}{value:.3f}")
-            i += 1
-            if i == 30:
+            stats_half = left if shown_count % 2 == 0 else right
+            stats_half.add_row(f"{VALUE_COLOR}{metric}", f"{VALUE_COLOR}{value:.3f}")
+            shown_count += 1
+            if shown_count == MAX_DASHBOARD_USER_STATS:
                 break
 
         if clear:
@@ -955,52 +901,48 @@ class PPOTrainer:
         print("\033[0;0H" + capture.get())
 
 
-def compute_puff_advantage(values, rewards, terminals, advantages, gamma, gae_lambda):
-    """CUDA kernel for puffer advantage with automatic CPU fallback. You need
-    nvcc (in cuda-dev-tools or in a cuda-dev docker base) to compile the fast
-    version."""
-
+def compute_puff_advantage(values, rewards, terminals, gamma, gae_lambda):
+    """GAE advantages; CPU fallback when torch finds no CUDA / HIP toolkit at import (ADVANTAGE_CUDA false)."""
     device = values.device
     if not ADVANTAGE_CUDA:
         values = values.cpu()
         rewards = rewards.cpu()
         terminals = terminals.cpu()
-        advantages = advantages.cpu()
-
+    advantages = torch.zeros_like(values)
     torch.ops.opengigaflow.compute_puff_advantage(values, rewards, terminals, advantages, gamma, gae_lambda)
-
-    if not ADVANTAGE_CUDA:
-        return advantages.to(device)
-
-    return advantages
+    return advantages.to(device)
 
 
-def abbreviate(num, b2, c2):
+def abbreviate(num):
     if num < 1e3:
-        return f"{b2}{num}{c2}"
+        return f"{VALUE_COLOR}{num}{UNIT_COLOR}"
     elif num < 1e6:
-        return f"{b2}{num / 1e3:.1f}{c2}K"
+        return f"{VALUE_COLOR}{num / 1e3:.1f}{UNIT_COLOR}K"
     elif num < 1e9:
-        return f"{b2}{num / 1e6:.1f}{c2}M"
+        return f"{VALUE_COLOR}{num / 1e6:.1f}{UNIT_COLOR}M"
     elif num < 1e12:
-        return f"{b2}{num / 1e9:.1f}{c2}B"
+        return f"{VALUE_COLOR}{num / 1e9:.1f}{UNIT_COLOR}B"
     else:
-        return f"{b2}{num / 1e12:.2f}{c2}T"
+        return f"{VALUE_COLOR}{num / 1e12:.2f}{UNIT_COLOR}T"
 
 
-def duration(seconds, b2, c2):
+def duration(seconds):
     if seconds < 0:
-        return f"{b2}0{c2}s"
+        return f"{VALUE_COLOR}0{UNIT_COLOR}s"
     seconds = int(seconds)
     h = seconds // 3600
     m = (seconds % 3600) // 60
     s = seconds % 60
-    return f"{b2}{h}{c2}h {b2}{m}{c2}m {b2}{s}{c2}s" if h else f"{b2}{m}{c2}m {b2}{s}{c2}s" if m else f"{b2}{s}{c2}s"
+    if h:
+        return f"{VALUE_COLOR}{h}{UNIT_COLOR}h {VALUE_COLOR}{m}{UNIT_COLOR}m {VALUE_COLOR}{s}{UNIT_COLOR}s"
+    if m:
+        return f"{VALUE_COLOR}{m}{UNIT_COLOR}m {VALUE_COLOR}{s}{UNIT_COLOR}s"
+    return f"{VALUE_COLOR}{s}{UNIT_COLOR}s"
 
 
-def fmt_perf(name, color, delta_ref, prof, b2, c2):
+def fmt_perf(name, color, delta_ref, prof):
     percent = 0 if delta_ref == 0 else int(100 * prof["buffer"] / delta_ref - 1e-5)
-    return f"{color}{name}", duration(prof["elapsed"], b2, c2), f"{b2}{percent:2d}{c2}%"
+    return f"{color}{name}", duration(prof["elapsed"]), f"{VALUE_COLOR}{percent:2d}{UNIT_COLOR}%"
 
 
 def dist_sum(value, device):
@@ -1032,16 +974,14 @@ def capture_rng_state():
     return state
 
 
-def restore_rng_state(state):
-    rng_state = state.get("rng_state")
-    if not rng_state:
-        return
-
+def restore_rng_state(rng_state):
     random.setstate(rng_state["python"])
     np.random.set_state(rng_state["numpy"])
     torch.set_rng_state(rng_state["torch"].cpu())
     if torch.cuda.is_available() and "cuda" in rng_state:
-        torch.cuda.set_rng_state_all([state.cpu() for state in rng_state["cuda"]])
+        # a state saved on a node with more GPUs restores the generators of the devices that exist here
+        device_states = rng_state["cuda"][: torch.cuda.device_count()]
+        torch.cuda.set_rng_state_all([state.cpu() for state in device_states])
 
 
 class Profile:
@@ -1050,14 +990,11 @@ class Profile:
         self.frequency = frequency
         self.stack = []
 
-    def __iter__(self):
-        return iter(self.profiles.items())
-
     def __getattr__(self, name):
         return self.profiles[name]
 
     def __call__(self, name, epoch, nest=False):
-        # Skip profiling the first few epochs, which are noisy due to setup
+        # only every frequency-th epoch is timed; pop() scales its time up to stand for the skipped ones
         if (epoch + 1) % self.frequency != 0:
             return
 
@@ -1075,7 +1012,6 @@ class Profile:
         profile = self.profiles[self.stack.pop()]
         delta = end - profile["start"]
         profile["delta"] += delta
-        # Multiply delta by freq to account for skipped epochs
         profile["elapsed"] += delta * self.frequency
 
     def end(self):
@@ -1106,7 +1042,7 @@ class Utilization(Thread):
 
     def run(self):
         while not self.stopped:
-            self.cpu_util.append(100 * psutil.cpu_percent() / psutil.cpu_count())
+            self.cpu_util.append(psutil.cpu_percent())
             mem = psutil.virtual_memory()
             self.cpu_mem.append(100 * mem.active / mem.total)
             if torch.cuda.is_available():
@@ -1133,8 +1069,8 @@ class Utilization(Thread):
 
 
 class NoLogger:
-    def __init__(self, args, run_id=None):
-        self.run_id = run_id or args["run_name"]
+    def __init__(self, args):
+        self.run_id = args["run_name"]
 
     def log(self, logs, step):
         pass
@@ -1147,13 +1083,12 @@ class NoLogger:
 
 
 class WandbLogger:
-    def __init__(self, args, load_id=None):
+    def __init__(self, args):
         import wandb
 
-        # run_name is the run id: with resume="allow" wandb attaches to the
-        # existing run when one already carries this id, and creates it otherwise.
+        # run_name is the run id: resume="allow" attaches to the run that carries it or creates one
         wandb.init(
-            id=load_id or args["run_name"],
+            id=args["run_name"],
             name=args["run_name"],
             project=args["wandb_project"],
             group=args["wandb_group"],
@@ -1177,7 +1112,7 @@ class WandbLogger:
     def upload_model(self, model_path):
         artifact = self.wandb.Artifact(self.run_id, type="model")
         artifact.add_file(model_path)
-        # Ship the config with the weights; load_checkpoint_architecture reads it off disk.
+        # evaluation reads the architecture from the config.yaml next to the weights
         config_path = os.path.join(drive_benchmark.resolve_run_dir(model_path), "config.yaml")
         if os.path.isfile(config_path):
             artifact.add_file(config_path)
@@ -1187,12 +1122,6 @@ class WandbLogger:
         if self.should_upload_model:
             self.upload_model(model_path)
         self.wandb.finish()
-
-    def download(self):
-        artifact = self.wandb.use_artifact(f"{self.run_id}:latest")
-        data_dir = artifact.download()
-        model_file = max(os.listdir(data_dir))
-        return f"{data_dir}/{model_file}"
 
 
 class TensorBoardLogger:
@@ -1243,26 +1172,17 @@ def _get_git_metadata():
     git_metadata = {
         "commit_hash": os.environ.get("GITHUB_SHA") or os.environ.get("COMMIT_SHA"),
     }
+    if git_metadata["commit_hash"] is not None:
+        return git_metadata
 
     try:
         repo_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-        if shutil.which("git") is None:
-            return git_metadata
-
-        subprocess.check_output(
-            ["git", "rev-parse", "--is-inside-work-tree"],
+        git_metadata["commit_hash"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
             cwd=repo_root,
             stderr=subprocess.DEVNULL,
             text=True,
-        )
-
-        if git_metadata["commit_hash"] is None:
-            git_metadata["commit_hash"] = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repo_root,
-                stderr=subprocess.DEVNULL,
-                text=True,
-            ).strip()
+        ).strip()
     except (OSError, subprocess.SubprocessError):
         pass
 
@@ -1270,18 +1190,10 @@ def _get_git_metadata():
 
 
 def _save_experiment_config(args, path):
-    import yaml
-    import json
-
-    experiment_dir = path
-    os.makedirs(experiment_dir, exist_ok=True)
-
-    # Save config as yaml
-    config_yaml_path = os.path.join(experiment_dir, "config.yaml")
-    with open(config_yaml_path, "w") as f:
-        # Convert defaultdict to dict for cleaner output
-        config = json.loads(json.dumps(args))
-        yaml.dump(config, f)
+    os.makedirs(path, exist_ok=True)
+    with open(os.path.join(path, "config.yaml"), "w") as f:
+        # json round trip turns defaultdicts into plain dicts for yaml.dump
+        yaml.dump(json.loads(json.dumps(args)), f)
 
 
 def _global_agent_steps(trainer):
@@ -1290,8 +1202,7 @@ def _global_agent_steps(trainer):
 
 
 def derive_rank_seeds(vec_seed, train_seed, world_size, global_rank):
-    """Deterministic per-rank (torch_seed, env_seed): DDP ranks share weights, so identical seeds
-    would collect duplicate experience. global_rank is torchrun's global RANK, not LOCAL_RANK."""
+    """Per-rank (torch_seed, env_seed) from torchrun's global RANK: equal seeds would collect duplicate experience."""
     torch_seed = train_seed * world_size + global_rank
     env_seed = vec_seed
     if env_seed is not None:
@@ -1308,13 +1219,6 @@ def parse_cpulist(cpulist):
         lo, _, hi = part.partition("-")
         cpus.update(range(int(lo), int(hi or lo) + 1))
     return cpus
-
-
-def apply_matmul_env_flags():
-    """OPENGIGAFLOW_BF16_REDUCED_REDUCTION=1 lets cuBLAS pick split-K kernels whose partial sums reduce in bf16."""
-    if os.environ.get("OPENGIGAFLOW_BF16_REDUCED_REDUCTION") == "1":
-        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
-        print("cuBLAS bf16 reduced-precision reductions enabled")
 
 
 def pooled_flop_utilization_percent(flop_windows):
@@ -1345,10 +1249,7 @@ def rank_core_share(cores, share_count, share_idx):
 
 
 def bind_process_to_gpu_numa_node(device_index, local_devices=None):
-    """Pin this process (and the env workers it forks) to CPUs of the GPU's NUMA node; returns whether it did.
-
-    Ranks in `local_devices` whose GPUs share the node split its cores evenly. No-op without NUMA or sysfs.
-    """
+    """Pin this process and its env workers to the GPU's NUMA node, shared with `local_devices`; True if pinned."""
     if os.environ.get("OPENGIGAFLOW_NUMA_BIND", "1") == "0" or not torch.cuda.is_available():
         return False
     numa_node = gpu_numa_node(device_index)
@@ -1382,47 +1283,17 @@ def bind_process_to_gpu_numa_node(device_index, local_devices=None):
 def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     args = args or load_config(env_name)
 
-    # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
+    # fine-tuning keeps the checkpoint's network and observation layout; rewards, maps and sim mode are this run's
     if args["load_model_path"]:
-        experiment_dir = drive_benchmark.resolve_run_dir(args["load_model_path"])
-        config_yaml_path = os.path.join(experiment_dir, "config.yaml")
-        KEYS_OF_INTEREST = {
-            "goal_source",
-            "goal_regen_mode",
-            "num_goals",
-            "min_goal_spacing",
-            "max_goal_spacing",
-            "reward_conditioning",
-            "reward_randomization",
-            "trajectory_prediction_length",
-            "num_trajectory_scaling_factors",
-            "trajectory_scaling_factors",
-            "obs_slots_boundary_n",
-            "obs_slots_lane_n",
-            "obs_boundary_stride",
-            "obs_lane_stride",
-            "obs_stride_merge_segments",
-            "obs_dropout_boundary",
-            "obs_dropout_lane",
-            "obs_slots_partners_n",
-            "obs_slots_traffic_controls_n",
-            "traffic_lights_enabled",
-            "stop_signs_enabled",
-        }
+        config_yaml_path = os.path.join(drive_benchmark.resolve_run_dir(args["load_model_path"]), "config.yaml")
         if os.path.exists(config_yaml_path):
             print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")
-            with open(config_yaml_path, "r") as f:
-                yaml_config = drive_arch.drop_retired_settings(yaml.safe_load(f))
-
-            # Override Policy dimensions from model config
-            if "policy" in yaml_config and isinstance(yaml_config["policy"], dict):
-                for k, v in yaml_config["policy"].items():
-                    args["policy"][k] = v
-            # Override ENV parameters for observation size from model config
-            if "env" in yaml_config and isinstance(yaml_config["env"], dict):
-                for k, v in yaml_config["env"].items():
-                    if k in KEYS_OF_INTEREST:
-                        args["env"][k] = v
+            yaml_config = drive_arch.load_checkpoint_config(config_yaml_path)
+            if isinstance(yaml_config.get("policy"), dict):
+                args["policy"].update(yaml_config["policy"])
+            if isinstance(yaml_config.get("env"), dict):
+                checkpoint_env = yaml_config["env"]
+                args["env"].update({key: checkpoint_env[key] for key in checkpoint_env if key in FINE_TUNE_ENV_KEYS})
         else:
             print(
                 f"No config.yaml at {config_yaml_path}; fine-tuning with the configured "
@@ -1434,7 +1305,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     if vecenv is None:
         validate_opengigaflow_resources(args, "training")
 
-    apply_matmul_env_flags()
     cpus_bound = False
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -1457,7 +1327,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     torch_seed, env_seed = derive_rank_seeds(args["vec"]["seed"], train_seed, world_size, global_rank)
     torch.manual_seed(torch_seed)
     vecenv = vecenv or load_env(args, seed=env_seed, pin_workers=cpus_bound)
-    policy = policy or load_policy(args, vecenv, env_name)
+    policy = policy or load_policy(args, vecenv)
 
     if "LOCAL_RANK" in os.environ:
         args["train"]["device"] = "cuda"
@@ -1465,14 +1335,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         policy = policy.to(local_rank)
         model = torch.nn.parallel.DistributedDataParallel(policy, device_ids=[local_rank], output_device=local_rank)
         model.forward_eval = policy.forward_eval
-        policy = model.to(local_rank)
+        policy = model
 
     # Set before the logger so the run config the logger uploads carries it too.
     args["git"] = _get_git_metadata()
 
-    # Under DDP only rank 0 owns the run logger; other ranks keep logger=None,
-    # which PPOTrainer wraps in a NoLogger. Without this gate every rank calls
-    # wandb.init() and you get world_size duplicate runs.
+    # only rank 0 owns the run logger; the others get PPOTrainer's NoLogger instead of duplicate wandb runs
     is_rank0 = (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0
     if is_rank0:
         if args["wandb"]:
@@ -1484,17 +1352,14 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
             )
             logger = TensorBoardMirror(logger, tensorboard_logger) if args["wandb"] else tensorboard_logger
 
-    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
+    train_config = dict(**args["train"], env=env_name, run_name=args["run_name"])
     if torch.distributed.is_initialized():
         train_config["total_timesteps"] //= torch.distributed.get_world_size()
     trainer = PPOTrainer(train_config, vecenv, policy, logger)
 
-    # A run is identified by its name, and its directory is train.data_dir. Relaunching
-    # the same run therefore finds its own trainer_state.pt and continues from it rather
-    # than overwriting the checkpoints already in that directory. An explicit
-    # resume_state_path or load_model_path still wins.
-    resume_state_path = args["train"].get("resume_state_path")
-    if not resume_state_path and not args.get("load_model_path"):
+    # relaunching a run name resumes its own trainer_state.pt unless resume_state_path or load_model_path is set
+    resume_state_path = args["train"]["resume_state_path"]
+    if not resume_state_path and not args["load_model_path"]:
         run_state_path = os.path.join(args["train"]["data_dir"], "trainer_state.pt")
         if os.path.exists(run_state_path):
             print(f"Run '{args['run_name']}' already exists in {args['train']['data_dir']}; resuming it.")
@@ -1502,30 +1367,25 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 
     if resume_state_path:
         trainer.load_training_state(resume_state_path)
-        # The checkpoint carries rank 0's RNG streams (save_checkpoint is rank-0 only);
-        # re-decorrelate the other ranks or post-resume action sampling re-synchronizes.
+        # the checkpoint holds rank 0's RNG streams: re-decorrelate the other ranks' action sampling
         if global_rank != 0:
             torch.manual_seed(int(np.random.SeedSequence([torch_seed, trainer.epoch]).generate_state(1)[0]))
 
-    # Restore optimizer state + step counters when resuming from a checkpoint.
-    # save_checkpoint writes models/model_<env>_<epoch>.pt and trainer_state.pt
-    # (sibling of models/) — so trainer_state.pt is one dir above the .pt path.
-    if args.get("load_model_path"):
+    if args["load_model_path"]:
         trainer_state_path = os.path.join(drive_benchmark.resolve_run_dir(args["load_model_path"]), "trainer_state.pt")
         if os.path.exists(trainer_state_path):
             print(f"Resuming optimizer/step state from {trainer_state_path}")
-            # weights_only=False as in load_training_state: the state carries the
-            # numpy scalars of the saved RNG state, not just tensors.
+            # weights_only=False: the state carries the numpy RNG state, not just tensors
             tstate = torch.load(trainer_state_path, map_location=train_config["device"], weights_only=False)
             trainer.optimizer.load_state_dict(tstate["optimizer_state_dict"])
             # The saved groups carry the old run's annealed lr; train.learning_rate is this run's base.
             for param_group in trainer.optimizer.param_groups:
                 param_group["lr"] = train_config["learning_rate"]
                 param_group["initial_lr"] = train_config["learning_rate"]
-            trainer.global_step = tstate.get("global_step", trainer.global_step)
-            trainer.epoch = tstate.get("update", trainer.epoch)
-            # Fast-forward the LR scheduler to the resumed epoch so the cosine
-            # schedule continues where it left off.
+            trainer.global_step = tstate["global_step"]
+            trainer.last_log_step = trainer.global_step
+            trainer.epoch = tstate["update"]
+            # fast-forward the cosine schedule to the resumed epoch
             for _ in range(trainer.epoch):
                 trainer.scheduler.step()
         else:
@@ -1538,20 +1398,14 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     stop_after_epochs = args["train"]["stop_after_epochs"]
     stop_epoch = float("inf") if stop_after_epochs is None else trainer.epoch + stop_after_epochs
 
+    use_cuda = is_cuda_device(train_config["device"])
     while trainer.global_step < train_config["total_timesteps"] and trainer.epoch < stop_epoch:
-        if is_cuda_device(train_config["device"]):
-            torch.compiler.cudagraph_mark_step_begin()
         try:
+            if use_cuda:
+                torch.compiler.cudagraph_mark_step_begin()
             trainer.evaluate()
-        except Exception:
-            trainer.vecenv.close()
-            trainer.utilization.stop()
-            if torch.distributed.is_initialized():
-                torch.distributed.destroy_process_group()
-            raise
-        if is_cuda_device(train_config["device"]):
-            torch.compiler.cudagraph_mark_step_begin()
-        try:
+            if use_cuda:
+                torch.compiler.cudagraph_mark_step_begin()
             trainer.train()
         except Exception:
             trainer.vecenv.close()
@@ -1562,7 +1416,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 
         if is_rank0 and args["train"]["render"] and trainer.epoch % args["train"]["render_interval"] == 0:
             render_training_replays(
-                env_name=env_name,
                 args=args,
                 policy=trainer.uncompiled_policy,
                 epoch=trainer.epoch,
@@ -1570,7 +1423,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
                 run_dir=path,
             )
 
-    trainer.mean_and_log()
+    # the last epoch of a finished run has logged already; a run stopped early still holds an unlogged window
+    if trainer.global_step != trainer.last_log_step:
+        trainer.mean_and_log()
     trainer.print_dashboard()
     model_path = trainer.close()
     shutdown_distributed()
@@ -1672,7 +1527,6 @@ def eval(
         np.random.seed(run_args["train"]["seed"])
         if failure_replay_csv is not None:
             benchmark_results[benchmark["name"]] = _render_eval_failures(
-                env_name,
                 run_args,
                 benchmark,
                 failure_replay_csv,
@@ -1700,7 +1554,6 @@ def eval(
         )
         summaries = _run_eval_rollout(
             run_args,
-            env_name,
             worker_env_kwargs,
             total_steps,
             f"Evaluating {benchmark['name']}",
@@ -1727,7 +1580,6 @@ def eval(
             )
         elif render_filter is not None:
             _render_eval_failures(
-                env_name,
                 run_args,
                 benchmark,
                 os.path.join(benchmark_output_dir, "episode_metrics.csv"),
@@ -1765,7 +1617,6 @@ def _require_finite_eval_batch(batch_array, what, num_workers, worker_env_kwargs
 
 def _run_eval_rollout(
     args,
-    env_name,
     worker_env_kwargs,
     total_steps,
     desc,
@@ -1810,7 +1661,7 @@ def _run_eval_rollout(
             evaluation_policy_cache = {"policy": policy}
         policy = evaluation_policy_cache["policy"]
         if policy is None:
-            policy = load_policy(args, vecenv, env_name)
+            policy = load_policy(args, vecenv)
             evaluation_policy_cache["policy"] = policy
         policy.eval()
         if "policy_forward_eval" not in evaluation_policy_cache:
@@ -1827,17 +1678,14 @@ def _run_eval_rollout(
             evaluation_policy_cache["sample_logits"] = eval_sample_logits
         policy_forward_eval = evaluation_policy_cache["policy_forward_eval"]
         eval_sample_logits = evaluation_policy_cache["sample_logits"]
-        # A discrete policy on a continuous env emits a discrete class that the
-        # policy's own table maps back to the continuous action the env expects.
         action_selection = args["eval"]["action_selection"]
         uncompiled_policy = base_policy(policy)
-        env_continuous = isinstance(vecenv.single_action_space, opengigaflow.spaces.Box)
-        discrete_policy_on_continuous_env = env_continuous and not uncompiled_policy.is_continuous
+        discrete_policy = not uncompiled_policy.is_continuous
         device = torch_device(args["train"]["device"])
         use_bfloat16 = args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
         if use_bfloat16 and not torch.cuda.is_bf16_supported():
             raise opengigaflow.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
-        allow_tf32 = args["train"].get("tf32", True)
+        allow_tf32 = args["train"]["tf32"]
         if not allow_tf32 and use_bfloat16 and not getattr(uncompiled_policy, "fp32_heads", False):
             raise opengigaflow.APIUsageError(
                 "train.tf32=False with train.precision=bfloat16 requires policy.fp32_heads=true"
@@ -1883,20 +1731,18 @@ def _run_eval_rollout(
                 action, logprob, entropy, cont_action = eval_sample_logits(
                     logits,
                     action_selection=action_selection,
-                    env_continuous=env_continuous,
+                    env_continuous=True,
                     policy=uncompiled_policy,
                 )
-                if discrete_policy_on_continuous_env:
-                    # raw_action stays the discrete class (what the replay logs record),
-                    # while the env is stepped with its continuous counterpart.
+                if discrete_policy:
+                    # replay logs record the discrete class; the env steps on its continuous counterpart
                     raw_action = action[:agents_per_batch].cpu().numpy()
                     continuous_actions = cont_action.reshape(-1, *vecenv.single_action_space.shape)
                     action = continuous_actions[:agents_per_batch].float().cpu().numpy()
                 else:
                     raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
                     action = raw_action
-            if env_continuous:
-                action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+            action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
             _require_finite_eval_batch(action, "policy actions", num_workers, worker_env_kwargs)
 
             if replay_capture is not None:
@@ -1946,7 +1792,7 @@ def _run_eval_rollout(
     return episode_summaries
 
 
-def render_training_replays(env_name, args, policy, epoch, global_step, run_dir):
+def render_training_replays(args, policy, epoch, global_step, run_dir):
     """Render one HTML replay per selected training map with the live policy, observations included."""
     run_args = copy.deepcopy(args)
     env_config = run_args["env"]
@@ -1981,7 +1827,6 @@ def render_training_replays(env_name, args, policy, epoch, global_step, run_dir)
     try:
         summaries = _run_eval_rollout(
             run_args,
-            env_name,
             worker_env_kwargs,
             total_steps,
             "Rendering training replays",
@@ -1999,11 +1844,10 @@ def render_training_replays(env_name, args, policy, epoch, global_step, run_dir)
     finally:
         if hasattr(policy, "train"):
             policy.train(policy_was_training)
-        restore_rng_state({"rng_state": rng_state})
+        restore_rng_state(rng_state)
 
 
 def _render_eval_failures(
-    env_name,
     run_args,
     benchmark,
     metrics_path,
@@ -2066,7 +1910,6 @@ def _render_eval_failures(
             replay_desc += f" (wave {replay_wave_idx + 1}/{replay_wave_count})"
         wave_summaries = _run_eval_rollout(
             failure_args,
-            env_name,
             worker_env_kwargs,
             total_steps,
             replay_desc,
@@ -2094,30 +1937,21 @@ def load_env(args, seed=None, pin_workers=False):
     vec_kwargs = dict(args["vec"])
     if seed is not None:
         vec_kwargs["seed"] = seed
-    if vec_kwargs.get("backend") == "Multiprocessing":
+    if vec_kwargs["backend"] == "Multiprocessing":
         vec_kwargs["pin_workers"] = pin_workers
-        if args["train"].get("rollout_dtype") == "float16":
+        if args["train"]["rollout_dtype"] == "float16":
             vec_kwargs["observation_transport_dtype"] = "float16"
     return opengigaflow.vector.make(Drive, env_kwargs=args["env"], **vec_kwargs)
 
 
-def load_policy(args, vecenv, env_name=""):
+def load_policy(args, vecenv):
     device = torch_device(args["train"]["device"])
     policy_cls = getattr(drive_torch, args["policy_name"])
     policy = policy_cls(vecenv.driver_env, **args["policy"])
 
     policy = policy.to(device)
 
-    load_id = args["load_id"]
-    if load_id is not None:
-        path = WandbLogger(args, load_id).download()
-        checkpoint = torch.load(path, map_location=device)
-        policy = opengigaflow.pytorch.load_policy_weights(policy, checkpoint)
-
     load_path = args["load_model_path"]
-    if load_path == "latest":
-        load_path = max(glob.glob(f"experiments/{env_name}*.pt"), key=os.path.getctime)
-
     if load_path is not None:
         checkpoint = torch.load(load_path, map_location=device)
         policy = opengigaflow.pytorch.load_policy_weights(policy, checkpoint)
@@ -2137,9 +1971,9 @@ def config_has_setting(config, setting_path):
     return True
 
 
-def known_cli_overrides(env_name, config_dir=CONFIG_DIR):
+def known_cli_overrides(env_name):
     """Hydra overrides from argv; one that names a setting the config lacks is dropped with a warning."""
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
+    with initialize_config_dir(config_dir=CONFIG_DIR, version_base=None):
         settings = OmegaConf.to_container(compose(config_name=env_name))
     overrides = []
     for arg in sys.argv[1:]:
@@ -2159,11 +1993,11 @@ def known_cli_overrides(env_name, config_dir=CONFIG_DIR):
     return overrides
 
 
-def load_config(env_name, config_dir=CONFIG_DIR, overrides=None):
+def load_config(env_name, overrides=None):
     if overrides is None:
-        overrides = known_cli_overrides(env_name, config_dir)
+        overrides = known_cli_overrides(env_name)
 
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
+    with initialize_config_dir(config_dir=CONFIG_DIR, version_base=None):
         cfg = compose(config_name=env_name, overrides=overrides)
 
     args = defaultdict(dict, OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True))

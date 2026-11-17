@@ -1,23 +1,4 @@
-"""Nightly wandb trend runs + the "PufferDrive Nightlies" report.
-
-The nightly launchers stamp every run's wandb group with the launch date.
-This tool folds those into a nightly regression view:
-
-  update (default)  Refresh the report's data: rebuild the per-seed trend
-                    runs in the nightly-trends project from the nightly
-                    runs' final metric values.
-
-  report [--create] Rewrite the report's layout: which panels exist and how
-                    they aggregate, per nightly project — (1) trend line
-                    panels over the trend runs (x = the night, y = mean
-                    across seeds with stderr bands); (2) per-night mean training
-                    curves. Panels are live queries, so new data appears
-                    without rerunning this — only rerun it to change the
-                    panel set (e.g. after editing TREND_METRICS et al.).
-
-    python scripts/nightly_report.py            # rebuild trend runs
-    python scripts/nightly_report.py report     # rewrite the report in place
-"""
+"""Rebuild the nightly wandb trend runs (update) or rewrite the "PufferDrive Nightlies" report layout (report)."""
 
 import argparse
 import datetime
@@ -32,9 +13,9 @@ ENTITY = "emerge_"
 PROJECTS = ["nightly-multi", "nightly-single", "nightly-multi-long"]
 TREND_PROJECT = "nightly-trends"
 NIGHT_ZERO = datetime.date(2026, 7, 4)
-# The multi-agent nightlies started logging eval_carla_fast on this night; earlier ones have no eval keys.
+# eval_carla_fast keys exist from this night until the in-training evals were removed
 EVAL_START = datetime.date(2026, 8, 3)
-# The single-agent nightly runs no evaluation, so it gets no eval panels.
+# the nightlies whose runs logged eval_carla_fast
 EVAL_PROJECTS = ("nightly-multi", "nightly-multi-long")
 SPS_SAMPLES = 500
 REPORT_URL = "https://wandb.ai/emerge_/nightly-multi/reports/PufferDrive-Nightlies--VmlldzoxNzQxNzI4NQ=="
@@ -85,8 +66,7 @@ WIDE_PANEL_HEIGHT = 10
 
 
 def layout_panels(wr, panels):
-    # Panels carry a default layout that stacks them 3-up; assign explicit slots so the
-    # wide metric gets a full-width row of its own above the rest.
+    # explicit slots: the wide metric gets a full-width row above the 3-up rest
     wide = [panel for panel in panels if WIDE_METRIC in panel.title]
     rest = [panel for panel in panels if WIDE_METRIC not in panel.title]
     next_y = 0

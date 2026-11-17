@@ -1,22 +1,7 @@
-# Single-agent "speed run" training program config (for submit_cluster.py).
-# One controlled agent per environment on a single CARLA map (Town10), with many
-# parallel environments sharing one cached copy of the map geometry. Traffic
-# lights are fully disabled (no observation, no metric, no reward penalty). Keys
-# here override opengigaflow/config/opengigaflow.yaml; submit_cluster.py converts
-# underscores in each key to dashes for the CLI.
-#
-# Launch (3 seeds via the colon sweep):
-#   source /scratch/$USER/venvs/pufferdrive/bin/activate
-#   EXPERIMENTS_DIR=<where you want experiment outputs, e.g. /scratch/$USER/runs>
-#   python scripts/submit_cluster.py \
-#       --save_dir $EXPERIMENTS_DIR --prefix $(date +%Y-%m-%d)_single_agent \
-#       --compute_config scripts/cluster_configs/nyu_greene.yaml \
-#       --program_config scripts/cluster_configs/single_agent_speed_run.yaml \
-#       --container --heartbeat --account <acct> --partition <gpu-partition> --time 720 \
-#       --args train.seed=0:1:2
+# Single-agent speed-run program config (scripts/launch_single_agent.sh): one agent per env on Town10HD, traffic lights
+# off (no observation, metric or penalty); keys override opengigaflow/config/opengigaflow.yaml.
 
-# Environment: single agent per env, Town10HD only (map_dir points directly
-# at one .bin), shorter episodes than the multi-agent default.
+# single agent per env, map_dir pointing at one .bin
 env.map_dir: opengigaflow/resources/carla/opendrive__Town10HD.bin
 env.num_maps: 1
 env.max_agents_per_env: 1
@@ -24,8 +9,7 @@ env.num_agents: 2048
 env.scenario_length: 1280
 env.resample_frequency: 128000
 env.traffic_light_behavior: 0
-# Goals: a single far goal (~200 m, the far end of the default spacing
-# range) instead of the default chain
+# a single far goal (~200 m, the far end of the default spacing range) instead of the default chain
 env.num_goals: 1
 env.goal_speed: 300
 env.min_goal_spacing: 200.0
@@ -59,7 +43,7 @@ env.phantom_braking_prob: 0
 env.partner_blindness_prob: 0
 env.partner_blindness_prob_min: 0
 
-# Policy: smaller shared-backbone net than the default split actor/critic
+# Policy: smaller backbones and linear heads
 policy.partner_input_size: 128
 policy.lane_input_size: 128
 policy.boundary_input_size: 128
@@ -78,11 +62,7 @@ train.update_epochs: 2
 train.compile: true
 train.checkpoint_interval: 500
 
-# W&B. Group has no space: submit_cluster.py joins the inner command into a
-# bash -c string without quoting arg values, so a space would split the arg.
-# Launchers (launch_single_agent.sh and Modal's nightly()) override
-# wandb_group to today's date at launch so runs cluster by night in the UI;
-# the static value here is just the fallback for ad-hoc invocations.
+# no spaces: submit_cluster.py joins the command unquoted; the launcher replaces the group with the date
 wandb: True
 wandb_project: nightly-single
 wandb_group: nightly-single

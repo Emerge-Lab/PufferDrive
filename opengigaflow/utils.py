@@ -4,7 +4,10 @@ import numpy as np
 
 
 EPISODE_COUNT_KEY = "n"
-EPISODE_SUM_KEYS = (EPISODE_COUNT_KEY, "total_distance_travelled_sum", "total_infraction_count")
+DISTANCE_SUM_KEY = "total_distance_travelled_sum"
+INFRACTION_COUNT_KEY = "total_infraction_count"
+WINDOW_SUM_KEYS = (DISTANCE_SUM_KEY, INFRACTION_COUNT_KEY)
+EPISODE_SUM_KEYS = (EPISODE_COUNT_KEY, *WINDOW_SUM_KEYS)
 
 
 def accumulate_environment_metric(metric_sums, key, value, weight):
@@ -24,22 +27,12 @@ def accumulate_environment_metric(metric_sums, key, value, weight):
             entry[1] += weight
 
 
-def environment_metric_sums(metric_lists):
-    """Per-key [value_sum, sample_count] over the collected log dicts."""
-    metric_sums = {}
-    for key, values in metric_lists.items():
-        if not values or not isinstance(values[0], numbers.Number):
-            continue
-        metric_sums[key] = [float(np.sum(values)), len(values)]
-    return metric_sums
-
-
 def finalize_environment_metrics(metric_sums):
     reduced_metrics = {}
-    total_distance = metric_sums.get("total_distance_travelled_sum")
-    total_infractions = metric_sums.get("total_infraction_count")
+    total_distance = metric_sums.get(DISTANCE_SUM_KEY)
+    total_infractions = metric_sums.get(INFRACTION_COUNT_KEY)
     for key, (value_sum, value_count) in metric_sums.items():
-        if key in ("total_distance_travelled_sum", "total_infraction_count"):
+        if key in WINDOW_SUM_KEYS:
             continue
         if key == EPISODE_COUNT_KEY:
             reduced_metrics[key] = value_sum
@@ -48,7 +41,7 @@ def finalize_environment_metrics(metric_sums):
 
     if total_distance is not None and total_infractions is not None:
         # Sum of the "n" per-dict episode counts; normalizes the window sums below
-        agent_episode_count = metric_sums.get("n", [0.0, 0])[0]
+        agent_episode_count = metric_sums.get(EPISODE_COUNT_KEY, [0.0, 0])[0]
         reduced_metrics["total_distance_travelled"] = total_distance[0]
         reduced_metrics["total_infractions"] = total_infractions[0]
         reduced_metrics["distance_per_agent"] = total_distance[0] / max(agent_episode_count, 1.0)
@@ -59,6 +52,9 @@ def finalize_environment_metrics(metric_sums):
 
 
 def reduce_environment_metrics(metric_lists):
-    # Preserve raw sums and sample counts so log batches with different numbers
-    # of completed episodes contribute with the correct weight.
-    return finalize_environment_metrics(environment_metric_sums(metric_lists))
+    metric_sums = {
+        key: [float(np.sum(values)), len(values)]
+        for key, values in metric_lists.items()
+        if values and isinstance(values[0], numbers.Number)
+    }
+    return finalize_environment_metrics(metric_sums)

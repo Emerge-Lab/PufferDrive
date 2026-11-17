@@ -1,8 +1,25 @@
 # OpenGigaFlow
 
-MARL autonomous driving RL environment. C simulation engine (GigaFlow/Waymo replay) + Python/PyTorch PPO training loop with advantage filtering.
+OpenGigaFlow is an open-source re-implementation of GIGAFLOW, the batched self-play driving simulator from
+[*Robust Autonomy Emerges from Self-Play*](https://arxiv.org/abs/2502.03349) (Cusumano-Towner et al., 2025).
+A C simulation engine runs dense traffic on CARLA town maps, and a PyTorch PPO trainer learns one shared driving
+policy for every agent from self-play alone, without human driving data. The trained policy is evaluated in
+self-play and, through co-simulation, in nuPlan and the CARLA leaderboard.
 
-## Install (local)
+- **Simulator:** C engine with a Python binding. Up to 150 agents per environment, with collisions, off-road
+  detection, traffic lights, stop signs, speed limits and scripted pedestrians. `gigaflow` mode populates a map
+  with agents and random goals; `replay` mode plays back logged scenarios.
+- **Training:** PPO with advantage filtering, on one GPU or several via `torchrun`, in bfloat16 with fused CUDA
+  encoder kernels. The policy is conditioned on randomized reward weights and speed caps, so one network covers a
+  range of driving styles.
+- **Maps:** 128 augmented CARLA town maps for training and the 8 original towns for evaluation ship with the
+  repository.
+- **Evaluation:** a built-in self-play benchmark, plus co-simulation with nuPlan's closed-loop simulator (Val14)
+  and CARLA Leaderboard 1.0 (longest6 v1).
+- **Replays:** evaluated episodes render to self-contained interactive HTML pages, optionally with the
+  observations the policy saw.
+
+## Install
 
 ```bash
 # Python env
@@ -13,6 +30,158 @@ uv pip install -e .
 python setup.py build_ext --inplace --force
 ```
 
+## Data
+
+Maps are `.bin` files under `opengigaflow/resources/`; the CARLA maps are converted from the towns' OpenDRIVE
+files. The repository ships:
+
+- `carla_128_affine_aug/`: the training maps (`env.map_dir` default), the 8 CARLA towns each mirrored, scaled
+  and sheared into 16 variants.
+- `carla/`: the 8 CARLA towns (Town01-07, Town10HD), used by the self-play benchmarks and the CARLA
+  co-simulation.
+- `nuplan/`, `sdc_replay_test/`: one nuPlan scenario each, used by the tests.
+
+Not shipped: the converted scenarios behind the replay benchmarks in
+`opengigaflow/config/evaluation/benchmark.yaml` (`nuplan_*` read the full set from `nuplan/`, `womd_*` read
+Waymo Open Motion validation scenarios from `wod-motion_val/`), and the nuPlan city maps that the nuPlan
+co-simulation needs (`CITY_BIN_DIR`).
+
+## Train
+
+All settings, with comments, are in `opengigaflow/config/opengigaflow.yaml`.
+
+```bash
+# Single node
+opengigaflow train
+
+# Override config on the fly (Hydra syntax: dotted.key=value). An override for a setting the config
+# does not have is ignored with a WARNING on stderr, so check the log for typos.
+opengigaflow train train.learning_rate=0.001 env.num_agents=512
+```
+
+Short local run on a machine without CUDA:
+
+```bash
+opengigaflow train train.device=cpu vec.backend=Serial vec.num_envs=2 vec.batch_size=2 env.num_agents=64 \
+    train.total_timesteps=8192 train.batch_size=2048 train.minibatch_size=1024 train.bptt_horizon=16
+```
+
+8-GPU server:
+
+```bash
+torchrun --standalone --nnodes=1 --nproc-per-node=8 -m opengigaflow.rl train
+```
+
+The SLURM version is `scripts/kesai/18_train_8GPU_3seeds_slurm.sh`: one 8-GPU node per seed, then the
+evaluations. `scripts/kesai/3_train_64GPU_multinode_slurm.sh` spans several nodes.
+
+## Evaluation
+
+Each evaluation loads a checkpoint from a training run, e.g. `experiments/<run>/final_model.pt`, with the run's
+`config.yaml` next to it. The `scripts/kesai/` scripts are written for our SLURM clusters
+(`scripts/kesai/cluster_env.sh`); adjust their `#SBATCH` lines and paths before using them.
+
+### Self-play
+
+Runs inside OpenGigaFlow on the 8 CARLA towns. Short local run (`carla_fast`: 250 scenarios of 33 s, failed
+episodes rendered as HTML; add `train.device=cpu` without a GPU):
+
+```bash
+opengigaflow eval carla_fast \
+    load_model_path=experiments/<run>/final_model.pt \
+    eval.render_filter=all_infractions \
+    eval.max_rendered_failures=10
+```
+
+8-GPU server, as in the KE:SAI scripts (80,000 ten-minute `carla` scenarios, one shard per GPU):
+
+```bash
+python scripts/parallel_eval.py carla --total-scenarios 80000 --num-gpus 8 \
+    load_model_path=experiments/<run>/final_model.pt \
+    vec.num_envs=60 \
+    eval.render_filter=all_infractions
+```
+
+`vec.num_envs` is the number of environment workers per GPU; 60 fits a node with 480 cores. The multi-node SLURM
+version is `scripts/kesai/21_selfplay_eval_slurm.sh`. Benchmark definitions, filtered replays and the output
+layout are described in [docs/evaluation.md](docs/evaluation.md).
+
+### nuPlan (Val14)
+
+Runs the policy as a planner inside nuPlan's unmodified closed-loop simulator, with CaRL's Val14 split and
+controller. Setup:
+
+- The nuPlan dataset and maps ([dataset setup](https://nuplan-devkit.readthedocs.io/en/latest/dataset_setup.html))
+  and a [nuplan-devkit](https://github.com/motional/nuplan-devkit) checkout.
+- [CaRL's nuPlan code](https://github.com/autonomousvision/CaRL/tree/main/nuPlan) (`carl_nuplan`) and its conda
+  environment.
+- This repository's simulator binding, built for that environment:
+  `NO_TRAIN=1 /path/to/nuplan_env/bin/python setup.py build_ext --inplace --force`.
+- The nuPlan city maps as `.bin` files.
+- Details: [nuPlan co-simulation README](opengigaflow/ocean/cosim/nuplan/README.md).
+
+Short local run (10 scenarios, reactive agents):
+
+```bash
+CKPT=experiments/<run>/final_model.pt \
+PY=/path/to/nuplan_env/bin/python PD=$PWD \
+NUPLAN_DEVKIT_ROOT=/path/to/nuplan-devkit \
+NUPLAN_DATA_ROOT=/path/to/nuplan NUPLAN_MAPS_ROOT=/path/to/nuplan/maps NUPLAN_EXP_ROOT=/path/to/nuplan_exp \
+CITY_BIN_DIR=/path/to/nuplan_city_bins \
+PYTHONPATH=$PWD:/path/to/CaRL/nuPlan:/path/to/nuplan-devkit \
+CHALLENGES=closed_loop_reactive_agents_opengigaflow WORKER=sequential LIMIT_TOTAL_SCENARIOS=10 \
+bash opengigaflow/ocean/cosim/nuplan/run_nuplan_planner.sh
+```
+
+All 1,118 Val14 scenarios on an 8-GPU node: `RUN_DIR=experiments/<run> sbatch scripts/kesai/9_nuPlan.sh`
+(`13_nuPlan_nonreactive.sh` for log-replay agents). The script also sets the planner options behind our scores
+(goal window, start-up jerk caps, pedestrian box padding, 40 partner slots, lane-width clipping); use the same
+values for comparable numbers.
+
+### CARLA longest6 v1 (Leaderboard 1.0)
+
+Drives the policy through carla_garage's unmodified Leaderboard 1.0 evaluator on the 36 longest6 routes. Setup:
+
+- [CARLA 0.9.10.1](https://github.com/carla-simulator/carla/releases/tag/0.9.10.1) and
+  [carla_garage](https://github.com/autonomousvision/carla_garage) with its `garage` conda environment
+  (Python 3.7). The routes are in its
+  [`leaderboard/data/longest6_split/`](https://github.com/autonomousvision/carla_garage/tree/main/leaderboard/data/longest6_split).
+- The policy runs in a separate server process in this repository's `.venv`.
+- Details: [CARLA Leaderboard 1.0 co-simulation README](opengigaflow/ocean/cosim/carla/lb1/README.md).
+
+Short local run (one route; the script starts and stops its own CARLA server):
+
+```bash
+CKPT=experiments/<run>/final_model.pt \
+CARLA_ROOT=/path/to/CARLA_0.9.10.1 \
+GARAGE_WORK_DIR=/path/to/carla_garage \
+GARAGE_PY=/path/to/envs/garage/bin/python \
+ROUTES=/path/to/carla_garage/leaderboard/data/longest6_split/longest_weathers_0.xml \
+bash opengigaflow/ocean/cosim/carla/lb1/run_leaderboard.sh
+```
+
+All 36 routes with 3 seeds on an 8-GPU node:
+`RUN_DIR=experiments/<run> sbatch scripts/kesai/14_carla_longest6_v1.sh`. The script also sets the co-simulation
+options behind our scores (`COSIM_*`: CARLA pedal control, 40 partner slots, pedestrian box padding, 30 m/s speed
+cap); use the same values for comparable numbers.
+
+## Debug
+
+```bash
+# Debug build (-O0, -g) with address, undefined-behavior and leak sanitizers
+DEBUG=1 python setup.py build_ext --inplace --force
+
+# Build only the simulator binding, without the torch training extension
+NO_TRAIN=1 python setup.py build_ext --inplace --force
+
+# Debug training under AddressSanitizer or gdb
+CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m opengigaflow.rl train train.device=cpu vec.backend=Serial
+gdb --args python -m opengigaflow.rl train train.device=cpu vec.backend=Serial
+```
+
+Step-through debugging of the C and Python code in VS Code:
+[docs/debugger/setup_your_debugger.md](docs/debugger/setup_your_debugger.md).
+
 ## Tests
 
 ```bash
@@ -22,253 +191,16 @@ make test
 
 # Individual suites
 make test-unit       # tests/unit_tests
+make test-eval       # tests/eval (evaluation integration)
 make test-c          # tests/drive (dynamics, geometry, IDM, collisions, ...)
-make test-smoke      # replay-HTML smoke test
 
 # Force-rebuild the C extension regardless of timestamps
 make rebuild
 
-# Opt-in: full smoke suite in Docker (train/rollout/eval goldens)
+# Opt-in: full smoke suite in Docker (train/rollout goldens)
 make test-docker-smoke
 ```
 
 `make help` (or bare `make`) prints this list. Targets call `.venv/bin/python`
 directly, so no venv activation is needed. If your interpreter lives elsewhere
 (conda, a cluster venv), override it: `make PYTHON=/path/to/python test`.
-
-## Install (HPC cluster)
-
-For the NYU cluster, OpenGigaFlow recommends a **mixed Singularity + venv** layout:
-
-- **Singularity image** (read-only, system-wide): supplies CUDA + cuDNN.
-- **ext3 overlay** (writable via `--fakeroot`, host the miniforge3 base interpreter at `/ext3/miniforge3` only).
-- **Venv on `/scratch`** (regular ext4, fast): everything else — `torch`, `opengigaflow`, the compiled `_C.so`.
-
-The venv lives outside the overlay because fuse2fs is single-threaded (~10 MB/s); putting torch/opengigaflow in `/scratch` makes installs and rebuilds ~50× faster.
-
-`scripts/setup_container.sh` is the entrypoint. It auto-detects whether it's running inside the container and re-`singularity exec`s itself accordingly, so you can call it from the login node directly.
-
-**Defaults** (all env-var overridable):
-
-| Variable | Default |
-|---|---|
-| `OVERLAY_PATH` | `/scratch/$USER/images/PufferDrive/overlay-15GB-500K.ext3` |
-| `IMAGE_PATH` | `/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif` |
-| `OVERLAY_TEMPLATE` | `/share/apps/overlay-fs-ext3/overlay-15GB-500K.ext3.gz` |
-| `VENV_PATH` | `/scratch/$USER/venvs/pufferdrive` |
-| `CONTAINER_PYTHON` | `/ext3/miniforge3/bin/python3` |
-
-The defaults match NYU Greene's filesystem layout. Override the env vars before invoking `setup_container.sh` if your cluster differs.
-
-**One-time setup:**
-
-```bash
-# 1. Create the overlay (login node, ~2 min, no GPU needed)
-./scripts/setup_container.sh create-overlay
-
-# 2. Install dependencies into the venv (writable mount; submit as a GPU job)
-sbatch --account=$ACCOUNT --gres=gpu:1 --cpus-per-task=8 --mem=32gb --time=60 \
-    --wrap "./scripts/setup_container.sh install"
-```
-
-The `install` step bootstraps `uv` if it's missing, creates the venv against the overlay's miniforge3, installs `torch` (cu121 wheels), then `pip install -e .` (which also builds the C extension). It also patches `bin/activate` so torch's bundled NCCL wins over the sif's older `libnccl.so.2` — without that, `torchrun`-spawned children crash on `undefined symbol: ncclCommShrink`. `TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"` is set during build so the resulting `_C.so` runs on A100 / L40S / H100 / H200 without "no kernel image" errors.
-
-**Per-code-change rebuild:**
-
-```bash
-sbatch --account=$ACCOUNT --gres=gpu:1 --cpus-per-task=4 --mem=8gb --time=15 \
-    --wrap "./scripts/setup_container.sh rebuild"
-```
-
-`rebuild` mounts the overlay read-only — safe to run while other jobs hold the same overlay.
-
-**Submitting training jobs:**
-
-```bash
-source /scratch/$USER/venvs/pufferdrive/bin/activate
-EXPERIMENTS_DIR=<where you want experiment outputs, e.g. /scratch/$USER/runs>
-python scripts/submit_cluster.py \
-    --compute_config scripts/cluster_configs/nyu_greene.yaml \
-    --program_config scripts/cluster_configs/train_base.yaml \
-    --save_dir $EXPERIMENTS_DIR \
-    --container
-```
-
-`scripts/cluster_configs/nyu_greene.yaml` defines `account`, `gpus`, `cpus`, `mem`, `time` — edit `account` to your allocation before first submit. `--container` makes `submit_cluster.py` wrap the job command in `singularity exec --nv --overlay $OVERLAY_PATH:ro $IMAGE_PATH ...`.
-
-**For a full guide on how to use this see [`docs/cluster_training.md`](docs/cluster_training.md).**
-
-## Data
-
-Place binaries under `opengigaflow/resources/`.
-
-## Train
-
-```bash
-# Single node
-opengigaflow train
-
-# Override config on the fly (Hydra syntax: dotted.key=value). An override for a setting the config
-# does not have is ignored with a WARNING on stderr, so check the log for typos.
-opengigaflow train train.learning_rate=0.001 env.num_agents=512
-
-# Local smoke test on a machine without CUDA
-opengigaflow train train.device=cpu vec.backend=Serial env.num_agents=64 \
-    train.total_timesteps=20480 train.batch_size=10240 train.minibatch_size=2560 train.bptt_horizon=16
-
-# Multi-GPU
-torchrun --standalone --nnodes=1 --nproc-per-node=6 -m opengigaflow.rl train
-```
-
-## Eval
-
-The eval command loads one or more named benchmarks from the benchmark YAML and
-writes per-episode metrics for each benchmark. Benchmark selection is mandatory;
-eval does not choose one implicitly. The default device is CUDA; on a machine
-without it add `train.device=cpu`.
-
-```bash
-# Run the CARLA YAML benchmark and render every evaluated scenario
-opengigaflow eval carla \
-  load_model_path=experiments/opengigaflow_xxxx/models/model_opengigaflow_000500.pt \
-  eval.render_scenarios=true \
-  eval.capture_observations=false
-```
-
-Scenario renders are captured during the benchmark pass and written as
-self-contained interactive HTML; the intermediate `.replay.zlib` bundles are
-deleted afterwards unless `eval.keep_zlib_replays=true`. To render only episodes
-where `offroad_rate > 0` instead:
-
-```bash
-opengigaflow eval carla \
-  load_model_path=experiments/opengigaflow_xxxx/models/model_opengigaflow_000500.pt \
-  eval.render_filter=offroad_rate \
-  eval.max_rendered_failures=10 \
-  eval.capture_observations=false
-```
-
-Set `env.eval_training_render=true` to evaluate and render the Gigaflow
-environment distribution saved in the checkpoint's adjacent `config.yaml`.
-The selected benchmark's `map_dir` and `num_maps` override the checkpoint values,
-so checkpoints remain portable across machines with different dataset paths.
-
-Use `eval.num_agents`, not `env.num_agents`, to configure evaluation capacity.
-Evaluation outputs are written under
-`eval/<benchmark>[_<output_name>]/<timestamp>/`. The benchmark seed and effective
-worker count are saved in the
-resolved configuration: repeated runs with both unchanged produce the same
-map/seed rows. Filtered renders replay the exact map and seed recorded by the
-metrics pass. Set `eval.failure_replay_csv=<path/to/episode_metrics.csv>` with a
-non-null `eval.render_filter` to skip the standard benchmark pass and filter an
-existing report directly. See [docs/evaluation.md](docs/evaluation.md) for the
-benchmark schema, filtered replay and all-scenario rendering flows, outputs, and
-training integration.
-
-## Nightly runs and the regression report
-
-`scripts/launch_nightly_best.sh` (multi-agent, `nightly_best.yaml`) and
-`scripts/launch_single_agent.sh` (single-agent speed run) each submit 3 seeds
-via `submit_cluster.py`, stamped with the launch date as the wandb group and
-`<date>_seed<N>` run names. Runs land in the public projects
-[`emerge_/nightly-multi`](https://wandb.ai/emerge_/nightly-multi) and
-[`emerge_/nightly-single`](https://wandb.ai/emerge_/nightly-single).
-
-The **[PufferDrive Nightlies report](https://wandb.ai/emerge_/nightly-multi/reports/PufferDrive-Nightlies--VmlldzoxNzQxNzI4NQ==)**
-tracks night-over-night regressions. Per project:
-
-1. **Nightly trend** — each metric's final value per night, mean across seeds
-   with stderr bands, on a real date axis.
-2. **Nightly finals** — bar charts of the same finals, one bar per night.
-3. **Training curves** — one mean-over-seeds curve per night, overlaid.
-
-`scripts/nightly_report.py` maintains one derived "trend" run per (project,
-seed) in [`emerge_/nightly-trends`](https://wandb.ai/emerge_/nightly-trends),
-which the trend panels read. The launchers rebuild these before each
-submission, so the report stays current with no other scheduler. Trend runs
-are disposable — the next update recreates them from the real runs.
-
-```bash
-# Refresh the report's data: rebuild the trend runs from the nightly runs' finals
-python scripts/nightly_report.py update
-
-# Rewrite the report's layout in place. Needed if panels change.
-python scripts/nightly_report.py report
-
-# Mint a brand-new report instead of editing the existing one
-python scripts/nightly_report.py report --create
-```
-
-To add a metric to the report: add its key to `TREND_METRICS` /
-`FINALS_METRICS` / `CURVE_METRICS` in `scripts/nightly_report.py`, then run
-`update` followed by `report`.
-
-## Key Configuration (`opengigaflow/config/opengigaflow.yaml`)
-
-### `env` — Simulation
-
-| Parameter | Default | Notes |
-|-----------|---------|-------|
-| `simulation_mode` | `"gigaflow"` | `"gigaflow"` (procedural) or `"replay"` (Data-driven) |
-| `num_agents` | `1024` | Total agents across all workers |
-| `min/max_agents_per_env` | `1 / 80` | Per-env agent count range |
-| `scenario_length` | `1280` | Steps per episode |
-| `collision_behavior` | `1` | `0` ignore, `1` stop |
-| `offroad_behavior` | `1` | Same options |
-| `traffic_light_behavior` | `1` | Same options |
-| `stop_sign_behavior` | `1` | Same options |
-| `traffic_lights_enabled` | `True` | Observe and enforce traffic lights |
-| `stop_signs_enabled` | `False` | Observe and enforce stop signs (CaRL RunStopSign2 semantics, penalised with `reward_stop_line`) |
-| `control_mode` | `"control_vehicles"` | `"control_vehicles"`, `"control_sdc_only"` |
-| `reward_conditioning` | `False` | Condition policy on reward weights |
-| `reward_randomization` | `False` | Randomize reward weights each episode |
-
-### `env` — Reward Shaping
-
-| Parameter | Default | Effect |
-|-----------|---------|--------|
-| `reward_goal` | `1.0` | Goal reaching (set 0 without reward conditioning) |
-| `reward_collision` | `1.5` | Collision penalty |
-| `reward_comfort` | `0.05` | Smooth driving |
-| `reward_lane_align` | `0.025` | Lane heading alignment |
-| `reward_vel_align` | `1.0` | Speed matching road limit |
-| `reward_lane_center` | `0.0038` | Lane centering |
-| `reward_stop_line` | `1.0` | Stop line penalty |
-| `reward_overspeed` | `0.005` | Speeding penalty |
-
-### `train` — PPO
-
-| Parameter | Default | Notes |
-|-----------|---------|-------|
-| `learning_rate` | `0.0005` | Adam LR |
-| `bptt_horizon` | `128` | BPTT window |
-| `minibatch_size` | `65_536` | |
-| `gamma` | `0.999` | Discount |
-| `gae_lambda` | `0.95` | GAE lambda |
-| `vf_coef` | `0.5` | Value loss weight |
-| `ent_coef` | `0.01` | Entropy bonus |
-
-### `policy` — Network
-
-| Parameter | Default | Notes |
-|-----------|---------|-------|
-| `backbone_hidden_size` | `512` | |
-| `backbone_num_layers` | `4` | |
-| `encoder_activation` / `backbone_activation` | `"relu"` / `"gelu"` | Options: `relu`, `tanh`, `gelu` |
-| `actor_hidden_size` / `critic_hidden_size` | `512` | Head widths (`*_num_layers = 0` → linear heads) |
-
-## Debug
-
-**C build issues**
-```bash
-# Verbose build with AddressSanitizer
-DEBUG=1 python setup.py build_ext --inplace --force
-
-# Skip the training-only CUDA extension
-NO_TRAIN=1 python setup.py build_ext --inplace --force
-
-# Debug train
-CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m opengigaflow.rl train train.device=cpu vec.backend=Serial
-# or
-gdb --args python -m opengigaflow.rl train train.device=cpu vec.backend=Serial
-```

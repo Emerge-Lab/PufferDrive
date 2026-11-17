@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 
 import numpy as np
@@ -36,11 +37,7 @@ def _require_mapping(value, label):
 
 
 def resolve_run_dir(model_path):
-    """Run directory holding a checkpoint's config.yaml.
-
-    Checkpoints sit either at the run root (train.final_model_name) or one level
-    down in models/ and best_models/, so accept both instead of assuming a depth.
-    """
+    """Run directory holding a checkpoint's config.yaml: its own folder, else the parent (models/, best_models/)."""
     checkpoint_dir = os.path.dirname(os.path.abspath(model_path))
     if os.path.isfile(os.path.join(checkpoint_dir, "config.yaml")):
         return checkpoint_dir
@@ -115,16 +112,13 @@ def load_benchmark_config(config_path, selected_names, map_dir_override=None, nu
             benchmark = {**benchmark, "env": {**benchmark_environment, "map_dir": map_dir_override}}
         selected_benchmark_configs.append(benchmark)
     resolved_benchmarks = normalize_opengigaflow_benchmarks(
-        environment_config,
-        selected_benchmark_configs,
-        "benchmark_config",
-        validate_resources=False,
+        environment_config, selected_benchmark_configs, "benchmark_config"
     )
     return environment_config, resolved_benchmarks
 
 
 def load_checkpoint_architecture(args):
-    """Load a 3.0 checkpoint's policy and observation architecture."""
+    """-> (args with the checkpoint's policy, env architecture and policy_name merged in, checkpoint config path)."""
     model_path = args["load_model_path"]
     if not isinstance(model_path, str) or not model_path.endswith(".pt") or not os.path.isfile(model_path):
         raise opengigaflow.APIUsageError("Benchmark requires a valid load_model_path checkpoint")
@@ -270,8 +264,7 @@ def _plan_benchmark_eval_workers(
 
 
 def _plan_failure_replay_workers(args, map_seed_pairs, num_workers, scenario_length):
-    """Split the (map, seed) pairs across workers; each worker cycles through its
-    pairs in fit-aware batches (num_agents from config bounds a batch)."""
+    """Split the (map, seed) pairs across workers, which cycle through them in batches bounded by num_agents."""
     pairs_per_worker, remainder = divmod(len(map_seed_pairs), num_workers)
     worker_env_kwargs = []
     pair_start = 0
@@ -328,8 +321,6 @@ def _build_eval_report(episode_summaries, num_scenarios):
 
 def _write_eval_reports(episode_summaries, out_dir, num_scenarios):
     """Write a per-episode metrics CSV and a JSON of metric averages to out_dir."""
-    import json
-
     report = _build_eval_report(episode_summaries, num_scenarios)
     if report is None:
         print("No evaluation episodes were recorded; skipping report.")

@@ -1,15 +1,9 @@
-# Base training configuration for OpenGigaFlow cluster jobs (turbostream).
-# These args are passed to `opengigaflow train` as --key=value flags.
-#
-# Only keys listed here override the defaults in opengigaflow/config/opengigaflow.yaml.
-# Vec settings (num_envs, num_workers, batch_size), env.map_dir, env.num_maps,
-# and env.num_agents are all intentionally omitted so runs inherit the ini.
+# Base program config for submit_cluster.py: key=value overrides of opengigaflow/config/opengigaflow.yaml (vec, maps and
+# agent counts stay the defaults).
 
-# Training
 train.total_timesteps: 10_000_000_000
 train.checkpoint_interval: 1000
 
-# W&B logging
 wandb: True
 wandb_project: opengigaflow
 wandb_group: cluster

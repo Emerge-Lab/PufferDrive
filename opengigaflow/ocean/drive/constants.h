@@ -3,26 +3,6 @@
 
 #include <math.h>
 
-// Every simulation constant lives here. Two kinds, kept separate within each section:
-//   - enum-like values: a closed set of modes/types selected by config or map data
-//   - tuning values: physical units, thresholds, capacities
-//
-//  1. Entity types          agent + road element + traffic control types
-//  2. Modes                 config-selected behavior switches
-//  3. Dynamics              action spaces, actuator limits, speed
-//  4. Geometry & collision  lane fitting, OBB checks, stop lines
-//  5. Spatial grid          cell sizing and neighborhood queries
-//  6. Routing & goals       route search, goal seeding, lane graph
-//  7. Traffic lights        procedural light generation
-//  8. Observations          per-entity feature counts
-//  9. Rewards               conditioning coefficient indices
-// 10. Metrics & scoring     metrics_array indices and scoring windows
-// 11. Telemetry             html frame field counts, episode queue
-
-// =====================================================================================
-// 1. ENTITY TYPES
-// =====================================================================================
-
 // -- AGENT TYPE
 #define UNKNOWN 0
 #define VEHICLE 1
@@ -30,8 +10,7 @@
 #define CYCLIST 3
 
 // -- ROAD TYPE
-// Ranges are load-bearing: is_road_lane/is_road_edge in datatypes.h
-// classify by decade (0-9 lanes, 10-19 lines, 20-29 edges, 30+ misc).
+// the decades are load-bearing: 0-9 lanes, 10-19 lines, 20-29 edges, 30+ misc
 #define LANE_UNKNOWN 0
 #define LANE_FREEWAY 1
 #define LANE_SURFACE_STREET 2
@@ -71,10 +50,6 @@
 #define TRAFFIC_CONTROL_STATE_OFF 4
 #define NUM_TRAFFIC_CONTROL_STATES 5
 
-// =====================================================================================
-// 2. MODES
-// =====================================================================================
-
 // Which agents get initialized at reset
 #define INIT_MODE_CREATE_ALL_VALID 0
 #define INIT_MODE_CREATE_CONTROLLABLE_TYPES 1
@@ -108,12 +83,11 @@
 #define GOAL_SOURCE_EXTERNAL 3 // co-sim: goal windows pushed by the external sim (c_set_agent_goals)
 #define GOAL_SOURCE_GT_MAP 4   // logged-trajectory goals projected onto the nearest co-directional lane center
 
-// =====================================================================================
-// 3. DYNAMICS
-// =====================================================================================
-
 #define MAX_BACKWARD_SPEED -2.0f
 #define STEERING_LIMIT 0.667f
+#define MAX_STEERING_ANGLE_RAD 0.55f
+#define MAX_STEERING_RATE_RADPS 0.6f
+#define WHEELBASE_LENGTH_RATIO 0.6f
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
 static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 
@@ -126,10 +100,6 @@ static const float JERK_LAT[NUM_JERK_LAT_ACTIONS] = {-4.0f, 0.0f, 4.0f};
 #define NUM_STEERING_ACTIONS 9
 static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
     = {-0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f};
-
-// =====================================================================================
-// 4. GEOMETRY & COLLISION
-// =====================================================================================
 
 #define INVALID_POSITION -10000.0f
 #define EGO_IDX 0 // Ego agent is always at index 0 in the agents array
@@ -145,6 +115,9 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define LANE_WIDTH 3.7f                // fallback when the map carries no per-point widths
 #define MAX_LANE_WIDTH_M 50.0f
 #define LANE_MARGIN 0.2f
+#define UNKNOWN_LANE_SPEED_LIMIT_MPS 15.0f // lanes without a map limit (nuPlan Boston/Singapore); CaRL's IDM fallback
+// Junction lanes inherit the min limit over their entry lanes; passes bound chained connectors
+#define SPEED_LIMIT_JUNCTION_INHERIT_PASSES 4
 
 // Agent-agent collision
 #define COLLISION_SKIP_DISP_M 0.1f
@@ -154,6 +127,16 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define COSIM_PARTNER_DEFAULT_WIDTH_M 2.0f
 #define COSIM_PARTNER_DEFAULT_HEIGHT_M 1.5f
 #define SPAWN_OFFROAD_SCALE_FACTOR 1.1f
+#define MAX_SPAWN_ATTEMPTS 30
+#define SPAWN_HEIGHT_M 1.5f
+#define TRAIN_SPAWN_LENGTH_MIN_M 0.8f
+#define TRAIN_SPAWN_LENGTH_MAX_M 7.0f
+#define TRAIN_SPAWN_WIDTH_MIN_M 0.8f
+#define TRAIN_SPAWN_WIDTH_MAX_M 3.0f
+#define EVAL_SPAWN_LENGTH_MIN_M 2.0f // eval spawns car-sized boxes
+#define EVAL_SPAWN_LENGTH_MAX_M 5.5f
+#define EVAL_SPAWN_WIDTH_MIN_M 1.5f
+#define EVAL_SPAWN_WIDTH_MAX_M 2.5f
 #define EVAL_SPAWN_EDGE_CLEARANCE_M 0.5f // Rear swing on a first full-lock turn must not clip the road edge
 // Replay self-play: logged vehicles failing these are created static instead of policy-controlled
 #define REPLAY_SPAWN_EDGE_CLEARANCE_M 0.5f                      // Car box must stay this far from the road edge
@@ -244,14 +227,8 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 
 #define BEHIND_COS_THRESHOLD -0.8660254f // cos(150 degrees)
 
-// =====================================================================================
-// 5. SPATIAL GRID
-// =====================================================================================
-
 #define GRID_CELL_SIZE 5.0f
 #define MAX_GRID_CELL_COUNT 100000000
-// Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution)
-// => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 64
 #define ROAD_QUERY_CELL_COUNT 25 // 5x5 cell neighborhood
 #define ROAD_QUERY_HALF_CELLS 2  // cells on each side of the window's centre cell
@@ -261,7 +238,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define OBS_ENTITY_EDGE 2
 
 // 5x5 cell neighborhood swept by a road query, centered on the agent's cell
-static const int ROAD_OFFSETS[25][2]
+static const int ROAD_OFFSETS[ROAD_QUERY_CELL_COUNT][2]
     = {{-2, -2}, {-1, -2}, {0, -2}, {1, -2}, {2, -2}, {-2, -1}, {-1, -1}, {0, -1}, {1, -1},
        {2, -1},  {-2, 0},  {-1, 0}, {0, 0},  {1, 0},  {2, 0},   {-2, 1},  {-1, 1}, {0, 1},
        {1, 1},   {2, 1},   {-2, 2}, {-1, 2}, {0, 2},  {1, 2},   {2, 2}};
@@ -269,10 +246,7 @@ static const int ROAD_OFFSETS[25][2]
 // 2.5D Z estimation
 #define Z_BUFFER 4.0f
 #define Z_NUM_PT_AVG 30
-
-// =====================================================================================
-// 6. ROUTING & GOALS
-// =====================================================================================
+#define Z_QUERY_CELL_COUNT 9 // 3x3 cell neighborhood
 
 #define MAX_GOALS 20
 #define MAX_ROUTE_LENGTH 64
@@ -282,26 +256,17 @@ static const int ROAD_OFFSETS[25][2]
 // Max snap distance from an externally-set (co-sim) goal waypoint to its lane; route goals are
 // already lane-centered upstream, so anything farther is off the drivable network -> no lane.
 #define GOAL_LANE_SNAP_MAX_DIST_M 6.0f
+#define GOAL_LANE_ALIGN_SIN_LIMIT 0.7071f // sin(45 deg): reject > 45 deg divergence mod 180
+#define GOAL_LANE_ALIGN_COS_MIN 0.0f      // cos(90 deg): reject lanes not generally co-directional
 #define LANE_GRAPH_DISTANCE_NORM_M 500.0f // normalization for the GPS lane-distance feature
-
-// =====================================================================================
-// 7. TRAFFIC LIGHTS
-// =====================================================================================
 
 #define TL_DEFAULT_RED_DURATION 2.0f
 #define TL_DEFAULT_YELLOW_DURATION 3.0f
 #define TL_DEFAULT_GREEN_DURATION 10.0f
 #define TL_EPISODE_DISABLE_PROB 0.20f
-// Junction lanes inherit the min limit over their entry lanes; passes bound chained connectors
-#define SPEED_LIMIT_JUNCTION_INHERIT_PASSES 4
-#define UNKNOWN_LANE_SPEED_LIMIT_MPS 15.0f // lanes without a map limit (nuPlan Boston/Singapore); CaRL's IDM fallback
 #define TL_INDIVIDUAL_REMOVE_PROB 0.20f
 #define TL_GROUP_REMOVE_PROB 0.20f
 #define TL_ALWAYS_GREEN_PROB 0.05f
-
-// =====================================================================================
-// 8. OBSERVATIONS
-// =====================================================================================
 
 #define EGO_FEATURES 11
 #define LANE_FEATURES 9
@@ -317,10 +282,6 @@ static const int ROAD_OFFSETS[25][2]
 #define OBS_VALID_COUNT_FEATURES 4
 // Heading deviation since last kept point that forces a keep when obs stride > 1 (~15 degrees).
 #define OBS_STRIDE_HEADING_THRESHOLD 0.2618f
-
-// =====================================================================================
-// 9. REWARDS
-// =====================================================================================
 
 // Indices into Agent.reward_coefs, randomized per-agent at spawn
 #define REWARD_COEF_GOAL_RADIUS 0
@@ -343,10 +304,6 @@ static const int ROAD_OFFSETS[25][2]
 #define REWARD_COEF_ACC 16
 #define REWARD_COEF_SPEED 17
 #define NUM_REWARD_COEFS 18
-
-// =====================================================================================
-// 10. METRICS & SCORING
-// =====================================================================================
 
 // Indices into Agent.metrics_array; NUM_METRICS is the slot count, slots 11 and 15 are unused
 #define NUM_METRICS 18
@@ -372,7 +329,7 @@ static const int ROAD_OFFSETS[25][2]
 #define DEFAULT_TTC 5.0f // when no vehicle ahead
 
 // Distance to collision
-#define DTC_FRONT_CONE_COS_THRESHOLD -0.90f       // 340 degree cone centered on ego heading
+#define DTC_FRONT_CONE_COS_THRESHOLD -0.90f       // 308 degree cone centered on ego heading (+-154 deg)
 #define DTC_OPPOSITE_HEADING_COS_THRESHOLD -0.90f // Exclude near-perfect opposite directions
 #define DEFAULT_DTC 50.0f                         // Ignore candidates beyond this range
 
@@ -388,20 +345,19 @@ static const int ROAD_OFFSETS[25][2]
 
 #define METRIC_SCORE_WINDOW_SECONDS 10.0f
 #define PROGRESS_REFERENCE_SPEED_MPS 10.0f
-
-// =====================================================================================
-// 11. TELEMETRY
-// =====================================================================================
+#define VELOCITY_PROGRESS_MIN_SPEED_MPS 2.5f
+#define COMFORT_ACCEL_THRESHOLD_MPS2 3.0f
+#define COMFORT_JERK_THRESHOLD_MPS3 5.0f
 
 // obs_html_frame array field counts
 #define AGENT_F32_GOAL_RADIUS_IDX 12
-#define AGENT_F32_FIELDS                                                                                               \
-    13 // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat, jerk_long, jerk_lat, goal_radius
-#define AGENT_I32_FIELDS                                                                                               \
-    10 // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx, blindness_active, braking_active
-#define GOAL_XY_FIELDS 2               // goal x, y per goal slot; reached slots stay zeroed
-#define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
-#define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
+// sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat, jerk_long, jerk_lat, goal_radius
+#define AGENT_F32_FIELDS 13
+// id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx, blindness_active, braking_active
+#define AGENT_I32_FIELDS 10
+#define GOAL_XY_FIELDS 2 // goal x, y per goal slot; reached slots stay zeroed
+#define METRICS_F32_FIELDS NUM_METRICS
+#define TRAFFIC_I16_FIELDS 3 // is_valid, type, state
 #define REWARD_F32_EPISODE_RETURN_IDX 0
 #define REWARD_F32_COLLISION_IDX 1
 #define REWARD_F32_OFFROAD_IDX 2

@@ -81,7 +81,6 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   challenge presets, `closed_loop_{nonreactive,reactive}_agents_opengigaflow`
   (log-replay vs IDM agents, each with its metrics; both pin `one_stage_controller`).
   Found via `hydra.searchpath=[pkg://opengigaflow.ocean.cosim.nuplan.config, ...]`.
-  Use city bins
 
 ## Visualization and run layout
 
@@ -108,7 +107,7 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   from 2300 files in 2000 folders (45 GB with videos) to ~220 files in 4 folders and ~0.2 GB for ~100 flagged
   scenarios. The planner no longer pickles its policy into the simulation logs (28 MB -> 0.2 MB each);
   `--strip-planner` rewrites the kept logs of older runs. `scripts/eval/nuplan_run_layout.py` resolves both
-  layouts (and the `details/simulation_log/` of runs tidied before 2026-11-09) for `compare_nuplan_evals.py`,
+  layouts for `compare_nuplan_evals.py`,
   `nuplan_comfort_breakdown.py`, `analyze_nuplan_cosim.py` and the renderer.
 
 ## How to run

@@ -1,38 +1,4 @@
-"""
-Submitit script for launching OpenGigaFlow training jobs on SLURM clusters.
-
-Example usage:
-    # Single job with config file
-    python scripts/submit_cluster.py \
-        --save_dir /path/to/experiments \
-        --compute_config scripts/cluster_configs/nyu_greene.yaml \
-        --program_config scripts/cluster_configs/train_base.yaml
-
-    # Sweep over learning rates
-    python scripts/submit_cluster.py \
-        --save_dir /path/to/experiments \
-        --compute_config scripts/cluster_configs/nyu_greene.yaml \
-        --args train.learning_rate=1e-4:3e-4:1e-3
-
-    # Override compute settings
-    python scripts/submit_cluster.py \
-        --save_dir /path/to/experiments \
-        --compute_config scripts/cluster_configs/nyu_greene.yaml \
-        --gpus 4 --time 120
-
-    # Dry run (preview commands without submitting)
-    python scripts/submit_cluster.py \
-        --save_dir /path/to/experiments \
-        --compute_config scripts/cluster_configs/nyu_greene.yaml \
-        --dry
-
-    # Run inside Singularity container (for glibc compatibility)
-    python scripts/submit_cluster.py \
-        --save_dir /path/to/experiments \
-        --compute_config scripts/cluster_configs/nyu_greene.yaml \
-        --program_config scripts/cluster_configs/train_base.yaml \
-        --container
-"""
+"""Submit OpenGigaFlow training jobs to a SLURM cluster via submitit, one per point of the --args colon sweeps."""
 
 import argparse
 import hashlib
@@ -49,23 +15,19 @@ import submitit
 def parse_args():
     parser = argparse.ArgumentParser(description="Submit OpenGigaFlow training jobs to SLURM cluster")
 
-    # Job management
     parser.add_argument("--save_dir", type=str, required=True, help="Base directory for experiment outputs")
     parser.add_argument("--prefix", type=str, default=None, help="Prefix for job names and wandb run name")
     parser.add_argument("--wandb-name", type=str, default=None, help="Wandb run name (defaults to --prefix)")
     parser.add_argument("--wandb-group", type=str, default=None, help="Wandb group name (overrides program config)")
     parser.add_argument("--wandb-project", type=str, default=None, help="Wandb project name (overrides program config)")
-    # Exported as env vars into the container command (not passed via --args,
-    # since URLs contain ':' which --args interprets as sweep separators).
+    # env vars of the container command, not --args: a URL's ':' would read as a sweep separator
     parser.add_argument("--wandb-base-url", type=str, default=None, help="WANDB_BASE_URL, e.g. https://api.wandb.ai")
     parser.add_argument("--wandb-entity", type=str, default=None, help="WANDB_ENTITY, e.g. emerge_")
     parser.add_argument("--dry", action="store_true", help="Dry run (don't submit, just print commands)")
 
-    # Config files
     parser.add_argument("--compute_config", type=str, default=None, help="YAML file with SLURM settings")
     parser.add_argument("--program_config", type=str, default=None, help="YAML file with training args")
 
-    # SLURM settings (override compute_config)
     parser.add_argument("--account", type=str, help="SLURM account")
     parser.add_argument("--partition", type=str, help="SLURM partition")
     parser.add_argument("--cpus", type=int, default=None, help="CPUs per task")
@@ -77,31 +39,25 @@ def parse_args():
         "--mem",
         type=str,
         default=None,
-        help=(
-            "Memory per node (e.g., 96gb). Falls back to compute_config['mem'], then to 96gb. "
-            "Gigaflow eval renders 8 ffmpeg children concurrently at 1080p which plus the "
-            "live training env can hit 60-70GB peak; smaller can OOM."
-        ),
+        help="Memory per node (e.g., 96gb). Falls back to compute_config['mem'], then to 96gb.",
     )
     parser.add_argument("--exclude", type=str, default="", help="Nodes to exclude")
     parser.add_argument("--time", type=int, default=None, help="Time limit in minutes")
     parser.add_argument("--task_per_node", type=int, default=1, help="Tasks per node")
     parser.add_argument("--max_pjob", type=int, default=None, help="Max parallel jobs")
 
-    # Program settings
     parser.add_argument("--main", type=str, default="-m opengigaflow.rl train", help="Main command to run")
     parser.add_argument(
         "--args", type=str, nargs="+", default=None, help="Args to override/sweep (e.g., learning_rate=1e-4:3e-4)"
     )
 
-    # GPU heartbeat: keeps utilization above threshold to prevent job reclamation on NYU cluster
+    # keeps the GPU utilization up so the NYU cluster does not reclaim the job
     parser.add_argument(
         "--heartbeat",
         action="store_true",
         help="Run scripts/gpu_heartbeat.py in background alongside training",
     )
 
-    # Container settings
     parser.add_argument("--container", action="store_true", help="Run inside Singularity container")
     parser.add_argument(
         "--container_image",
@@ -183,8 +139,7 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
             name_entries.append(args.program_config.split("/")[-1].rsplit(".", 1)[0])
 
         for key, val in main_args.items():
-            # Hydra override syntax: dotted.key=value, booleans lowercase,
-            # Python None (from YAML null) as Hydra's null literal.
+            # Hydra override syntax: lowercase booleans, YAML null as Hydra's null
             if isinstance(val, bool):
                 val = str(val).lower()
             elif val is None:
@@ -196,7 +151,6 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
                 name_entries.append(f"{display_key}{val}")
 
         job_name = "_".join(name_entries) if name_entries else "opengigaflow"
-        # Sanitize job name
         job_name = (
             job_name[:128]
             .replace("{", "")
@@ -227,30 +181,19 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
 
 
 def isolate_code(project_root: str, save_dir: str) -> str:
-    """Snapshot the code tree into save_dir/code (or code_vN if taken); for an
-    in-repo save_dir the snapshot goes to a <repo>_code_snapshots/ sibling of
-    the repo instead, mirroring save_dir's relative layout.
-
-    Top-level entries are symlinked (instant, avoids deep-copying data/),
-    except ancestors of the snapshot itself.
-
-    Runs on the login node at submission time, so the snapshot reflects the
-    code as it was when the job was submitted, not when it left the queue.
-    """
+    """Snapshot the repo into save_dir/code[_vN] (in-repo save_dirs: <repo>_code_snapshots/). -> the snapshot root."""
     import os
     import shutil
     from pathlib import Path
 
-    # setuptools file discovery walks the whole source tree following
-    # symlinks, so snapshots must live outside it.
+    # setuptools file discovery follows symlinks through the whole source tree: snapshots must live outside it
     project_root_resolved = Path(project_root).resolve()
     save_dir_resolved = Path(save_dir).resolve()
     save_root_entry = None
     if save_dir_resolved.is_relative_to(project_root_resolved):
         snapshots_root = project_root_resolved.parent / f"{project_root_resolved.name}_code_snapshots"
         save_dir_rel = save_dir_resolved.relative_to(project_root_resolved)
-        # The in-repo save root holds run outputs (and held snapshots before
-        # they moved out of the repo) — never link it into the snapshot.
+        # the in-repo save root holds run outputs: never link it into the snapshot
         save_root_entry = save_dir_rel.parts[0]
         isolated_root = str(snapshots_root / save_dir_rel / "code")
     else:
@@ -297,13 +240,11 @@ def isolate_code(project_root: str, save_dir: str) -> str:
 
 def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
     """Submit a single job to SLURM via submitit."""
-    # Load compute config
     from_config = {}
     if args.compute_config is not None:
         from_config = yaml.safe_load(open(args.compute_config, "r"))
         from_config = {k: v for k, v in from_config.items() if v is not None}
 
-    # Override with CLI args
     for key in ["account", "partition", "cpus", "gpus", "gpu_type", "mem", "nodes", "time", "nodelist", "exclude"]:
         if vars(args)[key] is not None:
             from_config[key] = vars(args)[key]
@@ -311,10 +252,8 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
     print(">>> Compute config:")
     pprint.pprint(from_config)
 
-    # Set up executor
     executor = submitit.AutoExecutor(folder=os.path.join(save_dir, "submitit"))
 
-    # Build GRES string for GPUs
     if from_config.get("gpu_type") is not None:
         gres = f"gpu:{from_config['gpu_type']}:{from_config['gpus']}"
     elif from_config.get("gpus") is not None:
@@ -349,15 +288,13 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         import subprocess
         import submitit
 
-        # project_root is the code snapshot taken by isolate_code at submission time.
-        # Change to project directory and set up environment
+        # project_root is the code snapshot isolate_code took at submission time
         os.chdir(project_root)
         os.environ["PYTHONPATH"] = project_root + ":" + os.environ.get("PYTHONPATH", "")
 
         nodes = from_config.get("nodes", 1)
         gpus = from_config.get("gpus", 1)
 
-        # Parse the main command
         main_parts = args.main.split()
 
         if nodes == 1:
@@ -387,26 +324,15 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                 f"{master_addr}:29500",
             ] + main_parts
 
-        # Add save_dir to command
         full_cmd = base_cmd + cmd + [f"train.data_dir={save_dir}"]
 
-        # If heartbeat is enabled, wrap the training command in a brace group that:
-        #   1. backgrounds python scripts/gpu_heartbeat.py
-        #   2. runs training in the foreground
-        #   3. kills the heartbeat on training exit, preserving training's exit code
-        # Brace groups `{ ... ; }` run in the current shell (unlike parens) so the
-        # preceding `cd` and env exports still apply to the training command. The `&`
-        # backgrounds only the python call, not the whole compound statement.
+        # a brace group runs in this shell (cd and exports apply): heartbeat backgrounded, training's exit code kept
         def wrap_with_heartbeat(train_cmd_str):
             hb = "python scripts/gpu_heartbeat.py > /tmp/gpu_heartbeat.log 2>&1 & HEARTBEAT_PID=$!"
             return f"{{ {hb}; {train_cmd_str}; TRAIN_EXIT=$?; kill $HEARTBEAT_PID 2>/dev/null; exit $TRAIN_EXIT; }}"
 
-        # Wrap with singularity if container mode is enabled
         if container_config is not None:
-            # Activate the venv on /scratch instead of /ext3/env.sh. The venv
-            # was created with the overlay's miniforge3 python, so its
-            # bin/python symlinks back into /ext3 (still mounted :ro). All
-            # packages are on /scratch ext4 — no fuse2fs in the read path.
+            # the /scratch venv rather than /ext3/env.sh: every package read stays off fuse2fs
             scratch_dir = os.environ.get("SCRATCH_DIR", "/scratch/" + os.environ.get("USER", ""))
             venv_path = os.environ.get("VENV_PATH", f"{scratch_dir}/venvs/pufferdrive")
             env_setup = f"source {venv_path}/bin/activate && export PYTHONNOUSERSITE=1"
@@ -419,9 +345,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                 f"export WANDB_DIR={scratch_dir}/wandb_data && "
                 f"mkdir -p {scratch_dir}/cache"
             )
-            # Pin the wandb server/org when requested, overriding the container's
-            # default login (e.g. a self-hosted server) so runs land on the
-            # intended entity.
+            # pins the wandb server and org over the container's default login
             if args.wandb_base_url:
                 cache_exports += f" && export WANDB_BASE_URL={args.wandb_base_url}"
             if args.wandb_entity:
@@ -460,10 +384,8 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         print(f">>> Command: {' '.join(full_cmd)}")
         subprocess.run(full_cmd, check=True)
 
-    # Get project root (directory containing this script's parent)
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    # Build container config if enabled
     container_config = None
     if args.container:
         container_config = {
@@ -473,8 +395,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         print(f">>> Container mode enabled: {container_config['image']}")
 
     if not dry:
-        # Snapshot the code now so edits made while the job waits in the queue
-        # don't leak into the run.
+        # snapshot now, so edits made while the job queues do not leak into the run
         isolated_root = isolate_code(project_root, save_dir)
         print(f">>> Code snapshot: {isolated_root}")
         job = executor.submit(launch_training, args, from_config, command, save_dir, isolated_root, container_config)

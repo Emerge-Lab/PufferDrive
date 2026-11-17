@@ -62,7 +62,6 @@ def test_filtered_ppo_accumulation_matches_optimizer_batches(
         "max_grad_norm": 1e6,
     }
     trainer.amp_context = contextlib.nullcontext()
-    trainer.compress_observations = False
     trainer.separate_grad_clip = False
     trainer.minibatch_size = microbatch_size
     trainer.accumulate_minibatches = accumulation_count

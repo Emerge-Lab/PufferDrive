@@ -17,7 +17,7 @@ static size_t compute_neighbor_cache_bytes(GridMap *grid_map) {
         return 0;
     }
     int grid_cell_count = grid_map->grid_cols * grid_map->grid_rows;
-    size_t bytes = grid_cell_count * sizeof(uint16_t *) + (grid_cell_count + 1) * sizeof(int);
+    size_t bytes = grid_cell_count * sizeof(uint16_t *) + grid_cell_count * sizeof(int);
     for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
         bytes += grid_map->neighbor_cache_count[grid_index] * sizeof(uint16_t);
     }

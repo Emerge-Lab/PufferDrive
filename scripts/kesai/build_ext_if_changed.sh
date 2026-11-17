@@ -1,6 +1,5 @@
 #!/bin/bash
-# Rebuild env before training if the source has changed.
-# Minimize rebuilds as they crash running jobs that are using the env.
+# Rebuild the C extension when its sources changed, only then: a rebuild crashes the running jobs that use it.
 REPO_DIR=$1
 # .so files are tagged per python version; track builds per interpreter
 PYTHON_TAG=$(python -c 'import sys; print("cp%d%d" % sys.version_info[:2])')

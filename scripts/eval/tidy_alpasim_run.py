@@ -1,27 +1,4 @@
-"""Tidy the output dir of scripts/kesai/12_alpasim.sh down to what is read after the run:
-
-  results.txt    official score, km between incidents and the per-metric means (written by 12_alpasim.sh)
-  run_info.txt   checkpoint, scenes, topology, git states
-  obs_html/      the replay pages render_alpasim_obs_html.py renders for the selected scenes (+ index.html)
-  details/       results-summary.json (the scored per-scene rows), metrics_unprocessed.parquet (per-step metrics of
-                 every rollout), eval-config.yaml, wizard-config.yaml, config.json, evaluation.yaml, evaluate.log,
-                 evaluation.log, services.log (every AlpaSim service container log, concatenated)
-  videos/        the in-run mp4s, only with RENDER_VIDEO=1
-  alpasim/wizard_0/rollouts/<clipgt>/<session>/rollout.asl  only with KEEP_ROLLOUT_LOGS all|imperfect|failed, where
-                 AlpaSim's and alpasim-training's offline tools look
-
-usage: python scripts/eval/tidy_alpasim_run.py <run_dir> [--keep_rollout_logs none] [--keep_container_info]
-
-Everything else is deleted: the evaluated checkpoint copy (final_model.pt + config.yaml, once the source checkpoint
-named in run_info.txt is confirmed to exist), nre_rc.local, per-rollout metrics.parquet and _complete markers
-(concatenated in metrics_unprocessed.parquet), controller csvs, runtime worker logs (copies of the runtime lines of
-evaluate.log), generated configs, docker-compose.yaml, prometheus configs, aggregate plots. evaluate.log and
-services.log lose the containers' INFO lines unless --keep_container_info. A run without results-summary.json (never
-aggregated: the wizard skips the aggregation when it takes a leaked SLURM_ARRAY_TASK_COUNT for an array job) keeps its
-wizard tree minus the controller csvs and worker logs; `<alpasim>/.venv/bin/python -m eval.aggregation.main
---array_job_dir <wizard_0> --config_path <wizard_0>/eval-config.yaml --failed_rollouts <wizard_0>/failed_rollouts.json`
-scores it, then this script finishes the job. Runs tidied into the 2026-10-12 layout (obs_replays/, logs/, alpasim/
-files) are moved into this one."""
+"""Tidy a scripts/kesai/12_alpasim.sh run to results.txt, run_info.txt, obs_html/, details/ and kept rollout logs."""
 
 import argparse
 import json
@@ -42,7 +19,6 @@ RUN_INFO = "run_info.txt"
 EVALUATE_LOG = "evaluate.log"
 SERVICES_LOG = "services.log"
 ALPAGYM_LOGS = ("config.json", "evaluation.yaml", "logs/evaluation.log")
-LEGACY_LOGS = ("evaluate.log", "config.json", "evaluation.yaml", "evaluation.log")  # logs/ of the 2026-10-12 layout
 WIZARD_KEPT = (
     "aggregate/results-summary.json",
     "aggregate/metrics_unprocessed.parquet",
@@ -98,11 +74,8 @@ def remove_empty_dirs(root):
 
 def remove_all(paths):
     """-> (files deleted, bytes freed)."""
-    freed_bytes = 0
-    paths = list(paths)
-    for path in paths:
-        freed_bytes += remove(path)
-    return len(paths), freed_bytes
+    files = [path for path in paths if path.is_file() or path.is_symlink()]
+    return len(files), sum(remove(path) for path in files)
 
 
 def append_log(src, target, header):
@@ -116,8 +89,7 @@ def append_log(src, target, header):
 
 
 def tidy_service_logs(txt_logs_dir, details_dir, keep_container_info):
-    """txt-logs/: the runtime worker logs deleted (copies of evaluate.log's runtime lines), the service container logs
-    into details/services.log. -> (files deleted, bytes freed)."""
+    """Delete the worker logs, append the service logs to details/services.log. -> (files deleted, bytes freed)."""
     if not txt_logs_dir.is_dir():
         return 0, 0
     deleted_count, freed_bytes = remove_all(sorted(txt_logs_dir.glob(WORKER_LOG_GLOB)))
@@ -130,8 +102,7 @@ def tidy_service_logs(txt_logs_dir, details_dir, keep_container_info):
 
 
 def remove_checkpoint_copy(run_dir):
-    """The evaluated copy of the checkpoint and its config.yaml, once run_info.txt's source checkpoint still exists
-    with the same size (a downloaded run keeps them). -> bytes freed."""
+    """Delete the evaluated checkpoint copy + config.yaml while the source has the same size. -> bytes freed."""
     run_info = run_dir / RUN_INFO
     if not run_info.is_file():
         return 0
@@ -145,30 +116,21 @@ def remove_checkpoint_copy(run_dir):
 
 
 def gather_run(run_dir, details_dir):
-    """A fresh run's alpagym/ tree and a 2026-10-12 layout into the current one; evaluate.log into details/."""
-    alpagym_dir, legacy_logs, legacy_alpasim = run_dir / "alpagym", run_dir / "logs", run_dir / "alpasim"
+    """A fresh run's alpagym/ tree into the run dir, evaluate.log into details/."""
+    alpagym_dir = run_dir / "alpagym"
     move(alpagym_dir / "obs_replays", run_dir / OBS_HTML_DIR)
     for name in ALPAGYM_LOGS:
         move(alpagym_dir / name, details_dir / Path(name).name)
-    move(alpagym_dir / "alpasim" / "wizard_0", legacy_alpasim / "wizard_0")
+    move(alpagym_dir / "alpasim" / "wizard_0", run_dir / "alpasim" / "wizard_0")
     remove_empty_dirs(alpagym_dir)
     if alpagym_dir.exists():
         leftovers = sorted(str(path.relative_to(run_dir)) for path in alpagym_dir.rglob("*") if path.is_file())
         print(f"[tidy_alpasim_run] left in place, unknown: {leftovers}")
-    move(run_dir / "obs_replays", run_dir / OBS_HTML_DIR)
-    move(legacy_logs / RUN_INFO, run_dir / RUN_INFO)
-    for name in LEGACY_LOGS:
-        move(legacy_logs / name, details_dir / name)
-    move(legacy_logs / "txt-logs", legacy_alpasim / "wizard_0" / "txt-logs")
-    remove_empty_dirs(legacy_logs)
-    for name in WIZARD_KEPT:
-        move(legacy_alpasim / Path(name).name, details_dir / Path(name).name)
     move(run_dir / EVALUATE_LOG, details_dir / EVALUATE_LOG)
 
 
 def sweep_wizard(wizard_dir, rows, keep_rule):
-    """Delete every file of the AlpaSim tree except the rollout.asl of the summary rows keep_rule keeps.
-    -> (files removed, bytes removed, rollout logs kept)."""
+    """Delete the AlpaSim tree but the kept rows' rollout.asl. -> (files removed, bytes removed, rollout logs kept)."""
     kept_logs = {
         wizard_dir / "rollouts" / row["clipgt_id"] / row["rollout_id"] / "rollout.asl" for row in rows if keep_rule(row)
     }

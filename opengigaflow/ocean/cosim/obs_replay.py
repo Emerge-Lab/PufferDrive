@@ -1,24 +1,19 @@
-"""Interactive observation replay (opengigaflow.viz) for a co-sim shadow env: the exact obs vector the
-policy received each step, its outputs (action, value, entropy, action probabilities) and the
-encoder max-pool winners, rendered as one self-contained HTML per scenario/route."""
+"""Co-sim observation replay pages (opengigaflow.viz): per-step policy obs, outputs and encoder pool winners."""
 
-import json
 from pathlib import Path
 
 import numpy as np
 
 from opengigaflow.ocean.drive import binding
 
+
 OBS_CLIP = 100.0  # parked FAR_AWAY slots carry ~5e3 goal offsets that would blow up the viewer's int16 quantization
 ROAD_CROP_MARGIN_M = 250.0  # whole-city bins: keep only road elements near the driven trajectory
-POOL_NAMES = ("pool_partner", "pool_lane", "pool_boundary", "pool_traffic")
-OBS_TRAILING_COUNT_FEATURES = 4  # lane/boundary/partner/traffic-control counts appended after the slots
 
 
 class ObsReplayCapture:
     def __init__(self, env, policy, out_stem, max_steps=800, ghost_trajectory=None):
-        """ghost_trajectory: (N, 5) logged/human ego boxes [x, y, heading, length, width] in the bin frame,
-        row f = frame f (the viewer's red ghost); None when the external sim has no logged ego."""
+        """ghost_trajectory: (N, 5) logged ego boxes [x, y, heading, length, width] in the bin frame (row = frame)."""
         self.env = env
         self.policy = policy
         self.out_stem = Path(out_stem)
@@ -30,30 +25,23 @@ class ObsReplayCapture:
         self.scenario = state[0] if isinstance(state, list) else state
         self.agent_cap = int(self.scenario["num_total_agents"])
         self.traffic_cap = max(int(self.scenario["num_traffic_elements"]), 1)
-        self.frames = {
-            key: []
-            for key in (
-                "agent_f32",
-                "agent_i32",
-                "metrics_f32",
-                "traffic_i16",
-                "goals_f32",
-                "rewards_f32",
-                "coefs_f32",
-                "obs",
-                "raw_action",
-                "action_index",
-                "value",
-                "entropy",
-                "policy_probs",
-            )
+        self.frame_buffer_layouts = {
+            "agent_f32": ((1, self.agent_cap, binding.AGENT_F32_FIELDS), np.float32),
+            "agent_i32": ((1, self.agent_cap, binding.AGENT_I32_FIELDS), np.int32),
+            "metrics_f32": ((1, self.agent_cap, binding.METRICS_F32_FIELDS), np.float32),
+            "traffic_i16": ((1, self.traffic_cap, binding.TRAFFIC_I16_FIELDS), np.int16),
+            "goals_f32": ((1, self.agent_cap, int(env.num_goals) * binding.GOAL_XY_FIELDS), np.float32),
+            "rewards_f32": ((1, self.agent_cap, binding.REWARD_F32_FIELDS), np.float32),
+            "coefs_f32": ((1, self.agent_cap, binding.NUM_REWARD_COEFS), np.float32),
         }
+        self.frames = {key: [] for key in self.frame_buffer_layouts}
+        self.frames.update(obs=[], raw_action=[], action_index=[], value=[], entropy=[], policy_probs=[])
 
     def __len__(self):
         return len(self.frames["obs"])
 
     def policy_outputs(self, obs_tensor, logits, value, entropy):
-        """-> aux dict for capture(): value/entropy/action probabilities (+ pool winners when the policy exposes them)."""
+        """-> aux dict for capture(): value, entropy, action probabilities and encoder pool winners."""
         import torch
 
         probs = torch.softmax(logits if isinstance(logits, torch.Tensor) else logits[0], dim=-1)
@@ -62,35 +50,20 @@ class ObsReplayCapture:
             "entropy": entropy.detach().cpu().numpy().reshape(-1).astype(np.float32),
             "policy_probs": probs.detach().cpu().numpy().astype(np.float32),
         }
-        pool_method = getattr(self.policy, "pool_slot_counts", None)
-        if pool_method is not None:
-            with torch.no_grad():
-                pool = pool_method(obs_tensor)
-            aux["pool"] = {name: counts.cpu().numpy().astype(np.int16) for name, counts in pool.items()}
+        with torch.no_grad():
+            pool = self.policy.pool_slot_counts(obs_tensor)
+        aux["pool"] = {name: counts.cpu().numpy().astype(np.int16) for name, counts in pool.items()}
         return aux
 
     def capture(self, obs, actions, aux, action_index=None):
-        """action_index: discrete class per agent behind `actions` (argmax when the executed action is the
-        distribution mean, the sampled/mode class otherwise); None or -1 when there is no class."""
+        """action_index: discrete class per agent behind `actions` (argmax for a mean action); None or -1: none."""
         if len(self) >= self.max_steps:
             return
-        cap, tcap = self.agent_cap, self.traffic_cap
-        agent_f32 = np.zeros((1, cap, binding.AGENT_F32_FIELDS), np.float32)
-        agent_i32 = np.zeros((1, cap, binding.AGENT_I32_FIELDS), np.int32)
-        metrics_f32 = np.zeros((1, cap, binding.METRICS_F32_FIELDS), np.float32)
-        traffic_i16 = np.zeros((1, tcap, binding.TRAFFIC_I16_FIELDS), np.int16)
-        goals_f32 = np.zeros((1, cap, int(self.env.num_goals) * binding.GOAL_XY_FIELDS), np.float32)
-        rewards_f32 = np.zeros((1, cap, binding.REWARD_F32_FIELDS), np.float32)
-        coefs_f32 = np.zeros((1, cap, binding.NUM_REWARD_COEFS), np.float32)
-        self.env.get_obs_html_frame(agent_f32, agent_i32, metrics_f32, traffic_i16, goals_f32, rewards_f32, coefs_f32)
+        frame_buffers = {name: np.zeros(shape, dtype) for name, (shape, dtype) in self.frame_buffer_layouts.items()}
+        self.env.get_obs_html_frame(*frame_buffers.values())
         frames = self.frames
-        frames["agent_f32"].append(agent_f32[0])
-        frames["agent_i32"].append(agent_i32[0])
-        frames["metrics_f32"].append(metrics_f32[0])
-        frames["traffic_i16"].append(traffic_i16[0])
-        frames["goals_f32"].append(goals_f32[0])
-        frames["rewards_f32"].append(rewards_f32[0])
-        frames["coefs_f32"].append(coefs_f32[0])
+        for name, frame_buffer in frame_buffers.items():
+            frames[name].append(frame_buffer[0])
         obs = np.asarray(obs, dtype=np.float32)
         frames["obs"].append(np.clip(obs, -OBS_CLIP, OBS_CLIP))
         frames["raw_action"].append(np.asarray(actions, dtype=np.float32).reshape(obs.shape[0], -1))
@@ -110,8 +83,6 @@ class ObsReplayCapture:
     def _env_cfg(self):
         env = self.env
         return {
-            "init_step": 0,
-            "goal_regen_mode": "finite",
             "action_type": "discrete",
             "num_goals": int(env.num_goals),
             "goal_radius": float(env.goal_radius),
@@ -119,8 +90,6 @@ class ObsReplayCapture:
             "obs_slots_partners_n": int(env.obs_slots_partners_n),
             "obs_slots_lane_n": int(env.obs_slots_lane_n),
             "obs_slots_boundary_n": int(env.obs_slots_boundary_n),
-            "obs_lane_stride": int(env.obs_lane_stride),
-            "obs_boundary_stride": int(env.obs_boundary_stride),
             "obs_slots_traffic_controls_n": int(env.obs_slots_traffic_controls_n),
             "obs_dropout_lane": float(env.obs_dropout_lane),
             "obs_dropout_boundary": float(env.obs_dropout_boundary),
@@ -132,12 +101,6 @@ class ObsReplayCapture:
             "obs_norm_road_seg_width_m": float(env.obs_norm_road_seg_width_m),
             "obs_norm_speed_mps": float(env.obs_norm_speed_mps),
             "obs_traffic_light_yellow_remaining": bool(env.obs_traffic_light_yellow_remaining),
-            "ego_features": int(env.ego_features),
-            "num_reward_coefs": int(env.num_reward_coefs),
-            "goal_dim": int(env.goal_dim),
-            "partner_features": int(env.partner_features),
-            "lane_features": int(env.lane_features),
-            "boundary_features": int(env.boundary_features),
         }
 
     def _check_layout(self, obs_dim):
@@ -152,7 +115,7 @@ class ObsReplayCapture:
             + env.obs_slots_boundary_kept * env.boundary_features
             + env.obs_slots_traffic_controls_n * env.traffic_control_features
         )
-        if obs_dim < viewer_dim or obs_dim - viewer_dim > OBS_TRAILING_COUNT_FEATURES:
+        if obs_dim < viewer_dim or obs_dim - viewer_dim > binding.OBS_VALID_COUNT_FEATURES:
             raise RuntimeError(
                 f"obs replay layout mismatch: obs has {obs_dim} columns, viewer layout expects {viewer_dim}"
             )
@@ -169,73 +132,30 @@ class ObsReplayCapture:
                 roads.append(elem)
         scenario = dict(self.scenario)
         scenario["road_elements"] = roads
-        scenario["map_corners"] = [float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1])]
         return scenario
 
-    def write(self, render_html=True, save_npz=False):
-        """Save <stem>.replay.zlib (+ .html when render_html, + .npz raw arrays when save_npz).
-        -> path of the html (or the zlib when not rendered), None when nothing was captured.
-        Deferred rendering: `render_replay_html(zlib_path)` turns a saved replay into the page later,
-        e.g. only for scenarios that scored badly."""
+    def write(self, render_html=True):
+        """Save <stem>.replay.zlib (+ <stem>.html if render_html) -> the last path written, None if nothing captured."""
         from opengigaflow import viz
 
         frames = self.frames
         if not frames["obs"]:
             return None
-        env_cfg = self._env_cfg()
         self._check_layout(frames["obs"][0].shape[-1])
-        agent_f32 = np.stack(frames["agent_f32"])
-        replay = {
-            "schema": "obs_html_compact_v1",
-            "env": env_cfg,
-            "agent_f32": agent_f32,
-            "agent_i32": np.stack(frames["agent_i32"]),
-            "metrics_f32": np.stack(frames["metrics_f32"]),
-            "traffic_i16": np.stack(frames["traffic_i16"]),
-            "goals_f32": np.stack(frames["goals_f32"]),
-            "rewards_f32": np.stack(frames["rewards_f32"]),
-            "coefs_f32": np.stack(frames["coefs_f32"]),
-            "obs": np.stack(frames["obs"]),
-            "raw_action": np.stack(frames["raw_action"]),
-            "clipped_action": np.stack(frames["raw_action"]),
-            "action_index": np.stack(frames["action_index"]),
-            "value": np.stack(frames["value"]),
-            "entropy": np.stack(frames["entropy"]),
-            "policy_probs": np.stack(frames["policy_probs"]) if frames["policy_probs"] else None,
-            "policy_mean": None,
-            "policy_std": None,
-            "policy_log_prob": None,
-        }
-        for pool_name in POOL_NAMES:
-            if frames.get(pool_name):
-                replay[pool_name] = np.stack(frames[pool_name])
+        replay = {name: np.stack(values) for name, values in frames.items() if values}
+        replay["env"] = self._env_cfg()
+        replay["clipped_action"] = replay["raw_action"]
         if self.ghost_trajectory is not None:
-            frame_count = agent_f32.shape[0]
+            frame_count = replay["agent_f32"].shape[0]
             ghost = np.zeros((frame_count, replay["raw_action"].shape[1], 5), np.float32)
             ghost_count = min(frame_count, len(self.ghost_trajectory))
             ghost[:ghost_count, 0] = self.ghost_trajectory[:ghost_count]
             replay["ghost_f32"] = ghost
         self.out_stem.parent.mkdir(parents=True, exist_ok=True)
         zlib_path = str(self.out_stem) + ".replay.zlib"
-        html_path = str(self.out_stem) + ".html"
-        viz.save_interactive_replay_zlib(self._cropped_scenario(agent_f32), replay, zlib_path)
-        if save_npz:
-            np.savez(
-                str(self.out_stem) + ".npz",
-                obs=replay["obs"],
-                agent_f32=agent_f32,
-                env_cfg_json=np.array(json.dumps(env_cfg)),
-            )
+        viz.save_interactive_replay_zlib(self._cropped_scenario(replay["agent_f32"]), replay, zlib_path)
         if not render_html:
             return zlib_path
-        render_replay_html(zlib_path)
+        html_path = str(self.out_stem) + ".html"
+        viz.render_interactive_replay_zlib(zlib_path, html_path)
         return html_path
-
-
-def render_replay_html(zlib_path):
-    """<stem>.replay.zlib -> <stem>.html"""
-    from opengigaflow import viz
-
-    html_path = str(zlib_path)[: -len(".replay.zlib")] + ".html"
-    viz.render_interactive_replay_zlib(str(zlib_path), html_path)
-    return html_path

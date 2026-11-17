@@ -1,13 +1,8 @@
 """calibrate_town_offset recovers a known bin-vs-CARLA translation and height from fake driving waypoints."""
 
-import os
-import sys
 from pathlib import Path
 
 import numpy as np
-
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import data_utils.mirror_map_bin as mbin
 from opengigaflow.ocean.cosim import carla_bridge as cb
@@ -63,7 +58,7 @@ class _Map:
 
 
 def test_calibration_recovers_translation_and_height():
-    transform = cb.CarlaTransform("Town01", offset=cb.town_offset(str(TOWN_BIN)))
+    transform = cb.CarlaTransform("Town01")
     offset, z_offset, residual_before, residual_after = cb.calibrate_town_offset(
         cb.driving_waypoint_samples(_Map(transform)), transform, str(TOWN_BIN)
     )

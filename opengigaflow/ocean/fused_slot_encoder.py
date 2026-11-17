@@ -1,10 +1,4 @@
-"""Fused per-slot encoder: Linear -> LayerNorm -> ReLU -> Linear -> masked max-pool over slots.
-
-Reproduces the bf16-autocast numerics of DriveBackbone._encode_and_pool (bf16 matmul inputs and outputs, fp32
-accumulation, fp32 LayerNorm, gradient to the first maximal slot) without materializing the per-slot activations
-between ops. This module is the torch side: custom ops, autograd and shape validation. The kernels are in
-cuda_slot_encoder.py and are imported by the first fused call, so building a policy needs no CUDA toolchain.
-"""
+"""Custom ops of the fused slot encoder, matching DriveBackbone._encode_and_pool's bf16-autocast numerics."""
 
 import torch
 

@@ -9,46 +9,30 @@
 #SBATCH --output experiments/logs/carla_longest6_v2_%j.out
 #SBATCH --error experiments/logs/carla_longest6_v2_%j.err
 #SBATCH --partition dev
-# CARLA longest6 evaluation of an OpenGigaFlow checkpoint through CaRL's unmodified original_leaderboard
-# (opengigaflow/ocean/cosim/carla/leaderboard_agent.py), the CARLA counterpart of 9_nuPlan.sh.
-#
-# WORKERS parallel workers (default 16), each one CARLA server + one evaluator at a time, spread round-robin over the
-# GPUs of the allocation (1-8, e.g. `sbatch --gres gpu:2`): under -nullrhi a server needs ~2 cores and no GPU, so
-# several share one. The 36 routes x SEEDS passes (route runs, $OUT/routes/route_<id>_s<seed>/) go longest-first to the
-# least loaded worker (route length from the xml), every route run gets its own server (restarted per route, CaRL's own
-# recipe), worker launches are staggered, a crashed route run is retried on the next GPU, and the result jsons are
-# aggregated at the end with CaRL's tools/result_parser.py (results.csv) plus the obs replay gallery of the failed
-# routes ($OUT/obs_html/index.html, as in 9_nuPlan.sh). scripts/eval/tidy_carla_run.py then leaves $OUT/results.csv,
-# run_info.txt, obs_html/, routes/ (flat: route_<id>_s<seed>.result.json of every route run, .telemetry.csv +
-# .world_log.npz of the failed ones) and details/ (timing.csv, workers.log, evaluators.log). Speed: wall and game
-# time of every route go to timing.csv, the run totals to run_info.txt and stdout.
-#
-# Overridable env: RUN_DIR, ROUTES, SCENARIOS (0 = opengigaflow's scenario-free longest6), SEEDS ("0 1 2" by default:
-# traffic-manager seeds, one full pass over the routes per seed, the protocol of CaRL's and carla_garage's
-# evaluate_routes_slurm.py with --num_repetitions 3; results.csv then carries mean and std over the seeds per route and
-# per town, the stdout summary the DS of every seed and mean +- std over the seeds; "0" = one pass with the evaluator's
-# default seed), REPETITIONS (leaderboard-internal repetitions within a pass, 1), ROUTE_SUBSET ("0 5 17": only these
-# route ids), WORKERS, NUM_GPUS, STAGGER_S (15: seconds between worker launches),
-# PORT_BASE (12000: CARLA rpc port of worker 0; worker w uses PORT_BASE+50w, TM PORT_BASE+6000+50w; a range with a port
-# already listening is skipped for 12000, then 22000, see run_info.txt port_base), OMP_NUM_THREADS (policy
-# threads; 2 from 16 workers on, else 4), LOGGING (1, default: telemetry, world log and obs replay per
-# route; 0: scores only), CARLA_VIEW (0, default: CARLA runs without rendering (-nullrhi; collision sensors
-# and telemetry work, an RGB camera segfaults the server); 1: chase-cam mp4 per route on a rendering server,
-# needs LOGGING=1), OBS_HTML (1 = failures, default: the interactive obs replay pages of the route runs with a
-# flagged infraction or a failed status, rendered into $OUT/obs_html at the end; all = every route run; 0 = none;
-# needs LOGGING=1), REPORT (0, default; 1 = the HTML report of scripts/eval/analyze_carla_cosim.py in $OUT/report,
-# needs LOGGING=1), TIDY (1, default: scripts/eval/tidy_carla_run.py flattens $OUT at the end; 0 = keep every file),
-# MAX_ATTEMPTS, CARLA_ROOT, CARL_WORK_DIR, PY, PD, COSIM_MAX_SPEED_MPS (ego speed cap, default 30),
-# COSIM_ZERO_PARTNER_STOPPED_TIME (default 1: vehicles' stopped-time obs held at 0, walkers keep theirs; 0 = all real),
-# COSIM_VRU_SIZE_PAD_M (default 0.8: added to the length and width of every walker and two-wheeler box, so they
-# read strictly larger than the smallest training vehicle; 0 = true CARLA boxes), WANDB_REPORT (1, default: the
-# DS of results.csv becomes the training run's final_eval/longest6_v2_DS in wandb, replacing an earlier report; 0 for
-# ablations, so the run keeps the number of its standard eval; never reported: a run with missing route records and the
-# scenario-free variant).
-# COSIM_DYNAMICS_SOURCE (carla_pedals, default: CARLA's physics moves the ego, driven only by the VehicleControl the agent
-# returns; opengigaflow: the ego is teleported along OpenGigaFlow's own dynamics, tags the folder _opengigaflow).
-# Ablations of carla_pedals: COSIM_PEDAL_REVERSE (0, default: the car never backs up; 1 = it reverses, tags the folder _reverse) and
-# COSIM_PEDAL_YELLOW_MARGIN (1, default; 0 = the policy sees CARLA's remaining yellow, tags the folder _noyellowmargin).
+# CARLA longest6 v2 eval of an OpenGigaFlow checkpoint through CaRL's unmodified original_leaderboard and
+# opengigaflow/ocean/cosim/carla/leaderboard_agent.py: WORKERS workers, one CARLA server + one evaluator per route run
+# (routes x SEEDS, longest first), results.csv from CaRL's tools/result_parser.py, the replay gallery in $OUT/obs_html,
+# then scripts/eval/tidy_carla_run.py flattens $OUT to results.csv, run_info.txt, obs_html/, routes/ and details/.
+# Overridable env (default):
+#   RUN_DIR, ROUTES, CARLA_ROOT, CARL_WORK_DIR, PY, PD  checkpoint run, route xml, CARLA and CaRL checkouts, python
+#   SCENARIOS (1)              0 = opengigaflow's scenario-free longest6
+#   SEEDS ("0 1 2")            traffic-manager seeds, one pass over the routes each; "0" = one pass, the default seed
+#   REPETITIONS (1)            leaderboard repetitions within a pass
+#   ROUTE_SUBSET               "0 5 17": only these route ids
+#   WORKERS (16), NUM_GPUS (the allocation's), STAGGER_S (15 s between worker launches), MAX_ATTEMPTS (3)
+#   PORT_BASE (12000)          worker w: rpc port PORT_BASE+50w, TM PORT_BASE+6000+50w; run_info.txt: the base used
+#   OMP_NUM_THREADS            policy threads (2 from 16 workers on, else 4)
+#   LOGGING (1)                telemetry, world log and obs replay per route; 0 = scores only
+#   CARLA_VIEW (0)             1 = chase-cam mp4 per route on a rendering server (needs LOGGING=1)
+#   OBS_HTML (1 = failures)    replay pages of the route runs with a flagged infraction or failed status; all; 0 = none
+#   REPORT (0)                 1 = scripts/eval/analyze_carla_cosim.py's HTML report in $OUT/report (needs LOGGING=1)
+#   TIDY (1)                   0 = keep every file
+#   WANDB_REPORT (1)           results.csv's DS becomes the run's final_eval/longest6_v2_DS in wandb; 0 for ablations
+#   COSIM_MAX_SPEED_MPS (30)   ego speed cap
+#   COSIM_ZERO_PARTNER_STOPPED_TIME (1)  vehicles' stopped-time obs held at 0, walkers keep theirs; 0 = all real
+#   COSIM_VRU_SIZE_PAD_M (0.8) added to the length and width of walker and two-wheeler boxes; 0 = true CARLA boxes
+#   COSIM_DYNAMICS_SOURCE (carla_pedals: CARLA's physics moves the ego; opengigaflow: teleported by OpenGigaFlow's)
+#   COSIM_PEDAL_YELLOW_MARGIN (1)  carla_pedals: 0 = the policy sees CARLA's remaining yellow
 set -u
 source scripts/kesai/cluster_env.sh || exit 1
 
@@ -96,27 +80,11 @@ NUM_GPUS=${NUM_GPUS:-$(nvidia-smi -L 2>/dev/null | grep -c "^GPU")}
 if [ "$NUM_GPUS" -lt 1 ] || [ "$NUM_GPUS" -gt 8 ]; then echo "NUM_GPUS=$NUM_GPUS must be 1..8"; exit 1; fi
 if [ "$WORKERS" -lt 1 ] || [ "$WORKERS" -gt 64 ]; then echo "WORKERS=$WORKERS must be 1..64"; exit 1; fi
 
-# Every port of the worker layout (rpc, streaming = rpc+1, TM) must be free of listeners; the first clear base wins.
-# Bases stay below the ephemeral range (32768+); the old 2000 put node_exporter (9100) and dcgm-exporter (9400) inside it.
-pick_port_base() {
-    local listening base w port busy
-    listening=" $(ss -ltun 2>/dev/null | awk 'NR > 1 {sub(/.*:/, "", $5); print $5}' | sort -u | tr '\n' ' ') "
-    for base in "$@"; do
-        busy=0
-        for ((w = 0; w < WORKERS; w++)); do
-            for port in $((base + 50 * w)) $((base + 50 * w + 1)) $((base + 6000 + 50 * w)); do
-                [[ "$listening" == *" $port "* ]] && { busy=$port; break 2; }
-            done
-        done
-        [ "$busy" = 0 ] && { echo "$base"; return 0; }
-        echo "port base $base: port $busy is in use, trying the next range" >&2
-    done
-    return 1
-}
-PORT_BASE=$(pick_port_base "$PORT_BASE" 12000 22000) || { echo "no free port range for $WORKERS workers (ss -ltun)"; exit 1; }
+# bases below the ephemeral range (32768+) and clear of node_exporter (9100) and dcgm-exporter (9400)
+PORT_BASE=$(pick_port_base "$WORKERS" "$PORT_BASE" 12000 22000) || { echo "no free port range for $WORKERS workers (ss -ltun)"; exit 1; }
 echo "port base $PORT_BASE: rpc $PORT_BASE+50w, TM $((PORT_BASE + 6000))+50w"
 
-# PD first, and drop inherited entries from other OpenGigaFlow checkouts (see 9_nuPlan.sh)
+# PD first; drop inherited entries of other OpenGigaFlow checkouts
 INHERITED_PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
 export PYTHONPATH="$PD:$CARL_WORK_DIR/original_leaderboard/leaderboard:$CARL_WORK_DIR/original_leaderboard/scenario_runner:$CARLA_ROOT/PythonAPI/carla${INHERITED_PYTHONPATH:+:$INHERITED_PYTHONPATH}"
 export SCENARIO_RUNNER_ROOT=$CARL_WORK_DIR/original_leaderboard/scenario_runner
@@ -124,10 +92,10 @@ cd "$PD" || exit 1
 OMP_THREADS=${OMP_NUM_THREADS:-$([ "$WORKERS" -ge 16 ] && echo 2 || echo 4)}
 export OMP_NUM_THREADS=$OMP_THREADS MKL_NUM_THREADS=$OMP_THREADS OPENBLAS_NUM_THREADS=$OMP_THREADS NUMEXPR_NUM_THREADS=$OMP_THREADS
 export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
-export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-carla_pedals}   # carla_pedals: CARLA's physics moves the ego, see shadow_ego.py
+export COSIM_DYNAMICS_SOURCE=${COSIM_DYNAMICS_SOURCE:-carla_pedals}
 [[ "$COSIM_DYNAMICS_SOURCE" =~ ^(opengigaflow|carla_pedals)$ ]] || { echo "COSIM_DYNAMICS_SOURCE=\"$COSIM_DYNAMICS_SOURCE\" must be opengigaflow or carla_pedals"; exit 1; }
-export COSIM_PEDAL_REVERSE=${COSIM_PEDAL_REVERSE:-0} COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}   # carla_pedals ablations, see shadow_ego.py
-[[ "$COSIM_PEDAL_REVERSE" =~ ^[01]$ && "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_REVERSE=\"$COSIM_PEDAL_REVERSE\" and COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }
+export COSIM_PEDAL_YELLOW_MARGIN=${COSIM_PEDAL_YELLOW_MARGIN:-1}
+[[ "$COSIM_PEDAL_YELLOW_MARGIN" =~ ^[01]$ ]] || { echo "COSIM_PEDAL_YELLOW_MARGIN=\"$COSIM_PEDAL_YELLOW_MARGIN\" must be 0 or 1"; exit 1; }
 export COSIM_MAX_SPEED_MPS=${COSIM_MAX_SPEED_MPS:-30}
 export COSIM_ZERO_PARTNER_STOPPED_TIME=${COSIM_ZERO_PARTNER_STOPPED_TIME:-1}
 export COSIM_VRU_SIZE_PAD_M=${COSIM_VRU_SIZE_PAD_M:-0.8}
@@ -140,7 +108,7 @@ TAG=$TAG$([ "$SEEDS" = "0 1 2" ] || echo "_seeds$(echo "$SEEDS" | tr ' ' '-')")
 TAG=$TAG$([ "$COSIM_VRU_SIZE_PAD_M" = "0.8" ] || echo "_vrupad$COSIM_VRU_SIZE_PAD_M")
 TAG=$TAG$([ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ] || echo "_$COSIM_DYNAMICS_SOURCE")
 if [ "$COSIM_DYNAMICS_SOURCE" = "carla_pedals" ]; then
-    TAG=$TAG$([ "$COSIM_PEDAL_REVERSE" = "0" ] || echo "_reverse")$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
+    TAG=$TAG$([ "$COSIM_PEDAL_YELLOW_MARGIN" = "1" ] || echo "_noyellowmargin")
 fi
 # results live in the model's own eval folder, next to the OpenGigaFlow benchmark evals
 OUT=$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
@@ -149,13 +117,12 @@ mkdir -p "$OUT/routes" "$OUT/aggregate"
     echo "checkpoint $CKPT"; echo "routes $ROUTES"; echo "seeds $SEEDS"; echo "repetitions $REPETITIONS"; echo "gpus $NUM_GPUS"
     echo "vru_size_pad_m $COSIM_VRU_SIZE_PAD_M"
     echo "dynamics_source $COSIM_DYNAMICS_SOURCE"
-    echo "pedal_reverse $COSIM_PEDAL_REVERSE"; echo "pedal_yellow_margin $COSIM_PEDAL_YELLOW_MARGIN"
+    echo "pedal_yellow_margin $COSIM_PEDAL_YELLOW_MARGIN"
     echo "git $(git -C "$PD" rev-parse --short HEAD 2>/dev/null) $(git -C "$PD" diff --quiet 2>/dev/null || echo dirty)"
     echo "port_base $PORT_BASE"
 } > "$OUT/run_info.txt"
 echo "Results -> $OUT"
 
-mkdir -p "$PD/experiments/logs"  # the build helper keeps its source hash there
 PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
 IMPORTED_AGENT=$("$PY" -c "import opengigaflow.ocean.cosim.carla.leaderboard_agent as a; print(a.__file__)") || { echo "ERROR: agent import failed (see traceback above)"; exit 1; }
 case "$IMPORTED_AGENT" in
@@ -163,7 +130,6 @@ case "$IMPORTED_AGENT" in
     *) echo "ERROR: agent imported from '$IMPORTED_AGENT', expected $PD"; exit 1 ;;
 esac
 
-# route ids of the xml
 mapfile -t ROUTE_IDS < <("$PY" -c "
 import sys, xml.etree.ElementTree as ET
 print('\n'.join(r.attrib['id'] for r in ET.parse(sys.argv[1]).getroot().iter('route')))" "$ROUTES")
@@ -174,8 +140,7 @@ UNITS=()
 for seed in "${SEED_LIST[@]}"; do for route_id in "${ROUTE_IDS[@]}"; do UNITS+=("$route_id:$seed"); done; done
 TOTAL_UNITS=$((TOTAL_ROUTES * ${#SEED_LIST[@]}))
 [ "$WORKERS" -gt "${#UNITS[@]}" ] && WORKERS=${#UNITS[@]}
-# longest route first to the least loaded worker; length = the xml's waypoint polyline (an earlier run's duration would
-# read a route that failed early as short)
+# longest route first to the least loaded worker; length = the xml's polyline (a failed run's duration would read short)
 mapfile -t ASSIGNMENT < <("$PY" - "$ROUTES" "$WORKERS" "${UNITS[@]}" <<'EOF'
 import math, sys, xml.etree.ElementTree as ET
 routes_xml, workers, units = sys.argv[1], int(sys.argv[2]), sys.argv[3:]  # unit = "<route id>:<seed>"
@@ -317,9 +282,7 @@ print(f"speed: {len(rows)}/{n_routes} route runs in {wall / 3600:.2f} h wall, {w
       f"idlest {min(per_worker.values()) / 3600:.2f} h; route runs/h {len(rows) / (wall / 3600):.1f}")
 EOF
 
-# aggregate: CaRL's parser over the per-route jsons, one subfolder per seed (the parser walks $OUT/aggregate and reports
-# mean/std over the seeds per route and town, the layout of CaRL's own evaluation) -> $OUT/aggregate/results.csv, plus
-# a per-route table
+# CaRL's parser over the per-route jsons, one subfolder per seed (mean/std over seeds) -> $OUT/aggregate/results.csv
 for f in "$OUT"/routes/route_*/result.json; do
     name=$(basename "$(dirname "$f")")
     mkdir -p "$OUT/aggregate/s${name##*_s}" && cp "$f" "$OUT/aggregate/s${name##*_s}/${name%_s*}.json"

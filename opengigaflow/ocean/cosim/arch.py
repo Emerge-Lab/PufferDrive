@@ -1,11 +1,4 @@
-"""Shadow-env Drive kwargs from a checkpoint config (CARLA + nuPlan co-sim).
-
-The shadow env adopts EVERY Drive-accepted key from the checkpoint's
-config.yaml env section -- full parity with the training env, no allowlist to
-fall out of date -- then applies CLEAN_EVAL_OVERRIDES (the repo's clean-eval
-profile), then the caller's structural co-sim keys (map_dir, num_agents,
-scenario_length, ...) win.
-"""
+"""Shadow-env Drive kwargs and conventions shared by the CARLA and nuPlan co-sims."""
 
 import inspect
 from pathlib import Path
@@ -14,13 +7,15 @@ import yaml
 
 from opengigaflow.ocean.drive.drive import Drive
 
-# Mirror of the noise/light/conditioning keys in
-# opengigaflow/config/evaluation/benchmark.yaml, duplicated so the co-sim venvs
-# (CARLA cp310 / nuPlan) never import the training stack;
-# tests/unit_tests/test_cosim_config_contract.py pins the two equal.
-# The reward_*/goal_* keys pin the conditioning obs to the GigaFlow paper's
-# eval values (Table A2) instead of adopting the training config's
-# reward_randomization=true, which would sample a random command profile.
+
+FAR_AWAY = 1.0e6  # park unused shadow-env agent slots out of observation range
+SCENARIO_LENGTH_MARGIN_STEPS = 2  # the shadow env must never hit its own truncation while the simulator runs on
+# write_ego_obs column order: speed, width, length, steering, accel_long, ...
+EGO_OBS_SPEED_IDX = 0
+EGO_OBS_STEERING_IDX = 3
+EGO_OBS_ACCEL_LONG_IDX = 4
+
+# the benchmark's clean-eval profile, duplicated so the co-sim venvs never import the training stack
 CLEAN_EVAL_OVERRIDES = {
     "obs_dropout_lane": 0.0,
     "obs_dropout_boundary": 0.0,
@@ -54,17 +49,8 @@ CLEAN_EVAL_OVERRIDES = {
 }
 
 
-# Some saved checkpoint configs store the infraction behaviors as resolved
-# binding enums (0/1) instead of the strings Drive.__init__ accepts
-# (collision_behavior: 1); normalize either spelling.
-_INFRACTION_BEHAVIOR_NAMES = {0: "ignore", 1: "stop"}
-_INFRACTION_BEHAVIOR_KEYS = ("collision_behavior", "offroad_behavior", "traffic_light_behavior")
-
-
 def checkpoint_config_path(checkpoint):
-    """config.yaml saved with a checkpoint: next to a run-dir `final_model.pt`, or one level up for
-    `models/model_*.pt`. Raises when neither exists (a shadow env built from Drive defaults would be
-    silently wrong)."""
+    """The config.yaml saved with a checkpoint: next to it, or one level up for models/model_*.pt."""
     checkpoint = Path(checkpoint).resolve()
     for candidate in (checkpoint.parent / "config.yaml", checkpoint.parents[1] / "config.yaml"):
         if candidate.exists():
@@ -92,8 +78,7 @@ RETIRED_SETTINGS = {
     ("policy", "shared_network"): False,
     ("policy", "mask_padded_features"): True,
 }
-# Removed settings that only shaped training (blind and braking agents, reward sampling, training margins, light
-# phases): evals switch those off, so a saved config may carry any value.
+# Removed settings that only shaped training: evals switch those off, so a saved config may carry any value.
 RETIRED_TRAINING_SETTINGS = (
     ("env", "reward_log_sampling"),
     ("env", "goal_speed_randomization"),
@@ -107,26 +92,21 @@ RETIRED_SECTIONS = ("rnn",)
 
 
 def drop_retired_settings(config):
-    """Strip the settings of removed features from a saved run config, in place. Raises when one of them
-    selects a feature that no longer exists (the checkpoint cannot be run by this code)."""
-    for key_path, remaining_value in RETIRED_SETTINGS.items():
+    """Strip the settings of removed features from a saved run config, in place; raises when one selects a removed
+    feature (the checkpoint cannot be run by this code)."""
+    for key_path in (*RETIRED_SETTINGS, *RETIRED_TRAINING_SETTINGS):
         section = config
         for section_name in key_path[:-1]:
             section = section.get(section_name) or {}
         setting_name = key_path[-1]
         if setting_name not in section:
             continue
-        if section[setting_name] != remaining_value:
+        if key_path in RETIRED_SETTINGS and section[setting_name] != RETIRED_SETTINGS[key_path]:
             raise ValueError(
                 f"saved config sets {'.'.join(key_path)}={section[setting_name]!r}; that feature was removed, "
-                f"only {remaining_value!r} is supported"
+                f"only {RETIRED_SETTINGS[key_path]!r} is supported"
             )
         del section[setting_name]
-    for key_path in RETIRED_TRAINING_SETTINGS:
-        section = config
-        for section_name in key_path[:-1]:
-            section = section.get(section_name) or {}
-        section.pop(key_path[-1], None)
     for section_name in RETIRED_SECTIONS:
         config.pop(section_name, None)
     return config
@@ -138,10 +118,7 @@ def load_checkpoint_config(config_path):
         return drop_retired_settings(yaml.safe_load(config_file))
 
 
-# Applied to every co-sim shadow env after CLEAN_EVAL_OVERRIDES: the eval-only semantics the native
-# benchmark gets from eval_mode (scripts/kesai/3_train_64GPU_multinode_slurm.sh passes the 0.2 m margin and the
-# 1.5 m/s^3 standstill deadband), which the co-sim env cannot enter because eval_mode's scenario
-# batching needs a full agent pool.
+# eval_mode's semantics, which the co-sim cannot enter: its scenario batching needs a full agent pool
 COSIM_EVAL_OVERRIDES = {
     "cosim_eval_semantics": True,
     "eval_perceived_size_margin_m": 0.2,
@@ -150,13 +127,8 @@ COSIM_EVAL_OVERRIDES = {
 
 
 def shadow_env_kwargs(cfg, overrides=None):
-    """Drive kwargs for a co-sim shadow env.
-
-    Precedence: checkpoint env config (every Drive-accepted key) < CLEAN_EVAL_OVERRIDES
-    < COSIM_EVAL_OVERRIDES < `overrides` (the co-sim's structural keys)."""
+    """Co-sim Drive kwargs; precedence: the checkpoint's Drive-accepted env keys < CLEAN_EVAL_OVERRIDES <
+    COSIM_EVAL_OVERRIDES < overrides (the co-sim's structural keys)."""
     accepted = set(inspect.signature(Drive.__init__).parameters)
     adopted = {k: v for k, v in ((cfg or {}).get("env") or {}).items() if k in accepted}
-    for key in _INFRACTION_BEHAVIOR_KEYS:
-        if key in adopted and isinstance(adopted[key], int):
-            adopted[key] = _INFRACTION_BEHAVIOR_NAMES[adopted[key]]
     return {**adopted, **CLEAN_EVAL_OVERRIDES, **COSIM_EVAL_OVERRIDES, **(overrides or {})}

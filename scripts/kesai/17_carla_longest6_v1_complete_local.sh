@@ -1,17 +1,13 @@
 #!/bin/bash
-# Complete a longest6 v1 run that lost routes on the cluster (CARLA 0.9.10 render-thread crashes, the job time limit) on
-# this desktop: scripts/kesai/14_carla_longest6_v1.sh in its COMPLETE_RUN mode with the local CARLA 0.9.10, carla_garage,
-# the `garage` conda env and the repo .venv as policy server. Sync the run folder from the cluster as is (it lives in the
-# model's eval/ folder); only its routes without a valid record are driven, in place, WORKERS servers in parallel on the
-# one GPU, then results.csv, the HTML report and the obs replay gallery are rebuilt over all routes. Nothing from the
-# cluster is overwritten: the replaced route folders and worker logs move to <run>/pre_completion_<stamp>/.
-#
-# Usage: bash scripts/kesai/17_carla_longest6_v1_complete_local.sh experiments/k_scaled_0050_1000/eval/carla_longest6_v1_<date>_<jobid>
-#
-# Overridable env: CKPT (default: the model folder the run sits in, else the model named in its run_info.txt under
-# $PD/experiments), WORKERS (8: ~2 cores and 2.5-5 GB each, the GPU stays idle), PORT_BASE (2200; never 2000, the
-# interactive server), STAGGER_S, ROUTE_SUBSET, and every other variable of script 14 (SCENARIOS, SEEDS, REPETITIONS,
-# COSIM_VRU_SIZE_PAD_M and COSIM_OBS_SLOTS_PARTNERS_N default to the run's own values; a run from before the seeds layout keeps its single seed). Expect ~1 h of wall time per hour of game time per worker.
+# Complete a longest6 v1 run folder synced from the cluster on this desktop: 14_carla_longest6_v1.sh's COMPLETE_RUN mode
+# with the local CARLA 0.9.10, carla_garage, the `garage` conda env and the repo .venv as policy server. Only the route
+# runs without a valid record are driven, in place; the replaced files move to <run>/pre_completion_<stamp>/.
+#   bash scripts/kesai/17_carla_longest6_v1_complete_local.sh experiments/<run>/eval/carla_longest6_v1_<date>_<job>
+# Overridable env (default):
+#   CKPT           final_model.pt of the model folder the run sits in, else of the run_info.txt model in experiments/
+#   WORKERS (8)    ~2 cores and 2.5-5 GB each
+#   PORT_BASE (2200; never 2000, the interactive server), STAGGER_S (20)
+#   the variables of 14_carla_longest6_v1.sh; the settings its run_info.txt records default to the run's own
 set -u
 
 RUN=${1:?usage: $0 <synced longest6 v1 run folder (holds routes/ and run_info.txt)>}

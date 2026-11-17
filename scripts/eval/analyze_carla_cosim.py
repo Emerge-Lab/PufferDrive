@@ -1,18 +1,4 @@
-"""Failure analysis + visualizations for CARLA leaderboard runs of the OpenGigaFlow co-sim agent
-(opengigaflow/ocean/cosim/carla/leaderboard_agent.py run with COSIM_WORLD_LOG and COSIM_TELEMETRY set).
-Same report shape as analyze_nuplan_cosim.py: score table worst first, failure-category counts,
-per-route diagnosis, six-frame top-down strip + speed plot + chase-cam video. The matplotlib top-down mp4
-is opt-in (--video): it costs about a minute per 1000 logged steps, the obs replay pages cover the same ground.
-
-usage: python scripts/eval/analyze_carla_cosim.py <run_dir> [<run_dir> ...] <report_dir> [--max-inline N] [--video]
-       [--obs-html-dir D]
-
-<run_dir> holds result.json (leaderboard_evaluator --checkpoint), world_log/*.npz, telemetry/*.csv and
-carla_view/*.mp4; the records of one run pair with the newest per-route files in timestamp order (retried
-routes leave the files of crashed attempts behind); a run tidy_carla_run.py flattened has no such folders, so the
-cluster scripts build the report (REPORT=1) before the tidy. --obs-html-dir: the run's obs replay gallery
-(scripts/eval/render_carla_obs_html.py), linked per route.
-"""
+"""HTML failure report of CARLA leaderboard co-sim runs: score table, failure categories, per-route strips and plots."""
 
 import argparse
 import glob
@@ -37,7 +23,8 @@ from matplotlib.patches import Polygon
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from render_carla_obs_html import page_name
+import carla_run_layout as layout
+from render_carla_obs_html import POSITION_PATTERN, page_name
 
 import data_utils.mirror_map_bin as mbin
 import opengigaflow
@@ -181,8 +168,8 @@ def parse_infractions(record, log):
     """-> [(category, bin_x, bin_y, message)] for every infraction with a position"""
     out = []
     for key, category in INFRACTION_KEYS:
-        for message in record.get("infractions", {}).get(key, []) or []:
-            m = re.search(r"x=([-\d.]+), y=([-\d.]+)", message)
+        for message in layout.infraction_messages(record, key):
+            m = POSITION_PATTERN.search(message)
             if m:
                 bx, by = log.carla_to_bin(float(m.group(1)), float(m.group(2)))
                 out.append((category, bx, by, message))
@@ -232,23 +219,20 @@ def diagnose(record, log, infractions):
         i = log.step_nearest(bx, by)
         state = log.own_light_state(i)
         reasons.append(
-            f"{category} at t={log.t[i]:.0f} s (v={log.ego[i, 4]:.1f} m/s, own light {LIGHT_COLOR.get(state, 'none') if state is not None else 'none'})"
+            f"{category} at t={log.t[i]:.0f} s (v={log.ego[i, 4]:.1f} m/s, own light {LIGHT_COLOR.get(state, 'none')})"
         )
     if scores["score_route"] < 100 and "route deviation" not in categories and "timeout" not in categories:
         reasons.append(f"route completion {scores['score_route']:.0f}%: {record.get('status')}")
-    for message in record.get("infractions", {}).get("min_speed_infractions", []) or []:
+    for message in layout.infraction_messages(record, "min_speed_infractions"):
         m = re.search(r"([\d.]+)%", message)
         if m and float(m.group(1)) < 80:
             categories.append("slow")
             reasons.append(f"min-speed: {message[:70]}")
             break
-    counts = {}
-    for c in categories:
-        counts[c] = counts.get(c, 0) + 1
-    return sorted(counts), reasons or ["no infraction"], stopped_frac, creep_frac
+    return sorted(set(categories)), reasons or ["no infraction"], stopped_frac, creep_frac
 
 
-def render_route(record, log, chase_mp4, report_dir, tag, make_video):
+def render_route(record, log, chase_mp4, report_dir, tag, seed, make_video):
     infractions = parse_infractions(record, log)
     categories, reasons, stopped_frac, creep_frac = diagnose(record, log, infractions)
     n = len(log.ego)
@@ -302,7 +286,6 @@ def render_route(record, log, chase_mp4, report_dir, tag, make_video):
             frames.append(fig_to_rgb(fig))
             plt.close(fig)
         write_mp4(report_dir / "videos" / f"{tag}_topdown.mp4", frames, fps=VIDEO_FPS)
-    infr = record.get("infractions", {})
     return {
         "route": tag,
         "town": log.meta["town"],
@@ -310,17 +293,15 @@ def render_route(record, log, chase_mp4, report_dir, tag, make_video):
         "driving_score": float(record["scores"]["score_composed"]),
         "route_completion": float(record["scores"]["score_route"]),
         "infraction_penalty": float(record["scores"]["score_penalty"]),
-        "collisions": sum(
-            len(infr.get(k, []) or []) for k in ("collisions_pedestrian", "collisions_vehicle", "collisions_layout")
-        ),
-        "red_lights": len(infr.get("red_light", []) or []),
+        "collisions": sum(len(layout.infraction_messages(record, key)) for key in layout.COLLISION_KEYS),
+        "red_lights": len(layout.infraction_messages(record, "red_light")),
         "offroad_pct": sum(
             float(m.group(1))
-            for m in (re.search(r"\(([\d.]+)%", s) for s in infr.get("outside_route_lanes", []) or [])
+            for m in (re.search(r"\(([\d.]+)%", s) for s in layout.infraction_messages(record, "outside_route_lanes"))
             if m
         ),
-        "route_dev": len(infr.get("route_dev", []) or []),
-        "min_speed_infractions": len(infr.get("min_speed_infractions", []) or []),
+        "route_dev": len(layout.infraction_messages(record, "route_dev")),
+        "min_speed_infractions": len(layout.infraction_messages(record, "min_speed_infractions")),
         "stopped_frac": stopped_frac,
         "creep_frac": creep_frac,
         "duration_s": float(log.t[-1]),
@@ -328,7 +309,7 @@ def render_route(record, log, chase_mp4, report_dir, tag, make_video):
         "diagnosis": "; ".join(reasons),
         "has_chase": chase_mp4 is not None,
         "has_topdown": make_video,
-        "obs_page": page_name(record, log.meta["town"]),
+        "obs_page": page_name(record, log.meta["town"], seed),
     }
 
 
@@ -351,9 +332,7 @@ def route_section(r, inline, obs_href_dir):
 
 def collect_routes(run_dir):
     run_dir = Path(run_dir)
-    with open(run_dir / "result.json") as result_file:
-        result = json.load(result_file)
-    records = result["_checkpoint"]["records"]
+    records = layout.read_records(run_dir / layout.RAW_RESULT_NAME)
     logs = sorted(glob.glob(str(run_dir / "world_log" / "*.npz")))
     videos = sorted(glob.glob(str(run_dir / "carla_view" / "*.mp4")))
     if len(logs) != len(records):
@@ -382,8 +361,9 @@ def main():
         (report_dir / sub).mkdir(parents=True, exist_ok=True)
     rows = []
     for run_dir in run_dirs:
+        seed = layout.seed_of(Path(run_dir).name)
         for record, log_path, chase_mp4, tag in collect_routes(run_dir):
-            rows.append(render_route(record, RouteLog(log_path), chase_mp4, report_dir, tag, args.video))
+            rows.append(render_route(record, RouteLog(log_path), chase_mp4, report_dir, tag, seed, args.video))
             print(f"{tag}: {rows[-1]['categories']} | {rows[-1]['diagnosis']}")
     df = pd.DataFrame(rows).sort_values("driving_score")
     df.to_csv(report_dir / "routes.csv", index=False)

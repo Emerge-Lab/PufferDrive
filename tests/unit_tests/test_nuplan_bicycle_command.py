@@ -1,12 +1,8 @@
 """Shadow-env accel/steering targets -> CaRL ActionTrajectory commands for nuPlan's KinematicBicycleModel."""
 
 import math
-import os
-import sys
 
 import pytest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from opengigaflow.ocean.cosim.nuplan_bicycle import (
     BicycleCommandConfig,
@@ -17,6 +13,7 @@ from opengigaflow.ocean.cosim.nuplan_bicycle import (
     low_pass_gain,
     low_pass_response,
 )
+
 
 PACIFICA_WHEEL_BASE_M = 3.089
 PACIFICA_REAR_AXLE_TO_CENTER_M = 1.461

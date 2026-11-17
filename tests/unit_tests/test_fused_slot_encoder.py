@@ -1,9 +1,4 @@
-"""The fused slot encoder must reproduce DriveBackbone._encode_and_pool under bf16 autocast.
-
-Agreement is checked at bf16 rounding level against the eager autocast path (gradient to the first maximal slot, as
-torch.max does) and against an fp32 ground truth:
-the fused path may not be further from the truth than the eager bf16 path it replaces.
-"""
+"""The fused slot encoder matches the eager bf16 _encode_and_pool and lies no further from the fp32 truth than it."""
 
 import pytest
 import torch

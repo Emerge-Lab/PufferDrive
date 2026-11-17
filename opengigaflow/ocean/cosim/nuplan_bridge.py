@@ -1,26 +1,4 @@
-"""nuPlan <-> OpenGigaFlow map conversion + state readback for co-simulation.
-
-Unlike CARLA (see carla_bridge.py), nuPlan is already a right-handed, z-up,
-meters, radians frame — no reflection is needed. The only transform is a
-translation: nuPlan map coordinates are large (UTM-ish, ~1e5-1e6 m) and the
-OpenGigaFlow bins store float32, so each bin is translated by an `origin`
-recovered per city (registered against the GPKG map, see `planner.py`'s
-`_city_bin_origin`) or read from a stored `centroid`:
-
-    bin_x = nuplan_x - origin_x        bin_y = nuplan_y - origin_y
-    bin_heading = nuplan_heading       bin_v = nuplan_v (global frame)
-
-Bins are pre-converted per-city map-only bins (`city_bin_dir`, see
-`planner.py`), holding only the road graph (lanes / boundaries / crosswalks /
-traffic-light stop lines) — no logged trajectories. Agent states are streamed
-from the nuPlan simulation every tick, exactly like the CARLA co-sim streams
-from CARLA. Traffic lights are matched geometrically at planner-build time
-(`match_connectors_to_stop_lines`) so live traffic-light status
-(`PlannerInput.traffic_light_data`) can be written with set_traffic_light_states.
-
-Nothing in this module imports `nuplan` at module scope, so the geometry
-helpers stay testable from an env without the nuplan-devkit installed.
-"""
+"""nuPlan <-> OpenGigaFlow city-bin frame (translation only) and nuPlan readback; nuplan is imported lazily."""
 
 from pathlib import Path
 
@@ -28,13 +6,13 @@ import numpy as np
 
 import data_utils.mirror_map_bin as _mbin
 
+
 TRAFFIC_TYPE_LIGHT = 1  # matches the CARLA bins' traffic-element type
 
 # nuPlan TrackedObjectType -> OpenGigaFlow agent type (1=vehicle 2=ped 3=cyclist)
 _NUPLAN_AGENT_TYPE = {"VEHICLE": 1, "PEDESTRIAN": 2, "BICYCLE": 3}
 
-# nuPlan TrafficLightStatusType -> OpenGigaFlow light enum (datatypes.h: RED=1 YELLOW=2 GREEN=3).
-# Training never produces UNKNOWN (0), so an unknown or unreported light is treated as GREEN.
+# nuPlan TrafficLightStatusType -> light state; training never produces UNKNOWN, so unknown or unreported is GREEN
 LIGHT_STATE_RED = 1
 LIGHT_STATE_YELLOW = 2
 LIGHT_STATE_GREEN = 3
@@ -45,7 +23,6 @@ _NUPLAN_LIGHT_STATE = {
     "UNKNOWN": LIGHT_STATE_GREEN,
 }
 
-FAR_AWAY = 1.0e6  # park surplus OpenGigaFlow agents out of observation range
 ROUTE_SEARCH_DEPTH_BLOCKS = 30  # PDM's Dijkstra window over route roadblocks
 
 
@@ -64,21 +41,12 @@ class NuPlanTransform:
 
 
 def route_lane_ids(map_api, route_roadblock_ids, start_x: float, start_y: float, start_heading: float):
-    """Lane-graph route through the route roadblocks -> [lane ids along it],
-    PDM-style: the starting lane is the on-route lane under the ego with the
-    smallest heading error (never a crossing lane of the same junction), then
-    Dijkstra over the route's lane graph to the last roadblock."""
+    """[lane ids] of the PDM-style lane-graph route: Dijkstra from the on-route lane under the ego with the smallest
+    heading error (never a crossing lane of the same junction) to the last route roadblock."""
     from nuplan.common.actor_state.state_representation import Point2D
-    from nuplan.common.maps.maps_datatypes import SemanticMapLayer
     from carl_nuplan.planning.simulation.planner.pdm_planner.utils.graph_search.dijkstra import Dijkstra
 
-    blocks = []
-    for rid in dict.fromkeys(route_roadblock_ids):
-        block = map_api.get_map_object(str(rid), SemanticMapLayer.ROADBLOCK) or map_api.get_map_object(
-            str(rid), SemanticMapLayer.ROADBLOCK_CONNECTOR
-        )
-        if block is not None and block.interior_edges:
-            blocks.append(block)
+    blocks = _route_blocks(map_api, dict.fromkeys(route_roadblock_ids))
     if not blocks:
         return []
     route_lanes = {lane.id: lane for block in blocks for lane in block.interior_edges}
@@ -99,8 +67,7 @@ def route_lane_ids(map_api, route_roadblock_ids, start_x: float, start_y: float,
     containing = sorted((lane for lane in route_lanes.values() if lane.contains_point(ego_point)), key=_heading_error)
     block_ids = [block.id for block in blocks]
     start_block_idx = block_ids.index(containing[0].get_roadblock_id()) if containing else 0
-    # The ego's own lane may not connect to the next route block (wrong lane for the turn, PDM's
-    # route correction keeps the block): fall back to the sibling lanes of its block, nearest first.
+    # the ego's lane may not connect to the next route block (wrong lane for the turn): its siblings, nearest first
     siblings = sorted(
         (lane for lane in blocks[start_block_idx].interior_edges if lane not in containing), key=_distance
     )
@@ -135,11 +102,8 @@ def _route_blocks(map_api, route_roadblock_ids):
 def roadblock_centroid_goals(
     map_api, route_roadblock_ids, start_x, start_y, start_heading, min_spacing: float, min_ahead_m: float
 ):
-    """Route roadblock centroids as goals -> (N, 2) in nuPlan map coordinates, from the ego's roadblock on
-    (the block containing the ego, else the nearest one). The ego block's own centroid is dropped when it
-    is behind the ego or less than min_ahead_m ahead; later centroids follow the route regardless of the
-    ego heading (turns). A centroid outside its (curved) polygon moves to the nearest interior-lane
-    baseline point; consecutive goals closer than min_spacing are thinned."""
+    """(N, 2) goals in nuPlan map coordinates: route roadblock centroids from the ego's (nearest) roadblock on, its own
+    only when min_ahead_m ahead, off-polygon ones moved onto a lane baseline, ones closer than min_spacing thinned."""
     from shapely.geometry import Point
 
     blocks = _route_blocks(map_api, route_roadblock_ids)
@@ -167,9 +131,8 @@ def roadblock_centroid_goals(
 
 
 def extend_route_past_loop_cut(corrected_ids, raw_ids):
-    """CaRL's route correction cuts the route where a later roadblock overlaps an earlier one (a loop),
-    which its Dijkstra needs; goal windows follow the route in travel order, so the logged remainder
-    after the cut is appended again -> [str ids]."""
+    """[str ids]: CaRL's route correction cuts a looping route for its Dijkstra; goals follow the whole route, so the
+    logged remainder after the cut is appended again."""
     corrected = [str(rid) for rid in corrected_ids]
     raw = [str(rid) for rid in raw_ids]
     if not corrected or corrected[-1] not in raw:
@@ -190,32 +153,9 @@ def logged_ego_boxes(scenario, transform: NuPlanTransform) -> np.ndarray:
 
 
 def read_bin_geometry(bin_path: Path) -> dict:
-    """Read the co-sim-relevant geometry out of an existing OpenGigaFlow bin
-    (city_bin_dir map-only bins or pre-converted training-format bins):
-
-      origin            (ox, oy) from the stored centroid, or None if unset
-                        (nuPlan map coords are ~1e5-1e6 m, so a (0, 0)/missing
-                        centroid means "not stored", never a real origin)
-      stop_line_centers (K, 2) bin-frame stop-line midpoints of all traffic
-                        elements, for origin registration
-      stop_lines        (K, 4) bin-frame stop-line endpoints [x1, y1, x2, y2]
-      stop_line_headings (K,) travel direction each stop line faces [rad]
-      traffic_types     (K,) element type (TRAFFIC_TYPE_LIGHT = traffic light)
-      num_traffic       K, the size set_traffic_light_states expects
-      ego_t0            (x, y, heading) of agent 0 at its first valid log step,
-                        or None if the bin has no agents — fallback origin
-                        recovery: origin = nuplan_ego_t0_xy - bin_ego_t0_xy
-      ego_traj          (N, 2) agent-0 valid trajectory in the bin frame, or
-                        None — fallback origin recovery for whole-log bins:
-                        fit_translation against the log's UTM ego trajectory
-    """
+    """Bin-frame traffic elements of a bin: stop_line_centers (K, 2), stop_lines (K, 4) [x1, y1, x2, y2],
+    stop_line_headings (K,) [rad], traffic_types (K,) and num_traffic K."""
     data = _mbin.read_bin(Path(bin_path))
-
-    centroid = data.get("centroid")
-    origin = None
-    if centroid is not None and (abs(centroid[0]) > 1.0 or abs(centroid[1]) > 1.0):
-        origin = (float(centroid[0]), float(centroid[1]))
-
     stop_lines = np.array(
         [[t["stop_line"][0], t["stop_line"][1], t["stop_line"][3], t["stop_line"][4]] for t in data["traffic"]],
         dtype=np.float64,
@@ -223,40 +163,18 @@ def read_bin_geometry(bin_path: Path) -> dict:
     centers = 0.5 * (stop_lines[:, 0:2] + stop_lines[:, 2:4])
     stop_line_headings = np.array([t["heading"] for t in data["traffic"]], dtype=np.float64)
     traffic_types = np.array([t["type"] for t in data["traffic"]], dtype=np.int32)
-
-    ego_t0, ego_traj = None, None
-    if data["agents"]:
-        cols = data["agents"][0]["cols"]
-        valid = np.asarray(cols["valid"]) > 0
-        if valid.any():
-            xs = np.asarray(cols["x"], np.float64)[valid]
-            ys = np.asarray(cols["y"], np.float64)[valid]
-            hs = np.asarray(cols["h"], np.float64)[valid]
-            ego_t0 = (float(xs[0]), float(ys[0]), float(hs[0]))
-            ego_traj = np.stack([xs, ys], axis=1)
-
     return {
-        "origin": origin,
         "stop_line_centers": centers,
         "stop_lines": stop_lines,
         "stop_line_headings": stop_line_headings,
         "traffic_types": traffic_types,
         "num_traffic": len(centers),
-        "ego_t0": ego_t0,
-        "ego_traj": ego_traj,
     }
 
 
 def fit_translation(src: np.ndarray, ref: np.ndarray, init=None, iterations: int = 50, max_points: int = 2000):
-    """Translation-only alignment of two samplings of the SAME physical curve
-    (e.g. a bin's centered ego trajectory vs the log's UTM ego trajectory):
-    find t minimizing nearest-neighbor distance from src + t onto ref.
-
-    Because the transform is a pure translation and both point sets trace the
-    identical path, the centroid-difference initialization lands within meters
-    and the ICP iterations converge to sub-centimeter. Returns
-    (t (2,) float64, median residual in meters) — callers should reject large
-    residuals rather than trust a bad fit."""
+    """(t (2,), median residual [m]): translation-only ICP of src + t onto ref, two samplings of the same curves;
+    callers reject large residuals rather than trust a bad fit."""
     src = np.asarray(src, np.float64).reshape(-1, 2)
     ref = np.asarray(ref, np.float64).reshape(-1, 2)
     if len(src) < 2 or len(ref) < 2:
@@ -264,19 +182,9 @@ def fit_translation(src: np.ndarray, ref: np.ndarray, init=None, iterations: int
     if len(src) > max_points:
         src = src[np.linspace(0, len(src) - 1, max_points).astype(int)]
 
-    try:
-        from scipy.spatial import cKDTree
+    from scipy.spatial import cKDTree
 
-        nearest = cKDTree(ref).query
-    except ImportError:  # brute force on a subsample
-        if len(ref) > 5000:
-            ref = ref[np.linspace(0, len(ref) - 1, 5000).astype(int)]
-
-        def nearest(pts):
-            d2 = ((pts[:, None, :] - ref[None, :, :]) ** 2).sum(-1)
-            j = d2.argmin(1)
-            return np.sqrt(d2[np.arange(len(pts)), j]), j
-
+    nearest = cKDTree(ref).query
     t = np.asarray(init, np.float64) if init is not None else ref.mean(0) - src.mean(0)
     for _ in range(iterations):
         dist, j = nearest(src + t)
@@ -289,9 +197,7 @@ def fit_translation(src: np.ndarray, ref: np.ndarray, init=None, iterations: int
 
 
 def read_bin_lane_points(bin_path: Path, max_points: int = 200_000) -> np.ndarray:
-    """(N, 2) float64 lane-centerline vertices of a bin (road types 0-9), the
-    bin-side point cloud for whole-city origin registration. Uniformly
-    subsampled to max_points."""
+    """(N, 2) float64 lane-centerline vertices of a bin (road types 0-9), uniformly subsampled to max_points."""
     data = _mbin.read_bin(Path(bin_path))
     pts = [
         np.stack([np.asarray(r["x"], np.float64), np.asarray(r["y"], np.float64)], axis=1)
@@ -307,12 +213,8 @@ def read_bin_lane_points(bin_path: Path, max_points: int = 200_000) -> np.ndarra
 
 
 def coarse_translation_vote(src: np.ndarray, ref: np.ndarray, grid: float = 5.0) -> np.ndarray:
-    """Global translation-only registration of two sparse constellations of the
-    SAME landmarks (e.g. a city bin's traffic stop-line centers vs the GPKG
-    map's stop polygons): every (ref - src) pair difference votes on a `grid`-m
-    cell; the true translation collects one vote per real landmark match while
-    mismatched pairs scatter. Returns the median of the diffs near the winning
-    cell — a few-meter-accurate init for fit_translation, found with no prior."""
+    """Translation between two sparse constellations of the same landmarks: every ref - src pair votes on a grid-m
+    cell, the median of the diffs near the winner is a few-metre init for fit_translation."""
     src = np.asarray(src, np.float64).reshape(-1, 2)
     ref = np.asarray(ref, np.float64).reshape(-1, 2)
     if len(src) < 3 or len(ref) < 3:
@@ -332,9 +234,8 @@ def coarse_translation_vote(src: np.ndarray, ref: np.ndarray, grid: float = 5.0)
 
 
 LIGHT_MATCH_MAX_DIST_M = 15.0  # nuPlan connector entries sit up to 14 m before/after the bin stop line
-LIGHT_MATCH_MAX_HEADING_DIFF_RAD = np.radians(
-    75.0
-)  # keeps skewed stop lines, rejects cross-street (90) and oncoming (180)
+# keeps skewed stop lines, rejects cross-street (90) and oncoming (180)
+LIGHT_MATCH_MAX_HEADING_DIFF_RAD = np.radians(75.0)
 
 
 def point_to_segment_distance(px: float, py: float, segments: np.ndarray) -> np.ndarray:
@@ -355,18 +256,9 @@ def match_connectors_to_stop_lines(
     max_dist_m: float = LIGHT_MATCH_MAX_DIST_M,
     max_heading_diff_rad: float = LIGHT_MATCH_MAX_HEADING_DIFF_RAD,
 ) -> dict:
-    """Geometric traffic-light mapping, the runtime replacement for the
-    `.tl.json` sidecar (works for any bin source). `connector_entries` maps
-    lane_connector_id(str) -> (x, y, heading) entry pose in nuPlan map
-    coordinates. Each connector takes the nearest traffic light whose stop
-    line faces its travel direction, measured to the line segment (a multi-lane
-    stop line's midpoint can sit >10 m from the outer lanes; matching every
-    lane of a line matters, or the route rule cannot override neighbours). Returns
-    {lane_connector_id: bin traffic-element idx}, skipping connectors with no
-    such stop line within max_dist_m."""
+    """{lane_connector_id: bin traffic element idx}: each connector entry pose (x, y, heading in nuPlan map coordinates)
+    takes the nearest light stop line within max_dist_m facing its travel direction, measured to the line segment."""
     mapping = {}
-    if not len(stop_lines):
-        return mapping
     is_light = traffic_types == TRAFFIC_TYPE_LIGHT
     for cid, (x, y, heading) in connector_entries.items():
         bx, by = transform.loc_to_bin(x, y)
@@ -383,8 +275,7 @@ def match_connectors_to_stop_lines(
 
 MOVING_PARTNER_TYPES = ("VEHICLE", "PEDESTRIAN", "BICYCLE")  # the only types the training bins turn into agents
 STATIC_PARTNER_TYPES = ("TRAFFIC_CONE", "BARRIER", "CZONE_SIGN", "GENERIC_OBJECT")
-# get_proximal_map_objects matches lane connectors by centerline (lanes by polygon): the patch must reach the
-# centerline of every connector whose polygon can overlap the object's box
+# lane connectors match by centerline (lanes by polygon): reach every connector whose polygon can touch the box
 STATIC_PARTNER_LANE_QUERY_RADIUS_M = 10.0
 
 
@@ -397,12 +288,8 @@ def lane_polygon_overlaps(lane, box) -> bool:
 
 
 def partner_tracked_objects(tracked_objects, map_api, static_on_lane: dict):
-    """Objects the shadow env should see: moving agents always; static clutter (cones, barriers, signs,
-    generic objects) only when its box overlaps a lane or lane-connector polygon, where the ego can hit it
-    (a center-point test dropped a curbside object protruding 0.7 m into the lane). The wider drivable area
-    also covers intersection corners and crosswalks, where barrier rows line the curb: those filled the
-    nearest-N partner slots as 0.6 x 3 m stopped vehicles the policy never saw in training.
-    static_on_lane: track_token -> bool, filled here (statics never move)."""
+    """Objects the shadow env sees: moving agents, and static clutter only where its box overlaps a lane or lane
+    connector polygon (not the whole drivable area); static_on_lane caches the test per track token."""
     from nuplan.common.actor_state.state_representation import Point2D
     from nuplan.common.maps.maps_datatypes import SemanticMapLayer
 
@@ -448,17 +335,14 @@ def nearest_partner_slots(x, y, ego_x: float, ego_y: float, slots: int):
     return np.argsort(distance_sq, kind="stable")[:slots]
 
 
-def tracked_objects_to_arrays(tracked_objects, transform: NuPlanTransform, first_slot: int = 1):
-    """nuPlan DetectionsTracks agents -> (idx, x, y, z, h, vx, vy, types, lengths, widths)
-    arrays in the bin frame, filling OpenGigaFlow slots first_slot..N."""
-    idx, x, y, z, h, vx, vy, tp, ln, wd = [], [], [], [], [], [], [], [], [], []
-    for j, obj in enumerate(tracked_objects):
+def tracked_objects_to_arrays(tracked_objects, transform: NuPlanTransform):
+    """nuPlan DetectionsTracks objects -> (x, y, heading, vx, vy, types, lengths, widths) arrays in the bin frame."""
+    x, y, h, vx, vy, tp, ln, wd = [], [], [], [], [], [], [], []
+    for obj in tracked_objects:
         bx, by = transform.loc_to_bin(obj.center.x, obj.center.y)
         v = getattr(obj, "velocity", None)
-        idx.append(first_slot + j)
         x.append(bx)
         y.append(by)
-        z.append(0.0)
         h.append(float(obj.center.heading))
         vx.append(float(v.x) if v is not None else 0.0)
         vy.append(float(v.y) if v is not None else 0.0)
@@ -466,10 +350,8 @@ def tracked_objects_to_arrays(tracked_objects, transform: NuPlanTransform, first
         ln.append(float(obj.box.length))
         wd.append(float(obj.box.width))
     return (
-        np.array(idx, np.int32),
         np.array(x, np.float32),
         np.array(y, np.float32),
-        np.array(z, np.float32),
         np.array(h, np.float32),
         np.array(vx, np.float32),
         np.array(vy, np.float32),
@@ -479,17 +361,14 @@ def tracked_objects_to_arrays(tracked_objects, transform: NuPlanTransform, first
     )
 
 
-_LIGHT_RESTRICTIVENESS = {1: 0, 2: 1, LIGHT_STATE_GREEN: 2}  # RED < YELLOW < GREEN
+_LIGHT_RESTRICTIVENESS = {LIGHT_STATE_RED: 0, LIGHT_STATE_YELLOW: 1, LIGHT_STATE_GREEN: 2}
 
 
 def traffic_light_states(
     traffic_light_data, connector_map: dict, num_traffic: int, route_connector_ids=()
 ) -> np.ndarray:
-    """PlannerInput.traffic_light_data -> per-element state array for
-    set_traffic_light_states. Several lane connectors (straight/left/right
-    from one lane) share one stop-line element: an element on the ego's route
-    is decided by its route connector alone, any other element by the most
-    restrictive reported status. Unreported means GREEN."""
+    """Per-element light states from PlannerInput.traffic_light_data: connectors share stop-line elements, so a route
+    element takes its route connector's status, any other the most restrictive reported one; unreported = GREEN."""
     states = np.full(num_traffic, LIGHT_STATE_GREEN, dtype=np.int32)
     on_route = set(str(cid) for cid in route_connector_ids)
     route_elements = {connector_map[cid] for cid in on_route if cid in connector_map}

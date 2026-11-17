@@ -3,23 +3,35 @@
 
 #include "opengigaflow/ocean/drive/drive.h"
 
-#ifndef DRIVE_TEST_REPO_ROOT
-#define DRIVE_TEST_REPO_ROOT "."
-#endif
-
 static inline const char *drive_carla_map(void) {
-    return DRIVE_TEST_REPO_ROOT "/opengigaflow/resources/carla/opendrive__Town01.bin";
+    return "./opengigaflow/resources/carla/opendrive__Town01.bin";
 }
 
 static inline const char *drive_nuplan_map(void) {
-    return DRIVE_TEST_REPO_ROOT "/opengigaflow/resources/nuplan/nuplan__00018a38-0063-54d1-a3c1-1ab931a4a1e5.bin";
+    return "./opengigaflow/resources/nuplan/nuplan__00018a38-0063-54d1-a3c1-1ab931a4a1e5.bin";
 }
 
-static inline char *drive_test_strdup(const char *src) {
-    size_t n = strlen(src) + 1;
-    char *dst = (char *) malloc(n);
-    memcpy(dst, src, n);
-    return dst;
+static inline void allocate(Drive *env) {
+    if (init(env) != 0) {
+        raise_error_with_message(ERROR_INITIALIZATION_FAILED, "init failed for map %s", env->map_name);
+    }
+    int max_obs = compute_observation_size(env);
+    env->observations = (float *) calloc(env->active_agent_count * max_obs, sizeof(float));
+    env->actions = (float *) calloc(env->active_agent_count * 2, sizeof(float));
+    env->rewards = (float *) calloc(env->active_agent_count, sizeof(float));
+    env->terminals = (unsigned char *) calloc(env->active_agent_count, sizeof(unsigned char));
+    env->truncations = (unsigned char *) calloc(env->active_agent_count, sizeof(unsigned char));
+    env->masks = (unsigned char *) calloc(env->active_agent_count, sizeof(unsigned char));
+}
+
+static inline void free_allocated(Drive *env) {
+    free(env->observations);
+    free(env->actions);
+    free(env->rewards);
+    free(env->terminals);
+    free(env->truncations);
+    free(env->masks);
+    c_close(env);
 }
 
 static inline Agent drive_test_agent(float x, float y, float heading) {
@@ -36,7 +48,6 @@ static inline Agent drive_test_agent(float x, float y, float heading) {
     agent.sim_height = 1.5f;
     agent.sim_valid = 1;
     agent.current_lane_idx = 1;
-    agent.previous_lane_idx = 1;
     agent.red_light_latched_idx = -1;
     agent.wheelbase = 2.7f;
     copy_pose_to_prev(&agent);
@@ -96,7 +107,7 @@ static inline Drive drive_test_env_config(
     env.scenario_length = 91;
     env.termination_mode = 0;
     env.inactive_agent_threshold = 0.4f;
-    env.map_name = drive_test_strdup(map_file);
+    env.map_name = strdup(map_file);
     env.num_controllable_agents = num_agents;
     env.num_max_agents = 64;
     env.init_step = 0;

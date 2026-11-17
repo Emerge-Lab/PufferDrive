@@ -12,14 +12,11 @@
 
 source scripts/kesai/cluster_env.sh || exit 1
 
-# Set up PyTorch Distributed Rendezvous parameters from Slurm variables
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_PORT=29500
 export WORLD_SIZE=$SLURM_JOB_NUM_NODES
 
-echo "START TIME: $(date)"
-echo "Master node: ${MASTER_ADDR}:${MASTER_PORT}"
-echo "Total nodes: ${WORLD_SIZE}"
+printf 'START TIME: %s\nMaster node: %s\nTotal nodes: %s\n' "$(date)" "${MASTER_ADDR}:${MASTER_PORT}" "${WORLD_SIZE}"
 start=$(date +%s)
 
 export SEED=1000
@@ -30,52 +27,19 @@ echo ${RUN_NAME}
 export DATA_DIR=$PD/experiments/${RUN_NAME}
 echo ${DATA_DIR}
 
-# Name the training run writes its final model under, so the eval steps below can
-# find it without knowing the last epoch number. Passed to train as
-# train.final_model_name so the two can never disagree.
+# passed to train as train.final_model_name, so the evals below find the final model without knowing its epoch
 export FINAL_MODEL_NAME=final_model.pt
 export MODEL_PATH=${DATA_DIR}/${FINAL_MODEL_NAME}
 echo ${MODEL_PATH}
 
-# Thread limit limits CPU thrashing across worker environments
-export NUMEXPR_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export VECLIB_MAXIMUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export OMP_NUM_THREADS=1
+# one BLAS/OpenMP thread per process: the env workers would otherwise thrash the CPUs
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh $PD || exit 1
-# Blocking env workers: kesai nodes give 60 threads per rank (--exclusive); vec.num_envs=60 is one worker per thread (0053/0059,
-# ~25 M SPS vs ~21.5 M with 32). 0063 ran 256 workers per rank (4.3x oversubscribed, 75 GB per GPU): +18% SPS from the worker count
-# but ~55% sample efficiency on goals/speed at 1e12 steps, so 60 stays the default. GPU memory ~21 GB fixed + 0.22 GB per 1024-agent worker (fp16).
-# A second instance needs its own RUN_NAME (plain VAR=... sbatch did not propagate on kesai): sbatch --export=ALL,RUN_NAME=k_scaled_0080_1000 scripts/kesai/3_train_64GPU_multinode_slurm.sh
-# 0067 = 0066 (the 0059 config, opengigaflow.yaml defaults, float16 rollout buffer, static footprint red light test) with the
-# training light cycle green U(3,10) / yellow U(2,3) s instead of GIGAFLOW's U(1,10) / U(1.5,2.25) and no training rear margin:
-# 0066's training red-light rate sat at 3.7% because committed slow crossings could not clear CARLA's tail band within a
-# 1.5 s yellow (8-map replay sweep: 17 -> 5 onsets). 0068 = 0067 with 128 workers per rank.
-# 0069 = 0068 + env.obs_traffic_light_yellow_remaining: every traffic-control row carries the seconds the light stays
-# yellow / 3 s (the training max; co-sims clip their timers to it). The evals below read the flag from the run's config.yaml.
-# 0070 = 0069 + env.scripted_pedestrian_ratio=0.1: scripted pedestrian crossings (CARLA Scenario3 geometry: ceil(0.1 x agents)
-# walker slots per env pop in at the right kerb 12-20 m ahead of a moving car and cross at 2-4.2 m/s as 1.0-1.5 m boxes).
-# Ablation = the same job with env.scripted_pedestrian_ratio=0. The eval profiles pin the ratio to 0.
-# 0071 = 0070 with the Leaderboard 1.0 walker profile (drive.h, 2026-11-04): walkers appear standing 12 m + 1.5 m per extra
-# lane ahead (+-2 m), half a lane outside the kerb, wait 0-0.6 s and ramp up over 0.3-0.7 s to 3.4 + 0.4 m/s per lane (+-1);
-# 0070's walkers set off at 2-4.2 m/s from their first frame, so its policy never learned to brake for a standing walker.
-# 0072 = 0071 with five pedestrian behaviours (constants.h PEDESTRIAN_*, 2026-11-05): 40% the 0071 pop-in crossers, 15% slow
-# crossers from either kerb, 20% standers, 15% kerb walkers, 10% kerb steppers. 0071 waited for every standing or passing
-# pedestrian (longest6 v1 timeouts at stuck walkers, nuPlan CLS -0.02 / -0.035). Ratio 0.1 -> 0.3 keeps the pop-in crossings
-# per car where 0071 had them (1.8 per episode); the walker slots are visible 48% of the time.
-# 0075 = 0072 with 0074's per-rank minibatch (393216, fills the GPU; 0072 ran 131072) on the 2026-11-09 audit fixes: map
-# layouts differ per rank and seed, failed init spawns keep their slot, light phases round up to whole steps (yellow
-# 2.1-3.0 s at dt 0.3), offroad is detected up to 40 m/s, spawns use the red-light detector, reset no longer consumes goals.
-# 0076 = 0075 with the 0072 minibatch (131072): 393216 on 32 ranks is 12.6M rows per optimizer step and gave 0075 62k optimizer steps against 175k in 0072.
-# 0077 = 0076 on the purged code (13_bernhard_purge, 2026-11-11): same configuration and seed; Neptune, sweeps, profile mode, in-training evals, adam/muon + cpu_offload, the LSTM path, ensembles and generic PufferLib leftovers are deleted. It has to reproduce 0076's metrics and SPS.
-# 0078 = 0077 after the rest of the purge (13_bernhard_purge, 2026-11-12): same configuration and seed; discrete env actions, the classic dynamics model, the shared backbone, the WOSAC evaluator, the pre-0044 observation switches and the unused rewards, randomizations and co-sim eval arms are deleted, and the eval folders are named without their standard settings. It has to reproduce 0077's metrics and SPS.
-# 0079 = 0078 with train.learning_rate 1.5e-3 (5e-4 in every run before) at the default minibatch (131072); 0080 pairs it with the 0075 minibatch (393216) at the same rate.
-# 0080 = 0079 with 0075's per-rank minibatch (393216, 12.6M rows per optimizer step): a third of 0079's optimizer steps at the same 1.5e-3 rate.
-# Other overrides are run identity, logging and hardware.
-# Execute torchrun across all nodes using srun
+# k_scaled_0080: the opengigaflow.yaml defaults with 128 env workers and minibatch 393216 per rank (12.6M rows per optimizer
+# step on 32 ranks) at lr 1.5e-3 for 1e12 steps; the other overrides are run identity, logging and hardware. GPU memory ~21 GB + 0.22 GB per
+# 1024-agent worker (fp16). Another run: sbatch --export=ALL,RUN_NAME=<name> scripts/kesai/3_train_64GPU_multinode_slurm.sh
 srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \
     --nproc-per-node=8 \
@@ -99,30 +63,16 @@ srun --cpus-per-task="$SLURM_CPUS_PER_TASK" torchrun \
     train.seed=${SEED} \
     tb=True
 
-if [ ! -f ${MODEL_PATH} ]; then
-    echo "Training did not produce ${MODEL_PATH}; skipping evaluation."
-    exit 1
-fi
+[ -f "${MODEL_PATH}" ] || { echo "Training did not produce ${MODEL_PATH}; skipping evaluation."; exit 1; }
 
-# nuPlan (reactive and non-reactive), longest6 (v2 and v1) and AlpaSim evals need one 8-GPU node each: submit them as their own jobs before the long self-play eval below so they queue while it runs.
-echo "Training done, submitting nuPlan reactive eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh \
-    || echo "nuPlan eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/9_nuPlan.sh"
-echo "Submitting nuPlan non-reactive eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh \
-    || echo "nuPlan non-reactive eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/13_nuPlan_nonreactive.sh"
-echo "Submitting longest6 v2 eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6_v2.sh \
-    || echo "longest6 v2 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/11_carla_longest6_v2.sh"
-echo "Submitting longest6 v1 eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/14_carla_longest6_v1.sh \
-    || echo "longest6 v1 eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/14_carla_longest6_v1.sh"
-echo "Submitting AlpaSim eval for ${MODEL_PATH}"
-RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh \
-    || echo "AlpaSim eval submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/12_alpasim.sh"
+# the co-sim evals need one 8-GPU node each: submitted before the long self-play eval below, so they queue while it runs
+for EVAL_SCRIPT in 9_nuPlan.sh 13_nuPlan_nonreactive.sh 11_carla_longest6_v2.sh 14_carla_longest6_v1.sh 12_alpasim.sh; do
+    echo "Submitting scripts/kesai/${EVAL_SCRIPT} for ${MODEL_PATH}"
+    RUN_DIR=${DATA_DIR} sbatch scripts/kesai/${EVAL_SCRIPT} \
+        || echo "submission failed; run by hand: RUN_DIR=${DATA_DIR} sbatch scripts/kesai/${EVAL_SCRIPT}"
+done
 
-# parallel_eval runs 8 srun shards per node (one GPU and an eighth of the CPUs each, 60 blocking workers like
-# training) so the eval uses every GPU and thread of the allocation; 60 workers x 5 scenarios = 300 scenarios per 9000-step episode.
+# 8 srun shards per node, each one GPU, an eighth of the CPUs and 60 env workers (x 5 scenarios = 300 per 9000-step episode)
 echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
 .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 80000 \
@@ -130,15 +80,6 @@ echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
     --shards-per-node 8 \
     env.map_dir=$PD/opengigaflow/resources/carla \
     vec.num_envs=60 \
-    eval.reward_comfort=0.05 \
-    eval.reward_lane_center=0.0038 \
-    eval.obs_slots_partners_n=40 \
-    env.eval_perceived_size_margin_m=0.2 \
-    eval.min_goal_spacing=20 \
-    eval.max_goal_spacing=200 \
-    env.disable_red_light_infractions=1 \
-    env.disable_stop_sign_infractions=1 \
-    env.eval_standstill_jerk_deadband_mps3=1.5 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
@@ -146,6 +87,5 @@ echo "Follow-up evals submitted, evaluating ${MODEL_PATH}"
     wandb=True
 
 end=$(date +%s)
-runtime=$((end-start))
 echo "END TIME: $(date)"
-echo "Runtime: ${runtime}"
+echo "Runtime: $((end-start))"

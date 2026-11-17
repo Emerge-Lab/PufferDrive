@@ -1,30 +1,13 @@
 #!/bin/bash
-# Setup script for OpenGigaFlow Singularity container environment
-# This creates an overlay with all dependencies for running on HPC clusters
-# with older glibc versions.
-#
-# Architecture:
-#   - miniforge3 lives on /scratch (NOT in the overlay) so its python is a
-#     real file accessible from any node, in or out of singularity. The venv
-#     symlinks `bin/python` into the /scratch miniforge3, which makes
-#     `source venv/activate` work on the login node directly without
-#     needing to enter the container.
-#   - All Python packages (torch, opengigaflow, etc.) live in the venv on /scratch
-#     too — fuse2fs is not on the write path for any install step.
-#   - The singularity image still supplies CUDA + cuDNN at job runtime. The
-#     overlay is preserved for the rare case where you need to install
-#     system-level tools, but it's not used for the standard python flow.
-#
-# Usage:
+# OpenGigaFlow on HPC clusters with an old glibc: the singularity image supplies CUDA, miniforge3 and the venv live
+# on /scratch (no fuse2fs on install paths, the venv activates on the login node too), the overlay is for system tools.
 #   1. Create an overlay (one time): ./setup_container.sh create-overlay
 #   2. Install dependencies: sbatch --gres=gpu:1 --wrap "./setup_container.sh install"
 #   3. Rebuild C extension: sbatch --gres=gpu:1 --wrap "./setup_container.sh rebuild"
 
 set -e
 
-# Configuration - adjust these paths for your setup (all env-var overridable).
-# Defaults match submit_cluster.py --container_overlay / --container_image so
-# both scripts agree on which overlay they're reading/writing.
+# env-overridable; the defaults match submit_cluster.py's --container_overlay / --container_image
 OVERLAY_PATH="${OVERLAY_PATH:-/scratch/$USER/images/PufferDrive/overlay-15GB-500K.ext3}"
 IMAGE_PATH="${IMAGE_PATH:-/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif}"
 OVERLAY_TEMPLATE="${OVERLAY_TEMPLATE:-/share/apps/overlay-fs-ext3/overlay-15GB-500K.ext3.gz}"
@@ -32,12 +15,9 @@ CONTAINER_DIR="${CONTAINER_DIR:-$(dirname "$OVERLAY_PATH")}"
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Venv lives on /scratch (regular ext4) — bypasses fuse2fs entirely for installs.
 VENV_PATH="${VENV_PATH:-/scratch/$USER/venvs/pufferdrive}"
-# miniforge3 lives on /scratch too so the venv's python symlink resolves
-# from any node without needing the singularity overlay to be mounted.
+# on /scratch too, so the venv's python symlink resolves on any node without the overlay
 MINIFORGE3_DIR="${MINIFORGE3_DIR:-/scratch/$USER/miniforge3}"
-# Pin to a miniforge3 release that ships Python 3.12. 25.x switched to 3.13,
-# but torch's cu121 wheels are cp39..cp312 only (no cp313), so 3.13 breaks
-# the install. Bump this once torch publishes cp313 wheels for our index.
+# a release with Python 3.12: torch's cu121 wheels stop at cp312
 MINIFORGE3_INSTALLER_URL="${MINIFORGE3_INSTALLER_URL:-https://github.com/conda-forge/miniforge/releases/download/24.11.3-2/Miniforge3-24.11.3-2-Linux-x86_64.sh}"
 MINIFORGE3_PYTHON_VERSION="${MINIFORGE3_PYTHON_VERSION:-3.12}"
 CONTAINER_PYTHON="${CONTAINER_PYTHON:-$MINIFORGE3_DIR/bin/python3}"
@@ -65,10 +45,7 @@ create_overlay() {
     echo "    --wrap \"$0 install\""
 }
 
-# Append the NCCL LD_LIBRARY_PATH fix to a venv's activate script so every
-# job that activates the venv inherits it. The cuda12.8 sif ships an old
-# libnccl (2.25.1) in /usr/lib that lacks ncclCommShrink; torch 2.x bundles
-# its own NCCL — we just have to make sure ld.so finds the bundled one first.
+# every activation puts torch's bundled NCCL first: the sif's libnccl 2.25.1 lacks ncclCommShrink
 patch_activate_nccl_fix() {
     local activate="$VENV_PATH/bin/activate"
     if grep -q "OPENGIGAFLOW_NCCL_FIX" "$activate" 2>/dev/null; then
@@ -86,16 +63,10 @@ fi
 EOF
 }
 
-# Install miniforge3 to /scratch if it isn't there yet. The conda-forge
-# installer is a self-contained shell script — no root, no singularity
-# required. Doing this on /scratch (rather than inside the overlay)
-# means $MINIFORGE3_DIR/bin/python3 is a real file accessible from any
-# node, so the venv's bin/python symlink resolves outside singularity too.
+# miniforge3 on /scratch (plain installer: no root, no singularity), a real python3 on every node
 ensure_miniforge3() {
     if [ -x "$MINIFORGE3_DIR/bin/python3" ]; then
-        # Verify the existing miniforge3 has the python version we expect —
-        # otherwise an earlier install that grabbed "latest" (Python 3.13)
-        # would stay around, and uv venv would happily reuse it.
+        # uv venv would otherwise reuse an earlier install of another Python (e.g. 3.13)
         local existing
         existing="$("$MINIFORGE3_DIR/bin/python3" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)"
         if [ "$existing" = "$MINIFORGE3_PYTHON_VERSION" ]; then
@@ -114,9 +85,7 @@ ensure_miniforge3() {
     echo "miniforge3 installed at $MINIFORGE3_DIR"
 }
 
-# Find or bootstrap a uv binary. Prefer one already on PATH or in
-# $HOME/.local/bin (auto-bound by apptainer). Fall back to the official
-# installer, which drops a static binary into ~/.local/bin in seconds.
+# uv from PATH or a ~/.local/bin (auto-bound by apptainer), else the official installer
 ensure_uv() {
     if command -v uv >/dev/null 2>&1; then
         UV_BIN="$(command -v uv)"
@@ -135,21 +104,10 @@ ensure_uv() {
     UV_BIN="$HOME/.local/bin/uv"
 }
 
-# Activate (and create if missing) the project venv. Must be called from
-# inside the container so $CONTAINER_PYTHON exists. We use `uv venv` rather
-# than `python -m venv` because miniforge3's `python -m venv` produces a
-# venv without bin/pip (its ensurepip path is broken on conda envs), which
-# causes subsequent pip calls to fall through to Ubuntu 24.04's system pip
-# (PEP 668 externally-managed → install rejected). uv venv ships pip out
-# of the box and works against any cpython.
+# inside the container; uv venv because miniforge3's python -m venv has no pip (the system pip would reject installs)
 ensure_venv() {
     ensure_uv
-    # If the venv exists but its python doesn't resolve into the current
-    # $MINIFORGE3_DIR (e.g. it points at /ext3/miniforge3 from before we
-    # moved miniforge3 onto /scratch), rebuild. readlink -f resolves the
-    # whole symlink chain, so this catches the case where the link is
-    # valid inside the container (overlay mounted) but stale relative to
-    # where the new venv should point.
+    # rebuild a venv whose python resolves outside $MINIFORGE3_DIR (e.g. the old /ext3/miniforge3)
     if [ -f "$VENV_PATH/bin/activate" ]; then
         local resolved
         resolved="$(readlink -f "$VENV_PATH/bin/python" 2>/dev/null || true)"
@@ -175,16 +133,12 @@ install_deps() {
     echo "=== Installing dependencies into venv at $VENV_PATH ==="
     ensure_venv
 
-    # Multi-arch CUDA build so the _C.so runs on A100 (8.0), L40S (8.9),
-    # H100/H200 (9.0) without "no kernel image is available for execution
-    # on the device" crashes when a training job lands on a different GPU.
+    # _C.so for A100 (8.0), L40S (8.9) and H100/H200 (9.0): a job may land on any of them
     export TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"
     # Parallel C++/CUDA build (ninja honors MAX_JOBS).
     export MAX_JOBS=8
     # Block ~/.local/lib leakage — venv only.
     export PYTHONNOUSERSITE=1
-
-    # uv was bootstrapped by ensure_venv; reuse the same binary.
 
     echo "=== Installing build tools (ninja for parallel CUDA compile) ==="
     uv pip install ninja
@@ -195,11 +149,8 @@ install_deps() {
 
     echo "=== Installing OpenGigaFlow (editable; also builds C extension via setup.py) ==="
     cd "$PROJECT_ROOT"
-    # --no-build-isolation: pyproject.toml's [build-system].requires includes
-    # torch, which would otherwise make uv spin up a fresh build env and
-    # download/extract ~6 GB of torch+CUDA wheels just to run setup.py once.
-    # We just installed torch into the venv, so use it directly.
-    uv pip install --no-build-isolation -e ".[cluster]"
+    # --no-build-isolation: build against the torch above instead of ~6 GB of wheels in a fresh build env
+    uv pip install --no-build-isolation -e .
 
     echo "=== Installing additional packages ==="
     uv pip install wandb rich submitit pyyaml
@@ -223,10 +174,7 @@ rebuild_extension() {
 
 run_in_container() {
     local cmd="$1"
-    # Overlay mounted read-only — every read/write the install or rebuild
-    # cares about happens on /scratch ext4 (miniforge3 + venv). The overlay
-    # is kept on the mount line for backward compatibility, but nothing
-    # in the python flow writes to it.
+    # overlay read-only: the install and rebuild only touch /scratch (miniforge3 + venv)
     singularity exec --nv \
         --overlay "$OVERLAY_PATH:ro" \
         "$IMAGE_PATH" \
@@ -241,9 +189,7 @@ case "${1:-}" in
         if [ -f /.singularity.d/Singularity ]; then
             install_deps
         else
-            # miniforge3 installs on /scratch via plain shell — no singularity
-            # needed for that step. The rest (uv + pip + build_ext) runs in
-            # the container so nvcc and the right glibc are on PATH.
+            # miniforge3 outside the container; uv, pip and build_ext inside it for nvcc and the right glibc
             ensure_miniforge3
             run_in_container "$0 install"
         fi

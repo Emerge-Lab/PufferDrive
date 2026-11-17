@@ -1,36 +1,4 @@
-"""CARLA <-> OpenGigaFlow coordinate transform + state readback for co-simulation.
-
-OpenGigaFlow's `carla*/opendrive__Town*.bin` maps are OpenDRIVE exports of the
-CARLA towns, stored in a y-flipped, per-town-translated frame. Empirically
-(road-network alignment + heading match to 1e-3 rad):
-
-    bin_x       =  carla_x + tx
-    bin_y       = -carla_y + ty
-    bin_heading = -radians(carla_yaw)          # CARLA yaw is degrees, left-handed
-    bin_vx      =  carla_vx
-    bin_vy      = -carla_vy
-
-`(tx, ty)` is the town's georeference offset -- a hardcoded constant per town
-(TOWN_OFFSETS below), not computed at runtime. History: this used to be
-recovered on the fly by ICP-aligning the loaded CARLA map's road points to the
-bin's lane points, on the theory that computing it fresh beats trusting a
-possibly-stale constant. In practice ICP's local gradient descent (start =
-centroid delta, refine by nearest-heading-bucket matching) silently settled a
-few meters from the true optimum for Town04/Town06 -- close enough that
-aggregate alignment stats still looked fine, but consistently off by about a
-lane width, so CARLA-synced background agents rendered off-lane in OpenGigaFlow.
-The fix that actually worked: a brute-force (tx, ty) grid search minimizing
-median nearest-neighbor distance from transformed CARLA waypoints to bin lane
-points (coarse then refined).
-For Town6, TWO independently geometry-refined Town06 candidates -- (-150.1,
-113.35) from the py123d arrow match, and (-150.93, 109.40) -- both scored
-dramatically WORSE on a full longest6 Town06 leaderboard sweep than the
-original (-150.93, 111.40).
-
-The OpenGigaFlow env additionally subtracts its own `world_mean` inside
-`set_agent_states`/`set_agent_goals`, so the values produced here are in the
-*bin* frame (== sim frame + world_mean), matching `get_global_agent_state`.
-"""
+"""CARLA <-> OpenGigaFlow bin frame (y mirrored, translated per town) and CARLA map/light/stop-sign readback."""
 
 import math
 from pathlib import Path
@@ -39,8 +7,8 @@ import numpy as np
 
 import data_utils.mirror_map_bin as _mbin
 
-# Verified per-town offsets -- see the module docstring for how these were
-# derived and why they're hardcoded instead of computed on the fly.
+
+# bin_x = carla_x + tx, bin_y = -carla_y + ty; found by a brute-force grid search (ICP settled a lane width off)
 TOWN_OFFSETS = {
     "Town01": (-204.34, 148.75),
     "Town02": (-93.70, 213.06),
@@ -60,24 +28,12 @@ def bin_path_for_town(town: str) -> str:
 
 
 def wrap_deg_180(d):
-    """Wrap a degree value (e.g. a yaw difference) to (-180, 180]."""
+    """Wrap a degree value (e.g. a yaw difference) to [-180, 180)."""
     return (d + 180.0) % 360.0 - 180.0
 
 
-def town_offset(bin_path: str):
-    """CARLA<->bin (tx, ty): the bin's stored centroid when present (bin =
-    original - centroid, and CARLA = original y-flipped, so the offset is just
-    -centroid_xy)."""
-    centroid = _mbin.read_bin(Path(bin_path)).get("centroid")
-    if centroid is not None:
-        return (-float(centroid[0]), -float(centroid[1]))
-    town = Path(bin_path).stem.split("__")[-1]
-    return TOWN_OFFSETS[town]
-
-
-OFFSET_CALIBRATION_MAX_RESIDUAL_M = (
-    1.0  # median lane-normal residual left after calibration: larger = wrong bin for this map
-)
+# median lane-normal residual left after calibration: larger = wrong bin for this map
+OFFSET_CALIBRATION_MAX_RESIDUAL_M = 1.0
 OFFSET_CALIBRATION_SPACING_M = 10.0
 OFFSET_CALIBRATION_MATCH_MAX_M = 2.0  # waypoint-to-bin-lane residuals beyond this are mismatches, not offset
 OFFSET_CALIBRATION_MAX_Z_OFFSET_M = 5.0  # exported bins sit 0-1.7 m below CARLA's ground; more means a frame mix-up
@@ -98,18 +54,8 @@ def driving_waypoint_samples(carla_map):
 
 
 def calibrate_town_offset(driving_waypoints, transform, town_bin):
-    """(tx, ty) refined so the bin's lane polylines coincide with CARLA's lane centres.
-
-    driving_waypoints: (N, 5) CARLA-frame [x, y, z, right_x, right_y] samples of the driving lanes
-    (driving_waypoint_samples). The exported bins sit a constant fraction of a metre off the CARLA frame
-    (measured 2026-09-23 with the stored offsets: Town01 0.27 m, Town02 0.6 m), and the ego plus every
-    streamed actor inherited it, driving 0.44 m right of CARLA's lane centre on Town02 and clipping curbs
-    the shadow env could not see. Least squares of the translation over the lane-normal residuals of the
-    waypoints against the nearest bin lane segment, two passes (re-matched after the first shift),
-    mismatches beyond OFFSET_CALIBRATION_MATCH_MAX_M dropped. The bins also sit a constant per-town height
-    below CARLA's ground (Town03 0.77 m, Town04 1.24 m, Town05 1.64 m, Town06 0), so the same matches give
-    the z offset as the median of bin lane z minus waypoint z.
-    Returns (offset, z_offset_m, residual_before_m, residual_after_m)."""
+    """(offset, z_offset_m, residual_before_m, residual_after_m): least squares of the translation over the lane-normal
+    residuals of driving_waypoint_samples against the bin lanes (two passes), z offset = median bin lane z - CARLA z."""
     data = _mbin.read_bin(Path(town_bin))
     seg_start, seg_end, seg_z_start, seg_z_end = [], [], [], []
     for road in data["roads"]:
@@ -180,17 +126,13 @@ def calibrate_town_offset(driving_waypoints, transform, town_bin):
 
 
 class CarlaTransform:
-    """Bidirectional CARLA <-> OpenGigaFlow-bin-frame transform for one town.
-
-    z_offset: bin z = CARLA z + z_offset (calibrate_town_offset; the bins sit 0.8-1.6 m below CARLA's
-    ground on Town03/04/05, so every injected height must go through z_to_bin)."""
+    """CARLA <-> bin frame of one town (the sim frame + world_mean, as set_agent_states and get_global_agent_state
+    use); bin z = CARLA z + z_offset, so every injected height goes through z_to_bin."""
 
     def __init__(self, town: str, offset=None, z_offset=0.0):
-        self.town = town
         self.tx, self.ty = offset if offset is not None else TOWN_OFFSETS[town]
         self.tz = float(z_offset)
 
-    # --- CARLA -> bin frame ---
     def loc_to_bin(self, cx, cy):
         return cx + self.tx, -cy + self.ty
 
@@ -201,21 +143,16 @@ class CarlaTransform:
         return -math.radians(yaw_deg)
 
     def state_to_bin(self, x, y, z, yaw_deg, vx, vy, angular_velocity_z_deg_s, accel_x, accel_y, box_z, box_extent_z):
-        """(x, y, z, heading, vx, vy, yaw_rate, accel_long) in the bin frame from a CARLA-frame actor state.
-        Angular velocity (deg/s) and acceleration (m/s^2, world frame) must come from CARLA's own physics, not
-        finite-differenced from a previous OpenGigaFlow state: env.step() may have already overwritten this
-        actor's previous state with a throwaway dummy-action rollout. box_z/box_extent_z: bounding-box pivot
-        offset and half height (vehicles pivot at the ground, walkers at the capsule centre); bin z = ground."""
+        """(x, y, z, heading, vx, vy, yaw_rate, accel_long) in the bin frame from a CARLA-frame actor state with
+        CARLA's own angular velocity (deg/s) and world-frame acceleration; bin z = the bounding box's ground."""
         bx, by = self.loc_to_bin(x, y)
         heading = self.yaw_to_bin(yaw_deg)
-        yaw_rate = -math.radians(
-            angular_velocity_z_deg_s
-        )  # mirrored y flips rotation sense, like yaw_to_bin's negation
+        # mirrored y flips rotation sense, like yaw_to_bin's negation
+        yaw_rate = -math.radians(angular_velocity_z_deg_s)
         accel_long = accel_x * math.cos(heading) + (-accel_y) * math.sin(heading)  # mirror y, like the velocity
         ground_z = z + box_z - box_extent_z
         return (bx, by, self.z_to_bin(ground_z), heading, vx, -vy, yaw_rate, accel_long)
 
-    # --- bin frame -> CARLA (to teleport the ego back into CARLA) ---
     def bin_to_loc(self, bx, by):
         return bx - self.tx, -(by - self.ty)
 
@@ -226,8 +163,7 @@ class CarlaTransform:
         return -math.degrees(heading_rad)
 
 
-# CARLA traffic-light state name -> OpenGigaFlow enum (datatypes.h:61-67)
-#   UNKNOWN=0 RED=1 YELLOW=2 GREEN=3 OFF=4
+# carla.TrafficLightState name -> OpenGigaFlow light state (UNKNOWN=0 RED=1 YELLOW=2 GREEN=3 OFF=4)
 TRAFFIC_LIGHT_STATE_YELLOW = 2
 TRAFFIC_LIGHT_STATE_OFF = 4
 LIGHT_STATE_BY_NAME = {
@@ -237,14 +173,8 @@ LIGHT_STATE_BY_NAME = {
     "Off": TRAFFIC_LIGHT_STATE_OFF,
     "Unknown": 0,
 }
-# scenario_runner's TrafficLightManipulator (Leaderboard 1 scenarios 7-9) sets a light's phase times to 1e9 s while it
-# drives the states itself; the light's own timer then says nothing about the remaining yellow
+# TrafficLightManipulator (Leaderboard 1 scenarios 7-9) freezes phase times at 1e9 s: the timer then tells nothing
 CARLA_LIGHT_TIMER_FROZEN_S = 1.0e6
-
-
-def light_state_from_name(state_name) -> int:
-    """carla.TrafficLightState.<name> (as sent over a co-sim protocol) -> OpenGigaFlow enum."""
-    return LIGHT_STATE_BY_NAME.get(state_name, 0)
 
 
 def carla_yellow_remaining_s(elapsed_s, yellow_time_s):
@@ -256,13 +186,11 @@ def carla_yellow_remaining_s(elapsed_s, yellow_time_s):
 
 
 LIGHT_PROBE_STEPS_M = (0.0, 3.0, 6.0, 10.0, 15.0)  # walk-back (all) / forward (all but 0) probes of map_lights_to_bin
-LIGHT_LANE_MATCH_MAX_DIST_M = 12.0  # measured Town01 controlled-lane stub distance (see below)
-LIGHT_LANE_FORWARD_MATCH_MAX_DIST_M = (
-    3.0  # forward fallback lands ON the connector; a lane width away is the neighbour's
-)
-LIGHT_LANE_ALIGN_COS_MIN = (
-    0.5  # forward fallback: the lane must run along the waypoint's heading (no crossing connectors)
-)
+LIGHT_LANE_MATCH_MAX_DIST_M = 12.0  # measured Town01 controlled-lane stub distance
+# forward fallback lands ON the connector; a lane width away is the neighbour's
+LIGHT_LANE_FORWARD_MATCH_MAX_DIST_M = 3.0
+# forward fallback: the lane must run along the waypoint's heading (no crossing connectors)
+LIGHT_LANE_ALIGN_COS_MIN = 0.5
 LIGHT_STOP_LINE_TOLERANCE_M = 1.0  # exported bin lines within this of the light's stop waypoint stay (median 0.5 m)
 ROUTE_STOP_LINE_MARGIN_M = 1.0  # a route crossing a stop line extended by this at both ends drives that line's lane
 ROUTE_STOP_LINE_ALIGN_COS_MIN = 0.5  # ... in the element's travel direction (opposing traffic crosses the same line)
@@ -270,10 +198,8 @@ TRIGGER_SAMPLE_SPAN_FRACTION = 0.9  # RunningRedLightTest.get_traffic_light_wayp
 TRIGGER_SAMPLE_STEP_M = 1.0
 JUNCTION_ADVANCE_STEP_M = 0.5
 MAX_JUNCTION_ADVANCE_STEPS = 400  # 200 m: a trigger volume farther from its junction is a map error
-JUNCTION_CLUSTER_M = 60.0  # stop lines this close are treated as one junction (outlier repair, see below)
-# An assigned light farther from its junction cluster-mates' lights than this
-# multiple of the cluster-mates' own spread is a wrong-junction match.
-OUTLIER_SPREAD_MULTIPLE = 2.0
+JUNCTION_CLUSTER_M = 60.0  # stop lines this close are treated as one junction
+OUTLIER_SPREAD_MULTIPLE = 2.0  # a light this many cluster-mate spreads from their centroid matched the wrong junction
 OUTLIER_MIN_SPREAD_M = 5.0  # floor for tiny/degenerate clusters (e.g. two lights a few meters apart)
 
 
@@ -301,9 +227,8 @@ def _cluster_by_proximity(points, keys, radius_m):
 
 
 def _drop_junction_outliers(mapping, light_geometry, transform, stop_centers):
-    """(light_idx, element_idx) pairs to remove from `mapping`: elements whose
-    assigned light sits far outside where its junction cluster-mates' lights
-    actually are -- see map_lights_to_bin's docstring."""
+    """(light_idx, element_idx) pairs to drop: single-owner elements whose light sits far outside where the lights of
+    the other elements of its junction (stop-line cluster of >= 3) are; no other light contests them."""
     element_light = {}
     for li, elements in enumerate(mapping):
         for j in elements:
@@ -337,9 +262,8 @@ def _drop_junction_outliers(mapping, light_geometry, transform, stop_centers):
 
 
 def light_stop_waypoints(light, carla_map):
-    """Stop waypoints of a traffic light from its trigger volume: one waypoint per lane the volume spans,
-    advanced to the junction entry, the line RunningRedLightTest scores (its get_traffic_light_waypoints).
-    Not TrafficLight.get_stop_waypoints: in Town01/02 those sit 10-14 m before the junction entry."""
+    """One waypoint per lane the light's trigger volume spans, advanced to the junction entry: the line
+    RunningRedLightTest scores (TrafficLight.get_stop_waypoints sits 10-14 m before it in Town01/02)."""
     import carla
 
     base_transform = light.get_transform()
@@ -367,12 +291,8 @@ def light_stop_waypoints(light, carla_map):
 
 
 def light_geometry_from_carla(lights, carla_map):
-    """Plain-data geometry of live CARLA traffic lights for map_lights_to_bin (CARLA frame).
-
-    One dict per light: id, x/y of the light actor, trigger_x/trigger_y of its trigger volume and one
-    entry per stop waypoint (light_stop_waypoints) with x, y, yaw_deg, lane_width,
-    `backward` = [x, y] of the first waypoint LIGHT_PROBE_STEPS_M behind it (None where the lane ends)
-    and `forward` = [x, y, yaw_deg] of the first waypoint each non-zero step ahead of it."""
+    """CARLA-frame dicts per light {id, x, y, trigger_x, trigger_y, stop_waypoints: [{x, y, yaw_deg, lane_width,
+    backward: [[x, y] per LIGHT_PROBE_STEPS_M behind], forward: [[x, y, yaw_deg] per non-zero step ahead]}]}."""
     geometry = []
     for light in lights:
         location = light.get_location()
@@ -420,47 +340,10 @@ def light_geometry_from_carla(lights, carla_map):
 
 
 def map_lights_to_bin(light_geometry, transform, town_bin):
-    """mapping[i] = list of bin traffic-element indices controlled by light_geometry[i]
-    (light_geometry_from_carla, or the same dicts built by a CARLA 0.9.10 co-sim client).
-
-    Semantic matching: each of the light's STOP WAYPOINTS is snapped to its bin
-    LANE (nearest drivable-lane segment -- stop lines lie ON lane segments, so
-    this is a near-zero-distance match), then lane -> element via the bin's
-    controlled_lanes. Geometry-only alternatives mis-bind systematically: the
-    light's own transform is the pole across the junction, and stop-line-to-
-    stop-line matching is off by ~9 m in these bins while adjacent approaches
-    are only 15-25 m apart.
-
-    CARLA's stop waypoints sit at the junction ENTRY, up to ~10 m past the
-    bin's controlled-lane stub, so each waypoint is walked backward along its
-    own lane until a controlled lane resolves (0/36 raw matches without this).
-    Where the bin element only lists the junction connectors (Town01: 3 of 36,
-    Town02: 4 of 24 approaches, connectors starting 12-15 m past the waypoint),
-    the backward walk finds nothing; a fallback then probes forward into the
-    junction for a lane within LIGHT_LANE_FORWARD_MATCH_MAX_DIST_M that runs
-    along the waypoint's heading (tight radius + alignment: on multi-lane
-    approaches the neighbour lane's connector is only a lane width away).
-
-    A second pass then repairs occasional wrong-junction matches: the walk-back
-    above resolves per light independently, and for a small number of lights
-    per town it lands on a bin element geometrically nowhere near that light
-    (measured: Town04 light 0 -> an element 44 m away, Town06 light 5 -> 34 m
-    away, while every OTHER approach in each of those same junctions matched
-    within its own junction's ~15-20 m span). Elements never collide (two
-    lights never claim the same one), so nothing else catches this -- the
-    element just silently carries a confidently wrong state forever. Fix:
-    cluster single-owner elements by stop-line proximity (one cluster ~= one
-    junction), and within each cluster of >=3, drop any element whose
-    assigned light sits far outside where the cluster's OTHER lights actually
-    are. A dropped element goes unmapped (state stays UNKNOWN) rather than
-    guessing a replacement -- no other candidate light contests these, so
-    there's nothing to reassign to with confidence.
-
-    Returns (mapping, num_traffic_elements); the state array passed to
-    set_traffic_light_states is sized to the bin's element count."""
-    import data_utils.mirror_map_bin as mbin
-
-    data = mbin.read_bin(Path(town_bin))
+    """(mapping, bin traffic element count), mapping[i] = bin elements light_geometry[i] controls, matched by lane (the
+    light pole stands across the junction): each stop waypoint walks back along its lane, else forward into the
+    junction, until a bin lane with controlling elements is in reach; wrong-junction matches are then dropped."""
+    data = _mbin.read_bin(Path(town_bin))
     seg_start, seg_end, seg_lane = [], [], []
     for road in data["roads"]:
         if not (0 <= road["type"] <= 9):
@@ -565,19 +448,10 @@ def route_crosses_stop_line(route_xy, stop_line, heading):
 
 
 def light_stop_line_overrides(light_geometry, mapping, transform, town_bin, route_xy=None):
-    """(element indices (K,), lines (K, 6)) for the bin light elements whose exported stop line sits more than
-    LIGHT_STOP_LINE_TOLERANCE_M along the lane from the light's stop waypoints (light_stop_waypoints: the
-    line RunningRedLightTest scores against; Town04: four approaches whose bin line is 8 m past it, so an
-    ego stopping at the bin line has already run the light). Each line is the bin's own translated along
-    the element's travel direction onto its most upstream waypoint (a line spanning several lanes then
-    precedes every lane's CARLA line); a light's waypoints go to the nearest of its elements.
-    route_xy (N, 2), bin frame: only lines the route crosses in their travel direction move (the ones the
-    leaderboard scores); the rest keep the exported position the policy trained with, since a moved
-    neighbouring line beside the ego's own red line is out of distribution (Town04 junctions 483/1249 sit
-    3.8 m apart in CARLA's model and the policy ran that red). None moves every line."""
-    import data_utils.mirror_map_bin as mbin
-
-    bin_traffic = mbin.read_bin(Path(town_bin))["traffic"]
+    """(element indices (K,), lines (K, 6)): bin light stop lines more than LIGHT_STOP_LINE_TOLERANCE_M along the lane
+    from the light's scored stop waypoints, moved along the travel direction onto the most upstream one. With route_xy
+    (N, 2, bin frame) only lines the route crosses move: a moved neighbouring line is out of distribution."""
+    bin_traffic = _mbin.read_bin(Path(town_bin))["traffic"]
     along_offsets_by_element = {}
     for light, elements in zip(light_geometry, mapping):
         if not elements:
@@ -613,9 +487,8 @@ def light_stop_line_overrides(light_geometry, mapping, transform, town_bin, rout
 
 
 def stop_sign_geometry_from_carla(world, carla_map):
-    """Plain-data geometry of every CARLA `traffic.stop` actor for stop_sign_lines (CARLA frame): id, the
-    trigger volume's centre/extent/yaw_deg and `lane` = [x, y, z, yaw_deg] of the driving-lane waypoint
-    under the centre. Signs whose centre projects onto no driving lane are left out."""
+    """CARLA-frame dicts per `traffic.stop` actor on a driving lane {id, center, extent, yaw_deg of the trigger volume,
+    lane: [x, y, z, yaw_deg] of the driving-lane waypoint under the centre}."""
     import carla
 
     geometry = []
@@ -646,12 +519,8 @@ def stop_sign_geometry_from_carla(world, carla_map):
 
 
 def stop_sign_lines(stop_sign_geometry, transform):
-    """(lines (K, 6), headings (K,)) in the bin frame, one per stop sign of stop_sign_geometry_from_carla: the
-    trigger volume's centre projected onto its driving lane, spanning the trigger's width across that lane,
-    with the lane's travel direction as heading and the lane waypoint's height (a few trigger volumes sit up
-    to 1.5 m above or below their road). Feed to Drive.set_stop_signs so the shadow env runs on the volumes
-    the leaderboard scores against instead of the bin's exported stop lines (which sit up to 9 m away on a
-    few Town03/05 approaches and miss four signs)."""
+    """(lines (K, 6), headings (K,)) in the bin frame for Drive.set_stop_signs: each trigger volume's centre on its
+    driving lane, spanning the trigger's width across it at the lane's height, heading = the lane's travel direction."""
     lines, headings = [], []
     for sign in stop_sign_geometry:
         center_x, center_y, _ = sign["center"]
