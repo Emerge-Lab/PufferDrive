@@ -16,8 +16,8 @@ self-play and, through co-simulation, in nuPlan and the CARLA leaderboard.
   range of driving styles.
 - **Maps:** 128 augmented CARLA town maps for training and the 8 original towns for evaluation ship with the
   repository.
-- **Evaluation:** a built-in self-play benchmark, plus co-simulation with nuPlan's closed-loop simulator (Val14)
-  and CARLA Leaderboard 1.0 (longest6 v1).
+- **Evaluation:** a built-in self-play benchmark, plus co-simulation with nuPlan's closed-loop simulator (Val14),
+  CARLA Leaderboard 1.0 (longest6 v1) and CARLA Leaderboard 2.0 (longest6 v2).
 - **Replays:** evaluated episodes render to self-contained interactive HTML pages, optionally with the
   observations the policy saw.
 
@@ -178,6 +178,33 @@ All 36 routes with 3 seeds on an 8-GPU node:
 (40 partner slots, pedestrian box padding, 30 m/s speed cap) are the defaults, `COSIM_EVAL_DEFAULTS` in
 `opengigaflow/ocean/cosim/carla/shadow_ego.py`.
 
+### CARLA longest6 v2 (Leaderboard 2.0)
+
+Drives the policy through CaRL's unmodified Leaderboard 2.0 evaluator on the 36 longest6 v2 routes. Setup:
+
+- [CARLA 0.9.15](https://github.com/carla-simulator/carla/releases/tag/0.9.15) and
+  [CaRL](https://github.com/autonomousvision/CaRL) with its `carl` conda environment (Python 3.10), set up as in
+  [its CARLA README](https://github.com/autonomousvision/CaRL/tree/main/CARLA). The routes are its
+  [`CARLA/custom_leaderboard/leaderboard/data/longest6.xml`](https://github.com/autonomousvision/CaRL/blob/main/CARLA/custom_leaderboard/leaderboard/data/longest6.xml).
+- The policy runs inside the evaluator, in the `carl` environment; the job builds this repository's simulator
+  binding for it.
+- Details: [CARLA Leaderboard 2.0 co-simulation README](opengigaflow/ocean/cosim/carla/README.md).
+
+Short local run (one route, one seed; the job starts and stops its own CARLA server):
+
+```bash
+RUN_DIR=experiments/<run> \
+CARLA_ROOT=/path/to/CARLA_0.9.15 \
+CARL_WORK_DIR=/path/to/CaRL/CARLA \
+PY=/path/to/envs/carl/bin/python \
+ROUTE_SUBSET=0 SEEDS=0 WORKERS=1 \
+bash scripts/slurm/eval_longest6_v2.sh
+```
+
+All 36 routes with 3 seeds on an 8-GPU node:
+`RUN_DIR=experiments/<run> sbatch scripts/slurm/eval_longest6_v2.sh`. The co-simulation options behind our scores
+are the same `COSIM_EVAL_DEFAULTS`, except that the policy keeps the partner slots it was trained with instead of 40.
+
 ## Performance
 
 ### GIGAFLOW benchmarks
@@ -185,7 +212,7 @@ All 36 routes with 3 seeds on an 8-GPU node:
 In the following we compare the performance of OpenGigaFlow to GIGAFLOW on benchmarks reported in the GIGAFLOW paper.
 
 #### nuPlan Val14 (reactive)
-nuPlan Val14 (reactive) is the most common planning benchmark in the literature and measure peformance of the policy on nuPlan maps in 20 second scenarios, with log-replay initialization and other agents being controlled by IDM.
+nuPlan Val14 (reactive) is the most common planning benchmark in the literature and measure peformance of the policy on nuPlan maps in 15 second scenarios, with log-replay initialization and other agents being controlled by IDM.
 OpenGigaFlow is the first open-model that can outperform PDM-Closed zero-shot without training on nuPlan data or maps.
 
 | Method             | Type | Zero-shot | Open |  CLS |
@@ -227,7 +254,7 @@ GIGAFLOW numbers are italic because the original benchmark is not open so there 
 Here we report some additional evals that are not part of the original GIGAFLOW paper, so the training recipe and method is not tuned for these benchmarks. OpenGigaFlow achieves reasonable performance zero-shot on them but is not state-of-the-art.
 
 #### nuPlan Val14 (non-reactive)
-The same as Val14 Reactive except other cars are driven by log replay and do not react to the ego agent.
+The same as Val14 Reactive except other cars are driven by log replay and do not react to the ego agent. We observe that our policy trained in self-play where most cars react to you sometime drive assuming the other car will react to it, leading to a lower score on this benchmark.
 
 | Method             | Type | Zero-shot | Open |  CLS |
 |--------------------|:----:|:---------:|:----:|-----:|
@@ -239,6 +266,7 @@ The same as Val14 Reactive except other cars are driven by log replay and do not
 | OpenGigaFlow 1.0.0 |  RL  |     ✅     |  ✅   |      |
 
 #### CARLA longest6 v2 (Leaderboard 2.0)
+A newer version of the classic longest6 updated with the CARLA leaderboard 2.0 scenarios and newer CARLA version. Unlike the other benchmarks it features driving at higher speeds (up to 80 km/h) as well as some extremely challenging scenarios where the model needs to merge into an infinite stream of non-reactive cars driving at high speeds through an intersection. Solving this requires exact timing and driving the car at its limits. No method today can solve all of these scenarios reliably.
 
 | Method             | Type | Zero-shot | Open | Driving score |
 |--------------------|:----:|:---------:|:----:|--------------:|

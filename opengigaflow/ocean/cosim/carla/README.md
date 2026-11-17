@@ -22,13 +22,13 @@ count/radius, reward conditioning) are adopted from the checkpoint's sibling `co
 
 ## How to run
 
-All 36 longest6 v2 routes on the cluster: `scripts/kesai/6_eval_longest6_v2.sh`. Locally, against a CARLA 0.9.15
+All 36 longest6 v2 routes on an 8-GPU node: `scripts/slurm/eval_longest6_v2.sh`. Locally, against a CARLA 0.9.15
 server you started yourself, in a cp310 env (CARLA 0.9.15 ships no cp312 wheel): `run_evaluator.py --model-dir <dir>
 --routes <xml> ...` (VS Code launch config "Cosim: CARLA leaderboard agent") with `CARL_WORK_DIR` and
 `SCENARIO_RUNNER_ROOT` exported (route scenarios silently fail to load without the latter, so `leaderboard_agent.py`
 refuses to start). The agent's environment variables are listed in `leaderboard_agent.py`, the shadow env's (`COSIM_*`)
 in `shadow_ego.py`; its `COSIM_EVAL_DEFAULTS` are the eval settings behind our scores, except that
-`6_eval_longest6_v2.sh` keeps the checkpoint's partner slots.
+`eval_longest6_v2.sh` keeps the checkpoint's partner slots.
 
 ### Ego dynamics
 
