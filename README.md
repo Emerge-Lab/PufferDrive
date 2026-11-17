@@ -72,8 +72,8 @@ opengigaflow train train.device=cpu vec.backend=Serial vec.num_envs=2 vec.batch_
 torchrun --standalone --nnodes=1 --nproc-per-node=8 -m opengigaflow.rl train
 ```
 
-The SLURM version is `scripts/kesai/18_train_8GPU_3seeds_slurm.sh`: one 8-GPU node per seed, then the
-evaluations. `scripts/kesai/3_train_64GPU_multinode_slurm.sh` spans several nodes.
+The SLURM version is `scripts/kesai/0_train_8gpu.sh`: one 8-GPU node per seed, then the
+evaluations. `scripts/kesai/1_train_multinode.sh` spans several nodes.
 
 ## Evaluation
 
@@ -103,7 +103,7 @@ python scripts/parallel_eval.py selfplay --total-scenarios 80000 --num-gpus 8 \
 ```
 
 `vec.num_envs` is the number of environment workers per GPU; 60 fits a node with 480 cores. The multi-node SLURM
-version is `scripts/kesai/21_selfplay_eval_slurm.sh`. Benchmark definitions, filtered replays and the output
+version is `scripts/kesai/2_eval_selfplay.sh`. Benchmark definitions, filtered replays and the output
 layout are described in [docs/evaluation.md](docs/evaluation.md).
 
 ### nuPlan (Val14)
@@ -133,8 +133,8 @@ CHALLENGES=closed_loop_reactive_agents_opengigaflow WORKER=sequential LIMIT_TOTA
 bash opengigaflow/ocean/cosim/nuplan/run_nuplan_planner.sh
 ```
 
-All 1,118 Val14 scenarios on an 8-GPU node: `RUN_DIR=experiments/<run> sbatch scripts/kesai/9_nuPlan.sh`
-(`13_nuPlan_nonreactive.sh` for log-replay agents). The script also sets the planner options behind our scores
+All 1,118 Val14 scenarios on an 8-GPU node: `RUN_DIR=experiments/<run> sbatch scripts/kesai/3_eval_nuplan_reactive.sh`
+(`4_eval_nuplan_nonreactive.sh` for log-replay agents). The script also sets the planner options behind our scores
 (goal window, start-up jerk caps, pedestrian box padding, 40 partner slots, lane-width clipping); use the same
 values for comparable numbers.
 
@@ -161,7 +161,7 @@ bash opengigaflow/ocean/cosim/carla/lb1/run_leaderboard.sh
 ```
 
 All 36 routes with 3 seeds on an 8-GPU node:
-`RUN_DIR=experiments/<run> sbatch scripts/kesai/14_carla_longest6_v1.sh`. The script also sets the co-simulation
+`RUN_DIR=experiments/<run> sbatch scripts/kesai/5_eval_longest6_v1.sh`. The script also sets the co-simulation
 options behind our scores (`COSIM_*`: CARLA pedal control, 40 partner slots, pedestrian box padding, 30 m/s speed
 cap); use the same values for comparable numbers.
 
