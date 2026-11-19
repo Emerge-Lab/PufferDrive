@@ -209,11 +209,11 @@ are the same `COSIM_EVAL_DEFAULTS`, except that the policy keeps the partner slo
 
 ### GIGAFLOW benchmarks
 
-In the following we compare the performance of OpenGigaFlow to GIGAFLOW on benchmarks reported in the GIGAFLOW paper.
+In the following we compare the performance of OpenGigaFlow to GIGAFLOW on benchmarks reported in the GIGAFLOW paper. We report the mean performance over 3 training seeds.
 
 #### nuPlan Val14 (reactive)
 nuPlan Val14 (reactive) is the most common planning benchmark in the literature and measure peformance of the policy on nuPlan maps in 15 second scenarios, with log-replay initialization and other agents being controlled by IDM.
-OpenGigaFlow is the first open-model that can outperform PDM-Closed zero-shot without training on nuPlan data or maps.
+OpenGigaFlow is the first open-model that can match PDM-Closed zero-shot without training on nuPlan data or maps.
 
 | Method             | Type | Zero-shot | Open |  CLS |
 |--------------------|:----:|:---------:|:----:|-----:|
@@ -223,7 +223,7 @@ OpenGigaFlow is the first open-model that can outperform PDM-Closed zero-shot wi
 | CaRL, tuned        |  RL  |     ❌     |  ✅   | 93.1 |
 | GIGAFLOW           |  RL  |     ✅     |  ❌   | 93.8 |
 | TerraZero          |  RL  |     ❌     |  ❌   | 94.2 |
-| OpenGigaFlow 1.0.0 |  RL  |     ✅     |  ✅   |      |
+| OpenGigaFlow 1.0.0 |  RL  |     ✅     |  ✅   | 91.8 |
 
 #### CARLA longest6 v1 (Leaderboard 1.0)
 longest6 v1 is a classic CARLA benchmark, that test the models ability to drive longer distances (much longer than nuPlan around ~1.6 km per route) consistently. Additionally it tests the agent in safety critical scenarios such as other cars running red lights, that are not observed in everyday driving logs. OpenGigaFlow is the state-of-the-art open model on this benchmark.
@@ -245,7 +245,7 @@ GIGAFLOW numbers are italic because the original benchmark is not open so there 
 |-----------------------|:----:|:----:|----------------:|
 | IDM                   | Rule |  ✅   |              11 |
 | PDM                   | Rule |  ✅   |             316 |
-| OpenGigaFlow 1.0.0    |  RL  |  ✅   |         441,266 |
+| OpenGigaFlow 1.0.0    |  RL  |  ✅   |         678,441 |
 | *GIGAFLOW (reported)* |  RL  |  ❌   |     *3,000,000* |
 
 
@@ -263,7 +263,7 @@ The same as Val14 Reactive except other cars are driven by log replay and do not
 | Diffusion Planner  |  IL  |     ❌     |  ✅   | 89.6 |
 | GIGAFLOW           |  RL  |     ✅     |  ❌   |    – |
 | CaRL, tuned        |  RL  |     ❌     |  ✅   | 93.9 |
-| OpenGigaFlow 1.0.0 |  RL  |     ✅     |  ✅   |      |
+| OpenGigaFlow 1.0.0 |  RL  |     ✅     |  ✅   | 87.5 |
 
 #### CARLA longest6 v2 (Leaderboard 2.0)
 A newer version of the classic longest6 updated with the CARLA leaderboard 2.0 scenarios and newer CARLA version. Unlike the other benchmarks it features driving at higher speeds (up to 80 km/h) as well as some extremely challenging scenarios where the model needs to merge into an infinite stream of non-reactive cars driving at high speeds through an intersection. Solving this requires exact timing and driving the car at its limits. No method today can solve all of these scenarios reliably.
