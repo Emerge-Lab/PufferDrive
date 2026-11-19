@@ -1,5 +1,4 @@
-"""roadblock_centroid_goals: route roadblock centroids become goals from the ego's block on, off-polygon
-centroids snap to a lane baseline, goals behind the ego or too close together are dropped."""
+"""roadblock_centroid_goals: route block centroids ahead of the ego become goals; off-polygon ones snap to a lane."""
 
 from types import SimpleNamespace
 
@@ -7,9 +6,9 @@ import numpy as np
 import pytest
 
 
-nuplan = pytest.importorskip("nuplan")
+pytest.importorskip("nuplan")
 
-from pufferlib.ocean.cosim import nuplan_bridge as nb
+from opengigaflow.ocean.cosim import nuplan_bridge as nb
 
 
 class _BlockMap:
@@ -55,8 +54,7 @@ def test_roadblock_centroid_goals_skip_behind_thin_and_snap_off_polygon_centroid
 
 
 def test_roadblock_centroid_goals_follow_the_route_through_turns():
-    # ego at the end of A facing east; a route that turns back west after B keeps its goals (only the ego
-    # block's own centroid is heading-gated), and the repeated block id of a loop is kept as a revisit
+    """Only the ego block's centroid is heading-gated: a route turning back after B keeps its goals, a loop revisits."""
     map_api = _BlockMap()
     goals = nb.roadblock_centroid_goals(
         map_api, ["A", "B", "A", "B"], 30.0, 2.0, 0.0, min_spacing=10.0, min_ahead_m=15.0
@@ -89,57 +87,3 @@ def test_extend_route_past_loop_cut_appends_the_logged_remainder():
     ]  # prepended start fix
     assert nb.extend_route_past_loop_cut(["1", "2"], ["1", "2"]) == ["1", "2"]
     assert nb.extend_route_past_loop_cut([], ["1"]) == []
-
-
-class _LaneMap:
-    """Two-lane road A -> connector B -> road C -> connector D -> road E; only lane 1 (y=6) flows into D."""
-
-    def __init__(self):
-        from shapely.geometry import Polygon
-
-        self.blocks, self.lanes = {}, {}
-
-        def add(block_id, x0, x1, lane_ys):
-            lanes = []
-            for k, y in enumerate(lane_ys):
-                path = [SimpleNamespace(x=float(x), y=float(y)) for x in np.arange(x0, x1 + 1e-9, 2.0)]
-                lane = SimpleNamespace(
-                    id=f"{block_id}{k}",
-                    baseline_path=SimpleNamespace(discrete_path=path),
-                    outgoing_edges=[],
-                    get_roadblock_id=lambda block_id=block_id: block_id,
-                )
-                lanes.append(lane)
-                self.lanes[lane.id] = lane
-            self.blocks[block_id] = SimpleNamespace(
-                id=block_id, polygon=Polygon([(x0, 0), (x1, 0), (x1, 8), (x0, 8)]), interior_edges=lanes
-            )
-
-        add("A", 0, 40, [2, 6])
-        add("B", 40, 60, [2, 6])
-        add("C", 60, 100, [2, 6])
-        add("D", 100, 120, [6])
-        add("E", 120, 160, [6])
-        for src, dst in [("A0", "B0"), ("A1", "B1"), ("B0", "C0"), ("B1", "C1"), ("C1", "D0"), ("D0", "E0")]:
-            self.lanes[src].outgoing_edges.append(self.lanes[dst])
-
-    def get_map_object(self, block_id, layer):
-        return self.blocks.get(block_id)
-
-
-def test_roadblock_lane_goals_keep_the_ego_lane_until_the_graph_forces_a_change():
-    goals = nb.roadblock_lane_goals(_LaneMap(), list("ABCDE"), 10.0, 2.0, 0.0, min_spacing=20.0, min_ahead_m=5.0)
-    # lane 0 through A and B; C's goal moves to lane 1 because only lane 1 flows into D
-    np.testing.assert_allclose(goals, [[20, 2], [50, 2], [80, 6], [110, 6], [140, 6]])
-
-
-def test_roadblock_lane_goals_seed_from_the_co_directional_lane_nearest_the_ego():
-    goals = nb.roadblock_lane_goals(_LaneMap(), list("ABCDE"), 10.0, 5.0, 0.0, min_spacing=20.0, min_ahead_m=5.0)
-    np.testing.assert_allclose(goals, [[20, 6], [50, 6], [80, 6], [110, 6], [140, 6]])
-    # facing west no lane is co-directional: nearest lane, own-block goal behind the ego dropped
-    goals = nb.roadblock_lane_goals(_LaneMap(), list("ABCDE"), 10.0, 5.0, np.pi, min_spacing=20.0, min_ahead_m=5.0)
-    np.testing.assert_allclose(goals, [[50, 6], [80, 6], [110, 6], [140, 6]])
-    assert nb.roadblock_lane_goals(_LaneMap(), ["nope"], 0.0, 0.0, 0.0, min_spacing=20.0, min_ahead_m=5.0).shape == (
-        0,
-        2,
-    )

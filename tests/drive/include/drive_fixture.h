@@ -1,26 +1,37 @@
 #ifndef DRIVE_FIXTURE_H
 #define DRIVE_FIXTURE_H
 
-#include "pufferlib/ocean/drive/drive.h"
-
-#ifndef DRIVE_TEST_REPO_ROOT
-#define DRIVE_TEST_REPO_ROOT "."
-#endif
+#include "opengigaflow/ocean/drive/drive.h"
 
 static inline const char *drive_carla_map(void) {
-    return DRIVE_TEST_REPO_ROOT "/pufferlib/resources/drive/binaries/carla/opendrive__Town01.bin";
+    return "./opengigaflow/resources/carla/opendrive__Town01.bin";
 }
 
 static inline const char *drive_nuplan_map(void) {
-    return DRIVE_TEST_REPO_ROOT
-        "/pufferlib/resources/drive/binaries/nuplan/nuplan__00018a38-0063-54d1-a3c1-1ab931a4a1e5.bin";
+    return "./opengigaflow/resources/nuplan/nuplan__00018a38-0063-54d1-a3c1-1ab931a4a1e5.bin";
 }
 
-static inline char *drive_test_strdup(const char *src) {
-    size_t n = strlen(src) + 1;
-    char *dst = (char *) malloc(n);
-    memcpy(dst, src, n);
-    return dst;
+static inline void allocate(Drive *env) {
+    if (init(env) != 0) {
+        raise_error_with_message(ERROR_INITIALIZATION_FAILED, "init failed for map %s", env->map_name);
+    }
+    int max_obs = compute_observation_size(env);
+    env->observations = (float *) calloc(env->active_agent_count * max_obs, sizeof(float));
+    env->actions = (float *) calloc(env->active_agent_count * 2, sizeof(float));
+    env->rewards = (float *) calloc(env->active_agent_count, sizeof(float));
+    env->terminals = (unsigned char *) calloc(env->active_agent_count, sizeof(unsigned char));
+    env->truncations = (unsigned char *) calloc(env->active_agent_count, sizeof(unsigned char));
+    env->masks = (unsigned char *) calloc(env->active_agent_count, sizeof(unsigned char));
+}
+
+static inline void free_allocated(Drive *env) {
+    free(env->observations);
+    free(env->actions);
+    free(env->rewards);
+    free(env->terminals);
+    free(env->truncations);
+    free(env->masks);
+    c_close(env);
 }
 
 static inline Agent drive_test_agent(float x, float y, float heading) {
@@ -37,7 +48,6 @@ static inline Agent drive_test_agent(float x, float y, float heading) {
     agent.sim_height = 1.5f;
     agent.sim_valid = 1;
     agent.current_lane_idx = 1;
-    agent.previous_lane_idx = 1;
     agent.red_light_latched_idx = -1;
     agent.wheelbase = 2.7f;
     copy_pose_to_prev(&agent);
@@ -51,8 +61,6 @@ static inline Drive drive_test_env_config(
     int num_agents,
     int use_map_cache) {
     Drive env = {0};
-    env.action_type = 0;
-    env.dynamics_model = DYNAMICS_MODEL_CLASSIC;
     env.reward_goal = 1.0f;
     env.reward_collision = 3.0f;
     env.reward_offroad = 3.0f;
@@ -66,7 +74,6 @@ static inline Drive drive_test_env_config(
     env.reward_stop_line = 1.0f;
     env.reward_timestep = 0.000025f;
     env.reward_overspeed = 0.05f;
-    env.reward_ade = 0.0f;
     env.collision_behavior = INFRACTION_BEHAVIOR_IGNORE;
     env.offroad_behavior = INFRACTION_BEHAVIOR_IGNORE;
     env.traffic_light_behavior = INFRACTION_BEHAVIOR_IGNORE;
@@ -75,7 +82,6 @@ static inline Drive drive_test_env_config(
     env.conditioning_speed_scale = 1.5f;
     env.goal_radius = 2.0f;
     env.goal_speed = 3.0f;
-    env.goal_speed_randomization = 1;
     env.goal_reach_requires_speed = 0;
     env.min_goal_spacing = 20.0f;
     env.max_goal_spacing = 60.0f;
@@ -83,29 +89,25 @@ static inline Drive drive_test_env_config(
     env.num_goals = 3;
     env.goal_regen_mode = GOAL_REGEN_FINITE;
     env.goal_source = GOAL_SOURCE_ROUTE;
-    env.obs_goal_lane_distance = 0;
     env.obs_slots_lane_n = 32;
     env.obs_slots_boundary_n = 32;
     env.obs_slots_lane_kept = 32;
     env.obs_slots_boundary_kept = 32;
     env.obs_slots_partners_n = 16;
-    env.obs_partner_relative_velocity = 0;
     env.obs_slots_traffic_controls_n = 4;
     env.traffic_lights_enabled = 1;
     env.traffic_light_green_min_s = 3.0f;
     env.traffic_light_yellow_min_s = 2.0f;
     env.traffic_light_yellow_max_s = 3.0f;
     env.stop_signs_enabled = 0;
-    env.yield_signs_enabled = 0;
     env.dt = 0.1f;
     env.base_max_speed_mps = 20.0f;
-    env.spawn_initial_speed = 0.0f;
     env.spawn_lateral_offset_max_frac = 0.0f;
     env.spawn_heading_max_deg = 0.0f;
     env.scenario_length = 91;
     env.termination_mode = 0;
     env.inactive_agent_threshold = 0.4f;
-    env.map_name = drive_test_strdup(map_file);
+    env.map_name = strdup(map_file);
     env.num_controllable_agents = num_agents;
     env.num_max_agents = 64;
     env.init_step = 0;
@@ -115,6 +117,7 @@ static inline Drive drive_test_env_config(
     env.sdc_controller = CONTROLLER_POLICY;
     env.non_sdc_controller = CONTROLLER_POLICY;
     env.non_vehicle_controller = CONTROLLER_REPLAY;
+    env.pdm_horizon_seconds = 4.0f;
     env.simulation_mode = simulation_mode;
     env.reward_conditioning = 0;
     env.reward_randomization = 0;
@@ -139,8 +142,6 @@ static inline Drive drive_test_env_config(
     env.partner_blindness_prob_min = 0.0f;
     env.partner_blindness_trigger_prob = 0.1f;
     env.partner_blindness_duration = 10;
-    env.partner_blindness_corridor = 1;
-    env.partner_blindness_time_fraction_max = 0.0f;
     env.phantom_braking_prob = 0.0f;
     env.phantom_braking_trigger_prob = 0.0f;
     env.phantom_braking_duration = 10;
@@ -155,23 +156,6 @@ static inline Drive drive_test_make_env(const char *map_file, int simulation_mod
 }
 
 static inline void drive_set_neutral_actions(Drive *env) {
-    if (env->action_type == 0) {
-        int *actions = (int *) env->actions;
-        int neutral;
-        if (env->dynamics_model == DYNAMICS_MODEL_JERK) {
-            int num_long = sizeof(JERK_LONG) / sizeof(JERK_LONG[0]);
-            int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
-            neutral = (num_long / 2) * num_lat + (num_lat / 2);
-        } else {
-            int num_accel = sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]);
-            int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
-            neutral = (num_accel / 2) * num_steer + (num_steer / 2);
-        }
-        for (int i = 0; i < env->active_agent_count; i++) {
-            actions[i] = neutral;
-        }
-        return;
-    }
     float (*actions)[2] = (float (*)[2]) env->actions;
     for (int i = 0; i < env->active_agent_count; i++) {
         actions[i][0] = 0.0f;

@@ -1,11 +1,9 @@
+"""Benchmark evaluation end to end: multiprocess self-play and SDC-replay evals, replays, wandb reporting."""
+
 import json
-import random
-import struct
 import sys
 import types
-import zlib
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -13,13 +11,13 @@ import pytest
 import torch
 import yaml
 
-import pufferlib
-from pufferlib import pufferl
-from pufferlib.config_schema import validate_puffer_drive_config
-from pufferlib.ocean.drive import binding
-from pufferlib.ocean.drive.drive import Drive
-from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
-from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
+import opengigaflow
+from opengigaflow import rl, viz
+from opengigaflow.config_schema import validate_opengigaflow_config
+from opengigaflow.ocean.drive import binding
+from opengigaflow.ocean.drive.drive import Drive
+from opengigaflow.ocean.evaluation_utils import eval_replay as drive_eval_replay
+from opengigaflow.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 
 
 SEED = 42
@@ -27,48 +25,43 @@ CARLA_SCENARIO_COUNT = 7
 CARLA_WORKER_COUNT = 2
 CARLA_MAP_COUNT = 4
 CARLA_SCENARIO_LENGTH = 32
-BENCHMARK_SCENARIO_LENGTH = 48
-TRAIN_EPOCH_COUNT = 7
-TRAIN_EVAL_INTERVAL = 3
-TRAIN_HORIZON = 16
-TRAIN_ENV_COUNT = 2
-TRAIN_AGENTS_PER_ENV = 8
 WANDB_RUN_NAME = "k_exp_0002_1000"
 WANDB_PROJECT = "nightly-multi-long"
 WANDB_TRAINING_SUMMARY = {"environment/collision_rate": 0.0123}
+WANDB_TRAINING_LAST_STEP = 1000190509056
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CARLA_MAP_DIR = REPO_ROOT / "pufferlib/resources/drive/binaries/carla"
-REPLAY_MAP_DIR = REPO_ROOT / "pufferlib/resources/drive/binaries/sdc_replay_test"
+CARLA_MAP_DIR = REPO_ROOT / "opengigaflow/resources/carla"
+REPLAY_MAP_DIR = REPO_ROOT / "opengigaflow/resources/sdc_replay_test"
 
 
 class ZeroPolicy(torch.nn.Module):
-    def __init__(self, action_count):
+    """Discrete jerk-grid policy with uniform logits: mode selection always takes class 0."""
+
+    is_continuous = False
+
+    def __init__(self):
         super().__init__()
-        self.action_count = action_count
+        jerk_long = torch.tensor(binding.JERK_LONG)
+        jerk_lat = torch.tensor(binding.JERK_LAT)
+        long_norm = torch.where(jerk_long < 0.0, jerk_long / -jerk_long[0], jerk_long / jerk_long[-1])
+        lat_norm = jerk_lat / jerk_lat[-1]
+        class_idx = torch.arange(len(jerk_long) * len(jerk_lat))
+        self.action_table = torch.stack(
+            [long_norm[class_idx // len(jerk_lat)], lat_norm[class_idx % len(jerk_lat)]], -1
+        )
 
     def forward_eval(self, observations):
         batch_size = observations.shape[0]
-        logits = torch.zeros((batch_size, self.action_count), device=observations.device)
+        logits = torch.zeros((batch_size, len(self.action_table)), device=observations.device)
         values = torch.zeros((batch_size, 1), device=observations.device)
-        return (logits,), values
+        return logits, values
 
-
-class RecordingLogger:
-    def __init__(self, run_id):
-        self.run_id = run_id
-        self.calls = []
-
-    def log(self, metrics, step):
-        self.calls.append((metrics, step))
-
-    def close(self, model_path, early_stop):
-        self.model_path = model_path
-        self.early_stop = early_stop
+    def discrete_actions_to_continuous(self, actions):
+        return self.action_table[actions.long()]
 
 
 def _load_config():
-    with patch.object(sys, "argv", ["pufferl.py"]):
-        return pufferl.load_config("puffer_drive")
+    return rl.load_config("opengigaflow", overrides=[])
 
 
 def _set_small_observation_config(args):
@@ -94,7 +87,6 @@ def _write_benchmark_config(
     scenario_length,
     max_agents_per_env,
     control_mode,
-    use_neighbor_cache,
     max_scenarios_per_batch=None,
 ):
     output_path.write_text(
@@ -107,6 +99,7 @@ def _write_benchmark_config(
                     "obs_dropout_lane": 0.0,
                     "obs_dropout_boundary": 0.0,
                     "speed_limit_random_prob": 0.0,
+                    "scripted_pedestrian_ratio": 0.0,
                 },
                 "benchmarks": [
                     {
@@ -120,7 +113,6 @@ def _write_benchmark_config(
                             "scenario_length": scenario_length,
                             "max_agents_per_env": max_agents_per_env,
                             "control_mode": control_mode,
-                            "use_neighbor_cache": use_neighbor_cache,
                             "max_scenarios_per_batch": max_scenarios_per_batch,
                         },
                     }
@@ -132,43 +124,24 @@ def _write_benchmark_config(
     return output_path
 
 
-def _standalone_eval_args(benchmark_config_path):
+def _write_checkpoint_run_dir(run_dir, args):
+    run_dir.mkdir()
+    (run_dir / "config.yaml").write_text(yaml.safe_dump(json.loads(json.dumps(args))))
+    (run_dir / "final_model.pt").write_bytes(b"")
+    args["load_model_path"] = str(run_dir / "final_model.pt")
+
+
+def _eval_args(benchmark_config_path, benchmark_name, worker_count, eval_agent_count, env_overrides):
     args = _load_config()
-    args["train"].update(
-        {
-            "seed": SEED,
-            "device": "cpu",
-            "compile": False,
-            "torch_deterministic": True,
-        }
-    )
-    args["vec"].update(
-        {
-            "seed": SEED,
-            "num_envs": CARLA_WORKER_COUNT,
-            "num_workers": CARLA_WORKER_COUNT,
-        }
-    )
-    args["env"].update(
-        {
-            "num_agents": 8,
-            "min_agents_per_env": 8,
-            "max_agents_per_env": 8,
-            "num_maps": CARLA_MAP_COUNT,
-            "map_dir": str(CARLA_MAP_DIR),
-            "use_map_cache": True,
-            "scenario_length": CARLA_SCENARIO_LENGTH,
-            "resample_frequency": CARLA_SCENARIO_LENGTH,
-            "action_type": "discrete",
-            "dynamics_model": "classic",
-        }
-    )
+    args["train"].update({"seed": SEED, "device": "cpu", "compile": False, "torch_deterministic": True})
+    args["vec"].update({"seed": SEED, "num_envs": worker_count, "num_workers": worker_count})
+    args["env"].update(env_overrides)
     _set_small_observation_config(args)
     args["eval"].update(
         {
             "benchmark_config": str(benchmark_config_path),
-            "benchmarks": "carla_test",
-            "num_agents": 8,
+            "benchmarks": benchmark_name,
+            "num_agents": eval_agent_count,
             "render_scenarios": False,
             "render_filter": None,
             "failure_replay_csv": None,
@@ -177,9 +150,22 @@ def _standalone_eval_args(benchmark_config_path):
         }
     )
     args["wandb"] = False
-    args["neptune"] = False
     args["tb"] = False
     return args
+
+
+def _standalone_eval_args(benchmark_config_path):
+    carla_env = {
+        "num_agents": 8,
+        "min_agents_per_env": 8,
+        "max_agents_per_env": 8,
+        "num_maps": CARLA_MAP_COUNT,
+        "map_dir": str(CARLA_MAP_DIR),
+        "use_map_cache": True,
+        "scenario_length": CARLA_SCENARIO_LENGTH,
+        "resample_frequency": CARLA_SCENARIO_LENGTH,
+    }
+    return _eval_args(benchmark_config_path, "carla_test", CARLA_WORKER_COUNT, 8, carla_env)
 
 
 @pytest.fixture(scope="module")
@@ -195,30 +181,29 @@ def carla_evaluation(tmp_path_factory):
         scenario_length=CARLA_SCENARIO_LENGTH,
         max_agents_per_env=8,
         control_mode="control_vehicles",
-        use_neighbor_cache=True,
     )
     args = _standalone_eval_args(benchmark_config_path)
+    _write_checkpoint_run_dir(output_root / "checkpoint", args)
     multiprocessing_calls = []
-    original_vector_make = pufferlib.vector.make
+    original_vector_make = opengigaflow.vector.make
 
     def record_vector_make(*make_args, **make_kwargs):
         if make_kwargs.get("backend") == "Multiprocessing":
             multiprocessing_calls.append(dict(make_kwargs))
         return original_vector_make(*make_args, **make_kwargs)
 
-    pufferlib.vector.make = record_vector_make
+    opengigaflow.vector.make = record_vector_make
     try:
-        benchmark_results = pufferl.eval(
-            env_name="puffer_drive",
+        benchmark_results = rl.eval(
+            env_name="opengigaflow",
             args=args,
-            policy=ZeroPolicy(action_count=63),
+            policy=ZeroPolicy(),
             eval_output_dir=str(output_root),
             eval_output_subdir="standard",
-            use_training_config=True,
             benchmark_names="carla_test",
         )
     finally:
-        pufferlib.vector.make = original_vector_make
+        opengigaflow.vector.make = original_vector_make
 
     benchmark_output_dir = output_root / "carla_test" / "standard"
     return {
@@ -302,9 +287,8 @@ def test_eval_report_reduces_distance_per_infraction_from_raw_totals():
 
 
 def _run_standalone_eval_with_wandb(tmp_path, monkeypatch, benchmark_name):
-    """Evaluate a checkpoint folder with wandb=True against a stub wandb -> (run dir, stored summary, run paths)."""
+    """Eval a checkpoint folder against a stub wandb -> (run dir, stored summary, history rows, requested run paths)."""
     run_dir = tmp_path / WANDB_RUN_NAME
-    run_dir.mkdir()
     benchmark_config_path = _write_benchmark_config(
         tmp_path / "benchmark.yaml",
         name=benchmark_name,
@@ -315,54 +299,91 @@ def _run_standalone_eval_with_wandb(tmp_path, monkeypatch, benchmark_name):
         scenario_length=CARLA_SCENARIO_LENGTH,
         max_agents_per_env=8,
         control_mode="control_vehicles",
-        use_neighbor_cache=True,
     )
     args = _standalone_eval_args(benchmark_config_path)
     args["eval"]["benchmarks"] = benchmark_name
     args["run_name"] = WANDB_RUN_NAME
     args["wandb_project"] = WANDB_PROJECT
-    (run_dir / "config.yaml").write_text(yaml.safe_dump(json.loads(json.dumps(args))))
-    (run_dir / "final_model.pt").write_bytes(b"")
-    args["load_model_path"] = str(run_dir / "final_model.pt")
+    _write_checkpoint_run_dir(run_dir, args)
     args["wandb"] = True
 
     stored_summary = dict(WANDB_TRAINING_SUMMARY)
+    stored_history = [{**WANDB_TRAINING_SUMMARY, "_step": WANDB_TRAINING_LAST_STEP}]
     requested_run_paths = []
 
     def fetch_run(run_path):
         requested_run_paths.append(run_path)
+        logged_keys = {key for row in stored_history for key in row if not key.startswith("_")}
         return types.SimpleNamespace(
             state="finished",
+            entity="emerge_",
             summary_metrics=dict(stored_summary),
-            summary=types.SimpleNamespace(update=stored_summary.update),
+            history_keys={"keys": dict.fromkeys(logged_keys, {}), "lastStep": stored_history[-1]["_step"]},
         )
 
+    def log_history_row(values):
+        stored_history.append({**values, "_step": stored_history[-1]["_step"] + 1})
+        stored_summary.update(values)
+
+    def open_session(**init_kwargs):
+        return types.SimpleNamespace(log=log_history_row, summary=stored_summary, finish=lambda: None)
+
     stub_wandb = types.ModuleType("wandb")
-    stub_wandb.Api = lambda: types.SimpleNamespace(run=fetch_run)
+    stub_wandb.Api = lambda: types.SimpleNamespace(run=fetch_run, flush=lambda: None)
+    stub_wandb.Settings = lambda **settings: settings
+    stub_wandb.init = open_session
     monkeypatch.setitem(sys.modules, "wandb", stub_wandb)
 
-    pufferl.eval(env_name="puffer_drive", args=args, policy=ZeroPolicy(action_count=63))
-    return run_dir, stored_summary, requested_run_paths
+    rl.eval(env_name="opengigaflow", args=args, policy=ZeroPolicy())
+    return run_dir, stored_summary, stored_history, requested_run_paths
 
 
 def test_standalone_selfplay_eval_reports_its_km_per_infraction_to_wandb(tmp_path, monkeypatch):
-    run_dir, stored_summary, requested_run_paths = _run_standalone_eval_with_wandb(tmp_path, monkeypatch, "carla")
+    run_dir, stored_summary, stored_history, requested_run_paths = _run_standalone_eval_with_wandb(
+        tmp_path, monkeypatch, "selfplay"
+    )
 
-    summary_path = next(run_dir.glob("eval/carla/*/evaluation_summary.json"))
+    summary_path = next(run_dir.glob("eval/selfplay/*/evaluation_summary.json"))
     distance_per_infraction_meters = json.loads(summary_path.read_text())["metrics_mean"]["avg_distance_per_infraction"]
+    km_per_infraction = distance_per_infraction_meters / 1000.0
     assert set(requested_run_paths) == {f"{WANDB_PROJECT}/{WANDB_RUN_NAME}"}
     assert stored_summary == {
         **WANDB_TRAINING_SUMMARY,
-        "final_eval/selfplay_km_per_infraction": distance_per_infraction_meters / 1000.0,
+        "final_eval/selfplay_km_per_infraction": km_per_infraction,
         "final_eval/selfplay_km_per_infraction_source": str(summary_path.relative_to(run_dir)),
     }
+    # The charts plot history rows: the value is one, a step after training's last.
+    assert stored_history[1:] == [
+        {"final_eval/selfplay_km_per_infraction": km_per_infraction, "_step": WANDB_TRAINING_LAST_STEP + 1}
+    ]
 
 
 def test_standalone_eval_of_another_benchmark_reports_nothing_to_wandb(tmp_path, monkeypatch):
-    _, stored_summary, requested_run_paths = _run_standalone_eval_with_wandb(tmp_path, monkeypatch, "carla_fast")
+    _, stored_summary, stored_history, requested_run_paths = _run_standalone_eval_with_wandb(
+        tmp_path, monkeypatch, "selfplay_fast"
+    )
 
     assert requested_run_paths == []
     assert stored_summary == WANDB_TRAINING_SUMMARY
+    assert len(stored_history) == 1
+
+
+@pytest.mark.parametrize("saved_yellow_remaining", [None, False, True], ids=["absent", "off", "on"])
+def test_checkpoint_keeps_its_own_yellow_remaining_column(tmp_path, saved_yellow_remaining):
+    """The yaml default is on; a config saved before the column existed has no key and must load without it."""
+    saved_args = _load_config()
+    if saved_yellow_remaining is None:
+        del saved_args["env"]["obs_traffic_light_yellow_remaining"]
+    else:
+        saved_args["env"]["obs_traffic_light_yellow_remaining"] = saved_yellow_remaining
+    _write_checkpoint_run_dir(tmp_path / "run", saved_args)
+
+    args = _load_config()
+    args["load_model_path"] = saved_args["load_model_path"]
+    merged, _ = drive_benchmark.load_checkpoint_architecture(args)
+
+    assert args["env"]["obs_traffic_light_yellow_remaining"] is True
+    assert merged["env"]["obs_traffic_light_yellow_remaining"] is bool(saved_yellow_remaining)
 
 
 def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
@@ -391,14 +412,13 @@ def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
     for worker_kwargs in worker_env_kwargs:
         worker_kwargs["capture_replay"] = False
 
-    replay_summaries = pufferl._run_eval_rollout(
+    replay_summaries = rl._run_eval_rollout(
         replay_args,
-        "puffer_drive",
         worker_env_kwargs,
         total_steps,
         "Seed replay",
         CARLA_SCENARIO_COUNT,
-        policy=ZeroPolicy(action_count=63),
+        policy=ZeroPolicy(),
     )
     replay_output_dir = carla_evaluation["output_root"] / "seed_replay"
     replay_summary = drive_benchmark._write_eval_reports(
@@ -437,8 +457,6 @@ def _replay_render_args():
             "max_agents_per_env": 1,
             "num_maps": 1,
             "map_dir": str(REPLAY_MAP_DIR),
-            "action_type": "discrete",
-            "dynamics_model": "jerk",
             "simulation_mode": "replay",
             "control_mode": "control_sdc_only",
             "sdc_controller": "replay",
@@ -446,39 +464,17 @@ def _replay_render_args():
             "scenario_length": 64,
             "resample_frequency": 64,
             "termination_mode": False,
-            "terminate_on_goal": False,
             "goal_source": "gt",
             "num_goals": 3,
             "compute_eval_metrics": True,
             "speed_limit_random_prob": 0.0,
+            "scripted_pedestrian_ratio": 0.0,
         }
     )
     _set_small_observation_config(args)
     args["eval"]["observation_replay_writer_count"] = 1
     args["eval"]["action_selection"] = "mode"
     return args
-
-
-def _read_replay_header(replay_path):
-    payload = zlib.decompress(replay_path.read_bytes())
-    header_length = struct.unpack_from("<I", payload)[0]
-    return json.loads(payload[4 : 4 + header_length])
-
-
-def _read_replay_float32_chunk(replay_path, chunk_name):
-    payload = zlib.decompress(replay_path.read_bytes())
-    header_length = struct.unpack_from("<I", payload)[0]
-    header = json.loads(payload[4 : 4 + header_length])
-    chunk = header["chunks"][chunk_name]
-    assert chunk["dtype"] == "float32"
-    data_start = 4 + header_length + (-(4 + header_length) % 4)
-    values = np.frombuffer(
-        payload,
-        dtype=np.float32,
-        count=chunk["nbytes"] // np.dtype(np.float32).itemsize,
-        offset=data_start + chunk["offset"],
-    )
-    return values.reshape(chunk["shape"])
 
 
 @pytest.mark.parametrize("capture_observations", [False, True], ids=["without_observations", "with_observations"])
@@ -492,22 +488,21 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
         scenario_length=64,
     )
     multiprocessing_calls = []
-    original_vector_make = pufferlib.vector.make
+    original_vector_make = opengigaflow.vector.make
 
     def record_vector_make(*make_args, **make_kwargs):
         multiprocessing_calls.append(dict(make_kwargs))
         return original_vector_make(*make_args, **make_kwargs)
 
-    monkeypatch.setattr(pufferlib.vector, "make", record_vector_make)
+    monkeypatch.setattr(opengigaflow.vector, "make", record_vector_make)
     replay_output_dir = tmp_path / drive_eval_replay.ZLIB_REPLAY_DIR_NAME
-    summaries = pufferl._run_eval_rollout(
+    summaries = rl._run_eval_rollout(
         args,
-        "puffer_drive",
         worker_env_kwargs,
         total_steps,
         "Replay capture",
         expected_episodes=2,
-        policy=ZeroPolicy(action_count=12),
+        policy=ZeroPolicy(),
         replay_output_dir=replay_output_dir,
         capture_observations=capture_observations,
     )
@@ -533,21 +528,23 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
     if capture_observations:
         required_chunks.add("obs")
     for replay_path in replay_paths:
-        header = _read_replay_header(replay_path)
+        header, chunks = viz.read_replay_zlib(replay_path)
         assert header["frames"] == 64
         assert header["active_count"] == 1
         assert (header["obs_dim"] > 0) is capture_observations
         assert required_chunks <= set(header["chunks"])
         assert header["agent_goal_radius_field"] == 12
         assert header["chunks"]["agent_f32"]["shape"][2] == 13
-        assert header["chunks"]["rewards_f32"]["shape"][2] == 14
-        agent_frames = _read_replay_float32_chunk(replay_path, "agent_f32")
+        assert header["chunks"]["rewards_f32"]["shape"][2] == binding.REWARD_F32_FIELDS
+        for float_chunk_name in ("agent_f32", "rewards_f32", "coefs_f32"):
+            assert header["chunks"][float_chunk_name]["dtype"] == "float32"
+        agent_frames = chunks["agent_f32"]
         assert np.any(agent_frames[..., header["agent_goal_radius_field"]] > 0.0)
-        rewards = _read_replay_float32_chunk(replay_path, "rewards_f32")
+        rewards = chunks["rewards_f32"]
         assert np.any(rewards[..., 0] != 0.0)
         np.testing.assert_allclose(rewards[..., 0], rewards[..., 1:].sum(axis=-1), atol=1e-4)
 
-        coefs = _read_replay_float32_chunk(replay_path, "coefs_f32")
+        coefs = chunks["coefs_f32"]
         assert header["chunks"]["coefs_f32"]["shape"][2] == binding.NUM_REWARD_COEFS
         goal_radius_coefs = coefs[..., 0]
         agent_goal_radii = agent_frames[..., header["agent_goal_radius_field"]]
@@ -569,207 +566,6 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
     assert len(sorted(path for path in render_dir.glob("*.html") if path.name != "index.html")) == 2
 
 
-def _write_training_benchmark(tmp_path):
-    return _write_benchmark_config(
-        tmp_path / "training_benchmark.yaml",
-        name="training_eval",
-        map_dir=CARLA_MAP_DIR,
-        simulation_mode="gigaflow",
-        num_maps=2,
-        num_scenarios=2,
-        scenario_length=TRAIN_HORIZON,
-        max_agents_per_env=TRAIN_AGENTS_PER_ENV,
-        control_mode="control_vehicles",
-        use_neighbor_cache=True,
-    )
-
-
-def _training_args(tmp_path, benchmark_config_path, evaluation_enabled):
-    args = _load_config()
-    total_agents = TRAIN_ENV_COUNT * TRAIN_AGENTS_PER_ENV
-    batch_size = total_agents * TRAIN_HORIZON
-    args["vec"].update(
-        {
-            "backend": "Serial",
-            "num_envs": TRAIN_ENV_COUNT,
-            "num_workers": TRAIN_ENV_COUNT,
-            "batch_size": TRAIN_ENV_COUNT,
-            "seed": SEED,
-        }
-    )
-    args["env"].update(
-        {
-            "num_agents": TRAIN_AGENTS_PER_ENV,
-            "min_agents_per_env": TRAIN_AGENTS_PER_ENV,
-            "max_agents_per_env": TRAIN_AGENTS_PER_ENV,
-            "num_maps": 2,
-            "allow_map_subset": True,
-            "map_dir": str(CARLA_MAP_DIR),
-            "use_map_cache": True,
-            "scenario_length": TRAIN_HORIZON,
-            "resample_frequency": TRAIN_HORIZON,
-            "stagger_first_episode": False,  # the default 20-step stagger horizon exceeds TRAIN_HORIZON
-        }
-    )
-    _set_small_observation_config(args)
-    args["policy"].update(
-        {
-            "ego_input_size": 8,
-            "partner_input_size": 8,
-            "lane_input_size": 8,
-            "boundary_input_size": 8,
-            "traffic_control_input_size": 8,
-            "context_input_size": 8,
-            "backbone_hidden_size": 32,
-            "backbone_num_layers": 1,
-            "actor_hidden_size": 16,
-            "actor_num_layers": 0,
-            "critic_hidden_size": 16,
-            "critic_num_layers": 0,
-            "fused_slot_encoder": False,  # tiny CPU encoders fail the fused width check
-        }
-    )
-    args["train"].update(
-        {
-            "seed": SEED,
-            "device": "cpu",
-            "compile": False,
-            "precision": "float32",
-            "torch_deterministic": True,
-            "anneal_lr": False,
-            "update_epochs": 1,
-            "batch_size": batch_size,
-            "bptt_horizon": TRAIN_HORIZON,
-            "adv_filter_enabled": False,
-            "minibatch_size": 64,
-            "max_minibatch_size": 64,
-            "total_timesteps": TRAIN_EPOCH_COUNT * batch_size,
-            "checkpoint_interval": 10_000,
-            "evaluation_interval_epochs": TRAIN_EVAL_INTERVAL if evaluation_enabled else None,
-            "evaluation_benchmarks": "training_eval",
-            "data_dir": str(tmp_path),
-        }
-    )
-    args["eval"].update(
-        {
-            "benchmark_config": str(benchmark_config_path),
-            "benchmarks": "training_eval",
-            "num_agents": TRAIN_AGENTS_PER_ENV,
-            "render_scenarios": False,
-            "render_filter": None,
-            "failure_replay_csv": None,
-            "capture_observations": False,
-        }
-    )
-    args["wandb"] = False
-    args["neptune"] = False
-    args["tb"] = False
-    return args
-
-
-def _seed_training():
-    random.seed(SEED)
-    np.random.seed(SEED)
-    torch.manual_seed(SEED)
-    torch.use_deterministic_algorithms(True, warn_only=True)
-
-
-def _assert_nested_exact(actual, expected):
-    assert type(actual) is type(expected)
-    if isinstance(actual, torch.Tensor):
-        assert torch.equal(actual, expected)
-        return
-    if isinstance(actual, np.ndarray):
-        np.testing.assert_array_equal(actual, expected)
-        return
-    if isinstance(actual, dict):
-        assert actual.keys() == expected.keys()
-        for key in actual:
-            _assert_nested_exact(actual[key], expected[key])
-        return
-    if isinstance(actual, (list, tuple)):
-        assert len(actual) == len(expected)
-        for actual_item, expected_item in zip(actual, expected):
-            _assert_nested_exact(actual_item, expected_item)
-        return
-    assert actual == expected
-
-
-def _run_training(tmp_path, benchmark_config_path, run_id, evaluation_enabled):
-    _seed_training()
-    logger = RecordingLogger(run_id)
-    args = _training_args(tmp_path, benchmark_config_path, evaluation_enabled)
-    # The run directory is train.data_dir, so each run needs its own; sharing one
-    # would make the second run resume the first instead of training from scratch.
-    run_dir = tmp_path / run_id
-    args["train"]["data_dir"] = str(run_dir)
-    args["run_name"] = run_id
-    pufferl.train("puffer_drive", args=args, logger=logger)
-    trainer_state = torch.load(run_dir / "trainer_state.pt", map_location="cpu", weights_only=False)
-    return run_dir, trainer_state, logger
-
-
-def test_mid_training_evaluation_preserves_exact_training_state(tmp_path):
-    benchmark_config_path = _write_training_benchmark(tmp_path)
-    previous_thread_count = torch.get_num_threads()
-    previous_deterministic_setting = torch.are_deterministic_algorithms_enabled()
-    try:
-        torch.set_num_threads(1)
-        baseline_dir, baseline_state, _ = _run_training(
-            tmp_path,
-            benchmark_config_path,
-            run_id="without_eval",
-            evaluation_enabled=False,
-        )
-        evaluated_dir, evaluated_state, evaluated_logger = _run_training(
-            tmp_path,
-            benchmark_config_path,
-            run_id="with_eval",
-            evaluation_enabled=True,
-        )
-    finally:
-        torch.set_num_threads(previous_thread_count)
-        torch.use_deterministic_algorithms(previous_deterministic_setting, warn_only=True)
-
-    assert baseline_dir.is_dir()
-    for state_key in (
-        "policy_state_dict",
-        "optimizer_state_dict",
-        "scheduler_state_dict",
-        "global_step",
-        "agent_step",
-        "epoch",
-        "update",
-        "rng_state",
-    ):
-        _assert_nested_exact(evaluated_state[state_key], baseline_state[state_key])
-    assert evaluated_state["epoch"] == TRAIN_EPOCH_COUNT
-
-    steps_per_epoch = TRAIN_ENV_COUNT * TRAIN_AGENTS_PER_ENV * TRAIN_HORIZON
-    expected_eval_directories = [f"epoch_{epoch:06d}_step_{epoch * steps_per_epoch}" for epoch in (3, 6, 7)]
-    eval_root = evaluated_dir / "eval/training/training_eval"
-    actual_eval_directories = sorted(path.name for path in eval_root.iterdir() if path.is_dir())
-    assert actual_eval_directories == expected_eval_directories
-    for eval_directory_name in expected_eval_directories:
-        eval_directory = eval_root / eval_directory_name
-        assert (eval_directory / "resolved_benchmark.yaml").is_file()
-        metrics = pd.read_csv(eval_directory / "episode_metrics.csv")
-        summary = json.loads((eval_directory / "evaluation_summary.json").read_text())
-        assert len(metrics) == 2
-        assert summary["num_scenarios"] == 2
-        assert summary["num_episodes"] == 2
-
-    eval_log_calls = [
-        (metrics, step) for metrics, step in evaluated_logger.calls if "eval_training_eval/num_episodes" in metrics
-    ]
-    assert [step for _, step in eval_log_calls] == [
-        3 * steps_per_epoch,
-        6 * steps_per_epoch,
-        7 * steps_per_epoch,
-    ]
-    assert all(metrics["eval_training_eval/num_episodes"] == 2 for metrics, _ in eval_log_calls)
-
-
 SDC_SCENARIO_COUNT = 8
 SDC_WORKER_COUNT = 2
 SDC_SCENARIO_LENGTH = 32
@@ -779,9 +575,7 @@ SDC_BATCH_CAP = 2
 
 @pytest.fixture(scope="module")
 def sdc_replay_map_dir(tmp_path_factory):
-    """A replay map dir with several distinctly named maps. The checked-in
-    fixture ships one, and a batch cap only bites when maps outnumber it, so copy
-    it under distinct names -- the name is what the map cache keys on."""
+    """The one checked-in replay map under SDC_SCENARIO_COUNT names: the map cache keys on the name."""
     map_dir = tmp_path_factory.mktemp("sdc_replay_maps")
     source_map = sorted(REPLAY_MAP_DIR.glob("*.bin"))[0]
     map_bytes = source_map.read_bytes()
@@ -791,55 +585,20 @@ def sdc_replay_map_dir(tmp_path_factory):
 
 
 def _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir):
-    args = _load_config()
-    args["train"].update(
-        {
-            "seed": SEED,
-            "device": "cpu",
-            "compile": False,
-            "torch_deterministic": True,
-        }
-    )
-    args["vec"].update(
-        {
-            "seed": SEED,
-            "num_envs": SDC_WORKER_COUNT,
-            "num_workers": SDC_WORKER_COUNT,
-        }
-    )
-    args["env"].update(
-        {
-            "num_agents": SDC_SCENARIO_COUNT,
-            "min_agents_per_env": 1,
-            "max_agents_per_env": SDC_MAX_AGENTS_PER_ENV,
-            "num_maps": SDC_SCENARIO_COUNT,
-            "map_dir": str(map_dir),
-            "use_map_cache": True,
-            "simulation_mode": "replay",
-            "control_mode": "control_sdc_only",
-            "scenario_length": SDC_SCENARIO_LENGTH,
-            "resample_frequency": SDC_SCENARIO_LENGTH,
-            "action_type": "discrete",
-            "dynamics_model": "classic",
-        }
-    )
-    _set_small_observation_config(args)
-    args["eval"].update(
-        {
-            "benchmark_config": str(benchmark_config_path),
-            "benchmarks": benchmark_name,
-            "num_agents": SDC_SCENARIO_COUNT,
-            "max_sdc_replay_workers": SDC_WORKER_COUNT,
-            "render_scenarios": False,
-            "render_filter": None,
-            "failure_replay_csv": None,
-            "capture_observations": False,
-            "action_selection": "mode",
-        }
-    )
-    args["wandb"] = False
-    args["neptune"] = False
-    args["tb"] = False
+    sdc_env = {
+        "num_agents": SDC_SCENARIO_COUNT,
+        "min_agents_per_env": 1,
+        "max_agents_per_env": SDC_MAX_AGENTS_PER_ENV,
+        "num_maps": SDC_SCENARIO_COUNT,
+        "map_dir": str(map_dir),
+        "use_map_cache": True,
+        "simulation_mode": "replay",
+        "control_mode": "control_sdc_only",
+        "scenario_length": SDC_SCENARIO_LENGTH,
+        "resample_frequency": SDC_SCENARIO_LENGTH,
+    }
+    args = _eval_args(benchmark_config_path, benchmark_name, SDC_WORKER_COUNT, SDC_SCENARIO_COUNT, sdc_env)
+    args["eval"]["max_sdc_replay_workers"] = SDC_WORKER_COUNT
     return args
 
 
@@ -854,17 +613,16 @@ def _run_sdc_eval(output_root, map_dir, benchmark_name, max_scenarios_per_batch)
         scenario_length=SDC_SCENARIO_LENGTH,
         max_agents_per_env=None,
         control_mode="control_sdc_only",
-        use_neighbor_cache=True,
         max_scenarios_per_batch=max_scenarios_per_batch,
     )
     args = _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir)
-    pufferl.eval(
-        env_name="puffer_drive",
+    _write_checkpoint_run_dir(output_root / f"{benchmark_name}_checkpoint", args)
+    rl.eval(
+        env_name="opengigaflow",
         args=args,
-        policy=ZeroPolicy(action_count=63),
+        policy=ZeroPolicy(),
         eval_output_dir=str(output_root),
         eval_output_subdir=benchmark_name,
-        use_training_config=True,
         benchmark_names=benchmark_name,
     )
     return pd.read_csv(output_root / benchmark_name / benchmark_name / "episode_metrics.csv")
@@ -906,20 +664,12 @@ def test_batch_cap_bounds_resident_envs(sdc_replay_map_dir):
 def test_batch_cap_rejects_non_positive_values():
     args = _load_config()
     args["env"]["max_scenarios_per_batch"] = 0
-    with pytest.raises(pufferlib.APIUsageError, match="max_scenarios_per_batch"):
-        validate_puffer_drive_config(args, "test")
+    with pytest.raises(opengigaflow.APIUsageError, match="max_scenarios_per_batch"):
+        validate_opengigaflow_config(args, "test")
 
 
 def test_batch_cap_preserves_scenario_coverage(tmp_path, sdc_replay_map_dir):
-    """Smaller batches must still cover the window exactly once: nothing dropped
-    or replayed at a batch boundary.
-
-    Metrics are not compared against the uncapped run: binding.shared draws its
-    seed from the same stream as the per-env seeds, once per batch, so more
-    batches shift each scenario's seed. That predates the cap -- eval.num_agents
-    or the worker count already move seeds -- so runs are reproducible for a
-    fixed batch layout, not across layouts.
-    """
+    """Smaller batches cover the window exactly once; metrics differ since every batch draws its own seed."""
     uncapped_metrics = _run_sdc_eval(tmp_path, sdc_replay_map_dir, "sdc_uncapped", None)
     capped_metrics = _run_sdc_eval(tmp_path, sdc_replay_map_dir, "sdc_capped", SDC_BATCH_CAP)
 
@@ -938,12 +688,8 @@ def test_batch_cap_evaluation_is_reproducible(tmp_path, sdc_replay_map_dir):
 
 
 def test_policy_builds_from_the_released_driver_env(sdc_replay_map_dir):
-    """load_policy constructs the policy from vecenv.driver_env, which the
-    Multiprocessing backend releases once it has read the spaces off it. The
-    policy only reads Python config attributes, which outlive close() -- but
-    eval runs this path on every benchmark, so pin it."""
-    with patch.object(sys, "argv", ["pufferl.py"]):
-        args = pufferl.load_config("puffer_drive")
+    """load_policy reads only config attributes off vecenv.driver_env, which the Multiprocessing backend closed."""
+    args = _load_config()
     args["train"]["device"] = "cpu"
     env_kwargs = {
         "num_agents": SDC_SCENARIO_COUNT,
@@ -960,7 +706,7 @@ def test_policy_builds_from_the_released_driver_env(sdc_replay_map_dir):
         "max_scenarios_per_batch": SDC_BATCH_CAP,
     }
     args["env"].update(env_kwargs)
-    vecenv = pufferlib.vector.make(
+    vecenv = opengigaflow.vector.make(
         [Drive] * SDC_WORKER_COUNT,
         env_args=[[]] * SDC_WORKER_COUNT,
         env_kwargs=[env_kwargs] * SDC_WORKER_COUNT,
@@ -970,7 +716,7 @@ def test_policy_builds_from_the_released_driver_env(sdc_replay_map_dir):
         batch_size=SDC_WORKER_COUNT,
     )
     try:
-        assert pufferl.load_policy(args, vecenv, "puffer_drive") is not None
+        assert rl.load_policy(args, vecenv) is not None
         obs, _ = vecenv.reset(SEED)
         assert obs.shape[0] == vecenv.agents_per_batch
     finally:

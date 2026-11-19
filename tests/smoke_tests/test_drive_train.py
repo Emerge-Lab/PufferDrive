@@ -1,94 +1,24 @@
-#!/usr/bin/env python3
-"""
-Deterministic CPU smoke test for the PufferDrive training pipeline.
+"""Deterministic CPU smoke test: two PPO epochs of the real training pipeline against a committed golden."""
 
-Runs the real pipeline (load_config -> load_env -> load_policy -> PuffeRL) for
-2 epochs on CPU (synchronous Serial backend), then compares the captured training
-metrics (PPO losses) and environment metrics (collision/offroad/goal/return)
-against a committed golden file. Kept deliberately small because CI runs it under
-QEMU (emulated fixed CPU) where torch is ~30x slower.
-
-The run is intentionally light but sized (short scenarios + enough agents) so
-that collisions, offroad events and episode completions actually occur, giving
-the metrics non-trivial values.
-
-Golden values
--------------
-The expected metrics live in tests/smoke_tests/data/drive_smoke_golden.json. The
-golden is bit-reproducible only inside the pinned image (tests/smoke_tests/
-Dockerfile), which freezes the compiler + torch/numpy wheels AND runs under QEMU
-emulating a fixed CPU (-cpu Haswell) so glibc libm dispatch and torch kernels are
-identical on every host. A golden generated outside that image will NOT match CI.
-To regenerate it after an intentional pipeline change (the image ENTRYPOINT
-already wraps qemu + python -m pytest, so pass only test args):
-
-    docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
-    docker run --rm -e SMOKE_UPDATE_GOLDEN=1 \
-        -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
-        pufferdrive-smoke tests/smoke_tests/test_drive_train.py
-
-Then commit the updated json. Subsequent runs assert against it within tolerance
-(np.isclose; tighten/loosen via SMOKE_RTOL / SMOKE_ATOL).
-"""
-
+import contextlib
 import json
-import os
 import random
 import signal
-import sys
-
-# Stabilize CPU math for cross-machine reproducibility (must be set before
-# torch/numpy load their BLAS). Single-threaded + a fixed, CPU-agnostic kernel
-# so floating-point rounding does not depend on the host CPU's SIMD features.
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")  # numpy's BLAS (OpenBLAS)
-os.environ.setdefault("OPENBLAS_CORETYPE", "Haswell")  # pin one OpenBLAS kernel
-os.environ.setdefault("MKL_CBWR", "COMPATIBLE")  # torch's BLAS (MKL): reproducible across CPUs
-# torch is built with oneDNN (MKL-DNN), which JIT-dispatches AVX2/AVX-512 kernels
-# by host CPU and is NOT covered by MKL_CBWR. Cap it to a fixed ISA floor so an
-# AVX-512 host and an AVX2 host run the identical kernel.
-os.environ.setdefault("ONEDNN_MAX_CPU_ISA", "AVX2")
-os.environ.setdefault("DNNL_MAX_CPU_ISA", "AVX2")  # older oneDNN env-var name
 
 import numpy as np
 import torch
+from smoke_golden import BPTT_HORIZON, SEED, assert_infractions_occur, build_config, is_number, record_or_compare_golden
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from opengigaflow.rl import PPOTrainer, load_env, load_policy
+from opengigaflow.utils import finalize_environment_metrics
 
-from pufferlib.pufferl import PuffeRL, load_config, load_env, load_policy
-from pufferlib.utils import finalize_environment_metrics
 
-SEED = 42
-EPOCHS = 2  # small: CI emulates the CPU under QEMU where torch is ~30x slower
-BPTT_HORIZON = 64  # env steps per evaluate(); == scenario length so episodes complete each epoch
-WATCHDOG_SECONDS = 1500  # generous: QEMU-emulated torch is slow; still catches true hangs
-
-GOLDEN_PATH = os.path.join(os.path.dirname(__file__), "data", "drive_smoke_golden.json")
-# Two-tier tolerance. Under QEMU (-cpu Haswell) almost every metric is bit-stable
-# across hosts (<1% drift); only float-accumulation metrics (loss sums, EMAs,
-# episode_return) carry ~5% host residue, because qemu-user runs FP on the host
-# CPU and glibc libm dispatches on the host's AT_HWCAP. So check the stable
-# metrics tightly and only those few loosely.
-RTOL = float(os.environ.get("SMOKE_RTOL", "2e-2"))
-LOOSE_RTOL = float(os.environ.get("SMOKE_LOOSE_RTOL", "8e-2"))
-ATOL = float(os.environ.get("SMOKE_ATOL", "1e-3"))
-LOOSE_ATOL = float(os.environ.get("SMOKE_LOOSE_ATOL", "5e-3"))
-# Metrics that are sums/EMAs/near-zero means of many floats -> host-FP-sensitive;
-# checked loosely. old_approx_kl is E[-logratio] ~ 0, so it needs the loose ATOL.
-LOOSE_KEYS = frozenset({"value_loss", "ema_max", "episode_return", "old_approx_kl"})
-
-# Env metrics we expect a random policy to exercise within the run.
-SANITY_KEYS = ("collision_rate", "offroad_rate")
+EPOCHS = 2  # CI emulates the CPU under QEMU, where torch is ~30x slower
+WATCHDOG_SECONDS = 1500
 
 
 class _DummyLogger:
-    """PuffeRL calls self.logger.log() inside mean_and_log(); no-op it."""
-
     run_id = "smoke"
-
-    def log(self, *args, **kwargs):
-        pass
 
     def __getattr__(self, _name):
         return lambda *a, **k: None
@@ -102,81 +32,9 @@ def _seed_everything():
     torch.set_num_threads(1)
 
 
-def _set_existing(section, updates):
-    """Only override keys that already exist, so we never inject an unknown
-    kwarg that a constructor would reject."""
-    for k, v in updates.items():
-        if k in section:
-            section[k] = v
-
-
-def _build_config():
-    # load_config() calls argparse.parse_args(), which would otherwise choke on
-    # pytest's argv. Hide it for the duration of the call.
-    saved_argv = sys.argv
-    sys.argv = [saved_argv[0]]
-    try:
-        args = load_config("puffer_drive")
-    finally:
-        sys.argv = saved_argv
-
-    _set_existing(
-        args["vec"],
-        {
-            # Serial (synchronous) on purpose: async Multiprocessing interleaves
-            # env recv by host scheduling/core-count, which reorders the batch and
-            # flips sampled actions -> metrics diverge across machines. Serial is
-            # deterministic everywhere, which is what the golden needs.
-            "backend": "Serial",
-            "num_envs": 4,  # fewer envs -> less per-epoch compute under QEMU
-            "seed": SEED,
-        },
-    )
-
-    _set_existing(
-        args["env"],
-        {
-            "num_agents": 16,  # per-env active count
-            "min_agents_per_env": 16,  # fixed active count -> deterministic, packed
-            "max_agents_per_env": 16,
-            "action_type": "discrete",
-            "num_maps": 2,  # few maps -> fast load
-            "use_map_cache": True,  # share map geometry across envs in a worker
-            "map_dir": "pufferlib/resources/drive/binaries/carla",
-            "scenario_length": BPTT_HORIZON,  # short -> episodes complete each epoch
-            "stagger_first_episode": False,  # golden expects full-length first episodes
-            "seed": SEED,
-        },
-    )
-
-    _set_existing(
-        args["policy"],
-        {
-            "ego_input_size": 32,
-            "partner_input_size": 128,
-            "lane_input_size": 64,
-            "boundary_input_size": 64,
-            "traffic_control_input_size": 16,
-            "context_input_size": 8,
-            "backbone_hidden_size": 256,
-            "actor_hidden_size": 128,
-            "critic_hidden_size": 64,
-            "fused_slot_encoder": False,  # the CPU-only image has no triton
-        },
-    )
-    _set_existing(args["rnn"], {"input_size": 256, "hidden_size": 256})
-
-    args["wandb"] = False
-    args["neptune"] = False
-    args["eval"] = None  # disable all evaluators during the smoke run
-
-    return args
-
-
 def _finalize_train_config(args, total_agents):
     minibatch_size = total_agents * BPTT_HORIZON // 8
-    _set_existing(
-        args["train"],
+    args["train"].update(
         {
             "device": "cpu",
             "compile": False,
@@ -188,55 +46,28 @@ def _finalize_train_config(args, total_agents):
             "bptt_horizon": BPTT_HORIZON,
             "minibatch_size": minibatch_size,
             "max_minibatch_size": minibatch_size,
-            "total_timesteps": 10_000_000,  # large -> never "done" during 5 epochs
+            "total_timesteps": 10_000_000,  # never reached within EPOCHS
             "checkpoint_interval": 10_000_000,
-        },
+        }
     )
-    return dict(**args["train"], env="puffer_drive", eval=args.get("eval", {}))
+    return dict(**args["train"], env="opengigaflow")
 
 
-def _capture_metrics(pufferl):
+def _capture_metrics(trainer):
     env_acc = {}
     for _ in range(EPOCHS):
-        pufferl.evaluate()
-        # Snapshot env stats BEFORE train()'s mean_and_log() resets them.
-        for k, (value_sum, weight_sum) in pufferl.collect_environment_metric_sums().items():
+        trainer.evaluate()
+        # train()'s mean_and_log() resets the env sums
+        for k, (value_sum, weight_sum) in trainer.env_metric_sums.items():
             entry = env_acc.setdefault(k, [0.0, 0.0])
             entry[0] += value_sum
             entry[1] += weight_sum
-        # Force logging this epoch so self.losses is set deterministically
-        # (otherwise it only updates on a wall-clock interval -> flaky).
-        pufferl.last_log_time = 0.0
-        pufferl.train()
+        # log every epoch: trainer.losses otherwise updates on a wall-clock interval
+        trainer.last_log_time = 0.0
+        trainer.train()
 
-    losses = {k: float(v) for k, v in pufferl.losses.items() if _is_number(v)}
-
-    env_means = finalize_environment_metrics(env_acc)
-
-    return losses, env_means
-
-
-def _is_number(x):
-    return isinstance(x, (int, float)) and not isinstance(x, bool)
-
-
-def _nan_eq(a, b, rtol, atol):
-    if np.isnan(a) and np.isnan(b):
-        return True
-    return bool(np.isclose(a, b, rtol=rtol, atol=atol))
-
-
-def _compare(label, actual, expected):
-    mismatches = []
-    for key, exp in expected.items():
-        loose = key in LOOSE_KEYS
-        rtol = LOOSE_RTOL if loose else RTOL
-        atol = LOOSE_ATOL if loose else ATOL
-        if key not in actual:
-            mismatches.append(f"  {label}/{key}: MISSING (expected {exp})")
-        elif not _nan_eq(actual[key], exp, rtol, atol):
-            mismatches.append(f"  {label}/{key}: {actual[key]!r} != expected {exp!r}")
-    return mismatches
+    losses = {k: float(v) for k, v in trainer.losses.items() if is_number(v)}
+    return losses, finalize_environment_metrics(env_acc)
 
 
 class _Watchdog:
@@ -256,71 +87,48 @@ class _Watchdog:
 
 def test_drive_smoke():
     _seed_everything()
-    args = _build_config()
+    args = build_config(num_envs=4)
+    args["policy"].update(
+        {
+            "ego_input_size": 32,
+            "partner_input_size": 128,
+            "lane_input_size": 64,
+            "boundary_input_size": 64,
+            "traffic_control_input_size": 16,
+            "context_input_size": 8,
+            "backbone_hidden_size": 256,
+            "actor_hidden_size": 128,
+            "critic_hidden_size": 64,
+            "fused_slot_encoder": False,  # CUDA-only kernels that need wider encoders than this run's
+        }
+    )
 
     vecenv = None
-    pufferl = None
+    trainer = None
     with _Watchdog():
         try:
-            vecenv = load_env("puffer_drive", args)
+            vecenv = load_env(args)
             total_agents = vecenv.num_agents
             train_config = _finalize_train_config(args, total_agents)
 
             _seed_everything()  # re-seed right before weight init
-            policy = load_policy(args, vecenv, "puffer_drive")
+            policy = load_policy(args, vecenv)
 
-            pufferl = PuffeRL(train_config, vecenv, policy, logger=_DummyLogger())
-            losses, env_means = _capture_metrics(pufferl)
+            trainer = PPOTrainer(train_config, vecenv, policy, logger=_DummyLogger())
+            losses, env_means = _capture_metrics(trainer)
         finally:
-            if pufferl is not None and hasattr(pufferl, "utilization"):
-                try:
-                    pufferl.utilization.stop()
-                except Exception:
-                    pass
+            if trainer is not None:
+                trainer.utilization.stop()
             if vecenv is not None:
-                try:
+                with contextlib.suppress(Exception):
                     vecenv.close()
-                except Exception:
-                    pass
 
     print("\n[smoke] total_agents:", total_agents)
     print("[smoke] losses:", json.dumps(losses, indent=2, sort_keys=True))
     print("[smoke] env_means:", json.dumps(env_means, indent=2, sort_keys=True))
 
-    # The run must actually exercise interesting cases.
-    present = [k for k in SANITY_KEYS if k in env_means]
-    assert present, f"no sanity env metrics captured; got keys: {sorted(env_means)}"
-    assert any(env_means[k] > 0 for k in present), (
-        f"expected nonzero {present} (collisions/offroad), got { {k: env_means[k] for k in present} }"
-    )
-
-    record = os.environ.get("SMOKE_UPDATE_GOLDEN") == "1" or not os.path.exists(GOLDEN_PATH)
-    if record:
-        os.makedirs(os.path.dirname(GOLDEN_PATH), exist_ok=True)
-        with open(GOLDEN_PATH, "w") as f:
-            json.dump(
-                {
-                    "meta": {
-                        "total_agents": int(total_agents),
-                        "bptt_horizon": BPTT_HORIZON,
-                        "epochs": EPOCHS,
-                        "seed": SEED,
-                    },
-                    "losses": losses,
-                    "env": env_means,
-                },
-                f,
-                indent=2,
-                sort_keys=True,
-            )
-        print(f"[smoke] wrote golden -> {GOLDEN_PATH}")
-        return
-
-    with open(GOLDEN_PATH) as f:
-        golden = json.load(f)
-
-    mismatches = _compare("losses", losses, golden["losses"]) + _compare("env", env_means, golden["env"])
-    assert not mismatches, "smoke metrics drifted from golden:\n" + "\n".join(mismatches)
+    assert_infractions_occur(env_means)
+    record_or_compare_golden("drive_smoke_golden.json", total_agents, EPOCHS, {"losses": losses, "env": env_means})
 
 
 if __name__ == "__main__":

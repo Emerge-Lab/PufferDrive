@@ -1,11 +1,4 @@
-"""Paired comparison of two nuPlan closed-loop eval runs of the PufferDrive planner, overall and per city.
-
-usage: python scripts/eval/compare_nuplan_evals.py <baseline_group_dir> <candidate_group_dir> [--worst N]
-
-Each group dir is a run_simulation.py `group` directory (scripts/kesai/9_nuPlan.sh writes them under $RUN_DIR/eval,
-tidy_nuplan_run.py flattens them); its scenarios.csv is compared on the scenarios both runs contain. The city of
-a scenario is read from the nuPlan log database under $NUPLAN_DATA_ROOT/nuplan-v1.1/splits/val when that exists.
-"""
+"""Paired comparison of two nuPlan eval runs (group dirs) on their common scenarios, overall and per city."""
 
 import argparse
 import functools

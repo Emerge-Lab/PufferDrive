@@ -1,19 +1,4 @@
-"""Render the interactive observation replays of an AlpaSim run (scripts/kesai/12_alpasim.sh:
-<run_dir>/obs_html/<clipgt>.replay.zlib) into one page per selected scene plus an index.html gallery (same
-navigator as the nuPlan, CARLA and self-play eval replays).
-
-usage: python scripts/eval/render_alpasim_obs_html.py <run_dir> [--select imperfect|failed|all] [--prune] [--workers N]
-
---select imperfect (default) pages the scenes scoring below 1 (and scenes without a score row), failed only the
-scenes AlpaSim marks as failed (at-fault collision, offroad, corridor exit), all every scene. Pages are named
-s<score>_<flags>_<clipgt>.html so the gallery lists the worst first (flags: COL at-fault collision, OFF offroad,
-CORR left the corridor laterally, PROG progress score < 1); each page carries the scene's AlpaSim score criteria
-and per-metric values as a panel, every violated per-step metric linking to the replay step of its first
-violation. The pages the run wrote (<clipgt>.html) and the pages of unselected scenes are deleted; --prune deletes
-every .replay.zlib once the pages are written (a page embeds the same bytes and is the replay source of a later
-re-render). Reads the tidy_alpasim_run.py layout (<run_dir>/details/*, obs_html/), the 2026-10-12 one (alpasim/*,
-obs_replays/) and the untidied AlpaSim trees of older runs.
-"""
+"""Render the obs replay pages + index.html gallery of a tidied AlpaSim run's selected scenes, with score panels."""
 
 import argparse
 import html
@@ -31,23 +16,20 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-from pufferlib import viz
+from render_obs_html import render_page
+
+from opengigaflow import viz
 
 
-FLAG_METRICS = (
-    ("COL", "collision_at_fault"),
-    ("OFF", "offroad"),
-    ("CORR", "left_corridor_laterally"),
-)
 PROGRESS_FLAG = "PROG"
 SELECT_MODES = ("imperfect", "failed", "all")
 REPLAY_SUFFIX = ".replay.zlib"
 GALLERY_INDEX = "index.html"
 CLIPGT_PATTERN = re.compile(r"clipgt-[0-9a-f-]{36}$")  # the scene id ends every page and replay name
-SCORED_METRICS = (
-    ("collision_at_fault", "at-fault collision"),
-    ("offroad", "offroad"),
-    ("left_corridor_laterally", "left corridor laterally"),
+SCORED_METRICS = (  # (metric, page-name flag, panel label)
+    ("collision_at_fault", "COL", "at-fault collision"),
+    ("offroad", "OFF", "offroad"),
+    ("left_corridor_laterally", "CORR", "left corridor laterally"),
 )
 UNSCORED_SERIES = (
     ("collision_any", "collision (any)"),
@@ -71,37 +53,18 @@ ALPASIM_STEP_SECONDS = 0.1
 
 
 def run_layout(run_dir):
-    """-> (obs replay dir, results-summary.json, metrics_unprocessed.parquet, eval-config.yaml) of the tidied
-    layout (details/, then the 2026-10-12 alpasim/), else of an AlpaSim wizard tree (alpasim/wizard_0, then the
-    older alpagym/ nesting)."""
-    obs_dirs = [
-        path
-        for path in (run_dir / "obs_html", run_dir / "obs_replays", run_dir / "alpagym" / "obs_replays")
-        if path.is_dir()
-    ]
-    if not obs_dirs:
-        raise SystemExit(f"no obs_html/ or obs_replays/ under {run_dir}")
-    candidates = [
-        (base / "results-summary.json", base / "metrics_unprocessed.parquet", base / "eval-config.yaml")
-        for base in (run_dir / "details", run_dir / "alpasim")
-    ]
-    for wizard_dir in (run_dir / "alpasim" / "wizard_0", run_dir / "alpagym" / "alpasim" / "wizard_0"):
-        aggregate = wizard_dir / "aggregate"
-        candidates.append(
-            (
-                aggregate / "results-summary.json",
-                aggregate / "metrics_unprocessed.parquet",
-                wizard_dir / "eval-config.yaml",
-            )
-        )
-    for summary_path, metrics_path, eval_config_path in candidates:
-        if summary_path.is_file():
-            return obs_dirs[0], summary_path, metrics_path, eval_config_path
-    raise SystemExit(f"no results-summary.json under {run_dir}: the run has not been scored")
+    """-> (obs_html/, results-summary.json, metrics_unprocessed.parquet, eval-config.yaml) of a tidied run."""
+    obs_dir, details_dir = run_dir / "obs_html", run_dir / "details"
+    if not obs_dir.is_dir():
+        raise SystemExit(f"no obs_html/ under {run_dir}")
+    summary_path = details_dir / "results-summary.json"
+    if not summary_path.is_file():
+        raise SystemExit(f"no {summary_path}: the run has not been scored or tidied (tidy_alpasim_run.py)")
+    return obs_dir, summary_path, details_dir / "metrics_unprocessed.parquet", details_dir / "eval-config.yaml"
 
 
 def scene_rows(summary_path):
-    """clipgt -> results-summary rollout row (score, status, failure_reason, metrics, score_metrics)."""
+    """-> ({clipgt: results-summary rollout row}, the summary's score criteria)."""
     summary = json.loads(summary_path.read_text())
     rows = {}
     for row in summary["rollouts"]:
@@ -127,9 +90,7 @@ def scene_series(metrics_path, rows):
 
 
 def scoring_timeline(df, frames, stop_gt_dist_m):
-    """AlpaSim scores from the first eval_relevant step through the first collision, offroad or stop_gt_dist_m
-    from the gt trajectory. -> {scored: series -> first replay step > 0 inside that window, after: first one past it,
-    stop_step, stop_reasons}. The replay ends with the per-step series, so index i is replay step i - (length - frames)."""
+    """-> {"scored"/"after": {series: first replay step > 0 in/after the scoring window}, stop_step, stop_reasons}."""
     wide = df.pivot(index="timestamps_us", columns="name", values="values").sort_index()
     wide["collision_at_fault"] = ((wide["collision_front"] > 0) | (wide["collision_lateral"] > 0)).astype(np.float64)
     offset = len(wide) - frames
@@ -146,7 +107,7 @@ def scoring_timeline(df, frames, stop_gt_dist_m):
     if stop_hits.size:
         timeline["stop_step"] = stop - offset
         timeline["stop_reasons"] = [reason for reason, hits in stop_events.items() if hits[stop]]
-    for name in [metric for metric, _ in SCORED_METRICS] + [series for series, _ in UNSCORED_SERIES]:
+    for name in [metric for metric, _, _ in SCORED_METRICS] + [series for series, _ in UNSCORED_SERIES]:
         hits = np.flatnonzero(wide[name].to_numpy() > 0)
         inside, later = hits[(hits >= start) & (hits <= stop)], hits[hits > stop]
         if inside.size:
@@ -179,11 +140,10 @@ def metric_line(label, value, failed, name, timeline):
 
 
 def score_panel(row, criteria, timeline):
-    """Fixed panel injected into the viewer: AlpaSim score, every score criterion, the unscored per-step metrics,
-    each violation linking to its first step in the scored window."""
+    """Fixed panel injected into the viewer: AlpaSim score, criteria and per-step metrics with their first step."""
     metrics, score_metrics = row["metrics"], row["score_metrics"]
     lines = []
-    for metric, label in SCORED_METRICS:
+    for metric, _, label in SCORED_METRICS:
         value = float(score_metrics[metric])
         criterion = html.escape(criteria.get(metric, ""))
         lines.append(
@@ -258,7 +218,7 @@ def scene_pages(obs_dir):
 def page_name(clipgt, row):
     if row is None:
         return f"{clipgt}.html"
-    flags = [flag for flag, metric in FLAG_METRICS if float(row["score_metrics"][metric]) > 0]
+    flags = [flag for metric, flag, _ in SCORED_METRICS if float(row["score_metrics"][metric]) > 0]
     if float(row["score_metrics"]["progress_score"]) < 1.0:
         flags.append(PROGRESS_FLAG)
     return f"s{float(row['score']):.2f}_" + "".join(f"{flag}_" for flag in flags) + f"{clipgt}.html"
@@ -269,23 +229,15 @@ def gallery_metrics(row):
     if row is None:
         return {}
     return {
-        "score": float(row["score"]),
         "collision_rate": float(row["metrics"]["collision_any"]),
         "at_fault_collision_rate": float(row["score_metrics"]["collision_at_fault"]),
         "offroad_rate": float(row["score_metrics"]["offroad"]),
     }
 
 
-def render_page(zlib_path, html_path, panel):
-    viz.render_interactive_replay_zlib(str(zlib_path), str(html_path))
-    if panel:
-        page = Path(html_path).read_text()
-        Path(html_path).write_text(page.replace("<body>", "<body>" + panel, 1))
-
-
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("run_dir", help="output dir of 12_alpasim.sh (holds obs_html/ and details/)")
+    ap.add_argument("run_dir", help="output dir of 7_eval_alpasim.sh (holds obs_html/ and details/)")
     ap.add_argument("--select", choices=SELECT_MODES, default="imperfect", help="scenes that get a page")
     ap.add_argument("--prune", action="store_true", help="delete every .replay.zlib once the pages are written")
     ap.add_argument("--workers", type=int, default=min(16, os.cpu_count() or 1))

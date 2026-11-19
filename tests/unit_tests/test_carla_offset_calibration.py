@@ -1,19 +1,14 @@
 """calibrate_town_offset recovers a known bin-vs-CARLA translation and height from fake driving waypoints."""
 
-import os
-import sys
 from pathlib import Path
 
 import numpy as np
 
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
 import data_utils.mirror_map_bin as mbin
-from pufferlib.ocean.cosim import carla_bridge as cb
+from opengigaflow.ocean.cosim import carla_bridge as cb
 
 
-TOWN_BIN = Path(__file__).resolve().parents[2] / "pufferlib/resources/drive/binaries/carla/opendrive__Town01.bin"
+TOWN_BIN = Path(__file__).resolve().parents[2] / "opengigaflow/resources/carla/opendrive__Town01.bin"
 TRUE_SHIFT = (-0.42, 0.31)  # bin lanes = CARLA lanes + shift, in the bin frame
 TRUE_Z_OFFSET = 1.24  # bin z = CARLA z + offset (Town04's measured value)
 
@@ -63,7 +58,7 @@ class _Map:
 
 
 def test_calibration_recovers_translation_and_height():
-    transform = cb.CarlaTransform("Town01", offset=cb.town_offset(str(TOWN_BIN)))
+    transform = cb.CarlaTransform("Town01")
     offset, z_offset, residual_before, residual_after = cb.calibrate_town_offset(
         cb.driving_waypoint_samples(_Map(transform)), transform, str(TOWN_BIN)
     )
@@ -73,8 +68,7 @@ def test_calibration_recovers_translation_and_height():
     assert abs(z_offset - TRUE_Z_OFFSET) < 0.02
 
 
-def test_transform_z_round_trip():
+def test_transform_z_offset():
     transform = cb.CarlaTransform("Town04", z_offset=TRUE_Z_OFFSET)
     assert transform.z_to_bin(0.0) == TRUE_Z_OFFSET
-    assert transform.z_to_carla(transform.z_to_bin(-1.24)) == -1.24
     assert cb.CarlaTransform("Town04").tz == 0.0

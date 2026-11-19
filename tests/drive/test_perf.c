@@ -20,9 +20,10 @@ static int test_simulator_raw_perf(void) {
     int tick = 0;
     double start = now_seconds();
     while (now_seconds() - start < timeout) {
-        int *actions = (int *) env.actions;
+        float (*actions)[2] = (float (*)[2]) env.actions;
         for (int i = 0; i < env.active_agent_count; i++) {
-            actions[i] = rand() % (7 * 9);
+            actions[i][0] = 2.0f * (float) rand() / (float) RAND_MAX - 1.0f;
+            actions[i][1] = 2.0f * (float) rand() / (float) RAND_MAX - 1.0f;
         }
         c_step(&env);
         tick++;

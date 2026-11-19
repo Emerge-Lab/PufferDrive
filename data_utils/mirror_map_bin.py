@@ -1,28 +1,5 @@
-#!/usr/bin/env python3
-"""mirror_map_bin.py — Reflect a PufferDrive map .bin across the x-axis to
-flip driving convention (right-hand traffic → left-hand traffic).
+"""Read and write OpenGigaFlow map .bin files."""
 
-CARLA's OpenDRIVE maps are right-hand-traffic by default. Negating y for every
-position, vy for every velocity, and h for every heading produces an equivalent
-map in which the same lane network is traversed on the left side of the road
-instead of the right. Lane / road / agent / traffic-control IDs and the
-lane-graph distance matrix are preserved unchanged — they're geometry-invariant.
-
-Round-trips byte-exactly when mirror is applied twice.
-
-Usage:
-    # Mirror a whole directory of bins:
-    python data_utils/mirror_map_bin.py \\
-        --input  pufferlib/resources/drive/binaries/carla \\
-        --output pufferlib/resources/drive/binaries/carla_lhs
-
-    # Mirror a single file:
-    python data_utils/mirror_map_bin.py \\
-        --input  pufferlib/resources/drive/binaries/carla/opendrive__Town01.bin \\
-        --output pufferlib/resources/drive/binaries/carla_lhs/opendrive__Town01.bin
-"""
-
-import argparse
 import struct
 from pathlib import Path
 
@@ -30,6 +7,7 @@ from pathlib import Path
 TRAFFIC_PHASE_SECTION_TAG = b"TLPHASE1"
 LANE_WIDTH_SECTION_TAG = b"LANEWID1"
 SPEED_ZONE_SECTION_TAG = b"SPDZONE1"
+AGENT_FLOAT_COLUMNS = ("x", "y", "z", "h", "vx", "vy", "len", "wid", "hgt")
 
 
 def _is_lane(road_type: int) -> bool:
@@ -48,6 +26,15 @@ def _read_i_array(f, n):
     return struct.unpack(f"<{n}i", f.read(4 * n)) if n else ()
 
 
+def _read_i_list(f):
+    (count,) = _read("<i", f)
+    return _read_i_array(f, count)
+
+
+def _write_i_list(f, values):
+    f.write(struct.pack(f"<i{len(values)}i", len(values), *values))
+
+
 def read_bin(path: Path) -> dict:
     with open(path, "rb") as f:
         num_agents, num_roads, num_traffic, num_objects = _read("<iiii", f)
@@ -57,10 +44,9 @@ def read_bin(path: Path) -> dict:
             agent_id, agent_type = _read("<ii", f)
             assert agent_id == i, f"agent id {agent_id} != idx {i}"
             (T,) = _read("<i", f)
-            cols = {k: _read_f_array(f, T) for k in ("x", "y", "z", "h", "vx", "vy", "len", "wid", "hgt")}
+            cols = {k: _read_f_array(f, T) for k in AGENT_FLOAT_COLUMNS}
             cols["valid"] = _read_i_array(f, T)
-            (route_len,) = _read("<i", f)
-            route = _read_i_array(f, route_len)
+            route = _read_i_list(f)
             (route_gt_len,) = _read("<i", f)
             goal = _read("<fff", f)
             (mark_as_expert,) = _read("<i", f)
@@ -92,10 +78,8 @@ def read_bin(path: Path) -> dict:
                 "headings": _read_f_array(f, S),
             }
             if _is_lane(road_type):
-                (ne,) = _read("<i", f)
-                road["entry_lanes"] = _read_i_array(f, ne)
-                (nx,) = _read("<i", f)
-                road["exit_lanes"] = _read_i_array(f, nx)
+                road["entry_lanes"] = _read_i_list(f)
+                road["exit_lanes"] = _read_i_list(f)
                 (road["speed_limit"],) = _read("<f", f)
                 (road["length"],) = _read("<f", f)
                 road["cum_lengths"] = _read_f_array(f, S)
@@ -107,10 +91,8 @@ def read_bin(path: Path) -> dict:
             assert traffic_id == i, f"traffic id {traffic_id} != idx {i}"
             stop_line = _read("<6f", f)
             (heading,) = _read("<f", f)
-            (state_len,) = _read("<i", f)
-            states = _read_i_array(f, state_len)
-            (ncl,) = _read("<i", f)
-            ctrl_lanes = _read_i_array(f, ncl)
+            states = _read_i_list(f)
+            ctrl_lanes = _read_i_list(f)
             traffic.append(
                 {
                     "id": traffic_id,
@@ -125,8 +107,7 @@ def read_bin(path: Path) -> dict:
         objects = []
         for i in range(num_objects):
             obj_id, obj_type, T = _read("<iii", f)
-            # 9 float arrays + 1 int array of length T, all concatenated.
-            raw = f.read((9 * 4 + 4) * T)
+            raw = f.read((9 * 4 + 4) * T)  # 9 float arrays + 1 int array of length T
             objects.append({"id": obj_id, "type": obj_type, "T": T, "raw": raw})
 
         (n_lanes_g,) = _read("<i", f)
@@ -137,10 +118,8 @@ def read_bin(path: Path) -> dict:
         dataset_name = f.read(32)
         (log_length,) = _read("<i", f)
         (log_dt,) = _read("<f", f)
-        (n_ooi,) = _read("<i", f)
-        objects_of_interest = _read_i_array(f, n_ooi)
-        (n_ttp,) = _read("<i", f)
-        tracks_to_predict = _read_i_array(f, n_ttp)
+        objects_of_interest = _read_i_list(f)
+        tracks_to_predict = _read_i_list(f)
 
         phase_tag = f.read(len(TRAFFIC_PHASE_SECTION_TAG))
         has_phase_section = phase_tag == TRAFFIC_PHASE_SECTION_TAG
@@ -184,167 +163,57 @@ def read_bin(path: Path) -> dict:
     }
 
 
-def mirror(data: dict) -> dict:
-    """Reflect across the x-axis: negate y for every position, vy for every
-    velocity, heading → -heading. Lane-graph distances, segment lengths,
-    cumulative lengths, lane widths, and all int IDs are reflection-invariant."""
-    for a in data["agents"]:
-        c = a["cols"]
-        c["y"] = tuple(-v for v in c["y"])
-        c["vy"] = tuple(-v for v in c["vy"])
-        c["h"] = tuple(-v for v in c["h"])
-        gx, gy, gz = a["goal"]
-        a["goal"] = (gx, -gy, gz)
-    for r in data["roads"]:
-        r["y"] = tuple(-v for v in r["y"])
-        r["headings"] = tuple(-v for v in r["headings"])
-    for t in data["traffic"]:
-        x1, y1, z1, x2, y2, z2 = t["stop_line"]
-        t["stop_line"] = (x1, -y1, z1, x2, -y2, z2)
-        t["heading"] = -t["heading"]
-    for o in data["objects"]:
-        # Object trajectory raw layout: x[T] y[T] z[T] h[T] vx[T] vy[T] len[T]
-        # wid[T] hgt[T] valid[T]. Negate y, h, vy in place.
-        T = o["T"]
-        if T == 0:
-            continue
-        arr = list(struct.unpack(f"<{9 * T}f{T}i", o["raw"]))
-        for k in range(T):
-            arr[T + k] = -arr[T + k]  # y
-            arr[3 * T + k] = -arr[3 * T + k]  # heading
-            arr[5 * T + k] = -arr[5 * T + k]  # vy
-        o["raw"] = struct.pack(f"<{9 * T}f{T}i", *arr)
-    return data
-
-
 def write_bin(data: dict, path: Path):
     with open(path, "wb") as f:
-        agents = data["agents"]
-        roads = data["roads"]
-        traffic = data["traffic"]
-        objects = data["objects"]
+        agents, roads, traffic, objects = data["agents"], data["roads"], data["traffic"], data["objects"]
+        lane_roads = [r for r in roads if _is_lane(r["type"])]
         f.write(struct.pack("<iiii", len(agents), len(roads), len(traffic), len(objects)))
 
         for a in agents:
-            f.write(struct.pack("<ii", a["id"], a["type"]))
             T = a["T"]
-            f.write(struct.pack("<i", T))
-            c = a["cols"]
-            for k in ("x", "y", "z", "h", "vx", "vy", "len", "wid", "hgt"):
-                if T:
-                    f.write(struct.pack(f"<{T}f", *c[k]))
-            if T:
-                f.write(struct.pack(f"<{T}i", *c["valid"]))
-            f.write(struct.pack("<i", len(a["route"])))
-            if a["route"]:
-                f.write(struct.pack(f"<{len(a['route'])}i", *a["route"]))
-            f.write(struct.pack("<i", a["route_gt_len"]))
-            f.write(struct.pack("<fff", *a["goal"]))
-            f.write(struct.pack("<i", a["mark_as_expert"]))
+            f.write(struct.pack("<iii", a["id"], a["type"], T))
+            f.writelines(struct.pack(f"<{T}f", *a["cols"][k]) for k in AGENT_FLOAT_COLUMNS)
+            f.write(struct.pack(f"<{T}i", *a["cols"]["valid"]))
+            _write_i_list(f, a["route"])
+            f.write(struct.pack("<i3fi", a["route_gt_len"], *a["goal"], a["mark_as_expert"]))
 
         for r in roads:
-            f.write(struct.pack("<ii", r["id"], r["type"]))
             S = r["S"]
-            f.write(struct.pack("<i", S))
-            for k in ("x", "y", "z", "headings"):
-                if S:
-                    f.write(struct.pack(f"<{S}f", *r[k]))
+            f.write(struct.pack("<iii", r["id"], r["type"], S))
+            f.writelines(struct.pack(f"<{S}f", *r[k]) for k in ("x", "y", "z", "headings"))
             if _is_lane(r["type"]):
-                f.write(struct.pack("<i", len(r["entry_lanes"])))
-                if r["entry_lanes"]:
-                    f.write(struct.pack(f"<{len(r['entry_lanes'])}i", *r["entry_lanes"]))
-                f.write(struct.pack("<i", len(r["exit_lanes"])))
-                if r["exit_lanes"]:
-                    f.write(struct.pack(f"<{len(r['exit_lanes'])}i", *r["exit_lanes"]))
-                f.write(struct.pack("<f", r["speed_limit"]))
-                f.write(struct.pack("<f", r["length"]))
-                if S:
-                    f.write(struct.pack(f"<{S}f", *r["cum_lengths"]))
+                _write_i_list(f, r["entry_lanes"])
+                _write_i_list(f, r["exit_lanes"])
+                f.write(struct.pack("<ff", r["speed_limit"], r["length"]))
+                f.write(struct.pack(f"<{S}f", *r["cum_lengths"]))
 
         for t in traffic:
-            f.write(struct.pack("<ii", t["id"], t["type"]))
-            f.write(struct.pack("<6f", *t["stop_line"]))
-            f.write(struct.pack("<f", t["heading"]))
-            f.write(struct.pack("<i", len(t["states"])))
-            if t["states"]:
-                f.write(struct.pack(f"<{len(t['states'])}i", *t["states"]))
-            f.write(struct.pack("<i", len(t["controlled_lanes"])))
-            if t["controlled_lanes"]:
-                f.write(struct.pack(f"<{len(t['controlled_lanes'])}i", *t["controlled_lanes"]))
+            f.write(struct.pack("<ii6ff", t["id"], t["type"], *t["stop_line"], t["heading"]))
+            _write_i_list(f, t["states"])
+            _write_i_list(f, t["controlled_lanes"])
 
         for o in objects:
             f.write(struct.pack("<iii", o["id"], o["type"], o["T"]))
             f.write(o["raw"])
 
-        lg = data["lane_graph"]
-        f.write(struct.pack("<i", lg["n"]))
-        if lg["n"] > 0:
-            f.write(struct.pack(f"<{lg['n']}i", *lg["lane_ids"]))
-            f.write(struct.pack(f"<{lg['n'] ** 2}f", *lg["distances"]))
+        n_lanes_g = data["lane_graph"]["n"]
+        f.write(struct.pack(f"<i{n_lanes_g}i", n_lanes_g, *data["lane_graph"]["lane_ids"]))
+        f.write(struct.pack(f"<{n_lanes_g * n_lanes_g}f", *data["lane_graph"]["distances"]))
 
         f.write(data["scenario_id"])
         f.write(data["dataset_name"])
-        f.write(struct.pack("<i", data["log_length"]))
-        f.write(struct.pack("<f", data["log_dt"]))
-        f.write(struct.pack("<i", len(data["objects_of_interest"])))
-        if data["objects_of_interest"]:
-            f.write(struct.pack(f"<{len(data['objects_of_interest'])}i", *data["objects_of_interest"]))
-        f.write(struct.pack("<i", len(data["tracks_to_predict"])))
-        if data["tracks_to_predict"]:
-            f.write(struct.pack(f"<{len(data['tracks_to_predict'])}i", *data["tracks_to_predict"]))
+        f.write(struct.pack("<if", data["log_length"], data["log_dt"]))
+        _write_i_list(f, data["objects_of_interest"])
+        _write_i_list(f, data["tracks_to_predict"])
         if data["has_phase_section"]:
             f.write(TRAFFIC_PHASE_SECTION_TAG)
             for t in traffic:
                 f.write(struct.pack("<ii", t["junction_id"], t["phase_idx"]))
         if data["has_width_section"]:
             f.write(LANE_WIDTH_SECTION_TAG)
-            for r in roads:
-                if _is_lane(r["type"]) and r["S"]:
-                    f.write(struct.pack(f"<{r['S']}f", *r["widths"]))
+            for r in lane_roads:
+                f.write(struct.pack(f"<{r['S']}f", *r["widths"]))
         if data["has_zone_section"]:
             f.write(SPEED_ZONE_SECTION_TAG)
-            for r in roads:
-                if _is_lane(r["type"]):
-                    f.write(struct.pack("<i", r["speed_zone_idx"]))
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--input", required=True, help="Directory of *.bin files or a single .bin path")
-    parser.add_argument("--output", required=True, help="Output directory or output .bin path")
-    parser.add_argument(
-        "--verify-roundtrip",
-        action="store_true",
-        help="Read the input, write it back unmodified, and assert bytes match. Skips mirroring.",
-    )
-    args = parser.parse_args()
-
-    src = Path(args.input)
-    dst = Path(args.output)
-
-    if src.is_file():
-        pairs = [(src, dst)]
-        dst.parent.mkdir(parents=True, exist_ok=True)
-    else:
-        bins = sorted(src.glob("*.bin"))
-        dst.mkdir(parents=True, exist_ok=True)
-        pairs = [(b, dst / b.name) for b in bins]
-
-    for src_path, out_path in pairs:
-        data = read_bin(src_path)
-        if not args.verify_roundtrip:
-            mirror(data)
-        write_bin(data, out_path)
-        if args.verify_roundtrip:
-            with open(src_path, "rb") as f1, open(out_path, "rb") as f2:
-                if f1.read() != f2.read():
-                    raise AssertionError(f"round-trip mismatch on {src_path.name}")
-            print(f"  ✓ round-trip {src_path.name}")
-        else:
-            print(f"  {src_path.name} → {out_path}")
-
-    print(f"\n{'verified' if args.verify_roundtrip else 'mirrored'} {len(pairs)} file(s).")
-
-
-if __name__ == "__main__":
-    main()
+            for r in lane_roads:
+                f.write(struct.pack("<i", r["speed_zone_idx"]))

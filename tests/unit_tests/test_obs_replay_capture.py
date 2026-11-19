@@ -4,13 +4,13 @@ import os
 
 import numpy as np
 
-from pufferlib import viz
-from pufferlib.ocean.cosim.obs_replay import ObsReplayCapture
-from pufferlib.ocean.drive import binding
-from pufferlib.ocean.drive.drive import Drive
+from opengigaflow import viz
+from opengigaflow.ocean.cosim.obs_replay import ObsReplayCapture
+from opengigaflow.ocean.drive import binding
+from opengigaflow.ocean.drive.drive import Drive
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MAP_DIR = os.path.join(REPO_ROOT, "pufferlib", "resources", "drive", "binaries", "sdc_replay_test")
+MAP_DIR = os.path.join(REPO_ROOT, "opengigaflow", "resources", "sdc_replay_test")
 NUM_GOALS = 3
 STEP_COUNT = 5
 
@@ -30,8 +30,6 @@ def _fixture_env():
         scenario_length=400,
         resample_frequency=1_000_000,
         termination_mode=False,
-        terminate_on_goal=False,
-        report_interval=1,
         num_goals=NUM_GOALS,
         goal_radius=2.0,
     )
@@ -42,7 +40,7 @@ def test_capture_writes_goal_reward_coef_chunks(tmp_path):
     obs, _ = env.reset()
     capture = ObsReplayCapture(env, None, tmp_path / "route", max_steps=STEP_COUNT)
     for _ in range(STEP_COUNT):
-        actions = env.action_space.sample()
+        actions = np.zeros(env.action_space.shape, dtype=env.action_space.dtype)
         capture.capture(obs, actions, {}, None)
         obs, *_ = env.step(actions)
     sdc_idx = env.get_state()[0]["active_agent_indices"][0]

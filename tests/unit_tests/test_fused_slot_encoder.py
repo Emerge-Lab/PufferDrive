@@ -1,32 +1,26 @@
-"""The fused Triton slot encoder must reproduce DriveBackbone._encode_and_pool under bf16 autocast.
-
-Agreement is checked at bf16 rounding level against the eager autocast path (gradient to the first maximal slot, as
-torch.max does) and against an fp32 ground truth:
-the fused path may not be further from the truth than the eager bf16 path it replaces.
-"""
+"""The fused slot encoder matches the eager bf16 _encode_and_pool and lies no further from the fp32 truth than it."""
 
 import pytest
 import torch
 from torch import nn
 
-import pufferlib.pytorch
+import opengigaflow.pytorch
 
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="fused slot encoder needs CUDA + Triton")
+pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="fused slot encoder needs CUDA")
 
-ENCODER_SHAPES = [(35, 10, 256), (30, 6, 256), (20, 11, 256), (4, 14, 128)]
-# None = the table config of this GPU; the second config exercises 64-row tiles with 8 warps
-KERNEL_CONFIGS = {"table": None, "wide": (64, 64, 8, 2, 128, 64, 8, 2, 64, 4)}
+# the last two sit on the kernels' limits: 16 features at width 256, the wide input tile at width 128
+ENCODER_SHAPES = [(35, 10, 256), (30, 6, 256), (20, 11, 256), (4, 14, 128), (8, 16, 256), (8, 32, 128)]
 BATCH = 1024
 BF16_ULP_AT_FOUR = 2.0**-6
 
 
 def make_encoder(in_features, width):
     layers = [
-        pufferlib.pytorch.layer_init(nn.Linear(in_features, width)),
+        opengigaflow.pytorch.layer_init(nn.Linear(in_features, width)),
         nn.LayerNorm(width),
         nn.ReLU(),
-        pufferlib.pytorch.layer_init(nn.Linear(width, width)),
+        opengigaflow.pytorch.layer_init(nn.Linear(width, width)),
     ]
     return nn.Sequential(*layers).cuda()
 
@@ -57,7 +51,7 @@ def make_inputs(slots, features, width, seed):
 
 
 def run(encoder, objects, counts, grad_pooled, path):
-    from pufferlib.ocean.fused_slot_encoder import fused_encode_and_pool
+    from opengigaflow.ocean.fused_slot_encoder import fused_encode_and_pool
 
     for parameter in encoder.parameters():
         parameter.grad = None
@@ -79,18 +73,8 @@ def relative_error(a, b):
     return ((a - b).norm() / b.norm().clamp_min(1e-12)).item()
 
 
-@pytest.fixture(params=list(KERNEL_CONFIGS), ids=list(KERNEL_CONFIGS))
-def kernel_config(request):
-    import pufferlib.ocean.fused_slot_encoder as fse
-
-    fields = KERNEL_CONFIGS[request.param]
-    fse.CONFIG_OVERRIDE = fse.KernelConfig(*fields) if fields else None
-    yield request.param
-    fse.CONFIG_OVERRIDE = None
-
-
 @pytest.mark.parametrize("slots,features,width", ENCODER_SHAPES)
-def test_fused_matches_autocast_reference(slots, features, width, kernel_config):
+def test_fused_matches_autocast_reference(slots, features, width):
     torch.manual_seed(0)
     encoder = make_encoder(features, width)
     objects, counts, grad_pooled = make_inputs(slots, features, width, seed=slots)
@@ -114,7 +98,7 @@ def test_fused_matches_autocast_reference(slots, features, width, kernel_config)
 
 @pytest.mark.parametrize("slots,features,width", ENCODER_SHAPES[:1])
 def test_fused_inference_matches_training_forward(slots, features, width):
-    from pufferlib.ocean.fused_slot_encoder import fused_encode_and_pool
+    from opengigaflow.ocean.fused_slot_encoder import fused_encode_and_pool
 
     torch.manual_seed(0)
     encoder = make_encoder(features, width)
@@ -127,14 +111,36 @@ def test_fused_inference_matches_training_forward(slots, features, width):
     assert pooled_eval.dtype == torch.bfloat16
 
 
+@pytest.mark.parametrize("slots,features,width", [ENCODER_SHAPES[0], ENCODER_SHAPES[3], (3, 5, 64)])
+def test_second_layer_weight_gradient_matches_dense_reference(slots, features, width):
+    """The arg-max-only kernel must equal grad_encoded^T @ normed_relu computed densely in float64."""
+    from opengigaflow.ocean.cuda_slot_encoder import cuda_slot_encoder_w2_grad
+
+    generator = torch.Generator(device="cuda").manual_seed(slots)
+    batch = BATCH + slots  # off the kernel's row-block size
+    normed_relu = torch.rand(batch * slots, width, device="cuda", generator=generator).to(torch.bfloat16)
+    counts = torch.randint(0, slots + 1, (batch,), device="cuda", generator=generator)
+    winner = torch.randint(0, slots, (batch, width), device="cuda", generator=generator)
+    grad_pooled = (torch.randn(batch, width, device="cuda", generator=generator) * 0.1).to(torch.bfloat16)
+    grad_w2 = cuda_slot_encoder_w2_grad(normed_relu, counts, winner.to(torch.uint8), grad_pooled, slots)
+
+    winner_grad = grad_pooled.double() * (winner < counts[:, None])
+    grad_encoded = torch.zeros(batch, slots, width, dtype=torch.float64, device="cuda")
+    grad_encoded.scatter_(1, winner[:, None, :], winner_grad[:, None, :])
+    reference = grad_encoded.view(batch * slots, width).t() @ normed_relu.double()
+    rounded_reference = reference.to(torch.bfloat16).float()
+    assert (grad_w2 != rounded_reference).float().mean().item() < 1e-3
+    assert (grad_w2 - rounded_reference).abs().max().item() <= 2.0**-7 * reference.abs().max().item()
+
+
 def test_fused_handles_strided_upstream_gradient():
     """The cat backward hands the encoder a strided slice of the feature gradient."""
-    from pufferlib.ocean.fused_slot_encoder import fused_encode_and_pool
+    from opengigaflow.ocean.fused_slot_encoder import fused_encode_and_pool
 
     torch.manual_seed(0)
     slots, features, width = ENCODER_SHAPES[0]
     encoder = make_encoder(features, width)
-    head = pufferlib.pytorch.layer_init(nn.Linear(2 * width, 8)).cuda()
+    head = opengigaflow.pytorch.layer_init(nn.Linear(2 * width, 8)).cuda()
     objects, counts, _ = make_inputs(slots, features, width, seed=11)
     other_features = torch.randn(BATCH, width, device="cuda")
     grads = {}

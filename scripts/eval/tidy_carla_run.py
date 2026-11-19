@@ -1,30 +1,13 @@
-"""Tidy a CARLA longest6 run (the $OUT folder of scripts/kesai/11_carla_longest6_v2.sh or 14_carla_longest6_v1.sh,
-after its gallery was rendered) down to what is read after the run:
-
-  results.csv     the result parser's summary and per-route table (moved up from aggregate/)
-  run_info.txt    the run's settings and speed line (COMPLETE_RUN reads it)
-  obs_html/       the replay pages render_carla_obs_html.py rendered before this script ran
-  routes/         flat: route_<id>_s<seed>.result.json of every route run; .telemetry.csv, .world_log.npz and
-                  .carla_view.mp4 of the kept route runs (route_<id>_rep<k>_s<seed>.* for further repetitions)
-  details/        timing.csv, workers.log (every worker log), evaluators.log (every evaluator log)
-
-usage: python scripts/eval/tidy_carla_run.py <run_dir> [--keep failures]
-
---keep selects the route runs whose telemetry, world log and chase cam survive: failures (a flagged leaderboard
-infraction or a failed status, the gallery's default selection), all, none. Everything else is deleted: the
-aggregate/ copies of the records, every .replay.zlib (a rendered page embeds its replay), the files of crashed
-earlier attempts, the CARLA server logs, server_pids, compat_lib/ and the queue. report/ and pre_completion_*/
-stay. A folder tidied before is left alone; a completed run (COMPLETE_RUN) is tidied again for its new routes."""
+"""Tidy a CARLA longest6 run down to results.csv, run_info.txt, obs_html/, flat routes/ and details/."""
 
 import argparse
-import shutil
 import sys
 from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import carla_run_layout as layout
-from tidy_alpasim_run import remove_empty_dirs
+from tidy_alpasim_run import append_log, move, remove, remove_all, remove_empty_dirs
 
 
 KEEP_MODES = ("failures", "all", "none")
@@ -38,57 +21,19 @@ WORKER_LOG_GLOB = "worker_w*.log"
 EVALUATOR_LOG_GLOB = "evaluator_attempt*.log"
 SERVER_LOG_GLOB = "carla_server_attempt*.log"
 RUN_SCRATCH = ("server_pids", "queue", "queue.lock")
-RUN_SCRATCH_DIRS = ("compat_lib",)
-
-
-def move(src, dst):
-    """Rename src to dst; a src an interrupted earlier tidy already moved is skipped."""
-    if not src.exists():
-        return
-    if dst.exists():
-        raise SystemExit(f"{dst} already exists, not overwriting it with {src}")
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    src.rename(dst)
-
-
-def remove(path):
-    """-> bytes freed by deleting the file, 0 when it does not exist."""
-    if not path.is_file() and not path.is_symlink():
-        return 0
-    size = path.lstat().st_size
-    path.unlink()
-    return size
-
-
-def append_log(src, target, header):
-    """Append src under a header line to target (details/*.log) and delete it. -> bytes freed."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with open(target, "ab") as target_file, open(src, "rb") as src_file:
-        target_file.write(f"==== {header} ====\n".encode())
-        shutil.copyfileobj(src_file, target_file)
-        target_file.write(b"\n")
-    return remove(src)
-
-
-def worker_index(path):
-    return int(path.stem[len("worker_w") :])
-
-
-def kept_record(record, keep):
-    if keep == "all":
-        return True
-    if keep == "none":
-        return False
-    return layout.route_failed(record)
+COMPAT_LIB_DIR = "compat_lib"
 
 
 def tidy_route_run(route_dir, routes_dir, details_dir, keep):
-    """Flatten one route folder: the record and the kept records' files up into routes/, the evaluator logs into
-    details/evaluators.log, the rest deleted. -> (files deleted, bytes freed, files kept)."""
+    """Flatten one route folder into routes/ and details/evaluators.log. -> (files deleted, bytes freed, files kept)."""
     result_path = route_dir / layout.RAW_RESULT_NAME
     records = layout.read_records(result_path) if result_path.is_file() else []
     stems = layout.record_stems(result_path, len(records))
-    kept_stems = {stem: k for k, (stem, record) in enumerate(zip(stems, records)) if stem and kept_record(record, keep)}
+    kept_stems = {
+        stem: k
+        for k, (stem, record) in enumerate(zip(stems, records))
+        if stem and (keep == "all" or (keep == "failures" and layout.route_failed(record)))
+    }
     deleted_count = freed_bytes = kept_count = 0
     for kind, suffix in layout.RECORD_FILE_KINDS:
         for path in sorted((route_dir / kind).glob(f"*{suffix}")):
@@ -101,33 +46,26 @@ def tidy_route_run(route_dir, routes_dir, details_dir, keep):
             deleted_count += 1
     for path in sorted(route_dir.glob(EVALUATOR_LOG_GLOB)):
         freed_bytes += append_log(path, details_dir / EVALUATORS_LOG, f"{route_dir.name} {path.name}")
-    for path in sorted(route_dir.glob(SERVER_LOG_GLOB)):
-        freed_bytes += remove(path)
-        deleted_count += 1
+    server_log_count, server_log_bytes = remove_all(sorted(route_dir.glob(SERVER_LOG_GLOB)))
     if records:
         move(result_path, routes_dir / f"{route_dir.name}{layout.RESULT_SUFFIX}")
         kept_count += 1
     else:
         freed_bytes += remove(result_path)  # the leaderboard's empty stub of a route whose every attempt crashed
     remove_empty_dirs(route_dir)
-    return deleted_count, freed_bytes, kept_count
+    return deleted_count + server_log_count, freed_bytes + server_log_bytes, kept_count
 
 
 def tidy_run_files(run_dir, details_dir):
-    """results.csv up from aggregate/, the aggregate copies, worker logs, timing and run scratch into details/ or
-    away. -> (files deleted, bytes freed)."""
-    deleted_count = freed_bytes = 0
-    aggregate_dir = run_dir / AGGREGATE_DIR
+    """results.csv up, logs and timing into details/, aggregate/ and run scratch deleted. -> (deleted, freed bytes)."""
+    aggregate_dir, compat_lib_dir = run_dir / AGGREGATE_DIR, run_dir / COMPAT_LIB_DIR
+    freed_bytes = 0
     if (aggregate_dir / RESULTS_CSV).is_file():
         freed_bytes += remove(run_dir / RESULTS_CSV)  # a completion re-parsed the run
         move(aggregate_dir / RESULTS_CSV, run_dir / RESULTS_CSV)
-    if aggregate_dir.is_dir():
-        for path in sorted(aggregate_dir.rglob("*")):
-            if path.is_file():
-                freed_bytes += remove(path)
-                deleted_count += 1
-        remove_empty_dirs(aggregate_dir)
-    for path in sorted(run_dir.glob(WORKER_LOG_GLOB), key=worker_index):
+    deleted_count, aggregate_bytes = remove_all(sorted(path for path in aggregate_dir.rglob("*") if path.is_file()))
+    remove_empty_dirs(aggregate_dir)
+    for path in sorted(run_dir.glob(WORKER_LOG_GLOB), key=lambda path: int(path.stem[len("worker_w") :])):
         freed_bytes += append_log(path, details_dir / WORKERS_LOG, path.name)
     timing = run_dir / TIMING_CSV
     if timing.is_file() and (details_dir / TIMING_CSV).is_file():
@@ -136,15 +74,10 @@ def tidy_run_files(run_dir, details_dir):
         freed_bytes += remove(timing)
     else:
         move(timing, details_dir / TIMING_CSV)
-    for name in RUN_SCRATCH:
-        freed_bytes += remove(run_dir / name)
-    for name in RUN_SCRATCH_DIRS:
-        if (run_dir / name).is_dir():
-            for path in sorted((run_dir / name).iterdir()):
-                freed_bytes += remove(path)
-                deleted_count += 1
-            remove_empty_dirs(run_dir / name)
-    return deleted_count, freed_bytes
+    freed_bytes += sum(remove(run_dir / name) for name in RUN_SCRATCH)
+    compat_lib_count, compat_lib_bytes = remove_all(sorted(compat_lib_dir.iterdir()) if compat_lib_dir.is_dir() else [])
+    remove_empty_dirs(compat_lib_dir)
+    return deleted_count + compat_lib_count, freed_bytes + aggregate_bytes + compat_lib_bytes
 
 
 def main():

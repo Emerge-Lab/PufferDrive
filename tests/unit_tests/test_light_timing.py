@@ -2,8 +2,8 @@
 
 import pytest
 
-from pufferlib.ocean.cosim import carla_bridge as cb
-from pufferlib.ocean.cosim.light_timing import YellowCountdown
+from opengigaflow.ocean.cosim import carla_bridge as cb
+from opengigaflow.ocean.cosim.light_timing import YellowCountdown
 
 
 def test_countdown_runs_from_onset_and_floors_at_one_step():

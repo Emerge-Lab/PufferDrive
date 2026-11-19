@@ -1,14 +1,12 @@
-"""Tests for `stagger_first_episode`: the first episode after an env is created ends at a
-random step in [init_step_min_horizon, scenario_length], so the sub-envs of a worker stop
-running their episodes in lockstep; every later episode keeps the full scenario_length."""
+"""stagger_first_episode ends only the first episode at a random step in [init_step_min_horizon, scenario_length]."""
 
 import numpy as np
 import pytest
 
-from pufferlib.ocean.drive.drive import Drive
+from opengigaflow.ocean.drive.drive import Drive
 
 
-MAP_DIR = "pufferlib/resources/drive/binaries/carla"
+MAP_DIR = "opengigaflow/resources/carla"
 SCENARIO_LENGTH = 120
 MIN_HORIZON = 20
 # Single-agent sub-envs: one independent first-episode draw per agent.
@@ -21,11 +19,8 @@ def _make_env(seed, **overrides):
         "min_agents_per_env": 1,
         "max_agents_per_env": 1,
         "num_maps": 1,
-        "allow_map_subset": True,
         "map_dir": MAP_DIR,
         "simulation_mode": "gigaflow",
-        "action_type": "continuous",
-        "dynamics_model": "jerk",
         "scenario_length": SCENARIO_LENGTH,
         "init_step_min_horizon": MIN_HORIZON,
         "resample_frequency": 1_000_000,

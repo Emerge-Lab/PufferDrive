@@ -1,18 +1,12 @@
-"""tidy_nuplan_run.py flattens a nuPlan run to overview.csv, scenarios.csv, obs_html/, simulation_log/ and details/
-and keeps the logs (and videos, when rendered) of the selected scenarios only; nuplan_run_layout resolves the fresh
-and the tidied layout."""
+"""tidy_nuplan_run.py flattens a nuPlan run to its selected scenarios' logs; nuplan_run_layout resolves both layouts."""
 
-import os
 import sys
 
-import pandas as pd
-
-sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "eval")
-)
-
 import nuplan_run_layout
+import pandas as pd
 import tidy_nuplan_run as tidy
+from replay_fixtures import relative_tree
+
 
 METRICS = (
     "no_ego_at_fault_collisions",
@@ -45,7 +39,7 @@ def _aggregator_table():
 
 def _write_run(group, videos=False):
     """nuPlan's tree after a run with simulation_log_callback; videos=True adds carl_visualization_callback's .avi."""
-    sim = group / "simulation" / f"{CHALLENGE}_pufferdrive" / TIMESTAMP
+    sim = group / "simulation" / f"{CHALLENGE}_opengigaflow" / TIMESTAMP
     aggregator = sim / "aggregator_metric"
     aggregator.mkdir(parents=True)
     table = _aggregator_table()
@@ -59,7 +53,7 @@ def _write_run(group, videos=False):
     comfort = pd.DataFrame({"scenario_name": list(SCENARIOS), "metric_score": [0.0, 1.0, 1.0]})
     comfort.to_parquet(sim / "metrics" / "ego_is_comfortable.parquet")
     for token in SCENARIOS:
-        log_dir = sim / "simulation_log" / "PufferDrivePlanner" / "turn" / "log" / token
+        log_dir = sim / "simulation_log" / "OpenGigaFlowPlanner" / "turn" / "log" / token
         log_dir.mkdir(parents=True)
         (log_dir / f"{token}.msgpack.xz").write_bytes(b"log " + token.encode())
     if videos:
@@ -87,14 +81,18 @@ def _copy_instead_of_transcode(avi_path, mp4_path, ffmpeg):
     mp4_path.write_bytes(avi_path.read_bytes())
 
 
-def _tree(root):
-    return sorted(str(path.relative_to(root)) for path in root.rglob("*"))
-
-
 def _run(group, *args, monkeypatch):
     monkeypatch.setattr(tidy, "transcode_video", _copy_instead_of_transcode)
     monkeypatch.setattr(sys, "argv", ["tidy_nuplan_run", str(group), *args])
     tidy.main()
+
+
+def test_layout_resolves_logs_kept_under_details(tmp_path):
+    log_dir = tmp_path / "details" / "simulation_log"
+    log_dir.mkdir(parents=True)
+    (log_dir / f"{COLLIDING}.msgpack.xz").write_bytes(b"log")
+    assert nuplan_run_layout.simulation_log_dir(tmp_path) == log_dir
+    assert list(nuplan_run_layout.simulation_logs(tmp_path)) == [COLLIDING]
 
 
 def test_layout_resolves_the_fresh_run(tmp_path):
@@ -150,22 +148,14 @@ def test_tidy_failures_mode_keeps_low_scores_and_their_videos(tmp_path, monkeypa
     assert not (tmp_path / "simulation").exists()
 
 
-def test_layout_resolves_a_run_tidied_into_details_before_2026_11(tmp_path):
-    old_log_dir = tmp_path / "details" / "simulation_log"
-    old_log_dir.mkdir(parents=True)
-    (old_log_dir / f"{COLLIDING}.msgpack.xz").write_bytes(b"log")
-    assert nuplan_run_layout.simulation_log_dir(tmp_path) == old_log_dir
-    assert list(nuplan_run_layout.simulation_logs(tmp_path)) == [COLLIDING]
-
-
 def test_tidy_leaves_unknown_files_and_reports_them(tmp_path, monkeypatch, capsys):
     sim = _write_run(tmp_path)
     (sim / "extra.bin").write_bytes(b"?")
     _run(tmp_path, monkeypatch=monkeypatch)
-    assert _tree(tmp_path / "simulation") == [
-        f"{CHALLENGE}_pufferdrive",
-        f"{CHALLENGE}_pufferdrive/{TIMESTAMP}",
-        f"{CHALLENGE}_pufferdrive/{TIMESTAMP}/extra.bin",
+    assert relative_tree(tmp_path / "simulation") == [
+        f"{CHALLENGE}_opengigaflow",
+        f"{CHALLENGE}_opengigaflow/{TIMESTAMP}",
+        f"{CHALLENGE}_opengigaflow/{TIMESTAMP}/extra.bin",
     ]
     assert "left in place, unknown" in capsys.readouterr().out
 
@@ -173,15 +163,15 @@ def test_tidy_leaves_unknown_files_and_reports_them(tmp_path, monkeypatch, capsy
 def test_tidy_is_a_no_op_the_second_time_and_on_an_unscored_run(tmp_path, monkeypatch, capsys):
     _write_run(tmp_path)
     _run(tmp_path, monkeypatch=monkeypatch)
-    before = _tree(tmp_path)
+    before = relative_tree(tmp_path)
     _run(tmp_path, monkeypatch=monkeypatch)
-    assert _tree(tmp_path) == before
+    assert relative_tree(tmp_path) == before
     assert "already tidied" in capsys.readouterr().out
     unscored = tmp_path / "unscored"
     sim = _write_run(unscored)
     for path in (sim / "aggregator_metric").iterdir():
         path.unlink()
-    before = _tree(unscored)
+    before = relative_tree(unscored)
     _run(unscored, monkeypatch=monkeypatch)
-    assert _tree(unscored) == before
+    assert relative_tree(unscored) == before
     assert "never scored" in capsys.readouterr().out

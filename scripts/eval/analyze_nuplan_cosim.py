@@ -1,14 +1,4 @@
-"""Failure analysis + visualizations for a nuPlan closed-loop run of the PufferDrive planner
-(pufferlib/ocean/cosim/nuplan). Needs the nuPlan devkit env (same interpreter as the simulation).
-
-usage: python scripts/eval/analyze_nuplan_cosim.py <group_dir> <report_dir> [--workers N] [--max-inline N] [--no-video]
-
-<group_dir> is the run_simulation.py `group` directory, fresh (simulation/<challenge>/<timestamp>/...) or
-tidied by tidy_nuplan_run.py (details/).
-Writes <report_dir>/index.html (score table sorted worst-first, failure-category counts, per-scenario
-diagnosis, the worst --max-inline scenarios inline with a six-frame strip + speed plot + video), plus
-strips/, speed/, videos/ and scenarios.csv. Per-scenario work runs in a multiprocessing pool.
-"""
+"""HTML failure report of a nuPlan planner run, fresh or tidied: score table, categories, per-scenario strips."""
 
 import argparse
 import math
@@ -26,7 +16,6 @@ from matplotlib.patches import Polygon  # noqa: E402
 
 from nuplan.common.actor_state.state_representation import Point2D  # noqa: E402
 from nuplan.common.maps.maps_datatypes import SemanticMapLayer  # noqa: E402
-from nuplan.planning.simulation.simulation_log import SimulationLog  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nuplan_log_remap  # noqa: E402  logs written on another machine (cluster paths, planner classes)
@@ -34,7 +23,7 @@ import nuplan_run_layout  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-from pufferlib.ocean.cosim.carla_cosim import write_mp4  # noqa: E402
+from opengigaflow.ocean.cosim.mp4 import write_mp4  # noqa: E402
 
 SCORE_COLS = [
     "score",
@@ -298,21 +287,14 @@ def scenario_section(r, report_dir, inline):
         f"ego {r['ego_dist_m']:.0f} m / expert {r['expert_dist_m']:.0f} m, max speed {r['ego_max_speed']:.1f} / {r['expert_max_speed']:.1f} m/s, "
         f"stopped {r['stopped_frac']:.0%} / {r['expert_stopped_frac']:.0%}, closest agent {r['min_agent_dist_m']:.1f} m"
     )
-    media = (
-        f'<img src="strips/{r["token"]}.png" style="max-width:100%"><br><img src="speed/{r["token"]}.png"><br>'
-        + (
-            f'<video src="videos/{r["token"]}.mp4" controls width="420"></video>'
-            if (report_dir / "videos" / f"{r['token']}.mp4").exists()
-            else ""
-        )
-        if inline
-        else f'<a href="strips/{r["token"]}.png">frames</a> &middot; <a href="speed/{r["token"]}.png">speed</a>'
-        + (
-            f' &middot; <a href="videos/{r["token"]}.mp4">video</a>'
-            if (report_dir / "videos" / f"{r['token']}.mp4").exists()
-            else ""
-        )
-    )
+    token = r["token"]
+    has_video = (report_dir / "videos" / f"{token}.mp4").exists()
+    if inline:
+        media = f'<img src="strips/{token}.png" style="max-width:100%"><br><img src="speed/{token}.png"><br>'
+        media += f'<video src="videos/{token}.mp4" controls width="420"></video>' if has_video else ""
+    else:
+        media = f'<a href="strips/{token}.png">frames</a> &middot; <a href="speed/{token}.png">speed</a>'
+        media += f' &middot; <a href="videos/{token}.mp4">video</a>' if has_video else ""
     return f"{header}<p><b>Diagnosis:</b> {r['diagnosis']}</p><p>{scores}</p><p>{facts}</p>{media}"
 
 
@@ -367,9 +349,9 @@ def main():
     table = df[table_cols].round(2).copy()
     table["token"] = table["token"].map(lambda t: f"<a href='#{t}'>{t}</a>")
     html = [
-        "<html><head><meta charset='utf-8'><title>PufferDrive nuPlan closed-loop report</title>",
+        "<html><head><meta charset='utf-8'><title>OpenGigaFlow nuPlan closed-loop report</title>",
         "<style>body{font-family:sans-serif;max-width:1500px;margin:auto} table{border-collapse:collapse;font-size:12px} td,th{border:1px solid #ccc;padding:3px 6px}</style></head><body>",
-        f"<h1>PufferDrive nuPlan closed-loop &middot; {len(df)} scenarios &middot; mean score {df['score'].mean():.3f}</h1>",
+        f"<h1>OpenGigaFlow nuPlan closed-loop &middot; {len(df)} scenarios &middot; mean score {df['score'].mean():.3f}</h1>",
         "<p>Orange = ego, blue = other agents (red within 8 m), green dashed = expert path, lane connectors colored by reported light state.</p>",
         "<h2>Mean metrics</h2>",
         df[SCORE_COLS].mean().to_frame("mean").T.round(3).to_html(index=False),

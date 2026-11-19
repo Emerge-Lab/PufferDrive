@@ -1,21 +1,4 @@
-"""Shard one PufferDrive eval benchmark across GPUs or nodes and aggregate the results.
-
-Each shard runs an independent `puffer eval` process over a disjoint scenario
-window (eval.scenario_offset), then the per-shard episode_metrics.csv files are
-merged into a single report; wandb=True writes its km/infraction into the summary
-of the training wandb run (self-play benchmark only). scripts/eval/tidy_selfplay_eval.py
-then folds the shard folders into the aggregate dir (evaluation_summary.json,
-obs_html/ with every shard's failure pages, details/); --keep-shards leaves them.
---num-gpus runs one shard per local GPU; --num-nodes runs the shards as srun steps
-of the surrounding SLURM allocation, --shards-per-node of them per node (default 1),
-each with one GPU and an equal share of the node's CPUs (SLURM_CPUS_PER_TASK).
-
-Usage (from the repo root, venv active):
-    python scripts/parallel_eval.py carla \
-        --total-scenarios 80000 --num-nodes 4 --shards-per-node 8 \
-        load_model_path=experiments/run/final_model.pt \
-        eval.output_name=run vec.num_envs=60 wandb=True
-"""
+"""Shard one OpenGigaFlow eval benchmark over local GPUs or SLURM srun steps and aggregate the episode metrics."""
 
 import argparse
 import os
@@ -24,16 +7,17 @@ import sys
 from datetime import datetime
 
 import pandas as pd
+import yaml
 
 RESERVED_OVERRIDE_KEYS = ("num_scenarios", "eval.num_scenarios", "eval.scenario_offset", "eval.output_subdir")
+DEFAULT_CONFIG_FILE = os.path.join("config", "opengigaflow.yaml")  # inside the opengigaflow package
 FAILED_LOG_TAIL_LINES = 30
 
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("benchmark", help="Benchmark name from the benchmark config, e.g. carla")
-    parser.add_argument("--env-name", default="puffer_drive")
-    parser.add_argument("--total-scenarios", type=int, required=True)
+    parser.add_argument("benchmark", help="Benchmark name from the benchmark config, e.g. selfplay")
+    parser.add_argument("--total-scenarios", type=int, help="Default: the benchmark's num_scenarios")
     shard_group = parser.add_mutually_exclusive_group(required=True)
     shard_group.add_argument("--num-gpus", type=int, help="Run one shard per local GPU")
     shard_group.add_argument(
@@ -59,15 +43,6 @@ def parse_arguments():
     return arguments, overrides
 
 
-def override_value(overrides, key):
-    value = None
-    for override in overrides:
-        override_key, _, override_val = override.partition("=")
-        if override_key == key:
-            value = override_val
-    return value
-
-
 def resolve_gpu_ids(num_gpus):
     visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
     if visible_devices is None:
@@ -89,21 +64,33 @@ def plan_shards(total_scenarios, num_shards):
     return shards
 
 
-def print_log_tail(log_path):
-    with open(log_path, "r", errors="replace") as log_file:
-        tail = log_file.readlines()[-FAILED_LOG_TAIL_LINES:]
-    print(f"--- last {len(tail)} lines of {log_path} ---")
-    print("".join(tail))
+def benchmark_scenario_count(benchmark_name, benchmark_config_path):
+    """num_scenarios of the benchmark in the config the shards load (None: opengigaflow.yaml's eval.benchmark_config)."""
+    import opengigaflow
+    from opengigaflow.ocean.evaluation_utils import evaluation_utils
+
+    if benchmark_config_path is None:
+        # not rl.load_config: importing rl installs its SIGINT handler and warning filter in this launcher
+        with open(os.path.join(os.path.dirname(opengigaflow.__file__), DEFAULT_CONFIG_FILE)) as default_config_file:
+            benchmark_config_path = yaml.safe_load(default_config_file)["eval"]["benchmark_config"]
+    _, benchmarks = evaluation_utils.load_benchmark_config(benchmark_config_path, benchmark_name)
+    if len(benchmarks) != 1:
+        raise SystemExit("--total-scenarios is required when several benchmarks are selected")
+    return benchmarks[0]["num_scenarios"]
 
 
 def main():
     arguments, overrides = parse_arguments()
+    override_values = dict(override.split("=", 1) for override in overrides)
     use_srun = arguments.num_nodes is not None
     num_shards = arguments.num_nodes * arguments.shards_per_node if use_srun else arguments.num_gpus
     if num_shards < 1:
         raise SystemExit("--num-gpus/--num-nodes must be at least 1")
-    if arguments.total_scenarios < num_shards:
-        raise SystemExit("--total-scenarios must be at least the shard count")
+    total_scenarios = arguments.total_scenarios
+    if total_scenarios is None:
+        total_scenarios = benchmark_scenario_count(arguments.benchmark, override_values.get("eval.benchmark_config"))
+    if total_scenarios < num_shards:
+        raise SystemExit(f"{total_scenarios} scenarios cannot fill {num_shards} shards")
     if use_srun:
         if "SLURM_JOB_ID" not in os.environ:
             raise SystemExit("--num-nodes requires running inside a SLURM allocation")
@@ -118,21 +105,21 @@ def main():
             f"{num_shards} shards: {arguments.num_nodes} nodes x {arguments.shards_per_node} per node, "
             f"{cpus_per_shard} CPUs each{numa_note}"
         )
-        num_envs_override = override_value(overrides, "vec.num_envs")
+        num_envs_override = override_values.get("vec.num_envs")
         if num_envs_override is not None and num_envs_override.isdigit() and int(num_envs_override) > cpus_per_shard:
             print(f"Note: vec.num_envs={num_envs_override} blocking workers exceed a shard's {cpus_per_shard} CPUs")
     for override in overrides:
         if override.partition("=")[0] in RESERVED_OVERRIDE_KEYS:
             raise SystemExit(f"Override '{override}' is managed by parallel_eval.py; remove it")
 
-    model_path = override_value(overrides, "load_model_path")
+    model_path = override_values.get("load_model_path")
     if model_path is None:
         raise SystemExit("load_model_path=<checkpoint.pt> override is required")
 
-    report_wandb = str(override_value(overrides, "wandb")).lower() in ("true", "1")
+    report_wandb = str(override_values.get("wandb")).lower() in ("true", "1")
     shard_overrides = [o for o in overrides if o.partition("=")[0] != "wandb"] + ["wandb=False"]
 
-    from pufferlib.ocean.evaluation_utils import eval_wandb_report, evaluation_utils
+    from opengigaflow.ocean.evaluation_utils import eval_wandb_report, evaluation_utils
 
     if report_wandb and arguments.benchmark != eval_wandb_report.SELFPLAY_BENCHMARK_NAME:
         raise SystemExit(
@@ -141,8 +128,8 @@ def main():
         )
 
     run_dir = evaluation_utils.resolve_run_dir(model_path)
-    output_dir_name = override_value(overrides, "eval.output_dir_name") or "eval"
-    output_name = override_value(overrides, "eval.output_name")
+    output_dir_name = override_values.get("eval.output_dir_name") or "eval"
+    output_name = override_values.get("eval.output_name")
     benchmark_dir_name = arguments.benchmark if output_name is None else f"{arguments.benchmark}_{output_name}"
     benchmark_dir = os.path.join(run_dir, output_dir_name, benchmark_dir_name)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -150,16 +137,15 @@ def main():
     os.makedirs(aggregate_dir)
 
     gpu_ids = None if use_srun else resolve_gpu_ids(num_shards)
-    shards = plan_shards(arguments.total_scenarios, num_shards)
+    shards = plan_shards(total_scenarios, num_shards)
     processes = []
     for shard_idx, (scenario_offset, shard_scenario_count) in enumerate(shards):
         shard_subdir = f"{stamp}_shard{shard_idx:02d}"
         command = [
             sys.executable,
             "-m",
-            "pufferlib.pufferl",
+            "opengigaflow.rl",
             "eval",
-            arguments.env_name,
             arguments.benchmark,
             *shard_overrides,
             f"num_scenarios={shard_scenario_count}",
@@ -167,7 +153,7 @@ def main():
             f"eval.output_subdir={shard_subdir}",
         ]
         if use_srun:
-            # --exact keeps the step to its CPU share (default: the whole node); --mem=0 shares the job's memory between steps
+            # --exact limits the step to its CPU share (default: the whole node); --mem=0 shares the job's memory
             command = [
                 "srun",
                 "--nodes=1",
@@ -181,7 +167,7 @@ def main():
             shard_env = dict(os.environ)
             if arguments.shards_per_node > 1:
                 # the --exact CPU slice is the placement; a socket bind inside it could leave fewer CPUs than workers
-                shard_env.setdefault("PUFFER_NUMA_BIND", "0")
+                shard_env.setdefault("OPENGIGAFLOW_NUMA_BIND", "0")
             placement = f"srun step, 1 GPU, {cpus_per_shard} CPUs"
         else:
             shard_env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu_ids[shard_idx])
@@ -195,18 +181,21 @@ def main():
             f"{scenario_offset + shard_scenario_count}), log {log_path}"
         )
 
-    failed_shards = []
+    failed_log_paths = []
     for shard_idx, process, log_file, log_path, _ in processes:
         exit_code = process.wait()
         log_file.close()
         status = "done" if exit_code == 0 else f"FAILED (exit {exit_code})"
         print(f"Shard {shard_idx}: {status}")
         if exit_code != 0:
-            failed_shards.append((shard_idx, log_path))
-    if failed_shards:
-        for _, log_path in failed_shards:
-            print_log_tail(log_path)
-        raise SystemExit(f"{len(failed_shards)} of {len(processes)} eval shards failed; not aggregating")
+            failed_log_paths.append(log_path)
+    for log_path in failed_log_paths:
+        with open(log_path, "r", errors="replace") as log_file:
+            tail = log_file.readlines()[-FAILED_LOG_TAIL_LINES:]
+        print(f"--- last {len(tail)} lines of {log_path} ---")
+        print("".join(tail))
+    if failed_log_paths:
+        raise SystemExit(f"{len(failed_log_paths)} of {len(processes)} eval shards failed; not aggregating")
 
     shard_frames = []
     for shard_idx, _, _, _, shard_subdir in processes:
@@ -219,7 +208,7 @@ def main():
         shard_frames.append(shard_frame)
 
     episode_summaries = pd.concat(shard_frames, ignore_index=True).to_dict("records")
-    summary = evaluation_utils._write_eval_reports(episode_summaries, aggregate_dir, arguments.total_scenarios)
+    summary = evaluation_utils._write_eval_reports(episode_summaries, aggregate_dir, total_scenarios)
     print(f"Aggregated {summary['num_episodes']} episodes from {len(processes)} shards into {aggregate_dir}")
     if not arguments.keep_shards:
         tidy_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval", "tidy_selfplay_eval.py")

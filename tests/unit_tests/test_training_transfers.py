@@ -8,8 +8,8 @@ import pytest
 import torch
 from torch.utils._python_dispatch import TorchDispatchMode
 
-from pufferlib.pufferl import PuffeRL
-from pufferlib.vector import Multiprocessing
+from opengigaflow.rl import PPOTrainer, rank_core_share
+from opengigaflow.vector import Multiprocessing
 
 
 @pytest.fixture
@@ -18,7 +18,6 @@ def shared_vector():
     vector = Multiprocessing.__new__(Multiprocessing)
     vector.processes = [Mock()]
     vector.buf = {"observations": np.arange(32, dtype=np.float32).reshape(2, 4, 4)}
-    vector.zero_copy = True
     vector._driver_env_open = False
     vector._observation_registration = None
     return vector
@@ -60,15 +59,6 @@ def test_registration_failure_does_not_unregister_unowned_memory(shared_vector, 
     runtime.cudaHostUnregister.assert_not_called()
 
 
-def test_copying_vector_does_not_register_unused_shared_buffer(shared_vector, monkeypatch):
-    shared_vector.zero_copy = False
-    runtime = Mock()
-    monkeypatch.setattr(torch.cuda, "cudart", runtime)
-    shared_vector.pin_observations()
-    shared_vector.close()
-    runtime.assert_not_called()
-
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for host registration")
 def test_registered_observation_views_transfer_exactly_and_unpin(shared_vector):
     device = torch.cuda.current_device()
@@ -81,6 +71,13 @@ def test_registered_observation_views_transfer_exactly_and_unpin(shared_vector):
     finally:
         shared_vector.close()
     assert not view.is_pinned()
+
+
+def test_ranks_on_one_numa_node_get_disjoint_equal_core_shares():
+    node_cores = [("domain", [core_idx, core_idx + 256]) for core_idx in range(112)]
+    shares = [rank_core_share(node_cores, 4, share_idx) for share_idx in range(4)]
+    assert [len(share) for share in shares] == [28, 28, 28, 28]
+    assert [core for share in shares for core in share] == node_cores
 
 
 class RejectScalarReadback(TorchDispatchMode):
@@ -96,7 +93,7 @@ class RejectScalarReadback(TorchDispatchMode):
     ["cpu", pytest.param("cuda", marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable"))],
 )
 def test_gradient_norms_stay_on_device_without_changing_updates(separate, device):
-    trainer = PuffeRL.__new__(PuffeRL)
+    trainer = PPOTrainer.__new__(PPOTrainer)
     trainer.config = {"max_grad_norm": 0.5}
     trainer.policy = torch.nn.ParameterList(
         [

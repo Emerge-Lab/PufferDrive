@@ -65,7 +65,7 @@ static int test_ground_truth_trajectories_fit_the_buffer_width(void) {
         int cell_count = agent_count * num_timesteps;
         float *xyz_heading = (float *) calloc(4 * cell_count, sizeof(float));
         int *valid = (int *) malloc(cell_count * sizeof(int));
-        int *ids = (int *) calloc(2 * agent_count, sizeof(int));
+        int *ids = (int *) calloc(agent_count, sizeof(int));
         for (int k = 0; k < cell_count; k++) {
             valid[k] = -1;
         }
@@ -77,8 +77,7 @@ static int test_ground_truth_trajectories_fit_the_buffer_width(void) {
             xyz_heading + 2 * cell_count,
             xyz_heading + 3 * cell_count,
             valid,
-            ids,
-            ids + agent_count);
+            ids);
         for (int t = 0; t < num_timesteps; t++) {
             int expected_valid = t < agent->trajectory_size ? agent->log_valid[t] : 0;
             EXPECT_EQ_INT(valid[t], expected_valid);
@@ -99,34 +98,7 @@ static int test_nuplan_replay_load_step_log(void) {
     return run_case("nuplan-replay", drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1);
 }
 
-static int test_nuplan_replay_create_only_controlled(void) {
-    srand(7);
-    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 4, 0);
-    env.init_mode = INIT_MODE_CREATE_ONLY_CONTROLLED;
-    env.control_mode = CONTROL_MODE_VEHICLES;
-    allocate(&env);
-    c_reset(&env);
-    EXPECT_EQ_INT(env.active_agent_count, 4);
-    EXPECT_EQ_INT(env.static_agent_count, 0);
-    EXPECT_EQ_INT(env.num_agents, env.active_agent_count + env.static_agent_count);
-    int valid_agent_count = 0;
-    for (int i = 0; i < env.num_total_agents; i++) {
-        valid_agent_count += env.agents[i].sim_valid == 1;
-    }
-    EXPECT_EQ_INT(valid_agent_count, env.num_agents);
-
-    int obs_size = compute_observation_size(&env);
-    for (int t = 0; t < 5; t++) {
-        drive_set_neutral_actions(&env);
-        c_step(&env);
-        EXPECT_TRUE(drive_all_finite(env.observations, env.active_agent_count * obs_size));
-    }
-    free_allocated(&env);
-    return 0;
-}
-
-static int test_short_early_reset_flags_and_logs(void) {
-    const float max_spawn_attempts = 30.0f;
+static int test_early_reset_logs_and_resets(void) {
     srand(7);
     Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     EXPECT_TRUE(env.active_agent_count >= 4);
@@ -143,24 +115,11 @@ static int test_short_early_reset_flags_and_logs(void) {
     c_step(&env);
 
     EXPECT_TRUE(env.log.n > 0.0f);
-    EXPECT_NEAR(env.log.early_reset_short, env.log.n, 1e-5f);
-    EXPECT_EQ_INT(env.short_reset_print_count, 1);
     EXPECT_EQ_INT(env.autoreset_pending, 1);
 
     drive_set_neutral_actions(&env);
     c_step(&env);
     EXPECT_EQ_INT(env.autoreset_pending, 0);
-    EXPECT_EQ_INT(env.short_reset_print_count, 1);
-    for (int x = 0; x < env.active_agent_count; x++) {
-        Log *agent_log = &env.logs[x];
-        float rejects = agent_log->spawn_reject_collision + agent_log->spawn_reject_offroad
-            + agent_log->spawn_reject_stop_line + agent_log->spawn_reject_empty_cell;
-        EXPECT_TRUE(rejects <= max_spawn_attempts);
-        EXPECT_TRUE(agent_log->spawn_failed == 0.0f || agent_log->spawn_failed == 1.0f);
-        Agent *agent = &env.agents[env.active_agent_indices[x]];
-        EXPECT_EQ_INT(agent->removed, (int) agent_log->spawn_failed);
-        EXPECT_EQ_INT(agent->stopped, (int) agent_log->stopped_at_reset);
-    }
     free_allocated(&env);
     return 0;
 }
@@ -277,7 +236,7 @@ static int test_stagger_first_episode(void) {
 }
 
 static int test_eval_spawn_keeps_edge_clearance(void) {
-    const char *town04_map = DRIVE_TEST_REPO_ROOT "/pufferlib/resources/drive/binaries/carla/opendrive__Town04.bin";
+    const char *town04_map = "./opengigaflow/resources/carla/opendrive__Town04.bin";
     const int reset_count = 8;
     const int agent_count = 50;
     Drive env = drive_test_env_config(town04_map, SIMULATION_MODE_GIGAFLOW, agent_count, 0);
@@ -304,9 +263,8 @@ int main(void) {
     RUN_TEST(test_carla_gigaflow_load_step_log);
     RUN_TEST(test_nuplan_gigaflow_load_step_log);
     RUN_TEST(test_nuplan_replay_load_step_log);
-    RUN_TEST(test_nuplan_replay_create_only_controlled);
     RUN_TEST(test_truncation_and_episode_log);
-    RUN_TEST(test_short_early_reset_flags_and_logs);
+    RUN_TEST(test_early_reset_logs_and_resets);
     RUN_TEST(test_stagger_first_episode);
     RUN_TEST(test_eval_spawn_keeps_edge_clearance);
     RUN_TEST(test_failed_init_spawn_keeps_policy_slot);

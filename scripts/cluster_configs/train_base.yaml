@@ -1,15 +1,13 @@
-# Base training configuration for PufferDrive cluster jobs (turbostream).
-# These args are passed to `puffer train puffer_drive` as --key=value flags.
-#
-# Only keys listed here override the defaults in pufferlib/config/puffer_drive.yaml.
-# Vec settings (num_envs, num_workers, batch_size), env.map_dir, env.num_maps,
-# and env.num_agents are all intentionally omitted so runs inherit the ini.
+# Base program config for submit_cluster.py: key=value overrides of opengigaflow/config/opengigaflow.yaml (maps and agent
+# counts stay the defaults).
 
-# Training
+# single-GPU scale (the defaults are sized for an 8-GPU node)
+vec.num_envs: 20
+train.minibatch_size: 65536
+train.max_minibatch_size: 65536
 train.total_timesteps: 10_000_000_000
 train.checkpoint_interval: 1000
 
-# W&B logging
 wandb: True
-wandb_project: pufferdrive
+wandb_project: opengigaflow
 wandb_group: cluster

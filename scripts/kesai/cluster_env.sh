@@ -1,10 +1,7 @@
-# Cluster detection for the scripts in this folder, sourced from the checkout root after the #SBATCH block:
+# Our clusters on top of scripts/slurm/job_env.sh, sourced after the #SBATCH block by a job submitted from the checkout root:
 #   source scripts/kesai/cluster_env.sh || exit 1
-# Always submit from the checkout root (sbatch keeps it as the job's working directory) and create experiments/logs once.
-# Sets CLUSTER (kesai | scaleway | local), HOME_BASE (where user homes live; other users' paths are $HOME_BASE/<user>/...),
-# SHARED_DATA (the shared datasets: nuplan, nurec, ... live directly below it), PD (this checkout) and SLURM_CPUS_PER_TASK
-# (whole-node jobs carry #SBATCH --exclusive instead of a per-cluster CPU count; srun steps and scripts/parallel_eval.py
-# read the count from here). Your own paths stay $HOME/..., which is /home/<user> on scaleway and /cephfs/home/<user> on kesai.
+# Sets CLUSTER (kesai | scaleway | local), HOME_BASE (other users' homes: $HOME_BASE/<user>) and SHARED_DATA (nuplan,
+# nurec, ...), then everything job_env.sh sets (PD, SLURM_CPUS_PER_TASK, numa_pin_for_gpu, pick_port_base).
 if [ -d /cephfs/data ]; then
     CLUSTER=kesai
     HOME_BASE=/cephfs/home
@@ -12,8 +9,16 @@ if [ -d /cephfs/data ]; then
     # the nodes also carry the BMC's USB NIC (169.254.x.x): pin NCCL and Gloo to the cluster network
     CLUSTER_IFACE=$(ip -o -4 addr show to 192.168.20.0/24 2>/dev/null | head -n 1 | cut -d' ' -f2)
     [ -n "$CLUSTER_IFACE" ] && export NCCL_SOCKET_IFNAME=$CLUSTER_IFACE GLOO_SOCKET_IFNAME=$CLUSTER_IFACE
-    # the 400G NICs have no working fabric yet: NCCL must not try RoCE over them (remove with the fabric)
-    export NCCL_IB_DISABLE=1
+    # multi-node NCCL: RDMA (RoCE v2) on the 400G GPU network since 18 Nov 2026. mlx5_0 is the GPU-network card of the
+    # RTX nodes, GID index 3 its RoCE v2 entry with the IPv4 address (the cluster's login default, repeated here for
+    # jobs that do not start from a login shell). NCCL_SOCKET_IFNAME above stays: NCCL uses it for its bootstrap.
+    # NCCL_IB_DISABLE=1 in the environment of a job forces sockets.
+    export NCCL_IB_HCA=${NCCL_IB_HCA:-mlx5_0} NCCL_IB_GID_INDEX=${NCCL_IB_GID_INDEX:-3}
+    # direct GPU-to-GPU copies between all GPUs of a node (cluster default since 18 Nov 2026: 8-GPU all_reduce
+    # 13.3 -> 21-22 GB/s), and NCCL's tree pattern for jobs on more than one node (256 MiB all_reduce with direct
+    # copies: two nodes 11.4 -> 18.5 GB/s, six nodes 10.3 -> 13.0; inside one node the tree is slower, so only there)
+    export NCCL_P2P_LEVEL=${NCCL_P2P_LEVEL:-SYS}
+    [ "${SLURM_JOB_NUM_NODES:-1}" -gt 1 ] && export NCCL_ALGO=${NCCL_ALGO:-Tree}
 elif [ -d /home/shared/data ]; then
     CLUSTER=scaleway
     HOME_BASE=/home
@@ -23,21 +28,6 @@ else
     HOME_BASE=/home
     SHARED_DATA=
 fi
-PD=${PD:-${SLURM_SUBMIT_DIR:-$PWD}}
-if [ ! -f "$PD/setup.py" ]; then
-    echo "cluster_env.sh: $PD is not the PufferDrive checkout; submit from the checkout root or set PD" >&2
-    return 1 2>/dev/null || exit 1
-fi
-export SLURM_CPUS_PER_TASK=${SLURM_CPUS_ON_NODE:-${SLURM_CPUS_PER_TASK:-$(nproc)}}
-# pufferlib opens 4 pipe fds per env worker; the job's soft nofile limit (1024 on kesai) caps workers near 200 per rank
-ulimit -n "$(ulimit -Hn)" 2>/dev/null || echo "cluster_env.sh: could not raise the open-file limit (soft $(ulimit -Sn), hard $(ulimit -Hn))" >&2
-export CLUSTER HOME_BASE SHARED_DATA PD
-echo "cluster: $CLUSTER  checkout: $PD  shared data: ${SHARED_DATA:-none}  cpus per task: $SLURM_CPUS_PER_TASK"
-
-# "taskset -c <cpus>" for the NUMA node of GPU index $1 (nvidia-smi order), empty when unknown; prefix per-GPU workers with it
-numa_pin_for_gpu() {
-    local bus node
-    bus=$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader -i "$1" 2>/dev/null | tr 'A-F' 'a-f')
-    node=$(cat "/sys/bus/pci/devices/${bus:4}/numa_node" 2>/dev/null) || return 0
-    [ "$node" -ge 0 ] 2>/dev/null && echo "taskset -c $(cat "/sys/devices/system/node/node${node}/cpulist")"
-}
+export CLUSTER HOME_BASE SHARED_DATA
+source scripts/slurm/job_env.sh || return 1 2>/dev/null || exit 1
+echo "cluster: $CLUSTER  shared data: ${SHARED_DATA:-none}"

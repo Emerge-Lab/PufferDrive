@@ -1,21 +1,15 @@
-"""light_stop_line_overrides moves a bin light stop line along its lane onto the light's stop waypoint (the
-junction entry RunningRedLightTest scores) and leaves lines within tolerance as exported."""
+"""light_stop_line_overrides moves a bin light stop line onto the light's stop waypoint unless within tolerance."""
 
 import math
-import os
-import sys
 from pathlib import Path
 
 import numpy as np
 
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
 import data_utils.mirror_map_bin as mbin
-from pufferlib.ocean.cosim import carla_bridge as cb
+from opengigaflow.ocean.cosim import carla_bridge as cb
 
 
-TOWN_BIN = Path(__file__).resolve().parents[2] / "pufferlib/resources/drive/binaries/carla/opendrive__Town01.bin"
+TOWN_BIN = Path(__file__).resolve().parents[2] / "opengigaflow/resources/carla/opendrive__Town01.bin"
 
 
 def _line_mid(element):
@@ -53,7 +47,7 @@ def _light_with_waypoints(transform, elements, along_offsets_m):
 def _setup():
     traffic = mbin.read_bin(TOWN_BIN)["traffic"]
     light_elements = [j for j, t in enumerate(traffic) if t["type"] == 1]
-    transform = cb.CarlaTransform("Town01", offset=cb.town_offset(TOWN_BIN))
+    transform = cb.CarlaTransform("Town01")
     return traffic, light_elements, transform
 
 

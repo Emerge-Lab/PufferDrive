@@ -1,25 +1,25 @@
 # Evaluation
 
-PufferDrive evaluation is config-driven. A named benchmark defines which
+OpenGigaFlow evaluation is config-driven. A named benchmark defines which
 scenarios to run. The evaluator writes deterministic per-episode
 metrics and can replay only the failed episodes as interactive HTML.
 
 Failure selection, replay capture, and HTML rendering are all handled by
-`puffer eval`; there is no separate failure-mining workflow.
+`opengigaflow eval`; there is no separate failure-mining workflow.
 
 ## Configuration
 
-The evaluation files live outside `pufferlib/ocean` because they configure the
+The evaluation files live outside `opengigaflow/ocean` because they configure the
 evaluation application, not the simulator:
 
-- `pufferlib/config/evaluation/benchmark.yaml` defines the shared deterministic
+- `opengigaflow/config/evaluation/benchmark.yaml` defines the shared deterministic
   environment and named benchmarks.
-- `pufferlib/config/puffer_drive.yaml` selects that file and configures the
+- `opengigaflow/config/opengigaflow.yaml` selects that file and configures the
   evaluator under `eval`.
 
 Each configured benchmark contains:
 
-- `name`: positional benchmark name passed after `puffer_drive`.
+- `name`: positional benchmark name passed after `opengigaflow`.
 - `simulation_mode`: `gigaflow` for generated scenarios or `replay` for recorded ones.
 - `num_scenarios`: number of episode summaries expected in the report.
 - `num_maps`: number of sorted map files available to the benchmark.
@@ -32,7 +32,8 @@ Each configured benchmark contains:
 `eval.num_agents` is the agent capacity of each evaluation worker and must be at
 least the benchmark's `max_agents_per_env`. The policy inference batch grows with
 the number of workers, so reduce both `eval.num_agents` and `vec.num_envs` for a
-small local CPU check.
+small local CPU check. An evaluation starts `vec.num_envs` worker processes; the
+default of 128 is the training value.
 
 Replay benchmarks using `control_sdc_only` additionally cap their worker count with
 `eval.max_sdc_replay_workers` (default `4`).
@@ -42,23 +43,23 @@ Replay benchmarks using `control_sdc_only` additionally cap their worker count w
 Benchmark selection and a 3.0 checkpoint are required, with the matching `config.yaml` in the run directory.
 
 ```bash
-puffer eval puffer_drive carla_fast \
-  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
+opengigaflow eval selfplay_fast \
+  load_model_path=experiments/<run>/final_model.pt \
   train.device=cpu
 ```
 
 Select multiple benchmarks with a comma-separated value:
 
 ```bash
-puffer eval puffer_drive carla_fast,womd_single \
-  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt
+opengigaflow eval selfplay_fast,womd_single \
+  load_model_path=experiments/<run>/final_model.pt
 ```
 
-For a smaller CPU run using the committed `carla_fast` benchmark:
+For a smaller CPU run using the committed `selfplay_fast` benchmark:
 
 ```bash
-puffer eval puffer_drive carla_fast \
-  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
+opengigaflow eval selfplay_fast \
+  load_model_path=experiments/<run>/final_model.pt \
   eval.num_agents=50 \
   vec.num_envs=2 \
   train.device=cpu
@@ -68,8 +69,8 @@ Hydra overrides are applied after the selected benchmark. This supports
 parameter experiments without editing `benchmark.yaml`:
 
 ```bash
-puffer eval puffer_drive carla_fast \
-  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
+opengigaflow eval selfplay_fast \
+  load_model_path=experiments/<run>/final_model.pt \
   env.goal_speed=10 \
   eval.output_name=goal_speed_10
 ```
@@ -78,11 +79,27 @@ Use `eval.output_name` when comparing runs so the folder identifies the
 experiment. The resolved configuration saved with every result records the
 effective values.
 
+The controller overrides evaluate the simulator's rule-based drivers on the same
+benchmarks. `pdm` is a PDM-Closed style planner, `idm` the intelligent driver
+model; both follow the agents' routes, and the checkpoint is loaded but its
+actions are ignored:
+
+```bash
+opengigaflow eval selfplay_fast \
+  load_model_path=experiments/<run>/final_model.pt \
+  env.sdc_controller=pdm env.non_sdc_controller=pdm \
+  eval.output_name=pdm
+```
+
+PDM does not slow down for goals, so with the benchmark's goal rule (the last
+goal of a set counts only below `env.goal_speed`) read its infraction and
+distance metrics, not its goal metrics.
+
 ## Evaluation flow
 
 For each selected benchmark, the evaluator:
 
-1. Loads the checkpoint's policy, RNN, and accepted 3.0 environment settings.
+1. Loads the checkpoint's policy and accepted 3.0 environment settings.
 2. Applies the benchmark and shared evaluation overrides.
 3. Splits a deterministic scenario window across evaluation workers.
 4. Runs deterministic policy inference and gathers one `evaluation_episode`
@@ -97,8 +114,8 @@ benchmark config, checkpoint configuration, worker arguments, maps, and seeds.
 Capture and render every scenario from the standard benchmark pass with:
 
 ```bash
-puffer eval puffer_drive carla_fast \
-  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
+opengigaflow eval selfplay_fast \
+  load_model_path=experiments/<run>/final_model.pt \
   eval.render_scenarios=true \
   eval.capture_observations=false
 ```
@@ -115,7 +132,7 @@ compressed files are removed after rendering by default; use
 To evaluate and render the environment distribution used during training, run:
 
 ```bash
-puffer eval puffer_drive carla_fast \
+opengigaflow eval selfplay_fast \
   load_model_path=path/to/model.pt \
   env.eval_training_render=true
 ```
@@ -126,8 +143,8 @@ Set `eval.render_filter` to render scenarios where a selected metric is greater
 than zero:
 
 ```bash
-puffer eval puffer_drive carla_fast \
-  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
+opengigaflow eval selfplay_fast \
+  load_model_path=experiments/<run>/final_model.pt \
   eval.render_filter=offroad_rate \
   eval.max_rendered_failures=10 \
   eval.capture_observations=false
@@ -148,9 +165,9 @@ To filter and replay an existing metrics CSV without rerunning the standard
 benchmark pass:
 
 ```bash
-puffer eval puffer_drive carla \
-  load_model_path=experiments/mimolette/models/model_puffer_drive_003815.pt \
-  eval.failure_replay_csv=experiments/mimolette/eval/carla/episode_metrics.csv \
+opengigaflow eval selfplay \
+  load_model_path=experiments/mimolette/models/model_opengigaflow_003815.pt \
+  eval.failure_replay_csv=experiments/mimolette/eval/selfplay/episode_metrics.csv \
   eval.render_filter=offroad_rate \
   eval.max_rendered_failures=10 \
   eval.capture_observations=false
@@ -194,24 +211,3 @@ agent batch size, infractions, progress, rewards, and score metrics.
 count, and means for every numeric metric. If the evaluator emits fewer or more
 episodes than requested, it prints a warning and still writes the available
 results; compare `num_scenarios` with `num_episodes` to detect the mismatch.
-
-## Evaluation during training
-
-Training uses the same configured evaluator and the live policy:
-
-```yaml
-env:
-  num_agents: 1024
-eval:
-  num_agents: 128
-train:
-  evaluation_interval_epochs: 100
-  evaluation_benchmarks: carla_fast
-```
-
-The default `evaluation_interval_epochs: null` disables evaluation during
-training. Mid-training evaluation currently shares
-`vec.num_envs` with training. If training ends between scheduled intervals, one
-final evaluation runs at the last epoch. Training evaluation logs benchmark
-metric means to the active logger and writes reports under the training run's
-`eval/training` hierarchy.

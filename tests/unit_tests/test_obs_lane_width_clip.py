@@ -2,23 +2,19 @@
 
 import os
 import shutil
-import sys
 
 import numpy as np
 import pytest
 
-from pufferlib.ocean.drive.drive import Drive
+from data_utils.mirror_map_bin import _is_lane, read_bin, write_bin
+from opengigaflow.ocean.drive.drive import Drive
+
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(REPO_ROOT, "data_utils"))
-from mirror_map_bin import _is_lane, read_bin, write_bin  # noqa: E402
-
 SOURCE_BIN = os.path.join(
     REPO_ROOT,
-    "pufferlib",
+    "opengigaflow",
     "resources",
-    "drive",
-    "binaries",
     "sdc_replay_test",
     "nuplan__c2a99be0-5b3e-5e67-88e6-6fd0f22e5419.bin",
 )
@@ -55,7 +51,6 @@ def _lane_width_obs(map_dir, **clip_kwargs):
         scenario_length=400,
         resample_frequency=1_000_000,
         termination_mode=False,
-        terminate_on_goal=False,
         obs_dropout_lane=0.0,
         obs_dropout_boundary=0.0,
         obs_norm_road_seg_width_m=ROAD_SEG_WIDTH_NORM_M,

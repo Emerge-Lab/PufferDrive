@@ -1,24 +1,16 @@
-"""tidy_carla_run.py flattens a longest6 run to results.csv, run_info.txt, obs_html/, routes/ (flat) and details/,
-keeping the telemetry and world logs of the failed route runs only; render_carla_obs_html.py pages the failed route
-runs by default and renders a tidied run from its pages; carla_run_layout resolves both layouts."""
+"""tidy_carla_run.py flattens a longest6 run; render_carla_obs_html.py pages its failed route runs, also once tidied."""
 
 import json
-import os
 import sys
 
-import numpy as np
-
-from pufferlib import viz
-from pufferlib.ocean.cosim.carla.shadow_ego import TELEMETRY_HEADER
-
-
-sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "eval")
-)
-
 import carla_run_layout as layout
+import numpy as np
 import render_carla_obs_html as render
 import tidy_carla_run as tidy
+from replay_fixtures import blank_replay, relative_tree
+
+from opengigaflow import viz
+from opengigaflow.ocean.cosim.carla.shadow_ego import TELEMETRY_HEADER
 
 
 FRAMES, AGENT_CAP = 40, 2
@@ -37,7 +29,6 @@ ROUTE_RUNS = {
     "route_07_s1": ("Failed - Simulation crashed", {}),
 }
 SCORES = {"route_03_s0": 50.0, "route_03_s1": 100.0, "route_07_s0": 80.5, "route_07_s1": 0.0}
-TOWNS = {3: "Town01", 7: "Town02"}
 
 
 def _record(route_run):
@@ -53,27 +44,7 @@ def _record(route_run):
 
 
 def _replay():
-    replay = {
-        "env": {
-            "num_goals": 2,
-            "goal_radius": 2.0,
-            "reward_conditioning": False,
-            "obs_slots_partners_n": 4,
-            "obs_slots_lane_n": 4,
-            "obs_slots_boundary_n": 4,
-            "obs_slots_traffic_controls_n": 1,
-        },
-        "agent_f32": np.zeros((FRAMES, AGENT_CAP, 13), np.float32),
-        "agent_i32": np.zeros((FRAMES, AGENT_CAP, 10), np.int32),
-        "metrics_f32": np.zeros((FRAMES, AGENT_CAP, len(viz.METRIC_LABELS)), np.float32),
-        "puffer_f32": np.zeros((FRAMES, AGENT_CAP, 4), np.float32),
-        "traffic_i16": np.zeros((FRAMES, 1, 3), np.int16),
-        "raw_action": np.ones((FRAMES, 1, 2), np.float32),
-        "clipped_action": np.ones((FRAMES, 1, 2), np.float32),
-        "value": np.zeros((FRAMES, 1), np.float32),
-        "entropy": np.zeros((FRAMES, 1), np.float32),
-        "obs": None,
-    }
+    replay = blank_replay(FRAMES, AGENT_CAP)
     replay["agent_f32"][:, 0, 0] = np.arange(FRAMES)
     return replay
 
@@ -98,7 +69,7 @@ def _write_run(root):
         route_dir = run / "routes" / route_run
         route_dir.mkdir(parents=True)
         _write_attempt(route_dir, "20261109_120100_000001")
-        (route_dir / "evaluator_attempt1.log").write_text(f"[puffer_agent] route done {route_run}\n")
+        (route_dir / "evaluator_attempt1.log").write_text(f"[opengigaflow_agent] route done {route_run}\n")
         (route_dir / "carla_server_attempt1.log").write_text("4.24.3 UE4\n")
         (route_dir / "result.json").write_text(json.dumps({"_checkpoint": {"records": [_record(route_run)]}}))
     # the crashed route was retried: a first attempt without a replay, server and evaluator logs of both
@@ -114,7 +85,8 @@ def _write_run(root):
     (aggregate / "results.csv").write_text('"sep=,"\nAvg. driving score,57.625\n')
     (run / "run_info.txt").write_text("checkpoint /x/final_model.pt\nseeds 0 1\n")
     (run / "timing.csv").write_text(
-        "route,worker,gpu,attempt,start,wall_s,game_s,pace,status,driving_score,seed\n3,0,0,1,12:01:00,100,300.0,3.0,Completed,50.00,0\n"
+        "route,worker,gpu,attempt,start,wall_s,game_s,pace,status,driving_score,seed\n"
+        "3,0,0,1,12:01:00,100,300.0,3.0,Completed,50.00,0\n"
     )
     (run / "server_pids").write_text("1234\n")
     for worker in (0, 1, 10):
@@ -122,10 +94,6 @@ def _write_run(root):
     (run / "compat_lib").mkdir()
     (run / "compat_lib" / "libtiff.so.5").symlink_to("/usr/lib/libtiff.so.6")
     return run
-
-
-def _tree(root):
-    return sorted(str(path.relative_to(root)) for path in root.rglob("*"))
 
 
 def _render(run, *args, monkeypatch):
@@ -208,9 +176,9 @@ def test_tidy_flattens_the_run_and_keeps_the_failed_routes_logs(tmp_path, monkey
         layout.record_file(runs["route_03_s0"], "world_log", ".npz", "route_03_s0").name == "route_03_s0.world_log.npz"
     )
     assert layout.record_file(runs["route_03_s1"], "world_log", ".npz", "route_03_s1") is None
-    before = _tree(run)
+    before = relative_tree(run)
     _tidy(run, monkeypatch=monkeypatch)
-    assert _tree(run) == before
+    assert relative_tree(run) == before
 
 
 def test_tidy_keep_all_and_none(tmp_path, monkeypatch):

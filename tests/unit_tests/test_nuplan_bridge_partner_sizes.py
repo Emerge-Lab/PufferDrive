@@ -1,15 +1,9 @@
-"""pad_vru_partner_sizes: pedestrian and bicycle boxes grow by the pad on both axes, vehicles keep their size, and
-the inputs are never modified."""
-
-import os
-import sys
+"""pad_vru_partner_sizes grows pedestrian and bicycle boxes by the pad on both axes and leaves its inputs untouched."""
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-from pufferlib.ocean.cosim import nuplan_bridge as nb
+from opengigaflow.ocean.cosim import nuplan_bridge as nb
 
 
 def test_pad_grows_pedestrian_and_bicycle_boxes_only():

@@ -41,7 +41,6 @@ static Agent drive_test_driving_agent(float prev_front_x, float cur_front_x, flo
     Agent agent = drive_test_agent(prev_front_x - TEST_HALF_LENGTH_M, y, 0.0f);
     agent.sim_x = cur_front_x - TEST_HALF_LENGTH_M;
     agent.current_lane_idx = 100;
-    agent.previous_lane_idx = 100;
     return agent;
 }
 
@@ -211,7 +210,6 @@ static int test_no_lane_assignment_still_flags(void) {
     set_light(TRAFFIC_CONTROL_STATE_RED);
     Agent agent = drive_test_driving_agent(-0.5f, 0.5f, 0.0f);
     agent.current_lane_idx = -1;
-    agent.previous_lane_idx = -1;
     env.agents = &agent;
     EXPECT_TRUE(check_red_light_violation(&env, 0));
     return 0;
@@ -226,26 +224,6 @@ static int test_training_margin_flags_before_line(void) {
     env.agents = &agent;
     EXPECT_FALSE(check_red_light_violation(&env, 0));
     agent = drive_test_driving_agent(-0.5f, -0.2f, 0.0f);
-    EXPECT_TRUE(check_red_light_violation(&env, 0));
-    return 0;
-}
-
-static int test_training_rear_margin_extends_tail_clearance(void) {
-    TrafficControlElement tc = drive_test_light();
-    Drive env = drive_test_light_env(&tc);
-    env.red_light_train_rear_margin_m = 1.0f;
-    set_light(TRAFFIC_CONTROL_STATE_RED);
-    // rear 2.5 m past the line clears 1 m + margin
-    Agent agent = drive_test_driving_agent(6.5f, 6.5f, 0.0f);
-    env.agents = &agent;
-    EXPECT_FALSE(check_red_light_violation(&env, 0));
-    agent = drive_test_driving_agent(5.9f, 5.9f, 0.0f);
-    EXPECT_TRUE(check_red_light_violation(&env, 0));
-    // eval semantics: the real 1 m clearance
-    env.eval_mode = 1;
-    agent = drive_test_driving_agent(5.9f, 5.9f, 0.0f);
-    EXPECT_FALSE(check_red_light_violation(&env, 0));
-    agent = drive_test_driving_agent(4.9f, 4.9f, 0.0f);
     EXPECT_TRUE(check_red_light_violation(&env, 0));
     return 0;
 }
@@ -304,7 +282,6 @@ int main(void) {
     RUN_TEST(test_different_z_level_no_flag);
     RUN_TEST(test_no_lane_assignment_still_flags);
     RUN_TEST(test_training_margin_flags_before_line);
-    RUN_TEST(test_training_rear_margin_extends_tail_clearance);
     RUN_TEST(test_eval_semantics_drop_training_margin);
     RUN_TEST(test_perceived_size_margin_never_inflates_detection);
     return test_summary(failures);

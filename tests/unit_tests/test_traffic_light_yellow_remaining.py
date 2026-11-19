@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 
-from pufferlib.ocean.drive import binding
-from pufferlib.ocean.drive.drive import Drive
+from opengigaflow.ocean.drive import binding
+from opengigaflow.ocean.drive.drive import Drive
 
-MAP_DIR = "pufferlib/resources/drive/binaries/carla"
+MAP_DIR = "opengigaflow/resources/carla"
 YELLOW = binding.TRAFFIC_CONTROL_STATE_YELLOW
 RED = binding.TRAFFIC_CONTROL_STATE_RED
 YELLOW_MAX_S = 3.0
@@ -19,11 +19,8 @@ def _make_env(**overrides):
         "min_agents_per_env": 1,
         "max_agents_per_env": 16,
         "num_maps": 1,
-        "allow_map_subset": True,
         "map_dir": MAP_DIR,
         "simulation_mode": "gigaflow",
-        "action_type": "continuous",
-        "dynamics_model": "jerk",
         "scenario_length": 120,
         "resample_frequency": 1_000_000,
         "termination_mode": 0,
@@ -42,9 +39,7 @@ def _make_env(**overrides):
 
 
 def _num_traffic(env):
-    state = env.get_state()
-    scenario = state[0] if isinstance(state, list) else state
-    return int(scenario["num_traffic_elements"])
+    return int(env.get_state()[0]["num_traffic_elements"])
 
 
 def _light_rows(env):

@@ -1,14 +1,6 @@
-# Multi-agent "best launch" nightly training program config.
-#
-# The training recipe (env physics, goals, observations, perturbations,
-# rewards, policy architecture, optimizer settings) comes from the defaults
-# in pufferlib/config/puffer_drive.yaml. This file only overrides scale,
-# run length, and logging.
-#
-# Launch via scripts/launch_nightly_best.sh (3 seeds, date-stamped).
+# Multi-agent nightly program config (scripts/launch_nightly_best.sh): opengigaflow.yaml's recipe, scale and length here.
 
-# Full training scale. The defaults are sized to run on-premise for dev;
-# the scale knobs for a real training run live here.
+# full training scale on one GPU (the defaults are sized for an 8-GPU node)
 policy.action_type: discrete
 env.num_agents: 3200
 vec.num_envs: 40
@@ -16,19 +8,11 @@ train.minibatch_size: 256000
 train.max_minibatch_size: 64000
 train.compile: true
 
-# Night-sized run: the default 500B-step schedule doesn't finish overnight.
+# night-sized: the default 1e12-step schedule does not finish overnight
 train.total_timesteps: 10_000_000_000
 train.checkpoint_interval: 500
 
-# Run the catalog-defined fast CARLA evaluation every 100 training epochs.
-train.evaluation_interval_epochs: 100
-train.evaluation_benchmarks: carla_fast
-
-# W&B — group has no space (submit_cluster.py joins the inner command
-# without quoting arg values). Launchers (launch_nightly_best.sh and
-# Modal's nightly()) override wandb_group to today's date at launch so
-# runs cluster by night in the UI; the static value here is just the
-# fallback for ad-hoc invocations.
+# no spaces: submit_cluster.py joins the command unquoted; the launcher replaces the group with the date
 wandb: True
 wandb_project: nightly-multi
 wandb_group: nightly-multi

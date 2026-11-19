@@ -1,0 +1,229 @@
+#include "constants.h"
+
+#include <stdlib.h>
+
+static inline int is_road_lane(int type) {
+    return (type >= 0 && type <= 9);
+}
+
+static inline int is_drivable_road_lane(int type) {
+    return (type == LANE_FREEWAY || type == LANE_SURFACE_STREET);
+}
+
+static inline int is_road_edge(int type) {
+    return (type >= 20 && type <= 29);
+}
+
+static inline int is_road_grid_candidate(int type) {
+    return is_road_lane(type) || is_road_edge(type);
+}
+
+struct Agent {
+    int id;
+    int type;
+
+    int trajectory_size;
+    float *log_trajectory_x;
+    float *log_trajectory_y;
+    float *log_trajectory_z;
+    float *log_heading;
+    float *log_velocity_x;
+    float *log_velocity_y;
+    float *log_length;
+    float *log_width;
+    float *log_height;
+    int *log_valid;
+
+    float sim_x;       // Bounding box center x
+    float sim_y;       // Bounding box center y
+    float sim_z;       // Bounding box center z
+    float sim_heading; // Bounding box heading
+    float cos_heading;
+    float sin_heading;
+    float sim_vx;           // Bounding box velocity x
+    float sim_vy;           // Bounding box velocity y
+    float sim_speed;        // Bounding box center speed magnitude
+    float sim_speed_signed; // Bounding box center signed longitudinal speed
+    float sim_length;       // Bounding box length
+    float sim_width;        // Bounding box width
+    float sim_height;       // Bounding box height
+    float radius;           // Circumradius (smallest enclosing circle) -> 0.5*sqrt(L^2+W^2)
+    float prev_x;
+    float prev_y;
+    float prev_cos_heading;
+    float prev_sin_heading;
+    int sim_valid;
+
+    int route_length;
+    int *route;
+    int current_route_idx; // Tracks progress through route array
+
+    float metrics_array[NUM_METRICS];
+    int current_lane_idx;
+    int active_agent;
+    int mark_as_expert;
+    int controller;
+    float cumulative_displacement;
+    int displacement_sample_count;
+    float distance_since_spawn;
+    float seconds_stopped;
+    float lane_curvature;         // 1/m at the closest segment of current lane, positive = left turn
+    float lane_heading_error_rad; // agent heading minus lane heading, positive = agent points left of lane
+    int comfort_violation_last_window_idx;
+
+    float list_goal_x[MAX_GOALS];
+    float list_goal_y[MAX_GOALS];
+    float list_goal_z[MAX_GOALS];
+    int list_goal_lane[MAX_GOALS]; // lane idx of each goal (for GPS lookup); -1 if none
+    float current_goal_x;          // alias = list_goal_x[current_goal_idx]
+    float current_goal_y;          // alias = list_goal_y[current_goal_idx]
+    float current_goal_z;          // alias = list_goal_z[current_goal_idx]
+    int current_goal_idx;          // index of next goal to reach (0..N-1)
+    int goal_count;                // number of active goals (<= num_goals)
+    float gt_goal_x;               // Last valid ground-truth goal position x
+    float gt_goal_y;               // Last valid ground-truth goal position y
+    float gt_goal_z;               // Last valid ground-truth goal position z
+
+    int stopped;                     // 0/1 -> freeze if set
+    int removed;                     // 0/1 -> remove from sim if set
+    int first_collision_partner_idx; // agent index of the first collision partner this episode, -1 if none
+    int stop_sign_target_idx;        // traffic element being approached, -1 if none
+    int stop_sign_stop_completed;    // 0/1 -> stood still inside the target's trigger box
+    int stop_sign_last_failed_idx;   // element run without stopping, not re-targeted until 20 m away
+    int stop_sign_standstill_idx;    // element whose trigger box the agent last stood still in, -1 if none
+    int red_light_latched_idx;       // light whose line the footprint has sat on since the violation, -1 if none
+
+    float accel_long;
+    float accel_lat;
+    float jerk_long;
+    float jerk_lat;
+    float steering_angle;
+    float wheelbase;
+
+    float reward_coefs[NUM_REWARD_COEFS];
+
+    int phantom_braking_counter;     // >0 means currently phantom braking
+    int partner_blindness_counter;   // steps left in the current blind interval, 0 = sees partners normally
+    unsigned char is_blind_partner;  // episode-level flag: agent may restrict partner visibility
+    unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
+};
+
+struct ScriptedPedestrian {
+    int agent_idx;        // slot in Drive.agents
+    int target_agent_idx; // car it appeared for, -1 while idle
+    int state;            // PEDESTRIAN_STATE_*
+    int mode;             // PEDESTRIAN_MODE_*, drawn when it goes idle
+    float timer_s;        // cooldown left while idle, standstill left before the leg, standing time left after it
+    float dir_x;          // unit walking (and facing) direction
+    float dir_y;
+    float path_m; // length of the leg, 0 for a stander
+    float remaining_m;
+    float speed_mps; // walking speed once the ramp is over
+    float ramp_s;    // seconds from setting off to speed_mps
+    float current_speed_mps;
+    float stand_s;     // standing time after the leg
+    float climb_per_m; // z change per metre walked: legs that run along a sloped road
+};
+
+// Lane point with the road edge distance on both sides
+typedef struct {
+    float x;
+    float y;
+    float z;
+    float right_x; // unit vector to the right of the lane heading
+    float right_y;
+    float right_kerb_m;
+    float left_kerb_m;
+    int lane_idx;
+    float lane_s_m;
+} KerbSite;
+
+typedef struct {
+    float mid_x_m;
+    float mid_y_m;
+    float mid_z_m;
+    float half_length_m;
+    float direction_x;
+    float direction_y;
+    float width_m;
+    int observed;
+} RoadObservationSegment;
+
+struct RoadMapElement {
+    int type;
+
+    int segment_size;
+    float *x;
+    float *y;
+    float *z;
+    float *headings;                              // Pre-computed heading for each segment
+    RoadObservationSegment *observation_segments; // Immutable; owned with the shared road geometry.
+
+    // Lane specific info
+    int num_entries;
+    int *entry_lanes;
+    int num_exits;
+    int *exit_lanes;
+    float speed_limit;
+    float length;
+    float *cum_lengths;
+    float *widths;      // per-point lane width, meters
+    int speed_zone_idx; // lanes sharing one posted limit; -1 = none (junction lane or map without zones)
+    float max_segment_half_length_m;
+};
+
+struct TrafficControlElement {
+    int type;
+
+    int state_size;
+    int *states;
+    float stop_line[6]; // Two 3D endpoints: [x1,y1,z1, x2,y2,z2]
+    float heading;
+    int num_controlled_lanes;
+    int *controlled_lanes;
+    int junction_id; // -1: light belongs to no junction
+};
+
+struct LaneGraph {
+    int n_lanes;
+    int *lane_ids;
+    float *distances;       // [goal * n_lanes + from]: row = goal lane, so an ego's lane obs read one contiguous row
+    int *lane_to_graph_idx; // road-element idx -> graph idx (-1 if lane absent from graph), sized num_road_elements
+};
+
+void free_agent(struct Agent *agent) {
+    free(agent->log_trajectory_x);
+    free(agent->log_trajectory_y);
+    free(agent->log_trajectory_z);
+    free(agent->log_heading);
+    free(agent->log_velocity_x);
+    free(agent->log_velocity_y);
+    free(agent->log_length);
+    free(agent->log_width);
+    free(agent->log_height);
+    free(agent->log_valid);
+    free(agent->route);
+}
+
+void free_road_element(struct RoadMapElement *element) {
+    free(element->x);
+    free(element->y);
+    free(element->z);
+    free(element->headings);
+    free(element->observation_segments);
+    free(element->entry_lanes);
+    free(element->exit_lanes);
+    free(element->cum_lengths);
+    free(element->widths);
+}
+
+void free_traffic_element(struct TrafficControlElement *element) {
+    free(element->states);
+    free(element->controlled_lanes);
+}
+
+void free_lane_graph(struct LaneGraph *graph) {
+    free(graph->lane_ids);
+    free(graph->distances);
+    free(graph->lane_to_graph_idx);
+}

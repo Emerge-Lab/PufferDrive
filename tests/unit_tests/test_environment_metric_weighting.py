@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from pufferlib.utils import accumulate_environment_metric, finalize_environment_metrics
+from opengigaflow.utils import accumulate_environment_metric, finalize_environment_metrics
 
 
 def _accumulate(logs):
@@ -30,8 +30,8 @@ def test_weighted_mean_over_completed_episodes():
 def test_unweighted_batch_stats_keep_plain_mean():
     sums = {}
     for value in (0.5, 1.5):
-        accumulate_environment_metric(sums, "obs/mean", value, 1.0)
-    assert finalize_environment_metrics(sums)["obs/mean"] == 1.0
+        accumulate_environment_metric(sums, "lane_center_rate", value, 1.0)
+    assert finalize_environment_metrics(sums)["lane_center_rate"] == 1.0
 
 
 def test_array_values_count_each_element():

@@ -1,23 +1,6 @@
-"""Tidy a CARLA self-play eval (scripts/parallel_eval.py, or one `puffer eval` run) down to what is read after it:
-
-  evaluation_summary.json   the metric averages over every scenario (eval_wandb_report.py reads them)
-  obs_html/                 the rendered replay pages of every shard's failures + one index.html
-  details/                  episode_metrics.csv (one row per scenario), failure_episodes.csv (the re-simulated
-                            failure episodes behind the pages, with their shard), selected_failures.csv (the rows
-                            the render filter picked, with their shard), resolved_benchmark.yaml, shards.log
-
-usage: python scripts/eval/tidy_selfplay_eval.py <aggregate dir>
-
-<aggregate dir> is <run>/eval/carla_<name>/<stamp> as parallel_eval.py leaves it, its shards next to it as
-<stamp>_shard<NN>/ (resolved_benchmark.yaml, episode_metrics.csv, evaluation_summary.json, failures/{...,
-rendered_replays/}); a single-process `puffer eval` dir holds the same files itself. The shard folders are deleted:
-their episode_metrics.csv rows are the aggregate's, their summaries are per-shard means, the per-shard gallery
-indexes make way for one. resolved_benchmark.yaml is the first shard's (the others differ in their scenario window
-only). A .replay.zlib kept by eval.keep_zlib_replays is deleted once its page exists. An already tidied dir is
-left alone."""
+"""Fold the shard folders of a CARLA self-play eval into evaluation_summary.json, obs_html/ and details/."""
 
 import argparse
-import shutil
 import sys
 from pathlib import Path
 
@@ -28,9 +11,9 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tidy_alpasim_run import remove_empty_dirs
+from tidy_alpasim_run import append_log, move, remove, remove_empty_dirs
 
-from pufferlib import viz
+from opengigaflow import viz
 
 
 OBS_HTML_DIR = "obs_html"
@@ -50,38 +33,8 @@ GALLERY_INDEX = "index.html"
 SHARD_COLUMN = "shard"
 
 
-def move(src, dst):
-    """Rename src to dst; a src an interrupted earlier tidy already moved is skipped."""
-    if not src.exists():
-        return
-    if dst.exists():
-        raise SystemExit(f"{dst} already exists, not overwriting it with {src}")
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    src.rename(dst)
-
-
-def remove(path):
-    """-> bytes freed by deleting the file, 0 when it does not exist."""
-    if not path.is_file():
-        return 0
-    size = path.stat().st_size
-    path.unlink()
-    return size
-
-
-def append_log(src, target, header):
-    """Append src under a header line to target and delete it. -> bytes freed."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with open(target, "ab") as target_file, open(src, "rb") as src_file:
-        target_file.write(f"==== {header} ====\n".encode())
-        shutil.copyfileobj(src_file, target_file)
-        target_file.write(b"\n")
-    return remove(src)
-
-
 def shard_dirs(run_dir):
-    """-> the <stamp>_shard<NN> folders next to a parallel_eval.py aggregate dir, then the dir itself when it holds
-    a run's own failures/ or resolved_benchmark.yaml (a single-process `puffer eval`)."""
+    """-> the <stamp>_shard<NN> folders next to run_dir, then run_dir itself when it holds a single process's eval."""
     shards = sorted(path for path in run_dir.parent.glob(f"{run_dir.name}_shard*") if path.is_dir())
     if (run_dir / FAILURES_DIR).is_dir() or (run_dir / RESOLVED_BENCHMARK_YAML).is_file():
         shards.append(run_dir)
@@ -94,15 +47,8 @@ def page_name(replay_path):
     return name[: -len(REPLAY_SUFFIX)] + ".html" if name.endswith(REPLAY_SUFFIX) else name
 
 
-def read_csv_with_shard(path, shard):
-    frame = pd.read_csv(path)
-    frame.insert(0, SHARD_COLUMN, shard)
-    return frame
-
-
-def tidy_shard(shard_dir, run_dir, details_dir, obs_dir, keep_aggregate_metrics):
-    """Pages into obs_html/, the failure tables and the benchmark config into details/, the rest deleted.
-    -> (failure episode frame or None, selected failures frame or None, files deleted, bytes freed)."""
+def tidy_shard(shard_dir, run_dir, details_dir, obs_dir):
+    """Pages to obs_html/, config to details/, rest deleted. -> (failure frame, selected frame, deleted, freed)."""
     shard = shard_dir.name[len(run_dir.name) + 1 :] if shard_dir != run_dir else "single"
     failures_dir = shard_dir / FAILURES_DIR
     deleted_count = freed_bytes = 0
@@ -118,35 +64,34 @@ def tidy_shard(shard_dir, run_dir, details_dir, obs_dir, keep_aggregate_metrics)
             deleted_count += 1
         else:
             move(replay, obs_dir / replay.name)
-    failure_frame = selected_frame = None
-    if (failures_dir / EPISODE_METRICS_CSV).is_file():
-        failure_frame = read_csv_with_shard(failures_dir / EPISODE_METRICS_CSV, shard)
-        freed_bytes += remove(failures_dir / EPISODE_METRICS_CSV)
-        deleted_count += 1
-    if (failures_dir / SELECTED_FAILURES_CSV).is_file():
-        selected_frame = read_csv_with_shard(failures_dir / SELECTED_FAILURES_CSV, shard)
-        freed_bytes += remove(failures_dir / SELECTED_FAILURES_CSV)
+    frames = []
+    for csv_path in (failures_dir / EPISODE_METRICS_CSV, failures_dir / SELECTED_FAILURES_CSV):
+        if not csv_path.is_file():
+            frames.append(None)
+            continue
+        frames.append(pd.read_csv(csv_path))
+        frames[-1].insert(0, SHARD_COLUMN, shard)
+        freed_bytes += remove(csv_path)
         deleted_count += 1
     freed_bytes += remove(failures_dir / SUMMARY_JSON)
     if (details_dir / RESOLVED_BENCHMARK_YAML).is_file():
         freed_bytes += remove(shard_dir / RESOLVED_BENCHMARK_YAML)
     else:
         move(shard_dir / RESOLVED_BENCHMARK_YAML, details_dir / RESOLVED_BENCHMARK_YAML)
-    if shard_dir != run_dir or not keep_aggregate_metrics:
-        freed_bytes += remove(shard_dir / EPISODE_METRICS_CSV)
-        deleted_count += 1
-    if shard_dir != run_dir:
-        freed_bytes += remove(shard_dir / SUMMARY_JSON)
-        deleted_count += 1
     remove_empty_dirs(failures_dir)
     if shard_dir != run_dir:
+        freed_bytes += remove(shard_dir / EPISODE_METRICS_CSV) + remove(shard_dir / SUMMARY_JSON)
+        deleted_count += 2
         remove_empty_dirs(shard_dir)
-    return failure_frame, selected_frame, deleted_count, freed_bytes
+    return *frames, deleted_count, freed_bytes
 
 
-def gallery_metrics(failure_frame):
+def gallery_metrics(failure_episodes_csv):
     """page name -> its episode's finite numeric metrics, the gallery's filter inputs (as the shards' renderer)."""
-    if failure_frame is None or "replay_path" not in failure_frame.columns:
+    if not failure_episodes_csv.is_file():
+        return {}
+    failure_frame = pd.read_csv(failure_episodes_csv)
+    if "replay_path" not in failure_frame.columns:
         return {}
     metrics = {}
     for _, row in failure_frame.iterrows():
@@ -174,7 +119,7 @@ def append_frames(frames, target):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("run_dir", help="parallel_eval.py aggregate dir (its shards next to it), or a `puffer eval` dir")
+    ap.add_argument("run_dir", help="parallel_eval.py aggregate dir (shards next to it), or an `opengigaflow eval` dir")
     args = ap.parse_args()
     run_dir = Path(args.run_dir).resolve()
     if not (run_dir / SUMMARY_JSON).is_file():
@@ -191,9 +136,7 @@ def main():
         freed_bytes += append_log(log, details_dir / SHARDS_LOG, log.name)
     failure_frames, selected_frames = [], []
     for shard_dir in shards:
-        failure_frame, selected_frame, shard_deleted, shard_freed = tidy_shard(
-            shard_dir, run_dir, details_dir, obs_dir, keep_aggregate_metrics=True
-        )
+        failure_frame, selected_frame, shard_deleted, shard_freed = tidy_shard(shard_dir, run_dir, details_dir, obs_dir)
         failure_frames.append(failure_frame)
         selected_frames.append(selected_frame)
         deleted_count += shard_deleted
@@ -202,12 +145,7 @@ def main():
     append_frames(selected_frames, details_dir / SELECTED_FAILURES_CSV)
     pages = sorted(path for path in obs_dir.glob("*.html") if path.name != GALLERY_INDEX) if obs_dir.is_dir() else []
     if pages:
-        file_metrics = (
-            gallery_metrics(pd.read_csv(details_dir / FAILURE_EPISODES_CSV))
-            if (details_dir / FAILURE_EPISODES_CSV).is_file()
-            else {}
-        )
-        viz.build_gallery_index(str(obs_dir), file_metrics=file_metrics)
+        viz.build_gallery_index(str(obs_dir), file_metrics=gallery_metrics(details_dir / FAILURE_EPISODES_CSV))
     leftovers = sorted(
         str(path.relative_to(run_dir.parent))
         for shard in shards

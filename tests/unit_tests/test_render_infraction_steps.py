@@ -1,21 +1,15 @@
 """Infraction -> replay step links in the obs replay panels of the CARLA and nuPlan renderers."""
 
-import os
 import sys
 
 import numpy as np
 import pandas as pd
-
-from pufferlib import viz
-from pufferlib.ocean.cosim.carla.shadow_ego import TELEMETRY_HEADER
-
-
-sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "eval")
-)
-
 import render_carla_obs_html as carla_render
 import render_obs_html as nuplan_render
+from replay_fixtures import blank_replay
+
+from opengigaflow import viz
+from opengigaflow.ocean.cosim.carla.shadow_ego import TELEMETRY_HEADER
 
 
 FRAMES, AGENT_CAP = 3000, 3
@@ -28,27 +22,7 @@ RED_LIGHT_MESSAGE = "Agent ran a red light 365 at (x=310.0, y=-62.0, z=0.3)"
 
 
 def _replay(ego_xy, collision_frames=()):
-    replay = {
-        "env": {
-            "num_goals": 2,
-            "goal_radius": 2.0,
-            "reward_conditioning": False,
-            "obs_slots_partners_n": 4,
-            "obs_slots_lane_n": 4,
-            "obs_slots_boundary_n": 4,
-            "obs_slots_traffic_controls_n": 1,
-        },
-        "agent_f32": np.zeros((FRAMES, AGENT_CAP, 13), np.float32),
-        "agent_i32": np.zeros((FRAMES, AGENT_CAP, 10), np.int32),
-        "metrics_f32": np.zeros((FRAMES, AGENT_CAP, len(viz.METRIC_LABELS)), np.float32),
-        "puffer_f32": np.zeros((FRAMES, AGENT_CAP, 4), np.float32),
-        "traffic_i16": np.zeros((FRAMES, 1, 3), np.int16),
-        "raw_action": np.ones((FRAMES, 1, 2), np.float32),
-        "clipped_action": np.ones((FRAMES, 1, 2), np.float32),
-        "value": np.zeros((FRAMES, 1), np.float32),
-        "entropy": np.zeros((FRAMES, 1), np.float32),
-        "obs": None,
-    }
+    replay = blank_replay(FRAMES, AGENT_CAP)
     replay["agent_f32"][:, 0, :2] = ego_xy
     replay["metrics_f32"][list(collision_frames), 0, nuplan_render.COLLISION_METRIC_IDX] = 1.0
     return replay

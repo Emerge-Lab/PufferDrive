@@ -18,19 +18,18 @@ UNIT_SRCS := \
 	test_drive_dynamics.c \
 	test_drive_map_cache.c \
 	test_drive_idm.c \
+	test_drive_pdm.c \
 	test_drive_speed_limits.c \
 	test_drive_cosim_setters.c \
-	test_drive_pedestrians.c
-SMOKE_SRCS := test_drive_env_smoke.c
+	test_drive_pedestrians.c \
+	test_drive_env_smoke.c
 PERF_SRCS := test_perf.c
 
 UNIT_BINS := $(UNIT_SRCS:%.c=$(BUILD_DIR)/%)
-SMOKE_BINS := $(SMOKE_SRCS:%.c=$(BUILD_DIR)/%)
 PERF_BINS := $(PERF_SRCS:%.c=$(BUILD_DIR)/%)
 
-# Sim headers are compiled into every test binary; without them as
-# prerequisites, editing drive.h leaves stale test binaries behind.
-DRIVE_HEADERS := $(wildcard $(ROOT)/pufferlib/ocean/drive/*.h)
+# Prerequisite of every test binary, so editing a sim header rebuilds them all
+DRIVE_HEADERS := $(wildcard $(ROOT)/opengigaflow/ocean/drive/*.h)
 
 $(BUILD_DIR)/%: %.c include/test.h include/drive_fixture.h $(DRIVE_HEADERS)
 	mkdir -p $(BUILD_DIR)
@@ -39,10 +38,7 @@ $(BUILD_DIR)/%: %.c include/test.h include/drive_fixture.h $(DRIVE_HEADERS)
 unit: $(UNIT_BINS)
 	@for bin in $(UNIT_BINS); do (cd $(ROOT) && tests/drive/$$bin) || exit $$?; done
 
-smoke: $(SMOKE_BINS)
-	@for bin in $(SMOKE_BINS); do (cd $(ROOT) && tests/drive/$$bin) || exit $$?; done
-
-test: unit smoke
+test: unit
 
 perf: $(PERF_BINS)
 	@cd $(ROOT) && tests/drive/$(PERF_BINS)
@@ -50,4 +46,4 @@ perf: $(PERF_BINS)
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: unit smoke test perf clean
+.PHONY: unit test perf clean

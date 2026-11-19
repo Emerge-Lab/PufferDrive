@@ -1,14 +1,5 @@
 """Convert a `docker save` archive into an enroot squashfs image (.sqsh) on a machine without Docker.
-
-usage: python scripts/kesai/docker_archive_to_sqsh.py alpasim-base-0.134.0.tar.zst /cephfs/data/nurec/sqsh/alpasim_base_0.134.0.sqsh \
-           --work_dir /cephfs/scratch/$USER/sqsh_build [--keep_work] [--processors 32]
-
-Flattens the image layers (OCI whiteouts applied), writes enroot's /etc/environment, /etc/fstab and /etc/rc from the
-image config (ENV, VOLUME, WORKDIR, ENTRYPOINT, CMD), the way `enroot import` does, and packs the rootfs with mksquashfs.
-work_dir needs about twice the unpacked image size. The sqsh name must be what the AlpaSim wizard looks for:
-image basename with ':' and '-' replaced by '_', e.g. alpasim-base:0.134.0 -> alpasim_base_0.134.0.sqsh.
-Needs tar, zstd (for .zst archives) and mksquashfs (squashfs-tools).
-"""
+work_dir (default <output>.work) needs about twice the unpacked image size (~100 GB): point --work_dir at scratch."""
 
 import argparse
 import json
@@ -24,19 +15,7 @@ COPY_BUFFER_BYTES = 1 << 20
 MAX_SYMLINK_HOPS = 40
 OPAQUE_WHITEOUT = ".wh..wh..opq"
 WHITEOUT_PREFIX = ".wh."
-SQUASH_OPTIONS = [
-    "-noappend",
-    "-comp",
-    "lz4",
-    "-Xhc",
-    "-b",
-    "262144",
-    "-no-xattrs",
-    "-force-uid",
-    "0",
-    "-force-gid",
-    "0",
-]
+SQUASH_OPTIONS = "-noappend -comp lz4 -Xhc -b 262144 -no-xattrs -force-uid 0 -force-gid 0".split()
 EXTRACTABLE_TYPES = (tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE, tarfile.SYMTYPE, tarfile.LNKTYPE)
 
 

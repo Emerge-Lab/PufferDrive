@@ -1,7 +1,5 @@
-# Debug command:
-#    DEBUG=1 python setup.py build_ext --inplace --force
-# Profiling command:
-#    PROFILE=1 python setup.py build_ext --inplace --force
+# DEBUG=1 python setup.py build_ext --inplace --force: -O0 sanitizer build
+# NO_TRAIN=1: no torch extension and no training dependencies
 
 from setuptools import find_namespace_packages, setup, Extension
 import numpy
@@ -12,30 +10,24 @@ from setuptools.command.build_ext import build_ext
 from torch.utils import cpp_extension
 from torch.utils.cpp_extension import CppExtension, CUDAExtension, CUDA_HOME, ROCM_HOME
 
-# build cuda extension if torch can find CUDA or HIP/ROCM in the system
-# may require `uv pip install --no-build-isolation` or `python setup.py build_ext --inplace`
+# CUDA kernel only when torch finds a CUDA / ROCm toolkit; may need `uv pip install --no-build-isolation`
 BUILD_CUDA_EXT = bool(CUDA_HOME or ROCM_HOME)
 
-# Build with DEBUG=1 to enable debug symbols
 DEBUG = os.getenv("DEBUG", "0") == "1"
-PROFILE = os.getenv("PROFILE", "0") == "1"
-NO_OCEAN = os.getenv("NO_OCEAN", "0") == "1"
 NO_TRAIN = os.getenv("NO_TRAIN", "0") == "1"
 
-# Shared compile args for all platforms
 extra_compile_args = [
     "-DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION",
 ]
 extra_link_args = ["-fwrapv"]
 cxx_args = [
     "-fdiagnostics-color=always",
-    # See note above: no FMA contraction -> reproducible float rounding for the
-    # advantage/V-trace kernel across CPUs.
+    # no FMA contraction: the advantage kernel rounds the same on every CPU
     "-ffp-contract=off",
 ]
 nvcc_args = []
 
-if DEBUG and not PROFILE:
+if DEBUG:
     # Apple clang has no LeakSanitizer; -fsanitize=leak is a hard error there.
     if platform.system() == "Darwin":
         sanitize_flag = "-fsanitize=address,undefined,bounds,pointer-overflow"
@@ -61,11 +53,11 @@ if DEBUG and not PROFILE:
     ]
 else:
     extra_compile_args += [
-        "-O2",
+        "-O3",
         "-flto=auto",
     ]
     extra_link_args += [
-        "-O2",
+        "-O3",
         "-flto=auto",
     ]
     cxx_args += [
@@ -73,30 +65,6 @@ else:
     ]
     nvcc_args += [
         "-O3",
-    ]
-
-if PROFILE:
-    extra_compile_args += [
-        "-g",
-        "-fno-omit-frame-pointer",
-        "-mno-omit-leaf-frame-pointer",
-        "-fno-inline",
-        "-fno-builtin",
-    ]
-    extra_link_args += [
-        "-g",
-        "-fno-inline",
-        "-fno-builtin",
-    ]
-    cxx_args += [
-        "-g",
-        "-fno-omit-frame-pointer",
-        "-mno-omit-leaf-frame-pointer",
-    ]
-    nvcc_args += [
-        "-lineinfo",
-        "-Xcompiler=-fno-omit-frame-pointer",
-        "-Xcompiler=-mno-omit-leaf-frame-pointer",
     ]
 
 system = platform.system()
@@ -105,10 +73,7 @@ if system == "Linux":
         "-Wno-alloc-size-larger-than",
         "-Wno-implicit-function-declaration",
         "-fmax-errors=3",
-        # Disable FMA contraction so float rounding does not depend on whether
-        # the host CPU/compiler fuses multiply-add. Required for the smoke
-        # golden to be bit-reproducible across machines (baseline ISA only;
-        # we never pass -march=native).
+        # no FMA contraction (and never -march=native): the smoke golden stays bit-identical across machines
         "-ffp-contract=off",
     ]
     extra_link_args += [
@@ -126,60 +91,54 @@ else:
 
 class BuildExt(build_ext):
     def run(self):
-        # Propagate any build_ext options (e.g., --inplace, --force) to subcommands
+        # build_torch and build_c inherit --inplace / --force
         build_ext_opts = self.distribution.command_options.get("build_ext", {})
         if build_ext_opts:
-            # Copy flags so build_torch and build_c respect inplace/force
             self.distribution.command_options["build_torch"] = build_ext_opts.copy()
             self.distribution.command_options["build_c"] = build_ext_opts.copy()
 
-        # Run the torch and C builds (which will handle copying when inplace is set)
         self.run_command("build_torch")
         self.run_command("build_c")
 
 
 class CBuildExt(build_ext):
     def run(self, *args, **kwargs):
-        self.extensions = [e for e in self.extensions if e.name != "pufferlib._C"]
+        self.extensions = [e for e in self.extensions if e.name != "opengigaflow._C"]
         super().run(*args, **kwargs)
 
 
 class TorchBuildExt(cpp_extension.BuildExtension):
     def run(self):
-        self.extensions = [e for e in self.extensions if e.name == "pufferlib._C"]
+        self.extensions = [e for e in self.extensions if e.name == "opengigaflow._C"]
         super().run()
 
 
-c_extensions = []
-c_extension_paths = []
-if not NO_OCEAN:
-    c_extension_paths = ["pufferlib/ocean/drive"]
-    c_extensions = [
-        Extension(
-            "pufferlib.ocean.drive.binding",
-            sources=["pufferlib/ocean/drive/binding.c"],
-            include_dirs=[numpy.get_include()],
-            extra_compile_args=extra_compile_args,
-            extra_link_args=extra_link_args,
-        )
-    ]
+c_extension_paths = ["opengigaflow/ocean/drive"]
+c_extensions = [
+    Extension(
+        "opengigaflow.ocean.drive.binding",
+        sources=["opengigaflow/ocean/drive/binding.c"],
+        include_dirs=[numpy.get_include()],
+        extra_compile_args=extra_compile_args,
+        extra_link_args=extra_link_args,
+    )
+]
 
 
-# Check if CUDA compiler is available. You need cuda dev, not just runtime.
 torch_extensions = []
 if not NO_TRAIN:
     torch_sources = [
-        "pufferlib/extensions/pufferlib.cpp",
+        "opengigaflow/extensions/custom_gae.cpp",
     ]
     if BUILD_CUDA_EXT:
         extension = CUDAExtension
-        torch_sources.append("pufferlib/extensions/cuda/pufferlib.cu")
+        torch_sources.append("opengigaflow/extensions/cuda/custom_gae.cu")
     else:
         extension = CppExtension
 
     torch_extensions = [
         extension(
-            "pufferlib._C",
+            "opengigaflow._C",
             torch_sources,
             extra_compile_args={
                 "cxx": cxx_args,
@@ -196,7 +155,6 @@ for key in ("CC", "CXX", "LDSHARED"):
     if cfg_vars[key]:
         cfg_vars[key] = cfg_vars[key].replace("-B /root/anaconda3/compiler_compat", "")
         cfg_vars[key] = cfg_vars[key].replace("-pthread", "")
-        cfg_vars[key] = cfg_vars[key].replace("-fno-strict-overflow", "")
 
 for key, value in cfg_vars.items():
     if value and "-fno-strict-overflow" in str(value):
@@ -205,9 +163,7 @@ for key, value in cfg_vars.items():
 install_requires = [
     "setuptools<81",
     "numpy",
-    "gymnasium==0.29.1",
     "pyyaml",
-    "awscli",
 ]
 
 if not NO_TRAIN:
@@ -221,25 +177,18 @@ if not NO_TRAIN:
         "pyarrow",
         "tqdm",
         "matplotlib==3.11.0",
-        "imageio",
-        "pyro-ppl",
-        "heavyball",
-        "neptune",
         "wandb",
         "wandb-workspaces",
         "tensorboard",
-        "jupytext",
-        "torchinfo",
-        "ipywidgets",
     ]
 
 setup(
-    version="3.0.0",
-    # Scope discovery to pufferlib, does not follow symlinks
-    packages=["pufferlib"]
-    + ["pufferlib." + pkg for pkg in find_namespace_packages(where="pufferlib")]
+    version="1.0.0",
+    # Scope discovery to opengigaflow, does not follow symlinks
+    packages=["opengigaflow"]
+    + ["opengigaflow." + pkg for pkg in find_namespace_packages(where="opengigaflow")]
     + c_extension_paths
-    + ["pufferlib/extensions"],
+    + ["opengigaflow/extensions"],
     include_package_data=True,
     install_requires=install_requires,
     ext_modules=c_extensions + torch_extensions,

@@ -9,21 +9,13 @@ static int test_observation_size_formula(void) {
     env.obs_slots_lane_kept = 5;
     env.obs_slots_boundary_kept = 7;
     env.obs_slots_traffic_controls_n = 4;
-    int expected = EGO_FEATURES + 3 * GOAL_FEATURES + 2 * PARTNER_FEATURES + 5 * LANE_FEATURES + 7 * BOUNDARY_FEATURES
-        + 4 * TRAFFIC_CONTROL_FEATURES + OBS_VALID_COUNT_FEATURES;
+    int expected = EGO_FEATURES + 3 * GOAL_FEATURES + 2 * (PARTNER_FEATURES + PARTNER_RELATIVE_VELOCITY_FEATURES)
+        + 5 * (LANE_FEATURES + LANE_SPEED_LIMIT_FEATURES) + 7 * BOUNDARY_FEATURES + 4 * TRAFFIC_CONTROL_FEATURES
+        + OBS_VALID_COUNT_FEATURES;
     EXPECT_EQ_INT(compute_observation_size(&env), expected);
 
     env.reward_conditioning = 1;
-    expected = EGO_FEATURES + NUM_REWARD_COEFS + 3 * GOAL_FEATURES + 2 * PARTNER_FEATURES + 5 * LANE_FEATURES
-        + 7 * BOUNDARY_FEATURES + 4 * TRAFFIC_CONTROL_FEATURES + OBS_VALID_COUNT_FEATURES;
-    EXPECT_EQ_INT(compute_observation_size(&env), expected);
-
-    env.obs_partner_relative_velocity = 1;
-    expected += 2 * PARTNER_RELATIVE_VELOCITY_FEATURES;
-    EXPECT_EQ_INT(compute_observation_size(&env), expected);
-
-    env.obs_lane_speed_limit = 1;
-    expected += 5 * LANE_SPEED_LIMIT_FEATURES;
+    expected += NUM_REWARD_COEFS;
     EXPECT_EQ_INT(compute_observation_size(&env), expected);
     return 0;
 }
@@ -31,60 +23,38 @@ static int test_observation_size_formula(void) {
 static int check_lane_speed_limit_column(int lane_slots_kept, int boundary_slots_kept) {
     const float forced_limit_mps = 12.5f;
     srand(21);
-    Drive plain = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 4, 0);
-    plain.obs_slots_lane_kept = lane_slots_kept;
-    plain.obs_slots_boundary_kept = boundary_slots_kept;
-    allocate(&plain);
-    c_reset(&plain);
-    srand(21);
-    Drive with_limit = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 4, 0);
-    with_limit.obs_slots_lane_kept = lane_slots_kept;
-    with_limit.obs_slots_boundary_kept = boundary_slots_kept;
-    with_limit.obs_lane_speed_limit = 1;
-    allocate(&with_limit);
-    c_reset(&with_limit);
+    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 4, 0);
+    env.obs_slots_lane_kept = lane_slots_kept;
+    env.obs_slots_boundary_kept = boundary_slots_kept;
+    allocate(&env);
+    c_reset(&env);
 
-    EXPECT_EQ_INT(with_limit.active_agent_count, plain.active_agent_count);
-    int plain_size = compute_observation_size(&plain);
-    int limit_size = compute_observation_size(&with_limit);
-    EXPECT_EQ_INT(limit_size - plain_size, plain.obs_slots_lane_kept * LANE_SPEED_LIMIT_FEATURES);
-    int lane_base = EGO_FEATURES + plain.num_goals * GOAL_FEATURES + plain.obs_slots_partners_n * PARTNER_FEATURES;
-    int limit_row_features = LANE_FEATURES + LANE_SPEED_LIMIT_FEATURES;
-    int plain_tail = lane_base + plain.obs_slots_lane_kept * LANE_FEATURES;
-    int limit_tail = lane_base + plain.obs_slots_lane_kept * limit_row_features;
-
-    for (int agent_idx = 0; agent_idx < plain.active_agent_count; agent_idx++) {
-        const float *plain_obs = &plain.observations[agent_idx * plain_size];
-        const float *limit_obs = &with_limit.observations[agent_idx * limit_size];
-        int lane_count = (int) limit_obs[limit_size - OBS_VALID_COUNT_FEATURES];
+    int obs_size = compute_observation_size(&env);
+    int lane_base = EGO_FEATURES + env.num_goals * GOAL_FEATURES + env.obs_slots_partners_n * PARTNER_ROW_FEATURES;
+    for (int agent_idx = 0; agent_idx < env.active_agent_count; agent_idx++) {
+        const float *obs = &env.observations[agent_idx * obs_size];
+        int lane_count = (int) obs[obs_size - OBS_VALID_COUNT_FEATURES];
         EXPECT_TRUE(lane_count > 0);
-        EXPECT_EQ_INT(memcmp(plain_obs, limit_obs, lane_base * sizeof(float)), 0);
-        EXPECT_EQ_INT(
-            memcmp(&plain_obs[plain_tail], &limit_obs[limit_tail], (plain_size - plain_tail) * sizeof(float)),
-            0);
-        for (int row = 0; row < plain.obs_slots_lane_kept; row++) {
-            const float *plain_row = &plain_obs[lane_base + row * LANE_FEATURES];
-            const float *limit_row = &limit_obs[lane_base + row * limit_row_features];
-            EXPECT_EQ_INT(memcmp(plain_row, limit_row, LANE_FEATURES * sizeof(float)), 0);
-            EXPECT_TRUE(row < lane_count ? limit_row[LANE_FEATURES] > 0.0f : limit_row[LANE_FEATURES] == 0.0f);
+        for (int row = 0; row < env.obs_slots_lane_kept; row++) {
+            float limit_obs = obs[lane_base + row * LANE_ROW_FEATURES + LANE_FEATURES];
+            EXPECT_TRUE(row < lane_count ? limit_obs > 0.0f : limit_obs == 0.0f);
         }
     }
 
-    for (int road_idx = 0; road_idx < with_limit.num_road_elements; road_idx++) {
-        with_limit.lane_speed_limit_mps[road_idx] = forced_limit_mps;
+    for (int road_idx = 0; road_idx < env.num_road_elements; road_idx++) {
+        env.lane_speed_limit_mps[road_idx] = forced_limit_mps;
     }
-    compute_observations(&with_limit);
-    for (int agent_idx = 0; agent_idx < with_limit.active_agent_count; agent_idx++) {
-        const float *limit_obs = &with_limit.observations[agent_idx * limit_size];
-        int lane_count = (int) limit_obs[limit_size - OBS_VALID_COUNT_FEATURES];
-        for (int row = 0; row < with_limit.obs_slots_lane_kept; row++) {
-            float expected = row < lane_count ? forced_limit_mps / with_limit.obs_norm_speed_mps : 0.0f;
-            EXPECT_NEAR(limit_obs[lane_base + row * limit_row_features + LANE_FEATURES], expected, 1e-6f);
+    compute_observations(&env);
+    for (int agent_idx = 0; agent_idx < env.active_agent_count; agent_idx++) {
+        const float *obs = &env.observations[agent_idx * obs_size];
+        int lane_count = (int) obs[obs_size - OBS_VALID_COUNT_FEATURES];
+        for (int row = 0; row < env.obs_slots_lane_kept; row++) {
+            float expected = row < lane_count ? forced_limit_mps / env.obs_norm_speed_mps : 0.0f;
+            EXPECT_NEAR(obs[lane_base + row * LANE_ROW_FEATURES + LANE_FEATURES], expected, 1e-6f);
         }
     }
 
-    free_allocated(&plain);
-    free_allocated(&with_limit);
+    free_allocated(&env);
     return 0;
 }
 
@@ -111,9 +81,9 @@ static int test_observation_zero_fill_and_valid_counts(void) {
     int obs_size = compute_observation_size(&env);
     float *obs = env.observations;
     int partner_base = EGO_FEATURES + env.num_goals * GOAL_FEATURES;
-    int road_base = partner_base + env.obs_slots_partners_n * PARTNER_FEATURES;
+    int road_base = partner_base + env.obs_slots_partners_n * PARTNER_ROW_FEATURES;
     int traffic_base
-        = road_base + env.obs_slots_lane_kept * LANE_FEATURES + env.obs_slots_boundary_kept * BOUNDARY_FEATURES;
+        = road_base + env.obs_slots_lane_kept * LANE_ROW_FEATURES + env.obs_slots_boundary_kept * BOUNDARY_FEATURES;
     int valid_base = obs_size - OBS_VALID_COUNT_FEATURES;
 
     EXPECT_NEAR(obs[valid_base + 2], 0.0f, 1e-5f);
@@ -121,7 +91,7 @@ static int test_observation_zero_fill_and_valid_counts(void) {
     EXPECT_TRUE(obs[valid_base + 1] >= 0.0f && obs[valid_base + 1] <= (float) env.obs_slots_boundary_kept);
     EXPECT_TRUE(obs[valid_base + 3] >= 0.0f && obs[valid_base + 3] <= (float) env.obs_slots_traffic_controls_n);
 
-    for (int i = 0; i < env.obs_slots_partners_n * PARTNER_FEATURES; i++) {
+    for (int i = 0; i < env.obs_slots_partners_n * PARTNER_ROW_FEATURES; i++) {
         EXPECT_NEAR(obs[partner_base + i], 0.0f, 1e-6f);
     }
     for (int i = traffic_base + (int) obs[valid_base + 3] * TRAFFIC_CONTROL_FEATURES; i < valid_base; i++) {
@@ -236,21 +206,10 @@ static int test_reward_coef_goal_speed_pinned(void) {
     env.goal_speed = 3.0f;
     rng_seed(&env.rng_state, 7);
 
-    env.goal_speed_randomization = 0;
     for (int sample_idx = 0; sample_idx < 16; sample_idx++) {
         generate_reward_coefs(&env, &agent);
         EXPECT_NEAR(agent.reward_coefs[REWARD_COEF_GOAL_SPEED], 3.0f, 1e-6f);
     }
-
-    env.goal_speed_randomization = 1;
-    int differs_from_pinned = 0;
-    for (int sample_idx = 0; sample_idx < 16; sample_idx++) {
-        generate_reward_coefs(&env, &agent);
-        float goal_speed = agent.reward_coefs[REWARD_COEF_GOAL_SPEED];
-        EXPECT_TRUE(goal_speed >= 0.0f && goal_speed <= 20.0f);
-        differs_from_pinned += fabsf(goal_speed - 3.0f) > 1e-3f;
-    }
-    EXPECT_TRUE(differs_from_pinned > 0);
     return 0;
 }
 
@@ -283,16 +242,9 @@ static int test_partner_obs_relative_velocity(void) {
     float obs[2 * (PARTNER_FEATURES + PARTNER_RELATIVE_VELOCITY_FEATURES)];
     int partner_count = 0;
 
-    env.obs_partner_relative_velocity = 0;
     memset(obs, 0, sizeof(obs));
     int end_idx = write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
     EXPECT_EQ_INT(partner_count, 1);
-    EXPECT_EQ_INT(end_idx, 2 * PARTNER_FEATURES);
-    EXPECT_NEAR(obs[7], 0.5f, 1e-5f);
-
-    env.obs_partner_relative_velocity = 1;
-    memset(obs, 0, sizeof(obs));
-    end_idx = write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
     EXPECT_EQ_INT(end_idx, 2 * (PARTNER_FEATURES + PARTNER_RELATIVE_VELOCITY_FEATURES));
     EXPECT_NEAR(obs[7], 0.5f, 1e-5f);
     EXPECT_NEAR(obs[PARTNER_FEATURES], -1.0f, 1e-5f);
@@ -310,7 +262,6 @@ static int test_partner_obs_split_long_partner(void) {
     env.obs_norm_veh_length_m = 10.0f;
     env.obs_norm_veh_width_m = 5.0f;
     env.obs_range_partner_m = 100.0f;
-    env.obs_partner_relative_velocity = 1;
     env.num_agents = 3;
     env.active_agent_count = 3;
     int active[3] = {0, 1, 2};
@@ -369,8 +320,8 @@ static int test_partner_obs_split_long_partner(void) {
     return 0;
 }
 
-static int test_partner_obs_blindness_corridor_toggle(void) {
-    // Ego heading +x, blind for the frame; car 20 m ahead in the corridor, car 20 m to the left outside it
+static int test_partner_obs_blind_step_hides_every_partner(void) {
+    // Ego heading +x, blind for the frame; car 20 m ahead, car 20 m to the left
     Drive env = {0};
     env.obs_norm_speed_mps = 10.0f;
     env.obs_norm_xy_offset_m = 100.0f;
@@ -396,27 +347,16 @@ static int test_partner_obs_blindness_corridor_toggle(void) {
         {agents[1].sim_x, agents[1].sim_y, agents[1].sim_z, 1},
         {agents[2].sim_x, agents[2].sim_y, agents[2].sim_z, 2},
     };
-    float obs[3 * PARTNER_FEATURES];
+    float obs[3 * PARTNER_ROW_FEATURES];
     int partner_count = 0;
 
-    env.partner_blindness_corridor = 1;
     agents[0].partner_blindness_counter = 2;
     memset(obs, 0, sizeof(obs));
     int end_idx = write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
-    EXPECT_EQ_INT(partner_count, 1);
-    EXPECT_EQ_INT(end_idx, 3 * PARTNER_FEATURES);
-    EXPECT_EQ_INT(agents[0].partner_blindness_counter, 1);
-    EXPECT_NEAR(obs[0], 0.2f, 1e-6f);
-    EXPECT_NEAR(obs[1], 0.0f, 1e-6f);
-
-    env.partner_blindness_corridor = 0;
-    agents[0].partner_blindness_counter = 2;
-    memset(obs, 0, sizeof(obs));
-    end_idx = write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
     EXPECT_EQ_INT(partner_count, 0);
-    EXPECT_EQ_INT(end_idx, 3 * PARTNER_FEATURES);
+    EXPECT_EQ_INT(end_idx, 3 * PARTNER_ROW_FEATURES);
     EXPECT_EQ_INT(agents[0].partner_blindness_counter, 1);
-    for (int i = 0; i < 3 * PARTNER_FEATURES; i++) {
+    for (int i = 0; i < 3 * PARTNER_ROW_FEATURES; i++) {
         EXPECT_NEAR(obs[i], 0.0f, 0.0f);
     }
 
@@ -424,7 +364,7 @@ static int test_partner_obs_blindness_corridor_toggle(void) {
     memset(obs, 0, sizeof(obs));
     end_idx = write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
     EXPECT_EQ_INT(partner_count, 2);
-    EXPECT_EQ_INT(end_idx, 3 * PARTNER_FEATURES);
+    EXPECT_EQ_INT(end_idx, 3 * PARTNER_ROW_FEATURES);
     return 0;
 }
 
@@ -444,40 +384,8 @@ static int test_partner_blindness_episode_rate_floor(void) {
     return 0;
 }
 
-static int test_partner_blindness_time_fraction_scales_trigger_prob(void) {
-    // 10-step bursts at trigger prob 0.03 leave a blind partner blind 10 / (10 + 0.97 / 0.03) = 23.6% of the time
-    Drive env = {0};
-    rng_seed(&env.rng_state, 7);
-    env.episode_partner_blindness_prob = 1.0f;
-    env.partner_blindness_trigger_prob = 0.03f;
-    env.partner_blindness_duration = 10;
-    Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
-
-    sample_erratic_flags(&env, &agent);
-    EXPECT_EQ_INT(agent.is_blind_partner, 1);
-    EXPECT_NEAR(agent.partner_blindness_trigger_prob, 0.03f, 1e-6f);
-
-    float base_fraction = 10.0f * 0.03f / (10.0f * 0.03f + 1.0f - 0.03f);
-    env.partner_blindness_time_fraction_max = base_fraction;
-    sample_erratic_flags(&env, &agent);
-    EXPECT_NEAR(agent.partner_blindness_trigger_prob, 0.03f, 1e-5f);
-
-    env.partner_blindness_time_fraction_max = 1.0f;
-    for (int draw = 0; draw < 32; draw++) {
-        sample_erratic_flags(&env, &agent);
-        EXPECT_EQ_INT(agent.is_blind_partner, 1);
-        EXPECT_TRUE(agent.partner_blindness_trigger_prob >= 0.03f - 1e-6f);
-        EXPECT_TRUE(agent.partner_blindness_trigger_prob <= 1.0f);
-    }
-
-    env.partner_blindness_trigger_prob = 1.0f;
-    sample_erratic_flags(&env, &agent);
-    EXPECT_NEAR(agent.partner_blindness_trigger_prob, 1.0f, 1e-6f);
-    return 0;
-}
-
-static int test_partner_blindness_full_time_fraction_blinds_every_frame(void) {
-    // Ego heading +x with trigger prob 1: the corridor hides the car on the left in every frame, the first included
+static int test_partner_blindness_trigger_prob_one_blinds_every_frame(void) {
+    // Trigger prob 1: the blind ego sees no partner in any frame, the first included
     Drive env = {0};
     rng_seed(&env.rng_state, 7);
     env.obs_norm_speed_mps = 10.0f;
@@ -490,7 +398,7 @@ static int test_partner_blindness_full_time_fraction_blinds_every_frame(void) {
     env.num_agents = 3;
     env.active_agent_count = 3;
     env.partner_blindness_duration = 1;
-    env.partner_blindness_corridor = 1;
+    env.partner_blindness_trigger_prob = 1.0f;
     int active[3] = {0, 1, 2};
     env.active_agent_indices = active;
     Agent agents[3];
@@ -502,21 +410,20 @@ static int test_partner_blindness_full_time_fraction_blinds_every_frame(void) {
     }
     env.agents = agents;
     agents[0].is_blind_partner = 1;
-    agents[0].partner_blindness_trigger_prob = 1.0f;
     PartnerScanEntry partner_scan[3] = {
         {agents[0].sim_x, agents[0].sim_y, agents[0].sim_z, 0},
         {agents[1].sim_x, agents[1].sim_y, agents[1].sim_z, 1},
         {agents[2].sim_x, agents[2].sim_y, agents[2].sim_z, 2},
     };
-    float obs[3 * PARTNER_FEATURES];
+    float obs[3 * PARTNER_ROW_FEATURES];
     int partner_count = 0;
     for (int frame = 0; frame < 20; frame++) {
         memset(obs, 0, sizeof(obs));
         write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
-        EXPECT_EQ_INT(partner_count, 1);
+        EXPECT_EQ_INT(partner_count, 0);
     }
 
-    agents[0].partner_blindness_trigger_prob = 0.0f;
+    env.partner_blindness_trigger_prob = 0.0f;
     agents[0].partner_blindness_counter = 0;
     memset(obs, 0, sizeof(obs));
     write_partner_obs(&env, &agents[0], 0, partner_scan, obs, 0, &partner_count);
@@ -605,10 +512,9 @@ int main(void) {
     RUN_TEST(test_reward_coef_goal_speed_pinned);
     RUN_TEST(test_partner_obs_relative_velocity);
     RUN_TEST(test_partner_obs_split_long_partner);
-    RUN_TEST(test_partner_obs_blindness_corridor_toggle);
+    RUN_TEST(test_partner_obs_blind_step_hides_every_partner);
     RUN_TEST(test_partner_blindness_episode_rate_floor);
-    RUN_TEST(test_partner_blindness_time_fraction_scales_trigger_prob);
-    RUN_TEST(test_partner_blindness_full_time_fraction_blinds_every_frame);
+    RUN_TEST(test_partner_blindness_trigger_prob_one_blinds_every_frame);
     RUN_TEST(test_reward_lane_align_wrong_way);
     return test_summary(failures);
 }

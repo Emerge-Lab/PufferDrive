@@ -1,4 +1,4 @@
-"""Unit tests for writing an evaluation's headline metric into the summary of the training wandb run."""
+"""Unit tests for logging an evaluation's headline metric to the history and summary of the training wandb run."""
 
 import csv
 import json
@@ -12,87 +12,167 @@ from pathlib import Path
 import pytest
 import yaml
 
-from pufferlib import pufferl
-from pufferlib.ocean.evaluation_utils import eval_wandb_report
-from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
+from opengigaflow import rl
+from opengigaflow.ocean.evaluation_utils import eval_wandb_report
 
 
 RUN_IDENTITY = {"run_name": "k_exp_0002_1000", "wandb_project": "nightly-multi-long"}
 RUN_PATH = "nightly-multi-long/k_exp_0002_1000"
-TRAINING_SUMMARY = {"environment/collision_rate": 0.0123, "_step": 1000190509056, "early_stop": False}
+RUN_ENTITY = "emerge_"
+TRAINING_LAST_STEP = 1000190509056
+TRAINING_SUMMARY = {"environment/collision_rate": 0.0123, "_step": TRAINING_LAST_STEP, "early_stop": False}
+TRAINING_HISTORY_ROW = {"environment/collision_rate": 0.0123, "_step": TRAINING_LAST_STEP}
 ROUTE_COUNT = 3
 SEED_COUNT = 2
 SCENARIO_COUNT = 5
 SCENE_COUNT = 4
+ALPASIM_KM_PER_AT_FAULT_INCIDENT = 6.4502
+ALPASIM_AT_FAULT_ROW = "avg_dist_between_incidents_at_fault    6.4502 km  (0.1550 incidents/km)"
+ALPASIM_NO_AT_FAULT_INCIDENT_ROW = "avg_dist_between_incidents_at_fault n/a  (no incidents)"
 STUB_WANDB_MODULE = """
 import json
 import os
 import sys
 
 
-class _Summary:
+def _load_run():
+    with open(os.environ["STUB_WANDB_RUN_PATH"]) as run_file:
+        return json.load(run_file)
+
+
+def _store_run(stored_run):
+    with open(os.environ["STUB_WANDB_RUN_PATH"], "w") as run_file:
+        json.dump(stored_run, run_file)
+
+
+class _SessionSummary:
     def update(self, values):
-        with open(os.environ["STUB_WANDB_SUMMARY_PATH"]) as summary_file:
-            stored_summary = json.load(summary_file)
-        stored_summary.update(values)
-        with open(os.environ["STUB_WANDB_SUMMARY_PATH"], "w") as summary_file:
-            json.dump(stored_summary, summary_file)
+        stored_run = _load_run()
+        stored_run["summary"].update(values)
+        _store_run(stored_run)
+
+
+class _Session:
+    summary = _SessionSummary()
+
+    def log(self, values):
+        stored_run = _load_run()
+        step = stored_run["history"][-1]["_step"] + 1
+        stored_run["history"].append({**values, "_step": step})
+        stored_run["summary"].update({**values, "_step": step})
+        _store_run(stored_run)
+
+    def finish(self):
+        pass
 
 
 class _Run:
     state = "finished"
-    summary = _Summary()
+    entity = "emerge_"
 
     @property
     def summary_metrics(self):
-        with open(os.environ["STUB_WANDB_SUMMARY_PATH"]) as summary_file:
-            return json.load(summary_file)
+        return _load_run()["summary"]
+
+    @property
+    def history_keys(self):
+        history = _load_run()["history"]
+        keys = {key: {} for row in history for key in row if not key.startswith("_")}
+        return {"keys": keys, "lastStep": history[-1]["_step"]}
 
 
 class Api:
+    def flush(self):
+        pass
+
     def run(self, run_path):
-        assert "pufferlib" not in sys.modules
+        assert "opengigaflow" not in sys.modules
         return _Run()
+
+
+def Settings(**kwargs):
+    return kwargs
+
+
+def init(**kwargs):
+    return _Session()
 """
 
 
-class _StubSummary:
+class _StubSession:
+    """The run wandb.init resumes: its summary is the stored one, log() goes through the stub's store_row."""
+
     def __init__(self, stub):
         self._stub = stub
+        self.summary = stub.stored_summary
 
-    def update(self, values):
-        self._stub.updates.append(dict(values))
-        self._stub.store_update(values)
+    def log(self, values):
+        self._stub.store_row(values)
+
+    def finish(self):
+        self._stub.finished_session_count += 1
 
 
 class _StubRun:
     def __init__(self, stub):
         self.state = stub.run_state
+        self.entity = RUN_ENTITY
         self.summary_metrics = dict(stub.stored_summary)
-        self.summary = _StubSummary(stub)
+        logged_keys = {key for row in stub.stored_history for key in row if not key.startswith("_")}
+        self.history_keys = {"keys": {key: {} for key in logged_keys}, "lastStep": stub.stored_history[-1]["_step"]}
 
 
 class _StubApi:
+    """Caches the run like wandb.Api does: read again without flush(), it is the object from before the session."""
+
     def __init__(self, stub):
         self._stub = stub
+        self._cached_run = None
+
+    def flush(self):
+        self._cached_run = None
 
     def run(self, run_path):
         self._stub.requested_run_paths.append(run_path)
-        return _StubRun(self._stub)
+        if self._cached_run is None:
+            self._cached_run = _StubRun(self._stub)
+        return self._cached_run
+
+
+def _append_history_row(stub, values):
+    """What wandb does with a logged row: one step after the last one, and its values become the summary's."""
+    step = stub.stored_history[-1]["_step"] + 1
+    stub.stored_history.append({**values, "_step": step})
+    stub.stored_summary.update({**values, "_step": step})
 
 
 @pytest.fixture
 def stub_wandb(monkeypatch):
-    """A wandb module that only has the public API: an attempt to open a session or log history fails."""
+    """A wandb module backed by one stored run: the public API reads it, a resumed session logs to it."""
     stub = types.ModuleType("wandb")
     stub.run_state = "finished"
     stub.stored_summary = dict(TRAINING_SUMMARY)
-    stub.updates = []
+    stub.stored_history = [dict(TRAINING_HISTORY_ROW)]
     stub.requested_run_paths = []
-    stub.store_update = stub.stored_summary.update
-    stub.Api = lambda: _StubApi(stub)
+    stub.init_kwargs = None
+    stub.finished_session_count = 0
+    stub.store_row = lambda values: _append_history_row(stub, values)
+    stub.api_count = 0
+
+    def api():
+        stub.api_count += 1
+        return _StubApi(stub)
+
+    stub.Api = api
+    stub.Settings = lambda **kwargs: kwargs
+
+    def init(**kwargs):
+        stub.init_kwargs = kwargs
+        return _StubSession(stub)
+
+    stub.init = init
     monkeypatch.setitem(sys.modules, "wandb", stub)
-    monkeypatch.setattr(eval_wandb_report, "SUMMARY_VERIFY_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr(eval_wandb_report, "REPORT_VERIFY_BACKOFF_SECONDS", 0.0)
     return stub
 
 
@@ -141,10 +221,17 @@ def _write_selfplay_summary(run_dir, distance_per_infraction_meters, num_episode
     return aggregate_dir / "evaluation_summary.json"
 
 
-def _write_alpasim_results(run_dir, score_line):
+def _write_alpasim_results(run_dir, score_line, at_fault_rows=(ALPASIM_AT_FAULT_ROW,)):
+    """results.txt as 7_eval_alpasim.sh writes it: score line, km between incidents (all, at-fault), per-metric means."""
     out_dir = run_dir / "eval" / "alpasim_gt_time5_r2_final_model_20261102_013615_909"
     out_dir.mkdir(parents=True)
-    (out_dir / "results.txt").write_text(score_line + "\ncollision_any   mean    0.0925  n 400\n")
+    result_lines = [
+        score_line,
+        "avg_dist_between_incidents             3.2251 km  (0.3101 incidents/km)",
+        *at_fault_rows,
+        "collision_any                       mean    0.0925  n 400",
+    ]
+    (out_dir / "results.txt").write_text("".join(line + "\n" for line in result_lines))
     return out_dir / "results.txt"
 
 
@@ -162,17 +249,42 @@ def _complete_result(run_dir, eval_type):
 
 
 @pytest.mark.parametrize("eval_type", sorted(eval_wandb_report.HEADLINE_METRIC_KEYS))
-def test_each_eval_type_writes_its_headline_value_and_source(stub_wandb, run_dir, eval_type):
+def test_each_eval_type_logs_its_headline_value_and_source(stub_wandb, run_dir, eval_type):
     result_path, expected_episode_count, expected_value = _complete_result(run_dir, eval_type)
 
     eval_wandb_report.report_headline_metric(eval_type, str(result_path), str(run_dir), expected_episode_count)
 
-    metric_key = eval_wandb_report.HEADLINE_METRIC_KEYS[eval_type]
-    reported_values = {metric_key: expected_value, f"{metric_key}_source": str(result_path.relative_to(run_dir))}
+    metric_values = {eval_wandb_report.HEADLINE_METRIC_KEYS[eval_type]: expected_value}
+    if eval_type == eval_wandb_report.EVAL_TYPE_ALPASIM:
+        metric_values[eval_wandb_report.ALPASIM_AT_FAULT_METRIC_KEY] = ALPASIM_KM_PER_AT_FAULT_INCIDENT
+    source_values = {f"{metric_key}_source": str(result_path.relative_to(run_dir)) for metric_key in metric_values}
+    reported_step = TRAINING_LAST_STEP + 1
     assert stub_wandb.requested_run_paths[0] == RUN_PATH
-    assert stub_wandb.updates == [reported_values]
-    # Training's own summary values stay exactly as they were.
-    assert stub_wandb.stored_summary == {**TRAINING_SUMMARY, **reported_values}
+    # The values are one history row, which is what the charts plot; the source strings stay out of the history.
+    assert stub_wandb.stored_history == [TRAINING_HISTORY_ROW, {**metric_values, "_step": reported_step}]
+    # Training's own summary values stay exactly as they were; only wandb's step bookkeeping advances.
+    assert stub_wandb.stored_summary == {**TRAINING_SUMMARY, **metric_values, **source_values, "_step": reported_step}
+    assert stub_wandb.finished_session_count == 1
+    # One api object for the whole report: each further one repeats a handshake that can time out.
+    assert stub_wandb.api_count == 1
+
+
+def test_session_resumes_the_training_run_and_sends_nothing_else_of_it(stub_wandb, run_dir):
+    result_path, _, _ = _complete_result(run_dir, eval_wandb_report.EVAL_TYPE_SELFPLAY)
+
+    eval_wandb_report.report_headline_metric(eval_wandb_report.EVAL_TYPE_SELFPLAY, str(result_path), str(run_dir))
+
+    # Name, group, tags, notes and config are not sent again, so wandb keeps the training run's.
+    assert set(stub_wandb.init_kwargs) == {"entity", "project", "id", "resume", "dir", "settings"}
+    assert stub_wandb.init_kwargs["entity"] == RUN_ENTITY
+    assert stub_wandb.init_kwargs["project"] == RUN_IDENTITY["wandb_project"]
+    assert stub_wandb.init_kwargs["id"] == RUN_IDENTITY["run_name"]
+    # A missing run must fail loudly rather than open a stray eval-only run.
+    assert stub_wandb.init_kwargs["resume"] == "must"
+    # No console log, machine metadata or system metrics of the reporting process on the training run.
+    assert stub_wandb.init_kwargs["settings"] == {"console": "off", "x_disable_meta": True, "x_disable_stats": True}
+    # The session's local files are temporary, not a second run folder in the checkout.
+    assert not os.path.exists(stub_wandb.init_kwargs["dir"])
 
 
 def test_headline_keys_are_one_per_eval_type():
@@ -184,9 +296,30 @@ def test_headline_keys_are_one_per_eval_type():
         "selfplay": "final_eval/selfplay_km_per_infraction",
         "alpasim": "final_eval/alpasim_score",
     }
+    assert eval_wandb_report.ALPASIM_AT_FAULT_METRIC_KEY == "final_eval/alpasim_km_per_at_fault_incident"
 
 
-def test_repeated_report_replaces_the_value_instead_of_adding_one(stub_wandb, run_dir):
+def test_alpasim_without_at_fault_incident_reports_only_the_score(stub_wandb, run_dir):
+    """No at-fault incident means no finite distance between them: the score is logged, the distance is not."""
+    score_line = f"official_score 1.0000  scenes {SCENE_COUNT}  failed 0"
+    result_path = _write_alpasim_results(run_dir, score_line, at_fault_rows=(ALPASIM_NO_AT_FAULT_INCIDENT_ROW,))
+
+    eval_wandb_report.report_headline_metric("alpasim", str(result_path), str(run_dir), SCENE_COUNT)
+
+    reported_step = TRAINING_LAST_STEP + 1
+    assert stub_wandb.stored_history == [
+        TRAINING_HISTORY_ROW,
+        {"final_eval/alpasim_score": 1.0, "_step": reported_step},
+    ]
+    assert stub_wandb.stored_summary == {
+        **TRAINING_SUMMARY,
+        "final_eval/alpasim_score": 1.0,
+        "final_eval/alpasim_score_source": str(result_path.relative_to(run_dir)),
+        "_step": reported_step,
+    }
+
+
+def test_repeated_report_becomes_the_runs_value(stub_wandb, run_dir):
     first_result = _write_selfplay_summary(run_dir, 691229300.0, SCENARIO_COUNT)
     eval_wandb_report.report_headline_metric(eval_wandb_report.EVAL_TYPE_SELFPLAY, str(first_result), str(run_dir))
 
@@ -195,12 +328,16 @@ def test_repeated_report_replaces_the_value_instead_of_adding_one(stub_wandb, ru
     second_result.write_text(first_result.read_text().replace("691229300.0", "200820400.0"))
     eval_wandb_report.report_headline_metric(eval_wandb_report.EVAL_TYPE_SELFPLAY, str(second_result), str(run_dir))
 
-    # One value per run and eval type, and the source names the eval the value came from.
+    # One summary value per run and eval type, and the source names the eval the value came from.
     assert stub_wandb.stored_summary == {
         **TRAINING_SUMMARY,
         "final_eval/selfplay_km_per_infraction": 200820.4,
         "final_eval/selfplay_km_per_infraction_source": "eval/carla_k_exp_0002_1000_redlight/evaluation_summary.json",
+        "_step": TRAINING_LAST_STEP + 2,
     }
+    # The history keeps both reports, the later one on the later step.
+    reported_rows = stub_wandb.stored_history[1:]
+    assert [row["final_eval/selfplay_km_per_infraction"] for row in reported_rows] == [691229.3, 200820.4]
 
 
 def _incomplete_longest6(run_dir):
@@ -228,6 +365,22 @@ def _alpasim_without_score(run_dir):
     return _write_alpasim_results(run_dir, score_line), SCENE_COUNT
 
 
+def _alpasim_without_at_fault_row(run_dir):
+    score_line = f"official_score 0.7832  scenes {SCENE_COUNT}  failed 0"
+    return _write_alpasim_results(run_dir, score_line, at_fault_rows=()), SCENE_COUNT
+
+
+def _alpasim_with_two_at_fault_rows(run_dir):
+    score_line = f"official_score 0.7832  scenes {SCENE_COUNT}  failed 0"
+    return _write_alpasim_results(run_dir, score_line, at_fault_rows=(ALPASIM_AT_FAULT_ROW,) * 2), SCENE_COUNT
+
+
+def _alpasim_with_zero_km_per_at_fault_incident(run_dir):
+    score_line = f"official_score 0.7832  scenes {SCENE_COUNT}  failed 0"
+    zero_km_row = "avg_dist_between_incidents_at_fault    0.0000 km  (inf incidents/km)"
+    return _write_alpasim_results(run_dir, score_line, at_fault_rows=(zero_km_row,)), SCENE_COUNT
+
+
 @pytest.mark.parametrize(
     ("eval_type", "write_result", "error_match"),
     [
@@ -237,6 +390,9 @@ def _alpasim_without_score(run_dir):
         ("alpasim", _alpasim_with_failed_scenes, "1 failed"),
         ("alpasim", _alpasim_subset, "2 of 4 scenes"),
         ("alpasim", _alpasim_without_score, "no official score"),
+        ("alpasim", _alpasim_without_at_fault_row, "exactly one 'avg_dist_between_incidents_at_fault' row"),
+        ("alpasim", _alpasim_with_two_at_fault_rows, "exactly one 'avg_dist_between_incidents_at_fault' row"),
+        ("alpasim", _alpasim_with_zero_km_per_at_fault_incident, "unusable 'avg_dist_between_incidents_at_fault'"),
     ],
 )
 def test_incomplete_evals_are_refused_before_wandb_is_touched(
@@ -248,6 +404,7 @@ def test_incomplete_evals_are_refused_before_wandb_is_touched(
         eval_wandb_report.report_headline_metric(eval_type, str(result_path), str(run_dir), expected_episode_count)
 
     assert stub_wandb.requested_run_paths == []
+    assert stub_wandb.init_kwargs is None
     assert stub_wandb.stored_summary == TRAINING_SUMMARY
 
 
@@ -260,7 +417,7 @@ def test_stale_longest6_results_csv_is_refused(stub_wandb, run_dir):
             "longest6_v1", str(result_path), str(run_dir), ROUTE_COUNT * SEED_COUNT
         )
 
-    assert stub_wandb.updates == []
+    assert stub_wandb.init_kwargs is None
 
 
 def test_missing_episode_count_is_refused(stub_wandb, run_dir):
@@ -269,7 +426,7 @@ def test_missing_episode_count_is_refused(stub_wandb, run_dir):
     with pytest.raises(eval_wandb_report.EvalReportError, match="episode count"):
         eval_wandb_report.report_headline_metric("nuplan_reactive", str(result_path), str(run_dir))
 
-    assert stub_wandb.updates == []
+    assert stub_wandb.init_kwargs is None
 
 
 def test_missing_result_file_is_refused(stub_wandb, run_dir):
@@ -277,34 +434,57 @@ def test_missing_result_file_is_refused(stub_wandb, run_dir):
         eval_wandb_report.report_headline_metric("alpasim", str(run_dir / "results.txt"), str(run_dir), SCENE_COUNT)
 
 
-def test_running_training_run_is_refused_without_a_write(stub_wandb, run_dir):
+def test_running_training_run_is_refused_without_a_session(stub_wandb, run_dir):
     stub_wandb.run_state = "running"
     result_path, _, _ = _complete_result(run_dir, eval_wandb_report.EVAL_TYPE_SELFPLAY)
 
     with pytest.raises(eval_wandb_report.EvalReportError, match="still running"):
         eval_wandb_report.report_headline_metric(eval_wandb_report.EVAL_TYPE_SELFPLAY, str(result_path), str(run_dir))
 
-    assert stub_wandb.updates == []
+    assert stub_wandb.init_kwargs is None
 
 
-def test_summary_damaged_by_the_update_is_reported(stub_wandb, run_dir):
-    def store_update_and_drop_a_training_value(values):
-        stub_wandb.stored_summary.update(values)
+def test_summary_damaged_by_the_session_is_reported(stub_wandb, run_dir):
+    def append_row_and_drop_a_training_value(values):
+        _append_history_row(stub_wandb, values)
         del stub_wandb.stored_summary["environment/collision_rate"]
 
-    stub_wandb.store_update = store_update_and_drop_a_training_value
+    stub_wandb.store_row = append_row_and_drop_a_training_value
     result_path, _, _ = _complete_result(run_dir, eval_wandb_report.EVAL_TYPE_SELFPLAY)
 
     with pytest.raises(eval_wandb_report.EvalReportError, match="environment/collision_rate"):
         eval_wandb_report.report_headline_metric(eval_wandb_report.EVAL_TYPE_SELFPLAY, str(result_path), str(run_dir))
 
 
-def test_server_float_formatting_is_not_a_mismatch(stub_wandb, run_dir):
-    def store_update_with_16_digits(values):
-        for key, value in values.items():
-            stub_wandb.stored_summary[key] = float(f"{value:.16g}") if isinstance(value, float) else value
+def test_value_that_reaches_only_the_summary_is_reported(stub_wandb, run_dir):
+    """A summary value without a history row is in no chart: the state every run from 0072 to 0077 was left in."""
+    stub_wandb.store_row = stub_wandb.stored_summary.update
+    result_path, _, _ = _complete_result(run_dir, eval_wandb_report.EVAL_TYPE_SELFPLAY)
 
-    stub_wandb.store_update = store_update_with_16_digits
+    with pytest.raises(eval_wandb_report.EvalReportError, match="did not reach the run's history"):
+        eval_wandb_report.report_headline_metric(eval_wandb_report.EVAL_TYPE_SELFPLAY, str(result_path), str(run_dir))
+
+
+def test_failed_log_still_closes_the_session(stub_wandb, run_dir):
+    """An open session keeps the training run in the running state, which refuses every later report."""
+
+    def fail_to_store(values):
+        raise ConnectionError("file stream unreachable")
+
+    stub_wandb.store_row = fail_to_store
+    result_path, _, _ = _complete_result(run_dir, eval_wandb_report.EVAL_TYPE_SELFPLAY)
+
+    with pytest.raises(ConnectionError):
+        eval_wandb_report.report_headline_metric(eval_wandb_report.EVAL_TYPE_SELFPLAY, str(result_path), str(run_dir))
+
+    assert stub_wandb.finished_session_count == 1
+
+
+def test_server_float_formatting_is_not_a_mismatch(stub_wandb, run_dir):
+    def append_row_with_16_digits(values):
+        _append_history_row(stub_wandb, {key: float(f"{value:.16g}") for key, value in values.items()})
+
+    stub_wandb.store_row = append_row_with_16_digits
     result_path, _, expected_value = _complete_result(run_dir, eval_wandb_report.EVAL_TYPE_SELFPLAY)
 
     eval_wandb_report.report_headline_metric(eval_wandb_report.EVAL_TYPE_SELFPLAY, str(result_path), str(run_dir))
@@ -330,13 +510,13 @@ def test_blank_run_identity_is_rejected(tmp_path):
         eval_wandb_report.load_run_identity(str(tmp_path / "config.yaml"))
 
 
-def test_command_line_reports_without_importing_pufferlib(tmp_path, run_dir):
+def test_command_line_reports_without_importing_opengigaflow(tmp_path, run_dir):
     """The eval jobs run the file by path in interpreters that must not pay for, or break on, the training stack."""
     stub_package_dir = tmp_path / "stub_site"
     stub_package_dir.mkdir()
     (stub_package_dir / "wandb.py").write_text(STUB_WANDB_MODULE)
-    stored_summary_path = tmp_path / "stored_summary.json"
-    stored_summary_path.write_text(json.dumps(TRAINING_SUMMARY))
+    stored_run_path = tmp_path / "stored_run.json"
+    stored_run_path.write_text(json.dumps({"summary": TRAINING_SUMMARY, "history": [TRAINING_HISTORY_ROW]}))
     result_path, expected_episode_count, expected_value = _complete_result(run_dir, "nuplan_nonreactive")
 
     completed = subprocess.run(
@@ -350,17 +530,25 @@ def test_command_line_reports_without_importing_pufferlib(tmp_path, run_dir):
             "--expected-episode-count",
             str(expected_episode_count),
         ],
-        env={**os.environ, "PYTHONPATH": str(stub_package_dir), "STUB_WANDB_SUMMARY_PATH": str(stored_summary_path)},
+        env={**os.environ, "PYTHONPATH": str(stub_package_dir), "STUB_WANDB_RUN_PATH": str(stored_run_path)},
         capture_output=True,
         text=True,
         check=False,
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert json.loads(stored_summary_path.read_text()) == {
-        **TRAINING_SUMMARY,
-        "final_eval/nuplan_nonreactive_CLS": expected_value,
-        "final_eval/nuplan_nonreactive_CLS_source": str(result_path.relative_to(run_dir)),
+    reported_step = TRAINING_LAST_STEP + 1
+    assert json.loads(stored_run_path.read_text()) == {
+        "summary": {
+            **TRAINING_SUMMARY,
+            "final_eval/nuplan_nonreactive_CLS": expected_value,
+            "final_eval/nuplan_nonreactive_CLS_source": str(result_path.relative_to(run_dir)),
+            "_step": reported_step,
+        },
+        "history": [
+            TRAINING_HISTORY_ROW,
+            {"final_eval/nuplan_nonreactive_CLS": expected_value, "_step": reported_step},
+        ],
     }
 
 
@@ -397,7 +585,7 @@ def test_training_logger_opens_the_run_with_its_config(monkeypatch):
     monkeypatch.setitem(sys.modules, "wandb", stub)
     args = defaultdict(dict, {**RUN_IDENTITY, "wandb_group": "emerge_", "tag": None})
 
-    logger = pufferl.WandbLogger(args)
+    logger = rl.WandbLogger(args)
 
     assert logger.run_id == "stub_run_id"
     assert stub.init_kwargs["id"] == RUN_IDENTITY["run_name"]
@@ -408,22 +596,8 @@ def test_training_logger_opens_the_run_with_its_config(monkeypatch):
     assert stub.init_kwargs["config"] is args
 
 
-def test_summarize_benchmark_metrics_skips_benchmarks_without_a_summary():
-    summary = {"num_scenarios": 1000, "num_episodes": 998, "metrics_mean": {"collision_rate": 0.11}}
-    results = {
-        "carla": {"episodes": [], "summary": summary},
-        "nuplan_single": {"episodes": [], "summary": None},
-    }
-
-    metrics = drive_benchmark.summarize_benchmark_metrics(results, "eval_")
-
-    assert set(metrics) == {"eval_carla/num_scenarios", "eval_carla/num_episodes", "eval_carla/collision_rate"}
-    assert drive_benchmark.summarize_benchmark_metrics({}, "eval_") == {}
-
-
 def test_tidied_longest6_run_reads_its_flat_route_records(tmp_path):
-    """After tidy_carla_run.py results.csv sits at the run's top and the records are routes/*.result.json; other
-    json files under the run are not records."""
+    """A tidied run keeps results.csv on top and its records as routes/*.result.json; other json is no record."""
     run = tmp_path / "carla_longest6_v2_seeds0-1_20261109_120000_7"
     (run / "routes").mkdir(parents=True)
     (run / "details").mkdir()

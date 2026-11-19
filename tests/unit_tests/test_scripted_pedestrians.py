@@ -1,13 +1,13 @@
-"""Scripted pedestrians (env.scripted_pedestrian_ratio): config validation, per-env slot rounding, and a
-short gigaflow rollout in which walkers appear as static partners and get logged."""
+"""Scripted pedestrians: ratio validation, per-env slot rounding, and walkers that appear as logged static partners."""
 
 import numpy as np
 import pytest
 
-from pufferlib.ocean.drive.drive import Drive
+from opengigaflow.ocean.drive.drive import Drive
 
-MAP_DIR = "pufferlib/resources/drive/binaries/carla"
+MAP_DIR = "opengigaflow/resources/carla"
 AGENTS_PER_ENV = 32
+CAR_SPEED_MPS = 5.0
 
 
 def _kwargs(**overrides):
@@ -16,20 +16,33 @@ def _kwargs(**overrides):
         "min_agents_per_env": AGENTS_PER_ENV,
         "max_agents_per_env": AGENTS_PER_ENV,
         "num_maps": 1,
-        "allow_map_subset": True,
         "map_dir": MAP_DIR,
         "simulation_mode": "gigaflow",
-        "action_type": "continuous",
-        "dynamics_model": "jerk",
         "scenario_length": 300,
         "resample_frequency": 0,
         "termination_mode": 0,
         "stagger_first_episode": False,
-        "spawn_initial_speed": 5.0,
         "seed": 3,
     }
     kwargs.update(overrides)
     return kwargs
+
+
+def _launch_cars(env):
+    """Walkers appear beside moving cars: give every car CAR_SPEED_MPS along its heading."""
+    state = env.get_global_agent_state()
+    zeros = np.zeros(env.num_agents, np.float32)
+    env.set_agent_states(
+        np.arange(env.num_agents, dtype=np.int32),
+        state["x"],
+        state["y"],
+        state["z"],
+        state["heading"],
+        CAR_SPEED_MPS * np.cos(state["heading"]),
+        CAR_SPEED_MPS * np.sin(state["heading"]),
+        zeros,
+        zeros,
+    )
 
 
 def test_ratio_validation():
@@ -52,6 +65,7 @@ def test_rollout_spawns_pedestrians_as_static_partners():
     env = Drive(**_kwargs(scripted_pedestrian_ratio=0.125))
     try:
         env.reset(seed=3)
+        _launch_cars(env)
         assert env.num_envs == 1
         expected_slots = 4
         state = env.get_global_agent_state(include_static=True)
@@ -78,6 +92,7 @@ def _walker_trace(seed, num_steps):
     env = Drive(**_kwargs(scripted_pedestrian_ratio=0.125, seed=seed))
     try:
         env.reset(seed=seed)
+        _launch_cars(env)
         actions = np.zeros_like(env.actions)
         trace = []
         for _ in range(num_steps):

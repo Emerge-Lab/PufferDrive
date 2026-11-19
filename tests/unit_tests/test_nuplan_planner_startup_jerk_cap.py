@@ -1,17 +1,13 @@
-"""Start-up jerk caps map onto the continuous jerk action's asymmetric scaling (brake JERK_LONG[0], accel JERK_LONG[-1])."""
-
-import os
-import sys
+"""Start-up jerk caps map onto the jerk action's asymmetric scaling: brake by JERK_LONG[0], accel by JERK_LONG[-1]."""
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-nuplan = pytest.importorskip("nuplan")
+pytest.importorskip("nuplan")
 pytest.importorskip("carl_nuplan")
 
-from pufferlib.ocean.cosim.nuplan.planner import startup_jerk_action_bounds
-from pufferlib.ocean.drive import binding
+from opengigaflow.ocean.cosim.nuplan.planner import startup_jerk_action_bounds
+from opengigaflow.ocean.drive import binding
 
 
 def test_caps_scale_by_the_env_jerk_range():

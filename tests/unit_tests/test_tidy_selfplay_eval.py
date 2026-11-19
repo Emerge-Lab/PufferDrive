@@ -1,8 +1,6 @@
-"""tidy_selfplay_eval.py folds the shard folders of a parallel self-play eval into evaluation_summary.json,
-obs_html/ and details/; EvalReplayCapture keeps the observations of the infracting agents only when asked."""
+"""tidy_selfplay_eval.py folds parallel self-play eval shards; EvalReplayCapture can keep infracting agents' obs."""
 
 import json
-import os
 import pickle
 import sys
 import zlib
@@ -10,17 +8,12 @@ import zlib
 import numpy as np
 import pandas as pd
 import pytest
-
-import pufferlib
-from pufferlib import viz
-from pufferlib.ocean.evaluation_utils import eval_replay
-
-
-sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "eval")
-)
-
 import tidy_selfplay_eval as tidy
+from replay_fixtures import relative_tree
+
+import opengigaflow
+from opengigaflow import viz
+from opengigaflow.ocean.evaluation_utils import eval_replay
 
 
 STAMP = "20261109-120000"
@@ -29,7 +22,6 @@ SHARD_FAILURES = {
     "shard00": [("opendrive__Town02", 11)],
     "shard01": [("opendrive__Town07", 21), ("opendrive__Town07", 22)],
 }
-METRIC_COLUMNS = ("collision_rate", "offroad_rate", "episode_length")
 
 
 def _episode_rows(pairs, shard_dir=None):
@@ -54,7 +46,7 @@ def _episode_rows(pairs, shard_dir=None):
 
 def _write_parallel_eval(root):
     """The aggregate dir and two shard folders as parallel_eval.py leaves them."""
-    benchmark_dir = root / "eval" / "carla_k_scaled_0099_1000"
+    benchmark_dir = root / "eval" / "selfplay_k_scaled_0099_1000"
     run_dir = benchmark_dir / STAMP
     run_dir.mkdir(parents=True)
     (run_dir / "evaluation_summary.json").write_text(json.dumps({"num_scenarios": 20, "num_episodes": 20}))
@@ -122,14 +114,14 @@ def test_tidy_folds_the_shards_into_the_aggregate_dir(tmp_path, monkeypatch):
 def test_tidy_is_a_no_op_the_second_time(tmp_path, monkeypatch, capsys):
     run_dir = _write_parallel_eval(tmp_path)
     _tidy(run_dir, monkeypatch)
-    before = sorted(str(path) for path in run_dir.rglob("*"))
+    before = relative_tree(run_dir)
     _tidy(run_dir, monkeypatch)
-    assert sorted(str(path) for path in run_dir.rglob("*")) == before
+    assert relative_tree(run_dir) == before
     assert "already tidied" in capsys.readouterr().out
 
 
 def test_tidy_handles_a_single_process_eval_dir(tmp_path, monkeypatch):
-    run_dir = tmp_path / "eval" / "carla" / STAMP
+    run_dir = tmp_path / "eval" / "selfplay" / STAMP
     failures = run_dir / "failures" / "rendered_replays"
     failures.mkdir(parents=True)
     (run_dir / "evaluation_summary.json").write_text("{}")
@@ -201,5 +193,5 @@ def test_all_mode_keeps_every_agents_observations(tmp_path):
 
 
 def test_unknown_observation_agents_mode_is_refused(tmp_path):
-    with pytest.raises(pufferlib.APIUsageError, match="capture_observations_agents"):
+    with pytest.raises(opengigaflow.APIUsageError, match="capture_observations_agents"):
         _capture(tmp_path, "nobody")

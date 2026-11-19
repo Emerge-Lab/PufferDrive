@@ -1,8 +1,4 @@
-"""GPU heartbeat: keeps utilization above threshold to prevent job reclamation.
-
-Monitors GPU utilization via nvidia-smi and performs matrix multiplications
-when utilization drops below THRESHOLD. Steps aside when real training is active.
-"""
+"""Matmul bursts whenever GPU utilization drops below THRESHOLD, so the cluster does not reclaim an idle-looking job."""
 
 import subprocess
 import time
