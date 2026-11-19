@@ -234,7 +234,7 @@ longest6 v1 is a classic CARLA benchmark, that test the models ability to drive 
 | TF++ Expert        | Rule |     ❌     |  ✅   |        83 ± 1 |
 | PlanT              |  IL  |     ❌     |  ✅   |        81 ± 7 |
 | GIGAFLOW           |  RL  |     ✅     |  ❌   |        92 ± 2 |
-| OpenGigaFlow 1.0.0 |  RL  |     ✅     |  ✅   |               |
+| OpenGigaFlow 1.0.0 |  RL  |     ✅     |  ✅   |        90 ± 4 |
 
 #### Self-play
 
@@ -274,7 +274,7 @@ A newer version of the classic longest6 updated with the CARLA leaderboard 2.0 s
 | PlanT              |  IL  |     ❌     |  ✅   |        62 ± 2 |
 | Roach              |  RL  |     ❌     |  ✅   |       22 ± 14 |
 | CaRL               |  RL  |     ❌     |  ✅   |        64 ± 2 |
-| OpenGigaFlow 1.0.0 |  RL  |     ✅     |  ✅   |               |
+| OpenGigaFlow 1.0.0 |  RL  |     ✅     |  ✅   |        61 ± 5 |
 
 ## Recommended hardware
 
