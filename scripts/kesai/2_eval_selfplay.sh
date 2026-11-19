@@ -22,7 +22,7 @@ SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 
 set -a  # every assignment up to "set +a" reaches scripts/slurm/eval_selfplay.sh
 RUN_DIR=$PD/experiments/${RUN_PREFIX}_${SEED}
-MAP_DIR=$PD/opengigaflow/resources/carla_v21  # the 8 towns: the benchmark reads only the folder's first 8 sorted maps
+MAP_DIR=$PD/opengigaflow/resources/carla  # the 8 towns: the benchmark reads only the folder's first 8 sorted maps
 EVAL_OUTPUT_DIR_NAME=
 TOTAL_SCENARIOS=
 SCENARIO_LENGTH=

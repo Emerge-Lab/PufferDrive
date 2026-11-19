@@ -16,14 +16,14 @@ source scripts/kesai/cluster_env.sh || exit 1
 
 SEEDS=(1000 2000 3000 4000)
 RUN_PREFIX=k_scaled_0085
-TRAIN_MAP_DIR=$PD/opengigaflow/resources/carla_128_affine_aug_v21
+TRAIN_MAP_DIR=$PD/opengigaflow/resources/carla_128_affine_aug
 SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 [ -n "${SEED}" ] || { echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} has no run configured; aborting."; exit 1; }
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} maps=${TRAIN_MAP_DIR}"
 
 set -a  # every assignment up to "set +a" reaches scripts/slurm/train.sh
 RUN_NAME=${RUN_PREFIX}_${SEED}
-SELFPLAY_EVAL_MAP_DIR=$PD/opengigaflow/resources/carla_v21  # the 8 towns: the benchmark reads only the folder's first 8 sorted maps
+SELFPLAY_EVAL_MAP_DIR=$PD/opengigaflow/resources/carla  # the 8 towns: the benchmark reads only the folder's first 8 sorted maps
 COSIM_TOWN_BIN_DIR=$SELFPLAY_EVAL_MAP_DIR  # the CARLA co-sim evals below drive on the same towns
 SELFPLAY_EVAL_WANDB_REPORT=1
 WORKERS_PER_GPU=60  # self-play eval: 8 shards x 60 env workers = the node's 480 CPUs (x 5 scenarios = 300 per 9000-step episode)
@@ -31,7 +31,7 @@ WORKERS_PER_GPU=60  # self-play eval: 8 shards x 60 env workers = the node's 480
 FOLLOW_UP_EVALS="scripts/kesai/3_eval_nuplan_reactive.sh scripts/kesai/4_eval_nuplan_nonreactive.sh scripts/kesai/6_eval_longest6_v2.sh scripts/kesai/5_eval_longest6_v1.sh scripts/kesai/7_eval_alpasim.sh"
 set +a
 for map_dir in "$TRAIN_MAP_DIR" "$SELFPLAY_EVAL_MAP_DIR"; do
-    [ -d "$map_dir" ] || { echo "missing map dir $map_dir (git-ignored, copy it to the cluster)"; exit 1; }
+    [ -d "$map_dir" ] || { echo "missing map dir $map_dir"; exit 1; }
 done
 
 exec bash scripts/slurm/train.sh \

@@ -19,7 +19,6 @@ PY=${PY:-$HOME/miniconda3/envs/carl/bin/python}   # cp310: CARLA 0.9.15 ships no
 CARLA_ROOT=${CARLA_ROOT:-$HOME/CARLA_0.9.15}
 CARL_WORK_DIR=${CARL_WORK_DIR:-$HOME/CaRL/CARLA}
 RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0071_1000}
-COSIM_TOWN_BIN_DIR=${COSIM_TOWN_BIN_DIR-$PD/opengigaflow/resources/carla_v21}  # the towns the run trained on; set but empty = the standard ones
 WANDB_REPORT=${WANDB_REPORT:-1}  # 0 for ablations
 set +a
 
