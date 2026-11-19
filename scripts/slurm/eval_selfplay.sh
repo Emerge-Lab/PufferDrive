@@ -47,7 +47,8 @@ echo "run $RUN_DIR  maps ${MAP_DIR:-benchmark default}  output dir ${EVAL_OUTPUT
 # one BLAS/OpenMP thread per process: the env workers would otherwise thrash the CPUs
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
 
-# one srun step per GPU, each with its share of the node's CPUs
+# one srun step per GPU, each with its share of the node's CPUs; PYTHONPATH: a script's sys.path lacks the checkout
+export PYTHONPATH=$PD${PYTHONPATH:+:$PYTHONPATH}
 .venv/bin/python scripts/parallel_eval.py selfplay \
     ${TOTAL_SCENARIOS:+--total-scenarios "$TOTAL_SCENARIOS"} \
     --num-nodes "$SLURM_JOB_NUM_NODES" \
