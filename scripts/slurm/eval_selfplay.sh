@@ -21,6 +21,7 @@
 #   EVAL_OUTPUT_DIR_NAME         results folder inside the run instead of eval
 #   RENDER_FILTER (all_infractions), CAPTURE_OBSERVATIONS (true)  replay pages of the failed episodes; RENDER_FILTER= for none
 #   WANDB_REPORT (0)             1: km per infraction -> the run's final_eval/selfplay_km_per_infraction in wandb
+#   BUILD_EXT (1)                0: no rebuild of the C extension when its sources changed (train.sh: its training built it)
 RUN_DIR=${RUN_DIR:-experiments/my_run}
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
 WORKERS_PER_GPU=${WORKERS_PER_GPU:-}
@@ -31,6 +32,7 @@ EVAL_OUTPUT_DIR_NAME=${EVAL_OUTPUT_DIR_NAME:-}
 RENDER_FILTER=${RENDER_FILTER-all_infractions}
 CAPTURE_OBSERVATIONS=${CAPTURE_OBSERVATIONS:-true}
 WANDB_REPORT=${WANDB_REPORT:-0}
+BUILD_EXT=${BUILD_EXT:-1}
 
 source scripts/slurm/job_env.sh || exit 1
 
@@ -47,6 +49,9 @@ echo "run $RUN_DIR  maps ${MAP_DIR:-benchmark default}  output dir ${EVAL_OUTPUT
 # one BLAS/OpenMP thread per process: the env workers would otherwise thrash the CPUs
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
 
+if [ "$BUILD_EXT" = "1" ]; then
+    PATH="$PD/.venv/bin:$PATH" bash "$PD/scripts/slurm/build_ext_if_changed.sh" "$PD" || exit 1
+fi
 # one srun step per GPU, each with its share of the node's CPUs; PYTHONPATH: a script's sys.path lacks the checkout
 export PYTHONPATH=$PD${PYTHONPATH:+:$PYTHONPATH}
 .venv/bin/python scripts/parallel_eval.py selfplay \

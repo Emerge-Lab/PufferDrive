@@ -8,6 +8,9 @@ Environment variables:
   COSIM_ZERO_PARTNER_STOPPED_TIME=1   vehicle partners' seconds_stopped held at 0 (walkers keep theirs); 0 = all real
   COSIM_VRU_SIZE_PAD_M=0.8            added to the length and width of every walker and two-wheeler partner box
   COSIM_OBS_SLOTS_PARTNERS_N=40       partner obs slots (max-pooled, so any count transfers); empty = the checkpoint's
+  COSIM_TOWN_BIN_DIR=<opengigaflow>/resources/carla
+                                      folder of the town maps (opendrive__<Town>.bin): the map version the checkpoint
+                                      trained on
   COSIM_TELEMETRY=/dir                per-route CSV of the shadow env's and the simulator's infraction flags
   COSIM_OBS_HTML=/dir                 per-route opengigaflow.viz replay of the exact obs and policy outputs
   COSIM_OBS_HTML_RENDER=1             0: save only the .replay.zlib (scripts/eval/render_carla_obs_html.py)
@@ -73,6 +76,7 @@ COSIM_EVAL_DEFAULTS = {
     "COSIM_VRU_SIZE_PAD_M": "0.8",
     "COSIM_OBS_SLOTS_PARTNERS_N": "40",
     "COSIM_PEDAL_YELLOW_MARGIN": "1",
+    "COSIM_TOWN_BIN_DIR": str(cb.DEFAULT_TOWN_BIN_DIR),
 }
 PARTNER_MAX_ABS_DZ_M = 20.0  # CARLA actors farther above/below the ego are hidden scenario props, not traffic
 DEFAULT_BASE_MAX_SPEED_MPS = 20.0  # Drive() defaults, for checkpoints whose config predates the keys
@@ -119,6 +123,14 @@ def cosim_obs_slots_partners_n():
     return obs_slots_partners_n
 
 
+def cosim_town_bin_dir():
+    """COSIM_TOWN_BIN_DIR as the absolute path of a folder that holds opendrive__<Town>.bin town maps."""
+    raw = os.environ.get("COSIM_TOWN_BIN_DIR", COSIM_EVAL_DEFAULTS["COSIM_TOWN_BIN_DIR"])
+    if not raw or not any(Path(raw).glob("opendrive__*.bin")):
+        raise FileNotFoundError(f"COSIM_TOWN_BIN_DIR={raw!r} holds no opendrive__<Town>.bin town map")
+    return str(Path(raw).resolve())
+
+
 def env_flag(name, default="0"):
     raw = os.environ.get(name, default)
     if raw not in ("0", "1"):
@@ -162,6 +174,7 @@ class ShadowEgo:
         self.vru_size_pad_m = float(os.environ.get("COSIM_VRU_SIZE_PAD_M", COSIM_EVAL_DEFAULTS["COSIM_VRU_SIZE_PAD_M"]))
         if not (self.vru_size_pad_m >= 0.0):
             raise ValueError(f"COSIM_VRU_SIZE_PAD_M must be >= 0, got {self.vru_size_pad_m}")
+        self.town_bin_dir = cosim_town_bin_dir()
         # Shadow agent pool == the training per-env cap
         self.num_agents = int(env_cfg["max_agents_per_env"])
 
@@ -250,7 +263,9 @@ class ShadowEgo:
         self.ego_extent = [float(v) for v in ego["extent"]]
         self.ego_box_z = float(ego["box_z"])
 
-        self.town_bin = cb.bin_path_for_town(town)
+        self.town_bin = cb.bin_path_for_town(town, self.town_bin_dir)
+        if not os.path.isfile(self.town_bin):
+            raise FileNotFoundError(f"COSIM_TOWN_BIN_DIR has no map of {town}: {self.town_bin}")
         self._load_policy_and_env(self.town_bin)
 
         self.transform = cb.CarlaTransform(town)

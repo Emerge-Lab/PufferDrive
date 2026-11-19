@@ -20,6 +20,7 @@ SEED=1000
 set -a  # every assignment up to "set +a" reaches scripts/slurm/train.sh
 RUN_NAME=${RUN_NAME:-k_scaled_0080_${SEED}}
 SELFPLAY_EVAL_MAP_DIR=$PD/opengigaflow/resources/carla
+COSIM_TOWN_BIN_DIR=$SELFPLAY_EVAL_MAP_DIR  # the CARLA co-sim evals below drive on the same towns
 SELFPLAY_EVAL_WANDB_REPORT=1
 WORKERS_PER_GPU=60  # self-play eval: 8 shards x 60 env workers = the node's 480 CPUs (x 5 scenarios = 300 per 9000-step episode)
 # the co-sim evals need one 8-GPU node each

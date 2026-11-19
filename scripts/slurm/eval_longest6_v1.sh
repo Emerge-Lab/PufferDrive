@@ -37,6 +37,8 @@
 #   LIBTIFF5_COMPAT (1)        no libtiff.so.5 for the egg: the garage env's, else a link to the system .so.6; 0 = never link
 #   COSIM_MAX_SPEED_MPS, COSIM_ZERO_PARTNER_STOPPED_TIME, COSIM_VRU_SIZE_PAD_M, COSIM_OBS_SLOTS_PARTNERS_N,
 #   COSIM_PEDAL_YELLOW_MARGIN  the shadow env's eval settings (shadow_ego.py: COSIM_EVAL_DEFAULTS); set one only for an ablation
+#   COSIM_TOWN_BIN_DIR         folder of the town maps (opendrive__<Town>.bin) the shadow env loads: set it for a checkpoint
+#                              trained on another map version than opengigaflow/resources/carla
 #   COMPLETE_RUN               an existing $OUT: reruns in place its route runs without a valid record with the settings
 #                              of its run_info.txt (CKPT must match); a requeued job completes its own folder this way
 set -u
@@ -76,7 +78,7 @@ if [ -n "$COMPLETE_RUN" ]; then
     PREVIOUS_PEDAL_REVERSE=$(run_info_value pedal_reverse)   # written by runs from before reverse was removed
     [ "${PREVIOUS_PEDAL_REVERSE:-0}" = "0" ] || { echo "COMPLETE_RUN=$COMPLETE_RUN was driven with the removed pedal reverse (pedal_reverse $PREVIOUS_PEDAL_REVERSE) and cannot be completed"; exit 1; }
     # the run's own shadow-env settings unless set here; one the run did not record keeps shadow_ego.py's default
-    for setting in max_speed_mps zero_partner_stopped_time vru_size_pad_m obs_slots_partners_n pedal_yellow_margin; do
+    for setting in max_speed_mps zero_partner_stopped_time vru_size_pad_m obs_slots_partners_n pedal_yellow_margin town_bin_dir; do
         setting_name=COSIM_${setting^^}
         [ -z "${!setting_name+x}" ] && grep -Eq "^$setting( |\$)" "$COMPLETE_RUN/run_info.txt" && export "$setting_name=$(run_info_value "$setting")"
     done
@@ -110,6 +112,7 @@ case "$OBS_HTML" in 1) OBS_HTML=failures ;; 0|failures|all) ;; *) echo "OBS_HTML
 REPORT=${REPORT:-0}
 TIDY=${TIDY:-1}
 WANDB_REPORT=${WANDB_REPORT:-0}
+case "${COSIM_TOWN_BIN_DIR:-/}" in /*) ;; *) COSIM_TOWN_BIN_DIR=$PD/$COSIM_TOWN_BIN_DIR ;; esac
 # a COSIM_* setting assigned above reaches the policy servers only when exported
 for setting_name in "${!COSIM_@}"; do export "$setting_name"; done
 EVALUATOR=$GARAGE_WORK_DIR/leaderboard/leaderboard/leaderboard_evaluator_local.py
@@ -140,6 +143,7 @@ case "$SEEDS" in "0 1 2") ;; "") TAG=${TAG}_legacyseed ;; *) TAG=${TAG}_seeds$(e
 TAG=$TAG${COSIM_MAX_SPEED_MPS+_maxspeed${COSIM_MAX_SPEED_MPS:-trained}}${COSIM_ZERO_PARTNER_STOPPED_TIME+_zerostopped$COSIM_ZERO_PARTNER_STOPPED_TIME}
 TAG=$TAG${COSIM_VRU_SIZE_PAD_M+_vrupad$COSIM_VRU_SIZE_PAD_M}${COSIM_OBS_SLOTS_PARTNERS_N+_partners${COSIM_OBS_SLOTS_PARTNERS_N:-trained}}
 [ "${COSIM_PEDAL_YELLOW_MARGIN:-}" = "0" ] && TAG=${TAG}_noyellowmargin
+case "${COSIM_TOWN_BIN_DIR:-}" in ""|"$PD/opengigaflow/resources/carla") ;; *) TAG=${TAG}_bins$(basename "$COSIM_TOWN_BIN_DIR") ;; esac
 # results live in the model's own eval folder, next to the OpenGigaFlow benchmark evals
 OUT=${COMPLETE_RUN:-$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}}
 mkdir -p "$OUT/routes" "$OUT/aggregate"

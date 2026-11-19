@@ -21,6 +21,7 @@ SERVER_PY=${SERVER_PY:-$HOME/miniconda3/envs/carl/bin/python}     # any OpenGiga
 CARLA_ROOT=${CARLA_ROOT:-$HOME/CARLA_0.9.10}
 GARAGE_WORK_DIR=${GARAGE_WORK_DIR:-$HOME/carla_garage_1}
 RUN_DIR=${RUN_DIR:-$PD/experiments/k_scaled_0071_1000}
+COSIM_TOWN_BIN_DIR=${COSIM_TOWN_BIN_DIR:-$PD/opengigaflow/resources/carla_v21}  # the map version the run trained on
 WANDB_REPORT=${WANDB_REPORT:-1}  # 0 for ablations
 set +a
 

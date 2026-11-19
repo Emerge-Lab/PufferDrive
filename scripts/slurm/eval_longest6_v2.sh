@@ -37,6 +37,8 @@
 #   COSIM_MAX_SPEED_MPS, COSIM_ZERO_PARTNER_STOPPED_TIME, COSIM_VRU_SIZE_PAD_M, COSIM_PEDAL_YELLOW_MARGIN
 #                              the shadow env's eval settings (shadow_ego.py: COSIM_EVAL_DEFAULTS); set one only for an ablation
 #   COSIM_OBS_SLOTS_PARTNERS_N (empty)  partner slots in the policy's obs; empty = the checkpoint's training value
+#   COSIM_TOWN_BIN_DIR         folder of the town maps (opendrive__<Town>.bin) the shadow env loads: set it for a checkpoint
+#                              trained on another map version than opengigaflow/resources/carla
 set -u
 source scripts/slurm/job_env.sh || exit 1
 
@@ -100,6 +102,7 @@ export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
 COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-}  # the longest6 v2 numbers so far use the checkpoint's slots, not shadow_ego.py's 40
 export COSIM_OBS_HTML_MAX_STEPS=${COSIM_OBS_HTML_MAX_STEPS:-20000}
 export COSIM_OBS_HTML_RENDER=0  # routes save the compact replay only; render_carla_obs_html.py renders all pages into $OUT/obs_html
+case "${COSIM_TOWN_BIN_DIR:-/}" in /*) ;; *) COSIM_TOWN_BIN_DIR=$PD/$COSIM_TOWN_BIN_DIR ;; esac
 # a COSIM_* setting assigned above reaches the agent only when exported
 for setting_name in "${!COSIM_@}"; do export "$setting_name"; done
 
@@ -109,6 +112,7 @@ TAG=$TAG$([ "$SEEDS" = "0 1 2" ] || echo "_seeds$(echo "$SEEDS" | tr ' ' '-')")
 TAG=$TAG${COSIM_MAX_SPEED_MPS+_maxspeed${COSIM_MAX_SPEED_MPS:-trained}}${COSIM_ZERO_PARTNER_STOPPED_TIME+_zerostopped$COSIM_ZERO_PARTNER_STOPPED_TIME}
 TAG=$TAG${COSIM_VRU_SIZE_PAD_M+_vrupad$COSIM_VRU_SIZE_PAD_M}${COSIM_OBS_SLOTS_PARTNERS_N:+_partners$COSIM_OBS_SLOTS_PARTNERS_N}
 [ "${COSIM_PEDAL_YELLOW_MARGIN:-}" = "0" ] && TAG=${TAG}_noyellowmargin
+case "${COSIM_TOWN_BIN_DIR:-}" in ""|"$PD/opengigaflow/resources/carla") ;; *) TAG=${TAG}_bins$(basename "$COSIM_TOWN_BIN_DIR") ;; esac
 # results live in the model's own eval folder, next to the OpenGigaFlow benchmark evals
 OUT=$RUN_DIR/eval/carla_${TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$OUT/routes" "$OUT/aggregate"

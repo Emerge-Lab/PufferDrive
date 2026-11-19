@@ -19,12 +19,12 @@ TOWN_OFFSETS = {
     "Town10HD": (8.13, 32.98),
 }
 
-_BIN_DIR = Path(__file__).resolve().parents[2] / "resources" / "carla"
+DEFAULT_TOWN_BIN_DIR = Path(__file__).resolve().parents[2] / "resources" / "carla"
 
 
-def bin_path_for_town(town: str) -> str:
-    """Path to the OpenDRIVE bin for a CARLA town name (e.g. 'Town01')."""
-    return str(_BIN_DIR / f"opendrive__{town}.bin")
+def bin_path_for_town(town: str, town_bin_dir) -> str:
+    """Path to the OpenDRIVE bin for a CARLA town name (e.g. 'Town01') in the folder town_bin_dir."""
+    return str(Path(town_bin_dir) / f"opendrive__{town}.bin")
 
 
 # median lane-normal residual left after calibration: larger = wrong bin for this map
