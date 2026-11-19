@@ -38,7 +38,7 @@
 #   COSIM_MAX_SPEED_MPS, COSIM_ZERO_PARTNER_STOPPED_TIME, COSIM_VRU_SIZE_PAD_M, COSIM_OBS_SLOTS_PARTNERS_N,
 #   COSIM_PEDAL_YELLOW_MARGIN  the shadow env's eval settings (shadow_ego.py: COSIM_EVAL_DEFAULTS); set one only for an ablation
 #   COSIM_TOWN_BIN_DIR         folder of the town maps (opendrive__<Town>.bin) the shadow env loads: set it for a checkpoint
-#                              trained on another map version than opengigaflow/resources/carla
+#                              trained on another map version than opengigaflow/resources/carla (empty: that folder)
 #   COMPLETE_RUN               an existing $OUT: reruns in place its route runs without a valid record with the settings
 #                              of its run_info.txt (CKPT must match); a requeued job completes its own folder this way
 set -u
@@ -112,7 +112,7 @@ case "$OBS_HTML" in 1) OBS_HTML=failures ;; 0|failures|all) ;; *) echo "OBS_HTML
 REPORT=${REPORT:-0}
 TIDY=${TIDY:-1}
 WANDB_REPORT=${WANDB_REPORT:-0}
-case "${COSIM_TOWN_BIN_DIR:-/}" in /*) ;; *) COSIM_TOWN_BIN_DIR=$PD/$COSIM_TOWN_BIN_DIR ;; esac
+case "${COSIM_TOWN_BIN_DIR:-}" in "") unset COSIM_TOWN_BIN_DIR ;; /*) ;; *) COSIM_TOWN_BIN_DIR=$PD/$COSIM_TOWN_BIN_DIR ;; esac
 # a COSIM_* setting assigned above reaches the policy servers only when exported
 for setting_name in "${!COSIM_@}"; do export "$setting_name"; done
 EVALUATOR=$GARAGE_WORK_DIR/leaderboard/leaderboard/leaderboard_evaluator_local.py

@@ -40,7 +40,9 @@ def test_a_checkpoint_that_never_trained_the_default_speed_cap_is_refused():
         shadow_ego.cosim_max_speed_mps(NARROW_SPEED_RANGE_ENV_CONFIG)
 
 
-def test_the_town_maps_default_to_the_tracked_towns():
+def test_the_town_maps_default_to_the_tracked_towns(monkeypatch):
+    assert shadow_ego.cosim_town_bin_dir() == shadow_ego.COSIM_EVAL_DEFAULTS["COSIM_TOWN_BIN_DIR"]
+    monkeypatch.setenv("COSIM_TOWN_BIN_DIR", "")
     assert shadow_ego.cosim_town_bin_dir() == shadow_ego.COSIM_EVAL_DEFAULTS["COSIM_TOWN_BIN_DIR"]
 
 
@@ -50,9 +52,9 @@ def test_the_environment_selects_another_town_map_folder(monkeypatch, tmp_path):
     assert shadow_ego.cosim_town_bin_dir() == str(tmp_path.resolve())
 
 
-@pytest.mark.parametrize("town_bin_dir", ["", "missing_folder", "folder_without_towns"])
+@pytest.mark.parametrize("town_bin_dir", ["missing_folder", "folder_without_towns"])
 def test_a_town_bin_dir_without_town_maps_is_refused(monkeypatch, tmp_path, town_bin_dir):
     (tmp_path / "folder_without_towns").mkdir()
-    monkeypatch.setenv("COSIM_TOWN_BIN_DIR", town_bin_dir and str(tmp_path / town_bin_dir))
+    monkeypatch.setenv("COSIM_TOWN_BIN_DIR", str(tmp_path / town_bin_dir))
     with pytest.raises(FileNotFoundError, match="town map"):
         shadow_ego.cosim_town_bin_dir()

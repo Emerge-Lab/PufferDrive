@@ -38,7 +38,7 @@
 #                              the shadow env's eval settings (shadow_ego.py: COSIM_EVAL_DEFAULTS); set one only for an ablation
 #   COSIM_OBS_SLOTS_PARTNERS_N (empty)  partner slots in the policy's obs; empty = the checkpoint's training value
 #   COSIM_TOWN_BIN_DIR         folder of the town maps (opendrive__<Town>.bin) the shadow env loads: set it for a checkpoint
-#                              trained on another map version than opengigaflow/resources/carla
+#                              trained on another map version than opengigaflow/resources/carla (empty: that folder)
 set -u
 source scripts/slurm/job_env.sh || exit 1
 
@@ -102,7 +102,7 @@ export COSIM_DEVICE=${COSIM_DEVICE:-cpu}
 COSIM_OBS_SLOTS_PARTNERS_N=${COSIM_OBS_SLOTS_PARTNERS_N-}  # the longest6 v2 numbers so far use the checkpoint's slots, not shadow_ego.py's 40
 export COSIM_OBS_HTML_MAX_STEPS=${COSIM_OBS_HTML_MAX_STEPS:-20000}
 export COSIM_OBS_HTML_RENDER=0  # routes save the compact replay only; render_carla_obs_html.py renders all pages into $OUT/obs_html
-case "${COSIM_TOWN_BIN_DIR:-/}" in /*) ;; *) COSIM_TOWN_BIN_DIR=$PD/$COSIM_TOWN_BIN_DIR ;; esac
+case "${COSIM_TOWN_BIN_DIR:-}" in "") unset COSIM_TOWN_BIN_DIR ;; /*) ;; *) COSIM_TOWN_BIN_DIR=$PD/$COSIM_TOWN_BIN_DIR ;; esac
 # a COSIM_* setting assigned above reaches the agent only when exported
 for setting_name in "${!COSIM_@}"; do export "$setting_name"; done
 

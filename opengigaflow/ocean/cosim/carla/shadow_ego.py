@@ -9,8 +9,8 @@ Environment variables:
   COSIM_VRU_SIZE_PAD_M=0.8            added to the length and width of every walker and two-wheeler partner box
   COSIM_OBS_SLOTS_PARTNERS_N=40       partner obs slots (max-pooled, so any count transfers); empty = the checkpoint's
   COSIM_TOWN_BIN_DIR=<opengigaflow>/resources/carla
-                                      folder of the town maps (opendrive__<Town>.bin): the map version the checkpoint
-                                      trained on
+                                      folder of the town maps (opendrive__<Town>.bin); another one only for a
+                                      checkpoint trained on another map version; empty = the default
   COSIM_TELEMETRY=/dir                per-route CSV of the shadow env's and the simulator's infraction flags
   COSIM_OBS_HTML=/dir                 per-route opengigaflow.viz replay of the exact obs and policy outputs
   COSIM_OBS_HTML_RENDER=1             0: save only the .replay.zlib (scripts/eval/render_carla_obs_html.py)
@@ -124,9 +124,9 @@ def cosim_obs_slots_partners_n():
 
 
 def cosim_town_bin_dir():
-    """COSIM_TOWN_BIN_DIR as the absolute path of a folder that holds opendrive__<Town>.bin town maps."""
-    raw = os.environ.get("COSIM_TOWN_BIN_DIR", COSIM_EVAL_DEFAULTS["COSIM_TOWN_BIN_DIR"])
-    if not raw or not any(Path(raw).glob("opendrive__*.bin")):
+    """COSIM_TOWN_BIN_DIR (empty: the default) as the absolute path of a folder of opendrive__<Town>.bin town maps."""
+    raw = os.environ.get("COSIM_TOWN_BIN_DIR") or COSIM_EVAL_DEFAULTS["COSIM_TOWN_BIN_DIR"]
+    if not any(Path(raw).glob("opendrive__*.bin")):
         raise FileNotFoundError(f"COSIM_TOWN_BIN_DIR={raw!r} holds no opendrive__<Town>.bin town map")
     return str(Path(raw).resolve())
 
