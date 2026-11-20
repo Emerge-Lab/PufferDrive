@@ -577,16 +577,26 @@ class PPOTrainer:
         losses["masked_fraction"] = 1.0 - (valid_idx.numel() / max(total_transitions, 1))
 
         if config["adv_filter_enabled"]:
-            ewma_beta = config["adv_filter_ewma_beta"]
-            current_max = valid_abs_adv.max().item() if valid_abs_adv.numel() > 0 else 0.0
-            self.ema_max = current_max if epoch == 0 else ewma_beta * current_max + (1 - ewma_beta) * self.ema_max
-            threshold = config["adv_filter_threshold_scale"] * self.ema_max
+            num_valid = valid_idx.numel()
+            if config["adv_filter_fixed_minibatch_count"] is not None:
+                optimizer_batch_size = self.minibatch_size * self.accumulate_minibatches
+                target_kept_count = min(config["adv_filter_fixed_minibatch_count"] * optimizer_batch_size, num_valid)
+                kept_abs_adv, top_idx = torch.topk(valid_abs_adv, target_kept_count, largest=True, sorted=False)
+                keep_idx = valid_idx[top_idx]
+                threshold = kept_abs_adv.min().item() if target_kept_count > 0 else 0.0
+            else:
+                ewma_beta = config["adv_filter_ewma_beta"]
+                current_max = valid_abs_adv.max().item() if num_valid > 0 else 0.0
+                self.ema_max = current_max if epoch == 0 else ewma_beta * current_max + (1 - ewma_beta) * self.ema_max
+                threshold = config["adv_filter_threshold_scale"] * self.ema_max
 
-            keep_mask = valid_abs_adv >= threshold
-            if config["adv_filter_leak_fraction"] > 0.0:
-                keep_mask |= torch.rand_like(valid_abs_adv) < config["adv_filter_leak_fraction"]
-            keep_idx = valid_idx[keep_mask]
-            num_valid, num_kept = valid_idx.numel(), keep_idx.numel()
+                keep_mask = valid_abs_adv >= threshold
+                if config["adv_filter_leak_fraction"] > 0.0:
+                    keep_mask |= torch.rand_like(valid_abs_adv) < config["adv_filter_leak_fraction"]
+                keep_idx = valid_idx[keep_mask]
+                kept_abs_adv = valid_abs_adv[keep_mask]
+                losses["ema_max"] = self.ema_max
+            num_kept = keep_idx.numel()
 
             if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
                 # Ranks keep different counts: trim to the global minimum so minibatch counts stay in sync
@@ -597,12 +607,11 @@ class PPOTrainer:
                     if min_num_kept == 0:
                         keep_idx = keep_idx[:0]
                     else:
-                        top_idx = torch.topk(valid_abs_adv[keep_mask], min_num_kept, largest=True, sorted=False).indices
+                        top_idx = torch.topk(kept_abs_adv, min_num_kept, largest=True, sorted=False).indices
                         keep_idx = keep_idx[top_idx]
 
             kept_fraction = keep_idx.numel() / max(num_valid, 1)
             losses["filter_threshold"] = threshold
-            losses["ema_max"] = self.ema_max
             losses["kept_fraction"] = kept_fraction
             losses["filtered_fraction"] = 1.0 - kept_fraction
         else:

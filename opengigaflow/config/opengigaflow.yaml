@@ -314,6 +314,8 @@ train:
   adv_filter_threshold_scale: 0.01
   # Also keep this random fraction of below-threshold transitions; 0 disables the leak
   adv_filter_leak_fraction: 0.0
+  # Keep the top |advantage| transitions that fill exactly this many minibatches instead of thresholding; null disables
+  adv_filter_fixed_minibatch_count: null
   # Rendering options
   render: false
   render_interval: 1000

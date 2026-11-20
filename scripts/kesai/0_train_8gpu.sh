@@ -11,15 +11,19 @@
 #SBATCH --partition dev
 #SBATCH --array=0
 # Training on our cluster, one 8-GPU node per seed (array task = SEEDS index), then the evaluations: our values for
-# scripts/slurm/train.sh, which documents the settings. k_scaled_0085 = opengigaflow.yaml's training settings on the v21 maps.
+# scripts/slurm/train.sh, which documents the settings. k_scaled_0086 = the 0084 rollout (64 workers x 64 steps per rank)
+# on the v21 maps with the advantage filter fixed at the top 3 minibatches per PPO epoch.
 source scripts/kesai/cluster_env.sh || exit 1
 
 SEEDS=(1000 2000 3000 4000)
-RUN_PREFIX=k_scaled_0085
+RUN_PREFIX=k_scaled_0086
+WORKER_COUNT=64
+ROLLOUT_STEP_COUNT=64
+ADV_FILTER_FIXED_MINIBATCH_COUNT=3
 TRAIN_MAP_DIR=$PD/opengigaflow/resources/carla_128_affine_aug
 SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 [ -n "${SEED}" ] || { echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} has no run configured; aborting."; exit 1; }
-echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} maps=${TRAIN_MAP_DIR}"
+echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED} maps=${TRAIN_MAP_DIR} workers=${WORKER_COUNT} rollout_steps=${ROLLOUT_STEP_COUNT} adv_filter_fixed_minibatch_count=${ADV_FILTER_FIXED_MINIBATCH_COUNT}"
 
 set -a  # every assignment up to "set +a" reaches scripts/slurm/train.sh
 RUN_NAME=${RUN_PREFIX}_${SEED}
@@ -39,5 +43,8 @@ exec bash scripts/slurm/train.sh \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     env.map_dir="$TRAIN_MAP_DIR" \
+    vec.num_envs="$WORKER_COUNT" \
+    train.bptt_horizon="$ROLLOUT_STEP_COUNT" \
+    train.adv_filter_fixed_minibatch_count="$ADV_FILTER_FIXED_MINIBATCH_COUNT" \
     train.seed="$SEED" \
     tb=True

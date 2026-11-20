@@ -367,6 +367,7 @@ class TrainingConfig:
     adv_filter_ewma_beta: float = _constrained_field(PROBABILITY_CONSTRAINT)
     adv_filter_threshold_scale: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     adv_filter_leak_fraction: float = _constrained_field(PROBABILITY_CONSTRAINT)
+    adv_filter_fixed_minibatch_count: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     render: bool = MISSING
     render_interval: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     render_num_maps: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
@@ -555,6 +556,26 @@ def _validate_cross_field_constraints(config, context):
             _raise_config_error(context, "train.batch_size", "must be at least train.minibatch_size")
         effective_minibatch_size = min(train["minibatch_size"], train["max_minibatch_size"])
         total_agents = config["vec"]["num_envs"] * config["env"]["num_agents"]
+        fixed_minibatch_count = train["adv_filter_fixed_minibatch_count"]
+        if fixed_minibatch_count is not None:
+            path = "train.adv_filter_fixed_minibatch_count"
+            if not train["adv_filter_enabled"]:
+                _raise_config_error(context, path, "requires train.adv_filter_enabled")
+            if train["adv_filter_leak_fraction"] > 0.0:
+                _raise_config_error(context, path, "cannot be combined with train.adv_filter_leak_fraction")
+            if train["min_batch_size"] is not None:
+                _raise_config_error(context, path, "cannot be combined with train.min_batch_size")
+            if train["batch_size"] == "auto":
+                resolved_batch_size = total_agents * train["bptt_horizon"]
+            else:
+                resolved_batch_size = train["batch_size"]
+            fixed_transition_count = fixed_minibatch_count * train["minibatch_size"]
+            if fixed_transition_count > resolved_batch_size:
+                _raise_config_error(
+                    context,
+                    path,
+                    f"{fixed_transition_count} transitions exceed the batch_size ({resolved_batch_size})",
+                )
         if train["bptt_horizon"] != "auto":
             if effective_minibatch_size % train["bptt_horizon"] != 0:
                 _raise_config_error(
