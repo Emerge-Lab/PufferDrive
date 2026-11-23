@@ -67,7 +67,7 @@ def checkpoint_config(path, fallback):
     return config
 
 
-def make_eval_config(base, control_mode, num_maps, num_agents):
+def make_eval_config(base, control_mode, num_maps, num_agents, map_dir=None):
     """Same overrides as examples/analyze.py, on a small map slice.
 
     lambda_value is left at the value stored in the checkpoint: 0.075 for the
@@ -75,7 +75,7 @@ def make_eval_config(base, control_mode, num_maps, num_agents):
     """
     config = copy.deepcopy(base)
     env = config["env"]
-    env["map_dir"] = str(MAP_DIR)
+    env["map_dir"] = str(MAP_DIR if map_dir is None else map_dir)
     env["control_mode"] = control_mode
     env["num_maps"] = num_maps
     env["num_agents"] = num_agents

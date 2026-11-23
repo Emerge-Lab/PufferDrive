@@ -1,0 +1,20 @@
+[
+  {
+    "map": "map_000.bin",
+    "scenario_id": "f2e32390fb9fc73a",
+    "source": "tfrecord-00010-of-00150_215.json",
+    "note": "Compact intersection, about 12 vehicles moving near the ego, crosswalks and stop signs."
+  },
+  {
+    "map": "map_001.bin",
+    "scenario_id": "3810e617bb1f0c2d",
+    "source": "tfrecord-00014-of-00150_101.json",
+    "note": "Intersection with crosswalks. The ego travels about 50 m with nearby traffic."
+  },
+  {
+    "map": "map_002.bin",
+    "scenario_id": "be141957a08e978e",
+    "source": "tfrecord-00021-of-00150_242.json",
+    "note": "Longer ego trip through an intersection with a handful of nearby vehicles."
+  }
+]
