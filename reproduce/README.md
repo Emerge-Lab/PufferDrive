@@ -4,11 +4,12 @@ Regularized self-play (lambda 0.075, about 30 minutes of human anchor data) keep
 
 ```bash
 python reproduce/eval.py
-python reproduce/eval.py --num-maps 10000 --num-agents 1024 --target-scenes 10000
+python reproduce/eval.py --num-maps 10000 --num-agents 1024 --target-scenes 10000 --seed 1
+python reproduce/eval.py --num-maps 10000 --num-agents 1024 --target-scenes 10000 --seed 1 --deterministic
 python reproduce/render.py
 ```
 
-Eval uses stochastic actions, episode length 200, and no observation noise. Lambda stays at the value stored in the checkpoint. Self-play controls every vehicle. Human replay controls only the ego; other agents follow the log.
+Eval uses episode length 200 and no observation noise. The default samples actions. `--deterministic` takes the mode of each action head. Lambda stays at the value stored in the checkpoint. Self-play controls every vehicle. Human replay controls only the ego; other agents follow the log.
 
 ## Results
 
@@ -19,12 +20,14 @@ First 128 validation maps, 1024 agents, seed 1. Self-play is 153 scenes. Human r
 | Regularized | 0.971 | 0.38% | 0.29% |
 | Unregularized | 0.981 | 1.40% | 1.37% |
 
-Full 10k validation split, 1024 agents per rollout, new seeds until 10,000 scenes in each mode:
+Full 10k validation split, seed 1, 1024 agents per rollout, 10,000 scenes in each mode. Stochastic and deterministic use the same map seeds.
 
-| Policy | Self-play score | Self-play collision | Human-replay at-fault |
-| --- | --- | --- | --- |
-| Regularized | 0.977 | 0.45% | 0.93% |
-| Unregularized | 0.984 | 0.86% | 1.86% |
+| Actions | Policy | Self-play score | Self-play collision | Human-replay at-fault |
+| --- | --- | --- | --- | --- |
+| Stochastic | Regularized | 0.977 | 0.45% | 0.93% |
+| Stochastic | Unregularized | 0.984 | 0.86% | 1.86% |
+| Deterministic | Regularized | 0.894 | 0.51% | 0.84% |
+| Deterministic | Unregularized | 0.984 | 0.80% | 1.96% |
 
 The paper's Table 1 reports the 30-minute policy near 0.2% self-play collision and 0.7% human-replay at-fault. Figure 1 quotes 0.6% at-fault.
 
@@ -36,8 +39,6 @@ Both files are the 20B-step runs. Each is about 2.5 MB.
 | --- | --- | --- |
 | Regularized (ours) | `reproduce/policies/reg_delta_50k_maps_anchor_200_maps.pt` | 50k self-play maps, lambda **0.075**, anchor on 200 scenarios (about 30 minutes) |
 | Unregularized | `reproduce/policies/unreg_delta_50k_maps.pt` | 50k self-play maps, lambda 0 |
-
-The regularized weights match `models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt` and `models/lambda_ablation/reg_lam_0.075_20B.pt`. The unregularized weights match `models/scaling_cpts/unreg_delta_50k_maps.pt` and `models/lambda_ablation/reg_lam_0.0_20B.pt`. Copies under `models/best_cpts/` with the same names are earlier runs.
 
 ## Validation split
 
@@ -55,7 +56,7 @@ Binaries land in `resources/drive/binaries/validation/` as `map_000.bin` onward.
 
 Rendering does not need this download.
 
-## Rendering
+## How to render (quick example)
 
 `reproduce/data/` has three interactive validation intersections. Ids are in `scenes.json`.
 
