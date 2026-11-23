@@ -67,7 +67,7 @@ def checkpoint_config(path, fallback):
     return config
 
 
-def make_eval_config(base, control_mode, num_maps, num_agents, map_dir=None):
+def make_eval_config(base, control_mode, num_maps, num_agents, map_dir=None, seed=1):
     """Same overrides as examples/analyze.py, on a small map slice.
 
     lambda_value is left at the value stored in the checkpoint: 0.075 for the
@@ -80,7 +80,7 @@ def make_eval_config(base, control_mode, num_maps, num_agents, map_dir=None):
     env["num_maps"] = num_maps
     env["num_agents"] = num_agents
     env["episode_length"] = EPISODE_LENGTH
-    env["seed"] = 1
+    env["seed"] = seed
     env["async_resets"] = False
     env["goal_behavior"] = 0
     env["render_mode"] = 1
@@ -115,8 +115,8 @@ def load_policy_once(config, num_maps, num_agents):
     return policy
 
 
-def evaluate_mode(policy, config, control_mode, num_maps, num_agents):
-    eval_config = make_eval_config(config, control_mode, num_maps, num_agents)
+def evaluate_mode(policy, config, control_mode, num_maps, num_agents, seed=1):
+    eval_config = make_eval_config(config, control_mode, num_maps, num_agents, seed=seed)
     env = load_env(ENV_NAME, eval_config)
     try:
         evaluator = CheckpointEvaluator(eval_config)
@@ -135,10 +135,34 @@ def print_row(name, mode, logs):
     )
 
 
+def rollout_until(policy, config, control_mode, num_maps, num_agents, target_scenes):
+    """One rollout, or several seeds, until target_scenes are collected."""
+    logs = []
+    seed = 1
+    while True:
+        print(f"  rollout seed {seed}", flush=True)
+        batch = evaluate_mode(policy, config, control_mode, num_maps, num_agents, seed=seed)
+        logs.extend(batch)
+        if target_scenes <= 0 or len(logs) >= target_scenes or not batch:
+            break
+        seed += 1
+        if seed > 40:
+            break
+    if target_scenes > 0:
+        logs = logs[:target_scenes]
+    return logs
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--num-maps", type=int, default=128, help="First N validation maps to sample from")
     parser.add_argument("--num-agents", type=int, default=1024, help="Controlled agents per rollout")
+    parser.add_argument(
+        "--target-scenes",
+        type=int,
+        default=0,
+        help="Keep sampling new seeds until each mode has this many scenes",
+    )
     args = parser.parse_args()
 
     if not (MAP_DIR / "map_000.bin").exists():
@@ -159,10 +183,10 @@ def main():
     for name, path in CHECKPOINTS:
         print(f"Loading {name}: {path.name}", flush=True)
         config = checkpoint_config(path, fallback)
-        policy = load_policy_once(config, args.num_maps, args.num_agents)
+        policy = load_policy_once(config, num_maps=1, num_agents=1)
         for mode_name, control_mode in MODES:
             print(f"  rollout {mode_name}", flush=True)
-            logs = evaluate_mode(policy, config, control_mode, args.num_maps, args.num_agents)
+            logs = rollout_until(policy, config, control_mode, args.num_maps, args.num_agents, args.target_scenes)
             print_row(name, mode_name, logs)
 
 
