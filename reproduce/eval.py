@@ -146,7 +146,7 @@ def rollout_until(policy, config, control_mode, num_maps, num_agents, target_sce
         if target_scenes <= 0 or len(logs) >= target_scenes or not batch:
             break
         seed += 1
-        if seed > 40:
+        if seed > max(40, target_scenes):
             break
     if target_scenes > 0:
         logs = logs[:target_scenes]

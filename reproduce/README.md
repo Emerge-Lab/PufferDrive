@@ -4,7 +4,7 @@ Regularized self-play (lambda 0.075, about 30 minutes of human anchor data) keep
 
 ```bash
 python reproduce/eval.py
-python reproduce/eval.py --num-maps 1000 --num-agents 1024 --target-scenes 1000
+python reproduce/eval.py --num-maps 10000 --num-agents 1024 --target-scenes 10000
 python reproduce/render.py
 ```
 
@@ -19,12 +19,12 @@ First 128 validation maps, 1024 agents, seed 1. Self-play is 153 scenes. Human r
 | Regularized | 0.971 | 0.38% | 0.29% |
 | Unregularized | 0.981 | 1.40% | 1.37% |
 
-First 1000 validation maps, 1024 agents per rollout, new seeds until 1000 scenes in each mode:
+Full 10k validation split, 1024 agents per rollout, new seeds until 10,000 scenes in each mode:
 
 | Policy | Self-play score | Self-play collision | Human-replay at-fault |
 | --- | --- | --- | --- |
-| Regularized | 0.979 | 0.27% | 0.80% |
-| Unregularized | 0.987 | 0.83% | 1.80% |
+| Regularized | 0.977 | 0.45% | 0.93% |
+| Unregularized | 0.984 | 0.86% | 1.86% |
 
 The paper's Table 1 reports the 30-minute policy near 0.2% self-play collision and 0.7% human-replay at-fault. Figure 1 quotes 0.6% at-fault.
 
