@@ -7,14 +7,13 @@ in three modes:
   2. Human-replay on validation maps
   3. Human-replay on interactive scenes
 
-Then plots metrics (mean ± SEM across rollout rows) vs gamma in a 4 x 4 grid
+Then plots metrics (mean ± SEM across rollout rows) vs gamma in a 3 x 3 grid
 where columns share a consistent mode (col 0 = sp_val, col 1 = hr_val,
-col 2 = hr_interactive, col 3 = hr_val with at-fault metric):
+col 2 = hr_interactive):
 
-  Row 1: collision rate            (sp_val, hr_val, hr_interactive, hr_val/at_fault)
-  Row 2: rear collision rate       (        hr_val, hr_interactive)
-  Row 3: route progress            (sp_val, hr_val, hr_interactive)
-  Row 4: score                     (sp_val, hr_val, hr_interactive)
+  Row 1: collision rate            (sp_val, hr_val, hr_interactive)
+  Row 2: route progress            (sp_val, hr_val, hr_interactive)
+  Row 3: score                     (sp_val, hr_val, hr_interactive)
 
 Why SEM and not std:
     Each row in `df` is one populated env log (effectively per-agent for
@@ -74,8 +73,6 @@ DYNAMICS_CONFIG_MAP = {
 # Metrics not in this list are plotted as-is, with their raw values.
 RATE_COLS_FOR_DISPLAY = [
     "collision_rate",
-    "at_fault_collision_rate",
-    "rear_collision_rate",
     "offroad_rate",
     "completion_rate",
 ]
@@ -86,17 +83,13 @@ METRICS = [
     "n",
     "score",
     "collision_rate",
-    "at_fault_collision_rate",
-    "rear_collision_rate",
     "collisions_per_agent",
     "offroad_rate",
     "offroad_per_agent",
     "completion_rate",
     "route_progress",
-    "lateral_error_avg",
     "episode_length",
     "episode_return",
-    "perc_controlled",
 ]
 
 
@@ -182,10 +175,9 @@ def run_mode(evaluator, policy, cpt_config, map_dir, control_mode, checkpoint, m
         if n_scenes > 0:
             mean_score = np.mean([r["score"] for r in rows])
             mean_coll = np.mean([r["collision_rate"] for r in rows])
-            mean_coll_fault = np.mean([r["at_fault_collision_rate"] for r in rows])
             print(
                 f"  {mode_name}: {n_scenes} scenes, score={mean_score:.3f}, "
-                f"collision_rate={mean_coll:.3f}, at_fault_collision_rate={mean_coll_fault:.3f}"
+                f"collision_rate={mean_coll:.3f}"
             )
         else:
             print(f"  {mode_name}: no populated scenes")
@@ -381,15 +373,14 @@ def _plot_panel(ax, df, mode, metric, title):
 
 
 def plot_gamma_vs_collision(df, output_path=PLOT_PATH):
-    """Plot metrics (mean ± SEM across rollout rows) vs gamma in a 4 x 4 grid.
+    """Plot metrics (mean ± SEM across rollout rows) vs gamma in a 3 x 3 grid.
 
     Layout — columns share a consistent mode (col 0 = sp_val, col 1 = hr_val,
-    col 2 = hr_interactive, col 3 = hr_val with the at-fault metric):
+    col 2 = hr_interactive):
 
-      Row 1: collision rate         sp_val, hr_val, hr_interactive, hr_val/at_fault
-      Row 2: rear collision rate           hr_val, hr_interactive
-      Row 3: route progress         sp_val, hr_val, hr_interactive
-      Row 4: score                  sp_val, hr_val, hr_interactive
+      Row 1: collision rate         sp_val, hr_val, hr_interactive
+      Row 2: route progress         sp_val, hr_val, hr_interactive
+      Row 3: score                  sp_val, hr_val, hr_interactive
 
     Error bars are ±1 SEM. Rate metrics (collision_rate etc.) are scaled to
     percentages at display time; route_progress and score are plotted in
@@ -401,25 +392,18 @@ def plot_gamma_vs_collision(df, output_path=PLOT_PATH):
 
     # (row, col, mode, metric, title)
     panels = [
-        # Row 0: collision rate
         (0, 0, "sp_val", "collision_rate", "Self-play (val)\ncollision rate"),
         (0, 1, "hr_val", "collision_rate", "Human-replay (val)\ncollision rate"),
         (0, 2, "hr_interactive", "collision_rate", "Human-replay (interactive)\ncollision rate"),
-        (0, 3, "hr_val", "at_fault_collision_rate", "Human-replay (val)\nat-fault collision rate"),
-        # Row 1: rear collision rate
-        (1, 1, "hr_val", "rear_collision_rate", "Human-replay (val)\nrear collision rate"),
-        (1, 2, "hr_interactive", "rear_collision_rate", "Human-replay (interactive)\nrear collision rate"),
-        # Row 2: route progress
-        (2, 0, "sp_val", "route_progress", "Self-play (val)\nroute progress"),
-        (2, 1, "hr_val", "route_progress", "Human-replay (val)\nroute progress"),
-        (2, 2, "hr_interactive", "route_progress", "Human-replay (interactive)\nroute progress"),
-        # Row 3: score
-        (3, 0, "sp_val", "score", "Self-play (val)\nscore"),
-        (3, 1, "hr_val", "score", "Human-replay (val)\nscore"),
-        (3, 2, "hr_interactive", "score", "Human-replay (interactive)\nscore"),
+        (1, 0, "sp_val", "route_progress", "Self-play (val)\nroute progress"),
+        (1, 1, "hr_val", "route_progress", "Human-replay (val)\nroute progress"),
+        (1, 2, "hr_interactive", "route_progress", "Human-replay (interactive)\nroute progress"),
+        (2, 0, "sp_val", "score", "Self-play (val)\nscore"),
+        (2, 1, "hr_val", "score", "Human-replay (val)\nscore"),
+        (2, 2, "hr_interactive", "score", "Human-replay (interactive)\nscore"),
     ]
 
-    nrows, ncols = 4, 4
+    nrows, ncols = 3, 3
     fig, axes = plt.subplots(nrows, ncols, figsize=(20, 20), sharey=False)
 
     used = set()
@@ -457,20 +441,16 @@ def main():
             score=("score", "mean"),
             route_progress=("route_progress", "mean"),
             collision_rate=("collision_rate", "mean"),
-            at_fault_collision_rate=("at_fault_collision_rate", "mean"),
-            rear_collision_rate=("rear_collision_rate", "mean"),
             offroad_rate=("offroad_rate", "mean"),
         )
         # Convert rate columns to % for the printed summary only
         summary_display = summary.copy()
-        for col in ["collision_rate", "at_fault_collision_rate", "rear_collision_rate", "offroad_rate"]:
+        for col in ["collision_rate", "offroad_rate"]:
             if col in summary_display.columns:
                 summary_display[col] = summary_display[col] * 100.0
         summary_display = summary_display.rename(
             columns={
                 "collision_rate": "collision_rate_pct",
-                "at_fault_collision_rate": "at_fault_collision_rate_pct",
-                "rear_collision_rate": "rear_collision_rate_pct",
                 "offroad_rate": "offroad_rate_pct",
             }
         )

@@ -52,7 +52,6 @@ LOG_METRIC_KEYS = (
     "dnf_rate",
     "completion_rate",
     "lane_alignment_rate",
-    "perc_controlled",
     "perc_other",
     "offroad_per_agent",
     "collisions_per_agent",

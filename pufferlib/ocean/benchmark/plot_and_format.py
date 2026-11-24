@@ -294,10 +294,7 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
     hr_cols = [
         "score",
         "collision_rate",
-        "at_fault_collision_rate",
-        "rear_collision_rate",
         "route_progress",
-        "lateral_error_avg",
     ]
     available = [m for m in set(sp_cols + hr_cols) if m in scaling_df.columns]
 
@@ -330,34 +327,8 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
         ("hr_score_mean", "hr_score_sem", r"Score $\uparrow$", True, False, 3),
         ("hr_collision_rate_mean", "hr_collision_rate_sem", r"Coll. (\%) $\downarrow$", False, True, 1),
     ]
-    if "at_fault_collision_rate" in available:
-        hr_specs.append(
-            (
-                "hr_at_fault_collision_rate_mean",
-                "hr_at_fault_collision_rate_sem",
-                r"At-fault (\%) $\downarrow$",
-                False,
-                True,
-                1,
-            )
-        )
-    if "rear_collision_rate" in available:
-        hr_specs.append(
-            (
-                "hr_rear_collision_rate_mean",
-                "hr_rear_collision_rate_sem",
-                r"Rear coll. (\%) $\downarrow$",
-                False,
-                True,
-                1,
-            )
-        )
     if "route_progress" in available:
         hr_specs.append(("hr_route_progress_mean", "hr_route_progress_sem", r"Route prog. $\uparrow$", True, False, 3))
-    if "lateral_error_avg" in available:
-        hr_specs.append(
-            ("hr_lateral_error_avg_mean", "hr_lateral_error_avg_sem", r"Lateral L2 $\downarrow$", False, False, 2)
-        )
 
     all_specs = [s for s in sp_specs + hr_specs if s[0] in merged.columns]
     n_sp = sum(1 for s in all_specs if s[0].startswith("sp_"))
@@ -700,16 +671,14 @@ def plot_anchor_eval(
 
 
 def plot_selfplay_behavior_analysis(df, save_path="results/figures/eval_selfplay_behavior_analysis.pdf"):
-    """Bar chart comparing two 50k checkpoints across four self-play behavior metrics.
+    """Bar chart comparing two 50k checkpoints across self-play behavior metrics.
 
-    4 subplots, one per metric. Two bars per subplot: unregularized vs regularized,
+    One subplot per metric. Two bars per subplot: unregularized vs regularized,
     using the shared reg/unreg color convention (black = unreg, blue = reg).
     Mode: scaling_sp_val (self-play). Mean ± SEM, raw values, no normalization.
 
     Metrics:
-        - collisions_per_agent
-        - lateral_error_avg
-        - longitudinal_error_avg
+        - collision_rate
         - displacement_error_avg
     """
     CHECKPOINTS_OF_INTEREST = {
@@ -725,8 +694,6 @@ def plot_selfplay_behavior_analysis(df, save_path="results/figures/eval_selfplay
 
     required_cols = [
         "collision_rate",
-        "lateral_error_avg",
-        "longitudinal_error_avg",
         "displacement_error_avg",
     ]
     missing = [c for c in required_cols if c not in df.columns]
@@ -746,13 +713,11 @@ def plot_selfplay_behavior_analysis(df, save_path="results/figures/eval_selfplay
     # (column, ylabel). None of these are percentages — they're counts/distances.
     subplot_specs = [
         ("collision_rate", "SP collision rate"),
-        ("lateral_error_avg", "SP lateral L2 distance"),
-        ("longitudinal_error_avg", "SP longitudinal L2 distance"),
         ("displacement_error_avg", "SP avg. displacement error"),
     ]
 
     _set_style(2)
-    fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+    fig, axes = plt.subplots(1, 2, figsize=(8, 4))
 
     for ax, (col, ylabel) in zip(axes, subplot_specs):
         means = agg[f"{col}_mean"].values
@@ -1035,34 +1000,22 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
     sp = df[df["mode"] == "scaling_sp_val"]
 
     hr_agg = (
-        hr.groupby(["sp_maps", "anchor_maps"])[["at_fault_collision_rate", "collision_rate"]]
+        hr.groupby(["sp_maps", "anchor_maps"])[["collision_rate"]]
         .mean()
         .reset_index()
-        .rename(
-            columns={
-                "at_fault_collision_rate": "hr_atfault",
-                "collision_rate": "hr_collision_rate",
-            }
-        )
+        .rename(columns={"collision_rate": "hr_collision_rate"})
     )
     sp_agg = (
-        sp.groupby(["sp_maps", "anchor_maps"])[["at_fault_collision_rate", "collision_rate"]]
+        sp.groupby(["sp_maps", "anchor_maps"])[["collision_rate"]]
         .mean()
         .reset_index()
-        .rename(
-            columns={
-                "at_fault_collision_rate": "sp_atfault",
-                "collision_rate": "sp_collision_rate",
-            }
-        )
+        .rename(columns={"collision_rate": "sp_collision_rate"})
     )
     agg = hr_agg.merge(sp_agg, on=["sp_maps", "anchor_maps"], how="left")
 
-    agg["hr_atfault"] = agg["hr_atfault"] * 100
-    agg["sp_atfault"] = agg["sp_atfault"] * 100
     agg["hr_collision_rate"] = agg["hr_collision_rate"] * 100
     agg["sp_collision_rate"] = agg["sp_collision_rate"] * 100
-    agg["delta_atfault"] = agg["sp_atfault"] - agg["hr_atfault"]
+    agg["delta_collision"] = agg["sp_collision_rate"] - agg["hr_collision_rate"]
 
     anchor_vals = sorted(agg["anchor_maps"].unique())
     color_map = _reg_unreg_colors(anchor_vals)
@@ -1077,8 +1030,8 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
 
     subplot_specs = [
         ("sp_collision_rate", "Self-play collision rate [%]"),
-        ("hr_atfault", "Human-replay at-fault collision rate [%]"),
-        ("delta_atfault", "\u0394 at-fault (SP \u2212 HR) [%]"),
+        ("hr_collision_rate", "Human-replay collision rate [%]"),
+        ("delta_collision", "\u0394 collision (SP \u2212 HR) [%]"),
     ]
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
@@ -1110,7 +1063,7 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
         ax.set_ylabel(ylabel)
         ax.grid(axis="y", alpha=0.3, linestyle="--")
 
-        if y_col == "delta_atfault":
+        if y_col == "delta_collision":
             ax.axhline(0, color=PALETTE["tier_best"], linestyle="--", linewidth=2.0, alpha=0.9, zorder=2)
             ax.text(
                 min(agg["sp_maps"]) * 1.1,
@@ -1165,7 +1118,7 @@ def _load_smart_baseline(csv_path: str = "results/smart_baseline_res.csv") -> pd
     Returns a DataFrame with columns:
         num_maps, minutes,
         hr_score,                                   # raw [0,1] — NOT multiplied by 100
-        hr_atfault_pct, hr_coll_pct, hr_offroad_pct, hr_progress_pct,
+        hr_coll_pct, hr_offroad_pct, hr_progress_pct,
         sp_coll_pct, sp_offroad_pct, sp_progress_pct
 
     Missing metrics are left as NaN so downstream `dropna(subset=[col])` skips
@@ -1176,7 +1129,6 @@ def _load_smart_baseline(csv_path: str = "results/smart_baseline_res.csv") -> pd
         "num_maps",
         "minutes",
         "hr_score",
-        "hr_atfault_pct",
         "hr_coll_pct",
         "hr_offroad_pct",
         "hr_progress_pct",
@@ -1199,7 +1151,6 @@ def _load_smart_baseline(csv_path: str = "results/smart_baseline_res.csv") -> pd
 
     # ── HR percentage metrics (multiplied by 100 below) ─────────────────────
     hr_wanted = {
-        "at_fault_collision_rate": "hr_atfault_pct",
         "collision_rate": "hr_coll_pct",
         "offroad_rate": "hr_offroad_pct",
         "route_progress": "hr_progress_pct",
@@ -1250,8 +1201,6 @@ def _smart_row(r, has_sp_offroad=False, has_hr_offroad=False):
         "hr_score_sem": np.nan,
         "hr_coll_mean": r["hr_coll_pct"],
         "hr_coll_sem": np.nan,
-        "hr_atfault_mean": r["hr_atfault_pct"],
-        "hr_atfault_sem": np.nan,
         "hr_progress_mean": r["hr_progress_pct"],
         "hr_progress_sem": np.nan,
         "hr_offroad_mean": r["hr_offroad_pct"] if has_hr_offroad else np.nan,
@@ -1303,14 +1252,10 @@ def plot_human_data_requirements(
     # ── Aggregate per anchor_maps ───────────────────────────────────────────
     hr = df[df["mode"] == "scaling_hr_val"]
     hr_agg = (
-        hr.groupby("anchor_maps")[["at_fault_collision_rate", "collision_rate", "route_progress"]]
-        .agg(["mean", "sem"])
-        .reset_index()
+        hr.groupby("anchor_maps")[["collision_rate", "route_progress"]].agg(["mean", "sem"]).reset_index()
     )
     hr_agg.columns = [
         "anchor_maps",
-        "hr_atfault_mean",
-        "hr_atfault_sem",
         "hr_coll_mean",
         "hr_coll_sem",
         "hr_progress_mean",
@@ -1324,7 +1269,7 @@ def plot_human_data_requirements(
     agg = hr_agg.merge(sp_agg, on="anchor_maps", how="outer")
     agg["anchor_minutes"] = agg["anchor_maps"] * 9 / 60
 
-    for col in ("hr_atfault", "hr_coll", "hr_progress", "sp_coll"):
+    for col in ("hr_coll", "hr_progress", "sp_coll"):
         agg[f"{col}_mean_pct"] = agg[f"{col}_mean"] * 100
         agg[f"{col}_sem_pct"] = agg[f"{col}_sem"] * 100
 
@@ -1343,11 +1288,11 @@ def plot_human_data_requirements(
             "linear",
         ),
         (
-            "hr_atfault_mean_pct",
-            "hr_atfault_sem_pct",
-            "Human-replay at-fault collision rate [%]",
-            "hr_atfault_pct",
-            "HR at-fault coll.",
+            "hr_coll_mean_pct",
+            "hr_coll_sem_pct",
+            "Human-replay collision rate [%]",
+            "hr_coll_pct",
+            "HR collision",
             True,
             "linear",
         ),
@@ -1551,7 +1496,7 @@ def generate_human_data_latex_table(
       3) Regularized self-play rows, sorted by increasing anchor data.
 
     Columns: self-play block (Coll., Off-road, Route prog.) and human-replay
-    block (Score, Coll., At-fault, Off-road, Route prog.). Off-road columns are
+    block (Score, Coll., Off-road, Route prog.). Off-road columns are
     emitted only if at least one row has non-NaN data for them.
 
     Top-3 values per metric column are highlighted via the shared tier palette;
@@ -1570,13 +1515,12 @@ def generate_human_data_latex_table(
 
     # ── Aggregate HR metrics (now includes score) ────────────────────────────
     hr = df[df["mode"] == "scaling_hr_val"]
-    hr_metrics = ["score", "at_fault_collision_rate", "collision_rate", "route_progress"]
+    hr_metrics = ["score", "collision_rate", "route_progress"]
     if "offroad_rate" in hr.columns:
         hr_metrics.append("offroad_rate")
     hr_agg = hr.groupby("anchor_maps")[hr_metrics].agg(["mean", "sem"]).reset_index()
     hr_short = {
         "score": "hr_score",
-        "at_fault_collision_rate": "hr_atfault",
         "collision_rate": "hr_coll",
         "route_progress": "hr_progress",
         "offroad_rate": "hr_offroad",
@@ -1609,7 +1553,7 @@ def generate_human_data_latex_table(
     has_hr_offroad = "hr_offroad_mean" in full_agg.columns
 
     # score is NOT a percentage — excluded from pct_cols intentionally
-    pct_cols = ["hr_atfault", "hr_coll", "hr_progress", "sp_coll", "sp_progress"]
+    pct_cols = ["hr_coll", "hr_progress", "sp_coll", "sp_progress"]
     if has_sp_offroad:
         pct_cols.append("sp_offroad")
     if has_hr_offroad:
@@ -1643,8 +1587,6 @@ def generate_human_data_latex_table(
                 "hr_score_sem": np.nan,
                 "hr_coll_mean": r["hr_coll_pct"],
                 "hr_coll_sem": np.nan,
-                "hr_atfault_mean": r["hr_atfault_pct"],
-                "hr_atfault_sem": np.nan,
                 "hr_progress_mean": r["hr_progress_pct"],
                 "hr_progress_sem": np.nan,
                 "hr_offroad_mean": r["hr_offroad_pct"] if "hr_offroad_pct" in r else np.nan,
@@ -1669,8 +1611,6 @@ def generate_human_data_latex_table(
                 "hr_score_sem": u["hr_score_sem"],
                 "hr_coll_mean": u["hr_coll_mean_pct"],
                 "hr_coll_sem": u["hr_coll_sem_pct"],
-                "hr_atfault_mean": u["hr_atfault_mean_pct"],
-                "hr_atfault_sem": u["hr_atfault_sem_pct"],
                 "hr_progress_mean": u["hr_progress_mean_pct"],
                 "hr_progress_sem": u["hr_progress_sem_pct"],
                 "hr_offroad_mean": u["hr_offroad_mean_pct"] if has_hr_offroad else np.nan,
@@ -1694,8 +1634,6 @@ def generate_human_data_latex_table(
                 "hr_score_sem": r["hr_score_sem"],
                 "hr_coll_mean": r["hr_coll_mean_pct"],
                 "hr_coll_sem": r["hr_coll_sem_pct"],
-                "hr_atfault_mean": r["hr_atfault_mean_pct"],
-                "hr_atfault_sem": r["hr_atfault_sem_pct"],
                 "hr_progress_mean": r["hr_progress_mean_pct"],
                 "hr_progress_sem": r["hr_progress_sem_pct"],
                 "hr_offroad_mean": r["hr_offroad_mean_pct"] if has_hr_offroad else np.nan,
@@ -1735,7 +1673,6 @@ def generate_human_data_latex_table(
     hr_specs = [
         ("hr_score_mean", "hr_score_sem", r"Score $\uparrow$", True, False, 3),  # added
         ("hr_coll_mean", "hr_coll_sem", r"Coll. (\%) $\downarrow$", False, False, 1),
-        ("hr_atfault_mean", "hr_atfault_sem", r"At-fault (\%) $\downarrow$", False, False, 1),
     ]
     if any_hr_offroad:
         hr_specs.append(("hr_offroad_mean", "hr_offroad_sem", r"Off-road (\%) $\downarrow$", False, False, 1))
@@ -2178,10 +2115,7 @@ def generate_hr_comparison_latex_table(df, save_path="results/figures/eval_hr_co
     hr_metric_cols = [
         "score",
         "collision_rate",
-        "at_fault_collision_rate",
-        "rear_collision_rate",
         "route_progress",
-        "lateral_error_avg",
     ]
     available = [m for m in hr_metric_cols if m in scaling_df.columns]
 
@@ -2202,10 +2136,7 @@ def generate_hr_comparison_latex_table(df, save_path="results/figures/eval_hr_co
     reg = merged[merged["anchor_maps"] != 0].sort_values(["sp_maps", "anchor_maps"])
     merged = pd.concat([unreg, reg]).reset_index(drop=True)
 
-    has_at_fault = "at_fault_collision_rate" in available
-    has_rear = "rear_collision_rate" in available
     has_route = "route_progress" in available
-    has_lateral = "lateral_error_avg" in available
 
     def _block_specs(prefix):
         """(mean_col, sem_col, header, higher_is_better, as_pct, decimals) for one block."""
@@ -2220,28 +2151,6 @@ def generate_hr_comparison_latex_table(df, save_path="results/figures/eval_hr_co
                 1,
             ),
         ]
-        if has_at_fault:
-            specs.append(
-                (
-                    f"{prefix}_at_fault_collision_rate_mean",
-                    f"{prefix}_at_fault_collision_rate_sem",
-                    r"At-fault (\%) $\downarrow$",
-                    False,
-                    True,
-                    1,
-                )
-            )
-        if has_rear:
-            specs.append(
-                (
-                    f"{prefix}_rear_collision_rate_mean",
-                    f"{prefix}_rear_collision_rate_sem",
-                    r"Rear coll. (\%) $\downarrow$",
-                    False,
-                    True,
-                    1,
-                )
-            )
         if has_route:
             specs.append(
                 (
@@ -2251,17 +2160,6 @@ def generate_hr_comparison_latex_table(df, save_path="results/figures/eval_hr_co
                     True,
                     False,
                     3,
-                )
-            )
-        if has_lateral:
-            specs.append(
-                (
-                    f"{prefix}_lateral_error_avg_mean",
-                    f"{prefix}_lateral_error_avg_sem",
-                    r"Lateral L2 $\downarrow$",
-                    False,
-                    False,
-                    2,
                 )
             )
         return specs
@@ -2545,310 +2443,6 @@ def plot_human_data_requirements_wosac(
     return fig
 
 
-def plot_collision_severity(
-    df,
-    save_path="results/figures/eval_collision_severity.pdf",
-    modes=("hr_interactive", "scaling_hr_interactive"),
-    sp_maps_filter=50000,
-):
-    CHECKPOINTS_OF_INTEREST = {
-        "models/scaling_cpts/unreg_delta_50k_maps.pt": "unregularized",
-        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt": "regularized",
-    }
-
-    # ── Filter ──────────────────────────────────────────────────────────────
-    sub = df[df["mode"].isin(modes)].copy()
-    if sub.empty:
-        print(f"  No rows in modes={modes} — skipping plot_collision_severity.")
-        return None
-
-    sub = sub[sub["checkpoint"].isin(CHECKPOINTS_OF_INTEREST)].copy()
-    if sub.empty:
-        print("  No rows for checkpoints of interest — skipping plot_collision_severity.")
-        return None
-
-    if sp_maps_filter is not None and "sp_maps" in sub.columns:
-        sub = sub[sub["sp_maps"] == sp_maps_filter]
-        if sub.empty:
-            print(f"  No rows with sp_maps={sp_maps_filter} — skipping plot_collision_severity.")
-            return None
-
-    sub["group"] = sub["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
-
-    coll = sub[(sub["delta_v_count"] > 0) & (sub["at_fault_collision_rate"] > 0)].copy()
-    if coll.empty:
-        print("  No collision events in filtered data — skipping plot_collision_severity.")
-        return None
-
-    multi_frac = (coll["delta_v_count"] > 1).mean()
-    print(f"  Collision events: {len(coll)} agent-episodes with at least one collision.")
-    print(f"  Multi-collision agent-episodes: {multi_frac:.1%}")
-    if multi_frac > 0.10:
-        print("  Note: multi-collision share > 10%; CDF/histogram are approximate.")
-
-    # ── Per-event proxy frame ────────────────────────────────────────────────
-    single = coll[coll["delta_v_count"] == 1][["group", "delta_v_max"]].copy()
-    single = single.rename(columns={"delta_v_max": "dv"})
-    multi = coll[coll["delta_v_count"] > 1].copy()
-    multi_max = multi[["group", "delta_v_max"]].rename(columns={"delta_v_max": "dv"})
-    multi_mean = multi[["group"]].copy()
-    multi_mean["dv"] = multi["delta_v_sum"] / multi["delta_v_count"]
-    events = pd.concat([single, multi_max, multi_mean], ignore_index=True)
-    events = events[events["dv"] > 0]
-
-    # ── Headline aggregates ──────────────────────────────────────────────────
-    def _agg(group_df):
-        total_sum = group_df["delta_v_sum"].sum()
-        total_count = group_df["delta_v_count"].sum()
-        if total_count == 0:
-            return pd.Series({"mean_dv": np.nan, "frac_under_1mph": np.nan, "n_events": 0})
-        return pd.Series(
-            {
-                "mean_dv": total_sum / total_count,
-                "frac_under_1mph": group_df["delta_v_under_1mph"].mean(),
-                "n_events": int(total_count),
-            }
-        )
-
-    headline = coll.groupby("group").apply(_agg).reset_index()
-    group_order = ["unregularized", "regularized"]
-    headline = headline.set_index("group").reindex(group_order).reset_index()
-    colors = [PALETTE["selfplay"], PALETTE["ours"]]
-
-    # ── Threshold landmarks shared between panel 0 and panel 2 ──────────────
-    # (label, m/s value)
-    THRESHOLDS = [
-        ("1 mph", 0.447),
-        ("5 mph", 2.235),
-        ("15 mph", 6.706),
-    ]
-
-    one_mph_mps = THRESHOLDS[0][1]
-
-    # ── Plot ─────────────────────────────────────────────────────────────────
-    _set_style(2)
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
-
-    # ── Panel 0: ECDF ────────────────────────────────────────────────────────
-    ax = axes[0]
-    for group, color in zip(group_order, colors):
-        dv = np.sort(events.loc[events["group"] == group, "dv"].values)
-        if dv.size == 0:
-            continue
-        ecdf = np.arange(1, dv.size + 1) / dv.size
-        ax.plot(dv, ecdf, color=color, linewidth=2.0, label=f"{group} (n={dv.size})", zorder=3)
-    ax.axvline(one_mph_mps, color="gray", linestyle="--", linewidth=1.2, alpha=0.8, zorder=2, label="1 mph (0.45 m/s)")
-    ax.set_xlabel(r"Per-event $\Delta v$ (m/s)")
-    ax.set_ylabel("Cumulative fraction of events")
-    ax.set_title("ECDF of collision severity")
-    ax.set_ylim(0, 1.02)
-    ax.set_xlim(left=0)
-    ax.grid(alpha=0.3, linestyle="--")
-    ax.legend(fontsize=9, loc="lower right", framealpha=1.0, facecolor="white", edgecolor="lightgray")
-    sns.despine(ax=ax)
-
-    # ── Panel 1: mean Δv bar ─────────────────────────────────────────────────
-    ax = axes[1]
-    x = np.arange(len(group_order))
-    means = headline["mean_dv"].values
-    ax.bar(x, means, color=colors, alpha=0.85, width=0.55)
-    for xi, m in zip(x, means):
-        if pd.notna(m):
-            ax.text(xi, m, f"{m:.2f}", ha="center", va="bottom", fontsize=10)
-    ax.set_xticks(x)
-    ax.set_xticklabels(group_order, rotation=15, ha="right")
-    ax.set_ylabel(r"Mean $\Delta v$ per collision (m/s)")
-    ax.set_title(r"Mean severity $\downarrow$")
-    ax.set_ylim(bottom=0)
-    ax.grid(axis="y", alpha=0.3, linestyle="--")
-    sns.despine(ax=ax)
-
-    # ── Panel 2: survival function (1 – ECDF) on log-y ──────────────────────
-    # Reads directly as "X% of collision events exceed Δv = y m/s",
-    # exactly what the table captures — and log-y stretches the tail.
-    ax = axes[2]
-    for group, color in zip(group_order, colors):
-        dv = np.sort(events.loc[events["group"] == group, "dv"].values)
-        if dv.size == 0:
-            continue
-        # survival(t) = P(Δv > t); prepend 0 so the step starts at 100 %.
-        surv_pct = (1 - np.arange(0, dv.size) / dv.size) * 100
-        dv_plot = np.concatenate([[0.0], dv])
-        surv_plot = np.concatenate([[100.0], surv_pct])
-        ax.step(dv_plot, surv_plot, where="post", color=color, linewidth=2.0, label=f"{group} (n={dv.size})", zorder=3)
-
-    # Vertical lines at threshold landmarks
-    for label, thresh in THRESHOLDS:
-        ax.axvline(thresh, color="tab:red", linestyle=":", linewidth=1.5, alpha=0.75, zorder=2)
-        ax.text(thresh + 0.05, 1.3, label, fontsize=10, color="grey", ha="left", va="top", rotation=90)
-
-    ax.set_yscale("log")
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:g}%"))
-    ax.set_xlabel(r"Per-event $\Delta v$ (m/s)")
-    ax.set_ylabel("% of events exceeding threshold (log scale)")
-    ax.set_title("Collision severity tail")
-    ax.set_xlim(left=0)
-    ax.set_ylim(bottom=0.5, top=110)  # headroom above 100 % for the label
-    ax.grid(alpha=0.3, linestyle="--", which="both")
-    ax.legend(fontsize=9, loc="upper right", framealpha=1.0, facecolor="white", edgecolor="lightgray")
-    sns.despine(ax=ax)
-
-    plt.tight_layout()
-    _ensure_dir(save_path)
-    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
-    plt.show()
-    return fig
-
-
-def generate_collision_severity_latex_table(
-    df,
-    save_path="results/figures/eval_collision_severity_table.tex",
-    modes=("hr_interactive", "scaling_hr_interactive"),
-    sp_maps_filter=50000,
-):
-    """Collision severity table — three thresholds (1 / 5 / 15 mph)."""
-
-    CHECKPOINTS_OF_INTEREST = {
-        "models/scaling_cpts/unreg_delta_50k_maps.pt": "unregularized",
-        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt": "regularized",
-    }
-
-    # ── Filter ───────────────────────────────────────────────────────────────
-    sub = df[df["mode"].isin(modes)].copy()
-    if sub.empty:
-        print(f"  No rows in modes={modes} — skipping severity table.")
-        return None
-    sub = sub[sub["checkpoint"].isin(CHECKPOINTS_OF_INTEREST)].copy()
-    if sub.empty:
-        print("  No rows for checkpoints of interest — skipping severity table.")
-        return None
-    if sp_maps_filter is not None and "sp_maps" in sub.columns:
-        sub = sub[sub["sp_maps"] == sp_maps_filter]
-        if sub.empty:
-            print(f"  No rows with sp_maps={sp_maps_filter} — skipping severity table.")
-            return None
-
-    sub["group"] = sub["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
-    coll = sub[(sub["delta_v_count"] > 0) & (sub["at_fault_collision_rate"] > 0)].copy()
-    if coll.empty:
-        print("  No collision events — skipping severity table.")
-        return None
-
-    single = coll[coll["delta_v_count"] == 1][["group", "delta_v_max"]].copy().rename(columns={"delta_v_max": "dv"})
-    multi = coll[coll["delta_v_count"] > 1].copy()
-    multi_max = multi[["group", "delta_v_max"]].rename(columns={"delta_v_max": "dv"})
-    multi_mean = multi[["group"]].copy()
-    multi_mean["dv"] = multi["delta_v_sum"] / multi["delta_v_count"]
-    events = pd.concat([single, multi_max, multi_mean], ignore_index=True)
-    events = events[events["dv"] > 0]
-
-    # Three thresholds matching the survival plot landmarks
-    thresholds = [
-        (r"$> 1$ mph", 0.447),  # cosmetic / Waymo minor floor
-        (r"$> 5$ mph", 2.235),  # typical airbag-deployment threshold
-        (r"$> 15$ mph", 6.706),  # serious injury risk
-    ]
-
-    # Collision rate per group from the full (unfiltered) sub frame
-    coll_rate = sub.groupby("group")["at_fault_collision_rate"].mean().rename("coll_rate_pct") * 100
-
-    rows = []
-    for group in ["unregularized", "regularized"]:
-        grp = coll[coll["group"] == group]
-        mean_dv = grp["delta_v_sum"].sum() / grp["delta_v_count"].sum()
-        dv = events.loc[events["group"] == group, "dv"].values
-        if dv.size == 0:
-            continue
-        row = {
-            "group": group,
-            "n_events": int(dv.size),
-            "coll_rate_pct": float(coll_rate.get(group, np.nan)),
-            "mean_dv": mean_dv,  # ← from coll, not from events
-            "max_dv": float(dv.max()),  # max still comes from the proxy frame
-        }
-        for _label, thresh in thresholds:
-            row[f"pct_{thresh:.3f}"] = float((dv > thresh).mean() * 100.0)
-        rows.append(row)
-
-    if not rows:
-        print("  No populated severity rows — skipping table.")
-        return None
-
-    table = pd.DataFrame(rows)
-
-    # (mean_col, header, higher_is_better, decimals)
-    metric_specs = [
-        ("mean_dv", r"Mean $\Delta v$ (m/s) $\downarrow$", False, 2),
-        ("max_dv", r"Max $\Delta v$ (m/s) $\downarrow$", False, 2),
-    ]
-    for label, thresh in thresholds:
-        metric_specs.append((f"pct_{thresh:.3f}", label + r" (\%) $\downarrow$", False, 1))
-
-    best_per_col = {}
-    for col, _, higher_is_better, _ in metric_specs:
-        vals = table[col].dropna()
-        if vals.empty:
-            best_per_col[col] = None
-            continue
-        best_per_col[col] = vals.max() if higher_is_better else vals.min()
-
-    def _fmt(val, col, decimals):
-        if pd.isna(val):
-            return "---"
-        target = best_per_col.get(col)
-        is_best = target is not None and np.isclose(val, target)
-        body = f"{val:.{decimals}f}"
-        return f"\\textbf{{{body}}}" if is_best else body
-
-    n_metric_cols = len(metric_specs)
-    # Events column is widened to accommodate "N (XX%)" — use 'r' for the
-    # metric block; the events cell is formatted inline, not ranked.
-    col_spec = "l|r|" + "r" * n_metric_cols
-
-    lines = [
-        r"% Requires: \usepackage{booktabs}, \usepackage{graphicx}, \usepackage{makecell}, \usepackage{bm}",
-        r"\begin{table}[ht]",
-        r"\centering",
-        (
-            r"\caption{Collision severity tail breakdown at 50k metadata maps "
-            r"(human-replay evaluation). \emph{Events} shows the count and share "
-            r"of all collision events attributed to each group. "
-            r"Per-event $\Delta v$ statistics and "
-            r"the fraction of events exceeding three injury-risk thresholds "
-            r"($1$ mph: cosmetic; $5$ mph: airbag-deployment floor; "
-            r"$15$ mph: elevated serious-injury risk). "
-            r"Best value per column in \textbf{bold}; lower is better throughout.}"
-        ),
-        r"\label{tab:collision_severity}",
-        r"\resizebox{\textwidth}{!}{%",
-        r"\begin{tabular}{" + col_spec + "}",
-        r"\toprule",
-    ]
-
-    # Header — "Events" spans count + share in one cell
-    header_cells = ["Method", r"\makecell{Events \\ (at-fault coll. rate)}"] + [s[1] for s in metric_specs]
-    lines.append(" & ".join(header_cells) + r" \\")
-    lines.append(r"\midrule")
-
-    for i, row in table.iterrows():
-        n = int(row["n_events"])
-        cr = row["coll_rate_pct"]
-        cr_str = f"{cr:.1f}\\%" if pd.notna(cr) else "---"
-        event_cell = f"{n} ({cr_str})"
-        cells = [row["group"], event_cell]
-        for col, _, _, decimals in metric_specs:
-            cells.append(_fmt(row[col], col, decimals))
-        lines.append(" & ".join(cells) + r" \\")
-
-    lines += [r"\bottomrule", r"\end{tabular}}", r"\end{table}"]
-
-    latex_str = "\n".join(lines)
-    _ensure_dir(save_path)
-    with open(save_path, "w") as f:
-        f.write(latex_str)
-    print(f"  LaTeX table written to {save_path}")
-    return latex_str
-
 
 def plot_three_metric_comparison(df, save_path="results/figures/eval_three_metric_comparison.pdf"):
     """Bar chart comparing unregularized vs regularized across three key collision metrics.
@@ -2856,7 +2450,7 @@ def plot_three_metric_comparison(df, save_path="results/figures/eval_three_metri
     3 subplots (1 row):
       0) Self-play collision rate         (mode: scaling_sp_val)
       1) IDM collision rate               (mode: scaling_idm_interactive)
-      2) Human-replay at-fault collision  (mode: scaling_hr_interactive)
+      2) Human-replay collision rate      (mode: scaling_hr_interactive)
 
     Two bars per subplot: unregularized (black) vs regularized (blue),
     following the shared PALETTE reg/unreg colour convention.
@@ -2889,14 +2483,14 @@ def plot_three_metric_comparison(df, save_path="results/figures/eval_three_metri
         },
         {
             "mode": "scaling_hr_interactive",
-            "col": "at_fault_collision_rate",
-            "ylabel": "At-fault collision rate [%]",
-            "title": "HR at-fault collision rate",
+            "col": "collision_rate",
+            "ylabel": "Collision rate [%]",
+            "title": "HR collision rate",
             "filter_sp_maps": True,
         },
     ]
 
-    required_cols = {"collision_rate", "at_fault_collision_rate"}
+    required_cols = {"collision_rate"}
     missing = required_cols - set(df.columns)
     if missing:
         print(f"  Missing columns {missing} — skipping plot_three_metric_comparison.")
@@ -2980,8 +2574,8 @@ def generate_main_comparison_latex_table(
     """LaTeX table comparing two checkpoints across self-play, HR, and IDM metrics.
 
     Rows:    unregularized (first), regularized (second).
-    Columns: SP score | HR score | IDM score | HR at-fault coll. |
-             HR longitudinal L2 | HR lateral L2 | HR displacement error
+    Columns: SP score | HR score | IDM score | HR collision rate |
+             HR displacement error
 
     Best value per column is bolded. No colour coding.
 
@@ -3006,9 +2600,7 @@ def generate_main_comparison_latex_table(
         ("scaling_sp_val", "score", "sp_score", True),
         ("scaling_hr_interactive", "score", "hr_score", True),
         ("scaling_idm_interactive", "score", "idm_score", False),
-        ("scaling_hr_interactive", "at_fault_collision_rate", "hr_atfault", True),
-        ("scaling_hr_interactive", "longitudinal_error_avg", "hr_long_err", True),
-        ("scaling_hr_interactive", "lateral_error_avg", "hr_lat_err", True),
+        ("scaling_hr_interactive", "collision_rate", "hr_coll", True),
         ("scaling_hr_interactive", "displacement_error_avg", "hr_disp_err", True),
     ]
 
@@ -3038,9 +2630,7 @@ def generate_main_comparison_latex_table(
         ("sp_score", r"Score $\uparrow$", True, False, 3),
         ("hr_score", r"Score $\uparrow$", True, False, 3),
         ("idm_score", r"Score $\uparrow$", True, False, 3),
-        ("hr_atfault", r"At-fault (\%) $\downarrow$", False, True, 1),
-        ("hr_long_err", r"Long. L2 $\downarrow$", False, False, 3),
-        ("hr_lat_err", r"Lat. L2 $\downarrow$", False, False, 3),
+        ("hr_coll", r"HR coll. (\%) $\downarrow$", False, True, 1),
         ("hr_disp_err", r"Disp. err. $\downarrow$", False, False, 3),
     ]
 
@@ -3133,7 +2723,6 @@ def generate_interactive_comparison_latex_table(
              each sorted by sp_maps. Identical layout to generate_scaling_latex_table.
     Columns (all from *_interactive modes):
              HR score | IDM score |
-             IDM at-fault coll. | HR at-fault coll. |
              IDM coll. | HR coll.
 
     Top-3 values per column are highlighted with the shared tier palette;
@@ -3171,8 +2760,8 @@ def generate_interactive_comparison_latex_table(
         agg.columns = flat
         return agg
 
-    hr_agg = _agg("hr", ["score", "at_fault_collision_rate", "collision_rate"])
-    idm_agg = _agg("idm", ["score", "at_fault_collision_rate", "collision_rate"])
+    hr_agg = _agg("hr", ["score", "collision_rate"])
+    idm_agg = _agg("idm", ["score", "collision_rate"])
 
     merged = hr_agg.merge(idm_agg, on=["sp_maps", "anchor_maps"], how="outer")
 
@@ -3186,22 +2775,6 @@ def generate_interactive_comparison_latex_table(
     all_specs = [
         ("hr_score_mean", "hr_score_sem", r"HR Score $\uparrow$", True, False, 3),
         ("idm_score_mean", "idm_score_sem", r"IDM Score $\uparrow$", True, False, 3),
-        (
-            "idm_at_fault_collision_rate_mean",
-            "idm_at_fault_collision_rate_sem",
-            r"IDM At-fault (\%) $\downarrow$",
-            False,
-            True,
-            1,
-        ),
-        (
-            "hr_at_fault_collision_rate_mean",
-            "hr_at_fault_collision_rate_sem",
-            r"HR At-fault (\%) $\downarrow$",
-            False,
-            True,
-            1,
-        ),
         ("idm_collision_rate_mean", "idm_collision_rate_sem", r"IDM Coll. (\%) $\downarrow$", False, True, 1),
         ("hr_collision_rate_mean", "hr_collision_rate_sem", r"HR Coll. (\%) $\downarrow$", False, True, 1),
     ]
@@ -3492,12 +3065,6 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
     print("  Saved eval_wosac_lineplot.pdf")
     plot_wosac_submetrics(wosac_df)
     print("  Saved eval_wosac_submetrics.pdf")
-    plot_collision_severity(
-        df,
-        modes=("hr_interactive", "scaling_hr_interactive"),
-        sp_maps_filter=50000,
-    )
-    generate_collision_severity_latex_table(df)
     plot_three_metric_comparison(df)
     generate_main_comparison_latex_table(df)
     if anchor_df is not None and not anchor_df.empty:

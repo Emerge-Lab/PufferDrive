@@ -70,8 +70,6 @@ DYNAMICS_CONFIG_MAP = {
 # Rate columns that should be displayed as percentages (data stays as ratios).
 RATE_COLS_FOR_DISPLAY = [
     "collision_rate",
-    "at_fault_collision_rate",
-    "rear_collision_rate",
     "offroad_rate",
     "completion_rate",
 ]
@@ -82,17 +80,13 @@ METRICS = [
     "n",
     "score",
     "collision_rate",
-    "at_fault_collision_rate",
-    "rear_collision_rate",
     "collisions_per_agent",
     "offroad_rate",
     "offroad_per_agent",
     "completion_rate",
     "route_progress",
-    "lateral_error_avg",
     "episode_length",
     "episode_return",
-    "perc_controlled",
 ]
 
 
@@ -186,10 +180,9 @@ def run_mode(evaluator, policy, cpt_config, map_dir, control_mode, checkpoint, m
             mean_score = np.mean([r["score"] for r in rows])
             # rates are ratios in the data — multiply by 100 only for display
             mean_coll_pct = np.mean([r["collision_rate"] for r in rows]) * 100.0
-            mean_coll_fault_pct = np.mean([r["at_fault_collision_rate"] for r in rows]) * 100.0
             print(
                 f"  {mode_name}: {n_scenes} scenes, score={mean_score:.3f}, "
-                f"collision_rate={mean_coll_pct:.2f}%, at_fault_collision_rate={mean_coll_fault_pct:.2f}%"
+                f"collision_rate={mean_coll_pct:.2f}%"
             )
         else:
             print(f"  {mode_name}: no populated scenes")
@@ -362,7 +355,7 @@ def plot_noise_vs_collision(df, output_path=PLOT_PATH):
     """Plot collision-rate metrics (in %) vs (dynamics_noise, sensor_noise).
 
     Layout: rows = {regularized, unregularized} (whichever exist),
-            cols = the same four metric/mode panels as the gamma-scan script.
+            cols = collision rate for self-play, human-replay validation, and interactive replay.
 
     Each cell is a heatmap with sensor_noise on the x-axis and dynamics_noise
     on the y-axis. Values shown are percentages (ratios * 100).
@@ -374,7 +367,6 @@ def plot_noise_vs_collision(df, output_path=PLOT_PATH):
     panels = [
         ("sp_val", "collision_rate", "Self-play (val)\ncollision rate"),
         ("hr_val", "collision_rate", "Human-replay (val)\ncollision rate"),
-        ("hr_val", "at_fault_collision_rate", "Human-replay (val)\nat-fault collision rate"),
         ("hr_interactive", "collision_rate", "Human-replay (interactive)\ncollision rate"),
     ]
 
@@ -472,20 +464,16 @@ def main():
             scenes=("score", "count"),
             score=("score", "mean"),
             collision_rate=("collision_rate", "mean"),
-            at_fault_collision_rate=("at_fault_collision_rate", "mean"),
-            rear_collision_rate=("rear_collision_rate", "mean"),
             offroad_rate=("offroad_rate", "mean"),
         )
         # Convert rate columns to % for the printed summary only
         summary_display = summary.copy()
-        for col in ["collision_rate", "at_fault_collision_rate", "rear_collision_rate", "offroad_rate"]:
+        for col in ["collision_rate", "offroad_rate"]:
             if col in summary_display.columns:
                 summary_display[col] = summary_display[col] * 100.0
         summary_display = summary_display.rename(
             columns={
                 "collision_rate": "collision_rate_pct",
-                "at_fault_collision_rate": "at_fault_collision_rate_pct",
-                "rear_collision_rate": "rear_collision_rate_pct",
                 "offroad_rate": "offroad_rate_pct",
             }
         )

@@ -130,8 +130,7 @@ def print_row(name, mode, logs):
     print(
         f"{name:<16} {mode:<14} {len(logs):6d} "
         f"{mean_metric(logs, 'score'):8.3f} "
-        f"{100 * mean_metric(logs, 'collision_rate'):8.2f} "
-        f"{100 * mean_metric(logs, 'at_fault_collision_rate'):8.2f}"
+        f"{100 * mean_metric(logs, 'collision_rate'):8.2f}"
     )
 
 
@@ -177,7 +176,7 @@ def main():
 
     print(f"Scenarios: {MAP_DIR}/map_000.bin .. map_{args.num_maps - 1:03d}.bin")
     print(f"Full validation set: {DATASET_URL}")
-    print(f"{'policy':<16} {'mode':<14} {'scenes':>6} {'score':>8} {'coll%':>8} {'at_fault%':>8}")
+    print(f"{'policy':<16} {'mode':<14} {'scenes':>6} {'score':>8} {'coll%':>8}")
 
     fallback = load_base_config()
     for name, path in CHECKPOINTS:

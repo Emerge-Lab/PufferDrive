@@ -72,8 +72,6 @@ def run_eval(action_type):
                     "action_type": action_type,
                     "iteration": it,
                     "route_progress": log["route_progress"],
-                    "lateral_error": log["lateral_error_avg"],
-                    "longitudinal_error": log["longitudinal_error_avg"],
                     "collision_rate": log["collision_rate"],
                     "offroad_rate": log["offroad_rate"],
                     "ADE": log["displacement_error_avg"],
@@ -108,7 +106,7 @@ def plot_summary(df, save_path):
 
     palette = [PALETTE[at] for at in ACTION_TYPES]
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
     # --- Subplot 0: grouped bar of rates ---
     ax = axes[0]
@@ -147,27 +145,23 @@ def plot_summary(df, save_path):
     for container in ax.containers:
         ax.bar_label(container, fmt="%.1f%%", padding=6, fontsize=10)
 
-    # --- Subplots 1 & 2: overlaid histograms ---
-    for ax, col, xlabel, ylabel in [
-        (axes[1], "lateral_error", "lateral error (m)", "count"),
-        (axes[2], "longitudinal_error", "longitudinal error (m)", "count"),
-    ]:
-        for at in ACTION_TYPES:
-            sub = df[df["action_type"] == at]
-            ax.hist(
-                sub[col],
-                bins=40,
-                alpha=0.55,
-                color=PALETTE[at],
-                edgecolor="black",
-                linewidth=0.5,
-                label=at,
-            )
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(ylabel)
-        ax.grid(axis="y", alpha=0.3, linestyle="--")
-        ax.legend(frameon=False)
-        sns.despine(ax=ax)
+    ax = axes[1]
+    for at in ACTION_TYPES:
+        sub = df[df["action_type"] == at]
+        ax.hist(
+            sub["ADE"],
+            bins=40,
+            alpha=0.55,
+            color=PALETTE[at],
+            edgecolor="black",
+            linewidth=0.5,
+            label=at,
+        )
+    ax.set_xlabel("ADE (m)")
+    ax.set_ylabel("count")
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
+    ax.legend(frameon=False)
+    sns.despine(ax=ax)
 
     plt.tight_layout()
     _ensure_dir(save_path)
@@ -190,8 +184,6 @@ def generate_latex_table(df, save_path):
         ("collision_rate", r"Coll. (\%) $\downarrow$", False, True, 1),
         ("offroad_rate", r"Off-road (\%) $\downarrow$", False, True, 1),
         ("ADE", r"ADE (m) $\downarrow$", False, False, 3),
-        ("lateral_error", r"Lateral L2 (m) $\downarrow$", False, False, 3),
-        ("longitudinal_error", r"Longitudinal L2 (m) $\downarrow$", False, False, 3),
     ]
     specs = [s for s in specs if s[0] in df.columns]
 
@@ -257,7 +249,7 @@ def main():
     print(f"\nTotal pooled samples: {len(df)}")
     print("\nMean ± std by action_type:")
     rate_metrics = {"collision_rate", "offroad_rate", "route_progress"}
-    metric_keys = ["collision_rate", "offroad_rate", "route_progress", "ADE", "lateral_error", "longitudinal_error"]
+    metric_keys = ["collision_rate", "offroad_rate", "route_progress", "ADE"]
     for at in ACTION_TYPES:
         sub = df[df["action_type"] == at]
         print(f"\n  [{at}] n={len(sub)}")

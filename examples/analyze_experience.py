@@ -2,8 +2,7 @@
 
 Two-panel figure summarising the paper's headline efficiency claim:
 
-  Panel 1 — Safe task completion (task completion − at-fault collision rate
-            with human-replay agents) vs. human-demonstration data.
+  Panel 1 — Safe task completion with human-replay agents vs. human-demonstration data.
             Regularized self-play RL (ours) uses a tiny amount of human data
             and beats methods that use orders of magnitude more.
 
@@ -13,10 +12,6 @@ Two-panel figure summarising the paper's headline efficiency claim:
             (~63 years of driving at 10 Hz); SMART trains on 45M
             transitions of human data (the full Waymo dataset of
             ~500,000 scenarios × 9 s × 10 Hz = 45M transitions).
-
-Safe task completion = task_completion − at_fault_collision_rate,
-  where task_completion ∈ [0, 1] and at_fault_collision_rate is expressed
-  as a fraction (e.g. 2.1% → 0.021).
 
 Time conversion convention (single rule, used everywhere):
     Waymo scenarios are discretised at 10 Hz, so 1 transition = 0.1 s.
@@ -57,10 +52,10 @@ COLOR_SELFPLAY = "#000000"  # black    — self-play RL baseline
 COLOR_SMART = "#d62728"  # tab:red  — SMART baseline
 
 # ─── Data ────────────────────────────────────────────────────────────────────
-# safe_task_completion = task_completion − at_fault_collision_rate (fraction)
-#   Self-play RL : 1.000 − 0.021 = 0.979
-#   Ours         : 1.000 − 0.006 = 0.994
-#   SMART        : 0.846 − 0.016 = 0.830
+# Plotted task scores.
+#   Self-play RL : 0.979
+#   Ours         : 0.994
+#   SMART        : 0.830
 
 df = pd.DataFrame(
     [
@@ -68,19 +63,19 @@ df = pd.DataFrame(
             "Method": "Self-play RL",
             "selfplay_transitions": 20_000_000_000,
             "human_transitions": 0,
-            "hr_score": 1.000 - 0.021,  # 0.979
+            "hr_score": 0.979,
         },
         {
             "Method": "Reg self-play RL (ours)",
             "selfplay_transitions": 20_000_000_000,
             "human_transitions": 18_000,  # ~30 min at 10 Hz
-            "hr_score": 1.000 - 0.006,  # 0.994
+            "hr_score": 0.994,
         },
         {
             "Method": "SMART (IL)",
             "selfplay_transitions": 0,
             "human_transitions": 45_000_000,  # 500k scenarios × 9 s × 10 Hz
-            "hr_score": 0.846 - 0.016,  # 0.830
+            "hr_score": 0.830,
         },
     ]
 )

@@ -45,7 +45,6 @@ METRICS = [
     "n",
     "score",
     "collision_rate",
-    "at_fault_collision_rate",
     "offroad_rate",
     "route_progress",
     "episode_length",

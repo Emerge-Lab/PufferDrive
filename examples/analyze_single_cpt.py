@@ -47,18 +47,13 @@ METRICS = [
     "n",
     "score",
     "collision_rate",
-    "at_fault_collision_rate",
-    "rear_collision_rate",
     "collisions_per_agent",
     "offroad_rate",
     "offroad_per_agent",
     "completion_rate",
     "route_progress",
-    "lateral_error_avg",
     "episode_length",
     "episode_return",
-    "perc_controlled",
-    "longitudinal_error_avg",
     "average_displacement_avg",
 ]
 # ─────────────────────────────────────────────────────────────────────────────
@@ -315,12 +310,8 @@ def main():
         summary = df.groupby(["episode_len", "mode"]).agg(
             scenes=("score", "count"),
             collision_rate=("collision_rate", "mean"),
-            at_fault_collision_rate=("at_fault_collision_rate", "mean"),
-            rear_collision_rate=("rear_collision_rate", "mean"),
             offroad_rate=("offroad_rate", "mean"),
             route_progress=("route_progress", "mean"),
-            # lateral_error_avg=("lateral_error_avg", "mean"),
-            # longitudinal_error_avg=("longitudinal_error_avg", "mean"),
         )
         print(f"\n{summary}")
 
