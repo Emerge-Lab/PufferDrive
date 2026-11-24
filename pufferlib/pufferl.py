@@ -1796,6 +1796,7 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--wandb", action="store_true", help="Use wandb for logging")
     parser.add_argument("--wandb-project", type=str, default="pufferlib")
     parser.add_argument("--wandb-group", type=str, default="debug")
+    parser.add_argument("--wandb-run-name", type=str, default=None, help="W&B display name for this run")
     parser.add_argument("--neptune", action="store_true", help="Use neptune for logging")
     parser.add_argument("--neptune-name", type=str, default="pufferai")
     parser.add_argument("--neptune-project", type=str, default="ablations")

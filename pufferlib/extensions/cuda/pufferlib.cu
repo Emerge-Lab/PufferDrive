@@ -81,8 +81,4 @@ void compute_puff_advantage_cuda(torch::Tensor values, torch::Tensor rewards,
     }
 }
 
-TORCH_LIBRARY_IMPL(pufferlib, CUDA, m) {
-  m.impl("compute_puff_advantage", &compute_puff_advantage_cuda);
-}
-
 }

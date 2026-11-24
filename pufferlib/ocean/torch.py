@@ -73,6 +73,13 @@ class Drive(nn.Module):
         return logits, values
 
     def encode_observations(self, observations, state=None):
+        from pufferlib.ocean.drive_encoder import encode, supports_cuda_encoder
+
+        if supports_cuda_encoder(self, observations):
+            return encode(self, observations)
+        return self.encode_observations_pytorch(observations, state=state)
+
+    def encode_observations_pytorch(self, observations, state=None):
         ego_dim = self.ego_dim
         partner_dim = self.max_partner_objects * self.partner_features
         road_dim = self.max_road_objects * self.road_features
