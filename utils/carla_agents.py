@@ -912,19 +912,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--town_names",
         nargs="+",
-        default=["Town01", "Town02", "Town10HD"],
+        default=["Town01", "Town02", "Town06", "Town10HD"],
         help="List of CARLA town names",
     )
     parser.add_argument(
         "--input_json_base_path",
         type=str,
-        default="data_utils/carla/carla_py123d",
+        default="data/carla/roads",
         help="Base path for input JSON files",
     )
     parser.add_argument(
         "--output_json_root_dir",
         type=str,
-        default="data/processed/carla_data",
+        default="data/carla/json",
         help="Root directory for output JSON files",
     )
     parser.add_argument(

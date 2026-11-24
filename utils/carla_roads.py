@@ -60,8 +60,13 @@ def make_all_non_expert_agent_initial_velocity_zero(towns, destination_directory
 
 
 if __name__ == "__main__":
-    source_directory = "data/processed/carla"
-    destination_directory = "data/processed/carla_data"
-    towns = ["town01", "town02", "town04", "town06", "town10HD"]
-    # replace_roads_in_json_files(source_directory, destination_directory, towns)
-    make_all_non_expert_agent_initial_velocity_zero(towns, destination_directory)
+    source_directory = "data/carla/roads"
+    destination_directory = "data/carla/json"
+    towns = ["Town01", "Town02", "Town06", "Town10HD"]
+    print(
+        "Road and scenario JSON for the flat towns live under "
+        f"{source_directory} and {destination_directory}: {', '.join(towns)}. "
+        "Call replace_roads_in_json_files or "
+        "make_all_non_expert_agent_initial_velocity_zero explicitly. "
+        "This script does not rewrite those files."
+    )

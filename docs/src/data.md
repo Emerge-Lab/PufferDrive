@@ -8,7 +8,9 @@ PufferDrive consumes map binaries generated from multiple data sources, includin
 - [`pufferdrive_womd_val`](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_val): **10k scenarios** from the Waymo Open Motion _validation_ dataset.
 - [`pufferdrive_mixed`](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_train_carla_mixed): **10,200** scenarios. The 10K from the WOMD train set above + Towns 1 and 2 duplicated 100x each.
 - Additional compatible sources: [ScenarioMax](https://github.com/valeoai/ScenarioMax) exports JSON in the same format.
-- Included [CARLA](https://carla.org/) maps: Readily available CARLA maps live in `data_utils/carla/carla_data`.
+- Included [CARLA](https://carla.org/) maps: flat towns (Town01, Town02, Town06, Town10HD) live in `data/carla/json`. Towns with elevation or overpasses are not included.
+- [I24-3D](https://i24motion.org/) raw scenes live in `data/i24/raw/I24-3D`. Conversion code is `utils/i24.py`. The raw JSON is not preprocessed into binaries in this tree.
+- Processing code for WOMD, I24, and CARLA is under `utils/`. Dataset files stay under `data/`.
 
 ### Download via Hugging Face
 
@@ -45,7 +47,7 @@ Notes:
 
 The simulator reads the compact binary layout produced by `save_map_binary` in `pufferlib/ocean/drive/drive.py` and parsed by `load_map_binary` in `pufferlib/ocean/drive/drive.h`:
 
-- **Header**: `sdc_track_index` (int), `num_tracks_to_predict` (int) followed by that many `track_index` ints, `num_objects` (int), `num_roads` (int).
+- **Header**: 16-byte `scenario_id`, `sdc_track_index` (int), `num_tracks_to_predict` (int) followed by that many `track_index` ints, `num_objects` (int), `num_roads` (int).
 - **Objects (vehicles/pedestrians/cyclists)**: For each object, the writer stores `scenario_id` (`unique_map_id` passed to `load_map`), `type` (`1` vehicle, `2` pedestrian, `3` cyclist), `id`, `array_size` (`TRAJECTORY_LENGTH = 91`), positions `x/y/z[91]`, velocities `vx/vy/vz[91]`, `heading[91]`, `valid[91]`, and scalars `width/length/height`, `goalPosition (x, y, z)`, `mark_as_expert` (int). Missing trajectory entries are zero-padded by the converter.
 - **Road elements**: Each road entry stores `scenario_id`, a remapped `type` (`4` lane, `5` road line, `6` road edge, `7` stop sign, `8` crosswalk, `9` speed bump, `10` driveway), `id`, `array_size` (#points), then `x/y/z` arrays of that length and scalars `width/length/height`, `goalPosition`, `mark_as_expert`. `save_map_binary` also simplifies long polylines (`len(geometry) > 10` and `type <= 16`) with a 0.1 area threshold to keep files small.
 - **Control hints**: `tracks_to_predict` and `mark_as_expert` influence which agents are controllable (`control_mode` in the simulator) versus replayed as experts or static actors (`set_active_agents` in `drive.h`).
@@ -82,16 +84,24 @@ Run the generator script. Important optional args:
 - `--avg_speed`: controls the gap between subsequent points in the trajectory
 
 ```bash
-python data_utils/carla/generate_carla_agents.py --num_objects 32 --num_data_per_map 8 --avg_speed 2
+python utils/carla_agents.py --num_objects 32 --num_data_per_map 8 --avg_speed 2
 ```
+
+The towns already in `data/carla/json` are packed with:
+
+```bash
+python utils/carla.py
+```
+
+That keeps a map only when its road geometry z span is at most 0.1 m and writes `data/carla/binaries/map_XXX.bin`.
 
 There is also a visualizer for inspecting initial agent positions on the map:
 
 ```bash
-python data_utils/carla/plot.py
+python utils/carla_plot.py
 ```
 
 Notes:
 
-- Base Carla maps that agents are spawned live under `data_utils/carla/carla_py123d` and the Carla XODRs are at `data/CarlaXODRs` to interact with the `pyxodr` submodule for XODR parsing and agent traj generation.
+- Road-only CARLA maps that agents are spawned on live under `data/carla/roads`. CARLA XODRs are at `data/CarlaXODRs` for the `pyxodr` submodule.
 - If you encounter missing binary or map errors, ensure the submodule was initialized and the required packages from `requirements-dev.txt` are installed.

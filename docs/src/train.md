@@ -37,7 +37,7 @@ map_dir = "resources/drive/binaries"
 num_maps = 2 # Number of Carla maps you're training in
 ```
 
-this should give a good starting point. With these settings, you'll need about 2-3 billion steps to get an agent that reaches most of it's goals (> 95%) and has a combined collsion / off-road rate of 3 % per episode of 300 steps in town 1 and 2, which can be found [here](https://github.com/Emerge-Lab/PufferDrive/tree/2.0/data_utils/carla/carla_data). Before launching your experiment, run `drive.py` with the folder to the Carla towns to process them to binaries, then ensure the `map_dir` above is pointed to these binaries.
+this should give a good starting point. With these settings, you'll need about 2-3 billion steps to get an agent that reaches most of it's goals (> 95%) and has a combined collsion / off-road rate of 3 % per episode of 300 steps in town 1 and 2. The flat CARLA scenarios are `data/carla/json`. Pack them with `python utils/carla.py`, then point `map_dir` at `data/carla/binaries`.
 
 > [!Note]
 > The default training hyperparameters work well for both configurations and typically don't need adjustment.

@@ -556,14 +556,10 @@ def load_and_plot_json(
 # Example usage
 if __name__ == "__main__":
     json_file_paths = [
-        "data_utils/carla/carla_py123d/Town01.json",
-        "data_utils/carla/carla_py123d/Town02.json",
-        "data_utils/carla/carla_py123d/Town03.json",
-        "data_utils/carla/carla_py123d/Town04.json",
-        "data_utils/carla/carla_py123d/Town05.json",
-        "data_utils/carla/carla_py123d/Town06.json",
-        "data_utils/carla/carla_py123d/Town07.json",
-        "data_utils/carla/carla_py123d/Town10HD.json",
+        "data/carla/roads/Town01.json",
+        "data/carla/roads/Town02.json",
+        "data/carla/roads/Town06.json",
+        "data/carla/roads/Town10HD.json",
     ]
     show_id = False  # Set to show IDs on the plot
     plot_as_points = False  # Set to True to plot as scatter points instead of lines
