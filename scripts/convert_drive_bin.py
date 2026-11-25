@@ -18,7 +18,6 @@ CURRENT_ROAD_EDGE = 6
 CURRENT_CROSSWALK = 8
 CURRENT_SPEED_BUMP = 9
 CURRENT_DRIVEWAY = 10
-IDM_EXTENSION_MAGIC = b"PDRV_IDM_EXT_V1\0"
 
 
 class Reader:
@@ -385,11 +384,8 @@ def write_current_payload(f, data, unique_map_id, sdc_track_index, tracks_to_pre
         f.write(struct.pack("<i", 0))
 
 
-def convert(
-    input_path, output_path, unique_map_id=0, sdc_track_index=None, append_idm_extension=True, expert_actions="missing"
-):
+def convert(input_path, output_path, unique_map_id=0, sdc_track_index=None, expert_actions="missing"):
     data = parse_new_for_conversion(input_path)
-    original_bytes = Path(input_path).read_bytes()
     if sdc_track_index is None:
         sdc_track_index = 0
 
@@ -397,10 +393,6 @@ def convert(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("wb") as f:
         write_current_payload(f, data, unique_map_id, sdc_track_index, data["tracks_to_predict"], expert_actions)
-        if append_idm_extension:
-            f.write(IDM_EXTENSION_MAGIC)
-            f.write(struct.pack("<Q", len(original_bytes)))
-            f.write(original_bytes)
 
     return {
         "scenario_id": data["scenario_id"],
@@ -409,21 +401,20 @@ def convert(
         "tracks_to_predict": data["tracks_to_predict"],
         "sdc_track_index": sdc_track_index,
         "output_size": output_path.stat().st_size,
-        "appended_idm_extension": append_idm_extension,
     }
 
 
 def convert_one_for_batch(args_tuple):
-    input_path, output_dir, file_index, append_idm_extension, expert_actions = args_tuple
+    input_path, output_dir, file_index, expert_actions = args_tuple
     output_path = output_dir / f"map_{file_index:03d}.bin"
     try:
-        convert(input_path, output_path, file_index, None, append_idm_extension, expert_actions)
+        convert(input_path, output_path, file_index, None, expert_actions)
         return input_path.name, output_path.name, True, None
     except Exception as exc:
         return input_path.name, output_path.name, False, str(exc)
 
 
-def batch_convert(input_dir, output_dir, workers, append_idm_extension=True, expert_actions="missing"):
+def batch_convert(input_dir, output_dir, workers, expert_actions="missing"):
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     if not input_dir.is_dir():
@@ -436,7 +427,7 @@ def batch_convert(input_dir, output_dir, workers, append_idm_extension=True, exp
     start_time = time.time()
     success_count = 0
     fail_count = 0
-    jobs = [(path, output_dir, idx, append_idm_extension, expert_actions) for idx, path in enumerate(bin_files)]
+    jobs = [(path, output_dir, idx, expert_actions) for idx, path in enumerate(bin_files)]
     print(f"Converting {len(jobs)} files with {workers} workers into {output_dir}")
 
     if workers == 1:
@@ -503,7 +494,6 @@ def add_convert_args(parser):
     parser.add_argument("output")
     parser.add_argument("--unique-map-id", type=int, default=0)
     parser.add_argument("--sdc-track-index", type=int, default=None)
-    parser.add_argument("--no-idm-extension", action="store_true")
     parser.add_argument("--expert-actions", choices=["missing", "zero"], default="missing")
 
 
@@ -513,7 +503,6 @@ def run_convert(args):
         output_path=args.output,
         unique_map_id=args.unique_map_id,
         sdc_track_index=args.sdc_track_index,
-        append_idm_extension=not args.no_idm_extension,
         expert_actions=args.expert_actions,
     )
     for key, value in summary.items():
@@ -537,7 +526,6 @@ def main(argv=None):
     batch_parser.add_argument("--input-dir", required=True, type=Path)
     batch_parser.add_argument("--output-dir", required=True, type=Path)
     batch_parser.add_argument("--workers", type=int, default=24)
-    batch_parser.add_argument("--no-idm-extension", action="store_true")
     batch_parser.add_argument("--expert-actions", choices=["missing", "zero"], default="missing")
 
     inspect_parser = subparsers.add_parser("inspect", help="Inspect current or new-format binaries")
@@ -552,7 +540,6 @@ def main(argv=None):
             args.input_dir,
             args.output_dir,
             args.workers,
-            append_idm_extension=not args.no_idm_extension,
             expert_actions=args.expert_actions,
         )
     if args.command == "inspect":

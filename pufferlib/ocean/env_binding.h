@@ -1210,8 +1210,6 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "CONTROLLER_STATIC", CONTROLLER_STATIC);
     PyModule_AddIntConstant(m, "CONTROLLER_POLICY", CONTROLLER_POLICY);
     PyModule_AddIntConstant(m, "CONTROLLER_REPLAY", CONTROLLER_REPLAY);
-    PyModule_AddIntConstant(m, "CONTROLLER_IDM", CONTROLLER_IDM);
-    PyModule_AddIntConstant(m, "CONTROLLER_CORRIDOR_IDM", CONTROLLER_CORRIDOR_IDM);
 
     PyModule_AddIntConstant(m, "ROAD_FEATURES", ROAD_FEATURES);
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);

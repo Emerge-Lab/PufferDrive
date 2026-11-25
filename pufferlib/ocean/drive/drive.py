@@ -35,8 +35,6 @@ CONTROLLER_MAP = {
     "static": 0,
     "policy": 1,
     "replay": 2,
-    "idm": 3,
-    "corridor_idm": 4,
 }
 
 
@@ -178,7 +176,7 @@ class Drive(pufferlib.PufferEnv):
                 f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
             )
 
-        controller_options = "'static', 'policy', 'replay', 'idm', or 'corridor_idm'"
+        controller_options = "'static', 'policy', or 'replay'"
         if self.sdc_controller_str not in CONTROLLER_MAP:
             raise ValueError(f"sdc_controller must be one of {controller_options}. Got: {self.sdc_controller_str}")
         if self.non_sdc_controller_str not in CONTROLLER_MAP:
@@ -192,10 +190,7 @@ class Drive(pufferlib.PufferEnv):
         self.sdc_controller = CONTROLLER_MAP[self.sdc_controller_str]
         self.non_sdc_controller = CONTROLLER_MAP[self.non_sdc_controller_str]
         if self.non_vehicle_controller_str == "auto":
-            if self.non_sdc_controller_str in ("idm", "corridor_idm"):
-                self.non_vehicle_controller_str = "replay"
-            else:
-                self.non_vehicle_controller_str = self.non_sdc_controller_str
+            self.non_vehicle_controller_str = self.non_sdc_controller_str
         self.non_vehicle_controller = CONTROLLER_MAP[self.non_vehicle_controller_str]
 
         if action_type == "discrete":
