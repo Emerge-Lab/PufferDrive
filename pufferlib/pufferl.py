@@ -236,7 +236,16 @@ class PuffeRL:
         # We only do this for the driver env to save memory
         self.reg_mode = full_args["env"]["reg_mode"]
         self.bc_anchor, self.data = self.vecenv.driver_env._init_regularization_strategy(device=config["device"])
+        if self.reg_mode == "kl_anchor" and self.bc_anchor is None:
+            self.reg_mode = None
         self.resample_freq_epoch = self.vecenv.driver_env.resample_frequency / self.vecenv.driver_env.episode_length
+        self.curriculum_stage = 1
+        self.curriculum_switch_step = 0
+        if full_args is not None:
+            full_args["curriculum_stage"] = 1
+        self.curriculum_episode_length = int(self.vecenv.driver_env.episode_length)
+        if full_args is not None and full_args.get("curriculum"):
+            full_args["curriculum_base_env"] = dict(full_args["env"])
 
         # Lambda conditioning
         self.lambda_obs_idx = self.vecenv.driver_env.lambda_obs_idx
@@ -443,6 +452,8 @@ class PuffeRL:
                 config["vtrace_rho_clip"],
                 config["vtrace_c_clip"],
             )
+            if mb == 0:
+                self._record_advantage_stats(advantages, epoch)
 
             profile("train_copy", epoch)
             adv = advantages.abs().sum(axis=1)
@@ -663,6 +674,8 @@ class PuffeRL:
         var_y = y_true.var()
         explained_var = torch.nan if var_y == 0 else 1 - (y_true - y_pred).var() / var_y
         losses["explained_variance"] = explained_var.item()
+        if getattr(self, "adv_abs_mean", None) is not None:
+            losses["adv_abs_mean"] = self.adv_abs_mean
 
         profile.end()
         logs = None
@@ -673,6 +686,8 @@ class PuffeRL:
         if self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training:
             human_replay_eval = self.config["eval"]["human_replay_eval"]
             self_play_eval = self.config["eval"]["self_play_eval"]
+            if self.curriculum_stage >= 2:
+                human_replay_eval = bool(self.config["eval"].get("stage2_human_replay_eval", False))
 
             self.evaluator = Evaluator(self.full_args, self.logger)
 
@@ -710,6 +725,8 @@ class PuffeRL:
             self.last_log_time = time.time()
             self.last_log_step = self.global_step
             profile.clear()
+            if logs is not None and not done_training:
+                self._maybe_advance_curriculum(logs)
 
         if self.epoch % config["checkpoint_interval"] == 0 or done_training:
             self.save_checkpoint()
@@ -717,6 +734,97 @@ class PuffeRL:
 
             if self.config["eval"]["wosac_realism_eval"]:
                 pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
+
+    def _maybe_advance_curriculum(self, logs):
+        """Switch to Carla once, then grow the episode length to the ini end.
+
+        The policy and rollout buffers stay. Stage 2 has to keep the same
+        observation width and the same agent count. The length change is
+        written onto the live simulators, so the vecenv is not rebuilt again.
+        """
+        if self.full_args is None or not self.full_args.get("curriculum"):
+            return
+        if self.curriculum_stage >= 2:
+            self._apply_curriculum_episode_length(logs)
+            return
+        spec = self.full_args.get("curriculum") or {}
+        stage2 = self.full_args.get("stage2") or {}
+        if not spec or not stage2:
+            return
+        metric = str(spec.get("metric", "score"))
+        threshold = float(spec.get("threshold", 0.7))
+        value = logs.get(f"environment/{metric}")
+        if value is None or not (value >= threshold):
+            return
+        start = int(spec.get("episode_length_start", 110))
+        end = int(spec.get("episode_length_end", start))
+        print(
+            f"Curriculum stage 2: environment/{metric} {float(value):.4f} >= {threshold}. "
+            f"Episode length {start} -> {end} over the remaining steps.",
+            flush=True,
+        )
+        merged = dict(stage2)
+        merged["episode_length"] = start
+        self.full_args["env"].update(merged)
+        old_agents = self.vecenv.num_agents
+        old_obs = tuple(self.vecenv.single_observation_space.shape)
+        self.vecenv.close()
+        new_env = load_env(self.full_args["env_name"], self.full_args)
+        new_obs = tuple(new_env.single_observation_space.shape)
+        if new_env.num_agents != old_agents or new_obs != old_obs:
+            new_env.close()
+            raise RuntimeError(
+                "Curriculum stage 2 changed the policy batch "
+                f"(agents {old_agents}->{new_env.num_agents}, obs {old_obs}->{new_obs})"
+            )
+        self.vecenv = new_env
+        # A fresh vecenv is in RESET until this. The next rollout calls recv().
+        self.vecenv.async_reset(self.config["seed"])
+        self.curriculum_switch_step = int(logs.get("agent_steps", self.global_step))
+        self.curriculum_stage = 2
+        self.full_args["curriculum_stage"] = 2
+        self.curriculum_episode_length = None
+        self._apply_curriculum_episode_length(logs)
+
+    def _apply_curriculum_episode_length(self, logs):
+        spec = self.full_args.get("curriculum") or {}
+        start = int(spec.get("episode_length_start", 110))
+        end = int(spec.get("episode_length_end", start))
+        total = int(self.config["total_timesteps"])
+        step = int(logs.get("agent_steps", self.global_step))
+        span = max(1, total - int(self.curriculum_switch_step))
+        progress = (step - int(self.curriculum_switch_step)) / span
+        if progress < 0.0:
+            progress = 0.0
+        elif progress > 1.0:
+            progress = 1.0
+        length = start + int((end - start) * progress)
+        if length == self.curriculum_episode_length:
+            return
+        self.curriculum_episode_length = length
+        self.full_args["env"]["episode_length"] = length
+        if hasattr(self.vecenv, "set_episode_length"):
+            self.vecenv.set_episode_length(length)
+        elif hasattr(self.vecenv.driver_env, "set_episode_length"):
+            self.vecenv.driver_env.set_episode_length(length)
+        driver = self.vecenv.driver_env
+        self.resample_freq_epoch = driver.resample_frequency / length
+        print(f"Curriculum episode length {length}", flush=True)
+
+    def _record_advantage_stats(self, advantages, epoch):
+        """Mean |advantage| every update. A histogram only every 50 epochs."""
+        with torch.no_grad():
+            valid = advantages[self.masks == 1]
+            if valid.numel() == 0:
+                valid = advantages.reshape(-1)
+            self.adv_abs_mean = float(valid.abs().mean())
+            if epoch % 50 != 0 or not isinstance(self.logger, WandbLogger):
+                return
+            flat = valid.detach().flatten()
+            if flat.numel() > 20000:
+                pick = torch.randint(flat.numel(), (20000,), device=flat.device)
+                flat = flat[pick]
+            self.adv_hist_samples = flat.float().cpu().numpy()
 
     def mean_and_log(self):
         config = self.config
@@ -767,6 +875,16 @@ class PuffeRL:
                 logs["data/lambda_distrib"] = wandb.Histogram(self.sampled_lambdas.cpu().numpy())
             if hasattr(self, "sampled_collision_rewards"):
                 logs["data/collision_reward_distrib"] = wandb.Histogram(self.sampled_collision_rewards.cpu().numpy())
+
+        if getattr(self, "curriculum_episode_length", None):
+            logs["curriculum/episode_length"] = self.curriculum_episode_length
+
+        samples = getattr(self, "adv_hist_samples", None)
+        if samples is not None and isinstance(self.logger, WandbLogger):
+            import wandb
+
+            logs["losses/adv_distribution"] = wandb.Histogram(samples)
+            self.adv_hist_samples = None
 
         if self.reg_mode == "log_prob_direct":
             logs["data/total_human_samples"] = self.data.get("data/total_human_samples", 0)

@@ -192,6 +192,9 @@ def env_creator(name="squared", *args, **kwargs):
 
     # TODO: Robust sanity / ocean imports
     name = name.replace("puffer_", "")
+    if name == "drive_curriculum":
+        module = importlib.import_module("pufferlib.ocean.drive.drive")
+        return module.Drive
     try:
         module = importlib.import_module(f"pufferlib.ocean.{name}.{name}")
         return getattr(module, MAKE_FUNCTIONS[name])

@@ -204,10 +204,19 @@ def discretize_action(accel: float, steer: float) -> tuple[float, float]:
     )
 
 
+def simulator_wheelbase(length: float) -> float:
+    """Wheelbase used by bicycle_integrate: 0.6 of the body, at least 1 m."""
+    wheelbase = 0.6 * float(length)
+    if wheelbase < 1.0:
+        return 1.0
+    return wheelbase
+
+
 def displacement_errors(
     positions: list[tuple[float, float, float, float, float]],
     length: float,
     discrete: bool,
+    wheelbase: float | None = None,
 ) -> list[float]:
     """Open-loop position error at each step after the first.
 
@@ -217,7 +226,8 @@ def displacement_errors(
     """
     if len(positions) < 2:
         return []
-    wheelbase = wheelbase_for(length)
+    if wheelbase is None:
+        wheelbase = wheelbase_for(length)
     limits = limits_for(length)
     articulated = vehicle_kind(length) == "trailer"
     x, y, heading, vx, vy = positions[0]

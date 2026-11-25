@@ -1,13 +1,15 @@
 // Fused Drive encoder. Matches Drive.encode_observations_pytorch:
 //   ego / partner / road: Linear -> LayerNorm -> Linear
 //   partner and road: max over objects (strict >, first index wins ties)
-//   concat(ego, road, partner) -> erf GELU -> Linear -> ReLU
+//   concat(ego, road, partner, four corner pools) -> erf GELU -> Linear -> ReLU
+// Corner views are 16 partners each, same tower as the center partners, separate weights.
+// Observation layout is ego, center partners, corners, roads.
 // Road's last feature is a class index, one-hot with 7 classes (trunc toward 0, clamp to [0, 6]).
 // One warp handles one agent. Only one tower's weights occupy shared memory at a time, so two
 // blocks fit on an SM; the concat embedding is staged in a global buffer between towers. The
 // square second-layer matrix uses stride 65 so both k*stride+lane and lane*stride+k hit distinct
 // shared-memory banks. Road and partner dots are issued four objects at a time so one weight load
-// feeds four independent FMAs. The shared projection is read from a transposed [192, 256] buffer.
+// feeds four independent FMAs. The shared projection is read from a transposed [448, 256] buffer.
 // Backward recomputes the forward and accumulates grads into per-warp partials (no cross-warp
 // atomics), then reduces.
 
@@ -27,11 +29,16 @@ constexpr int kHidden = 256;
 constexpr int kEgoDim = 12;
 constexpr int kPartners = 31;
 constexpr int kPartnerF = 7;
+constexpr int kCornerViews = 4;
+constexpr int kCornerPartners = 16;
 constexpr int kRoads = 128;
 constexpr int kRoadF = 7;
 constexpr int kRoadIn = 13;
-constexpr int kCat = 192;
-constexpr int kObs = kEgoDim + kPartners * kPartnerF + kRoads * kRoadF;
+constexpr int kTowers = 3 + kCornerViews;
+constexpr int kCat = kTowers * kEnc;
+constexpr int kCornerObs = kCornerViews * kCornerPartners * kPartnerF;
+constexpr int kRoadBase = kEgoDim + kPartners * kPartnerF + kCornerObs;
+constexpr int kObs = kRoadBase + kRoads * kRoadF;
 constexpr int kWarp = 32;
 constexpr int kWarpsPerBlock = 8;
 constexpr int kThreads = kWarp * kWarpsPerBlock;
@@ -348,8 +355,10 @@ __global__ void __launch_bounds__(kThreads, 1)
         const float* ego_lnb, const float* ego_w2, const float* ego_b2, const float* part_w1,
         const float* part_b1, const float* part_lng, const float* part_lnb, const float* part_w2,
         const float* part_b2, const float* road_w1, const float* road_b1, const float* road_lng,
-        const float* road_lnb, const float* road_w2, const float* road_b2, const float* shared_T,
-        const float* shared_b, float* __restrict__ cat_g, float* __restrict__ out) {
+        const float* road_lnb, const float* road_w2, const float* road_b2, const float* corner_w1,
+        const float* corner_b1, const float* corner_lng, const float* corner_lnb, const float* corner_w2,
+        const float* corner_b2, const float* shared_T, const float* shared_b, float* __restrict__ cat_g,
+        float* __restrict__ out) {
     extern __shared__ float smem[];
     int tid = threadIdx.x;
     int lane = tid & 31;
@@ -376,8 +385,8 @@ __global__ void __launch_bounds__(kThreads, 1)
         int arg0, arg1;
         float* slot = cat_g + static_cast<long>(b) * kCat + kEnc;
         pool<kRoadIn, true>(
-            obs + static_cast<long>(b) * kObs, kEgoDim + kPartners * kPartnerF, kRoads, kRoadF, x, h, smem + OFF_W1,
-            smem + OFF_B1, smem + OFF_G, smem + OFF_BE, smem + OFF_W2, smem + OFF_B2, slot, arg0, arg1, lane);
+            obs + static_cast<long>(b) * kObs, kRoadBase, kRoads, kRoadF, x, h, smem + OFF_W1, smem + OFF_B1,
+            smem + OFF_G, smem + OFF_BE, smem + OFF_W2, smem + OFF_B2, slot, arg0, arg1, lane);
     }
     __syncthreads();
 
@@ -391,6 +400,22 @@ __global__ void __launch_bounds__(kThreads, 1)
             smem + OFF_G, smem + OFF_BE, smem + OFF_W2, smem + OFF_B2, slot, arg0, arg1, lane);
     }
     __syncthreads();
+
+    for (int c = 0; c < kCornerViews; ++c) {
+        load_tower(
+            smem, corner_w1 + c * kEnc * kPartnerF, kPartnerF, corner_b1 + c * kEnc, corner_lng + c * kEnc,
+            corner_lnb + c * kEnc, corner_w2 + c * kEnc * kEnc, corner_b2 + c * kEnc, tid);
+        __syncthreads();
+        int base = kEgoDim + kPartners * kPartnerF + c * kCornerPartners * kPartnerF;
+        for (int b = warp_id; b < B; b += nwarps) {
+            int arg0, arg1;
+            float* slot = cat_g + static_cast<long>(b) * kCat + (3 + c) * kEnc;
+            pool<kPartnerF, false>(
+                obs + static_cast<long>(b) * kObs, base, kCornerPartners, kPartnerF, x, h, smem + OFF_W1,
+                smem + OFF_B1, smem + OFF_G, smem + OFF_BE, smem + OFF_W2, smem + OFF_B2, slot, arg0, arg1, lane);
+        }
+        __syncthreads();
+    }
 
     for (int b = warp_id; b < B; b += nwarps) {
         float acc[8];
@@ -595,11 +620,14 @@ __global__ void __launch_bounds__(kThreads, 1)
         const float* ego_b2, const float* part_w1, const float* part_b1, const float* part_lng,
         const float* part_lnb, const float* part_w2, const float* part_b2, const float* road_w1,
         const float* road_b1, const float* road_lng, const float* road_lnb, const float* road_w2,
-        const float* road_b2, const float* shared_T, const float* shared_b, float* cat_g, float* dcat,
-        int* road_arg, int* part_arg, float* gelu_out, float* gpre_out, float* ego_dw1, float* ego_db1,
-        float* ego_dlng, float* ego_dlnb, float* ego_dw2, float* ego_db2, float* part_dw1, float* part_db1,
-        float* part_dlng, float* part_dlnb, float* part_dw2, float* part_db2, float* road_dw1, float* road_db1,
-        float* road_dlng, float* road_dlnb, float* road_dw2, float* road_db2) {
+        const float* road_b2, const float* corner_w1, const float* corner_b1, const float* corner_lng,
+        const float* corner_lnb, const float* corner_w2, const float* corner_b2, const float* shared_T,
+        const float* shared_b, float* cat_g, float* dcat, int* road_arg, int* part_arg, int* corner_arg,
+        float* gelu_out, float* gpre_out, float* ego_dw1, float* ego_db1, float* ego_dlng, float* ego_dlnb,
+        float* ego_dw2, float* ego_db2, float* part_dw1, float* part_db1, float* part_dlng, float* part_dlnb,
+        float* part_dw2, float* part_db2, float* road_dw1, float* road_db1, float* road_dlng, float* road_dlnb,
+        float* road_dw2, float* road_db2, float* corner_dw1, float* corner_db1, float* corner_dlng,
+        float* corner_dlnb, float* corner_dw2, float* corner_db2) {
     extern __shared__ float smem[];
     int tid = threadIdx.x;
     int lane = tid & 31;
@@ -642,8 +670,8 @@ __global__ void __launch_bounds__(kThreads, 1)
     for (int b = warp_id; b < B; b += nwarps) {
         int arg0, arg1;
         pool<kRoadIn, true>(
-            obs + static_cast<long>(b) * kObs, kEgoDim + kPartners * kPartnerF, kRoads, kRoadF, x, h, smem + OFF_W1,
-            smem + OFF_B1, smem + OFF_G, smem + OFF_BE, smem + OFF_W2, smem + OFF_B2,
+            obs + static_cast<long>(b) * kObs, kRoadBase, kRoads, kRoadF, x, h, smem + OFF_W1, smem + OFF_B1,
+            smem + OFF_G, smem + OFF_BE, smem + OFF_W2, smem + OFF_B2,
             cat_g + static_cast<long>(b) * kCat + kEnc, arg0, arg1, lane);
         road_arg[static_cast<long>(b) * kEnc + lane] = arg0;
         road_arg[static_cast<long>(b) * kEnc + lane + 32] = arg1;
@@ -661,6 +689,24 @@ __global__ void __launch_bounds__(kThreads, 1)
         part_arg[static_cast<long>(b) * kEnc + lane + 32] = arg1;
     }
     __syncthreads();
+    for (int c = 0; c < kCornerViews; ++c) {
+        load_tower(
+            smem, corner_w1 + c * kEnc * kPartnerF, kPartnerF, corner_b1 + c * kEnc, corner_lng + c * kEnc,
+            corner_lnb + c * kEnc, corner_w2 + c * kEnc * kEnc, corner_b2 + c * kEnc, tid);
+        __syncthreads();
+        int base = kEgoDim + kPartners * kPartnerF + c * kCornerPartners * kPartnerF;
+        for (int b = warp_id; b < B; b += nwarps) {
+            int arg0, arg1;
+            pool<kPartnerF, false>(
+                obs + static_cast<long>(b) * kObs, base, kCornerPartners, kPartnerF, x, h, smem + OFF_W1,
+                smem + OFF_B1, smem + OFF_G, smem + OFF_BE, smem + OFF_W2, smem + OFF_B2,
+                cat_g + static_cast<long>(b) * kCat + (3 + c) * kEnc, arg0, arg1, lane);
+            int* args = corner_arg + (static_cast<long>(c) * B + b) * kEnc;
+            args[lane] = arg0;
+            args[lane + 32] = arg1;
+        }
+        __syncthreads();
+    }
     for (int b = warp_id; b < B; b += nwarps) {
         const float* cat = cat_g + static_cast<long>(b) * kCat;
         float pre[8];
@@ -718,7 +764,7 @@ __global__ void __launch_bounds__(kThreads, 1)
         int r0 = road_arg[static_cast<long>(b) * kEnc + lane];
         int r1 = road_arg[static_cast<long>(b) * kEnc + lane + 32];
         bwd_tower<kRoadIn, true>(
-            obs + static_cast<long>(b) * kObs, kEgoDim + kPartners * kPartnerF, kRoads, kRoadF,
+            obs + static_cast<long>(b) * kObs, kRoadBase, kRoads, kRoadF,
             dcat + static_cast<long>(b) * kCat + kEnc, r0, r1, x, h, gh, smem + OFF_W1, smem + OFF_B1, smem + OFF_G,
             smem + OFF_BE, smem + OFF_W2, smem + OFF_B2, road, lane);
     }
@@ -732,6 +778,30 @@ __global__ void __launch_bounds__(kThreads, 1)
             obs + static_cast<long>(b) * kObs, kEgoDim, kPartners, kPartnerF,
             dcat + static_cast<long>(b) * kCat + 2 * kEnc, p0, p1, x, h, gh, smem + OFF_W1, smem + OFF_B1,
             smem + OFF_G, smem + OFF_BE, smem + OFF_W2, smem + OFF_B2, part, lane);
+    }
+    __syncthreads();
+    for (int c = 0; c < kCornerViews; ++c) {
+        load_tower(
+            smem, corner_w1 + c * kEnc * kPartnerF, kPartnerF, corner_b1 + c * kEnc, corner_lng + c * kEnc,
+            corner_lnb + c * kEnc, corner_w2 + c * kEnc * kEnc, corner_b2 + c * kEnc, tid);
+        __syncthreads();
+        long view = (static_cast<long>(c) * nwarps + warp_id);
+        Acc corner{corner_dw1 + view * kPartnerF * kEnc,
+                   corner_db1 + view * kEnc,
+                   corner_dlng + view * kEnc,
+                   corner_dlnb + view * kEnc,
+                   corner_dw2 + view * kEnc * kEnc,
+                   corner_db2 + view * kEnc};
+        int base = kEgoDim + kPartners * kPartnerF + c * kCornerPartners * kPartnerF;
+        for (int b = warp_id; b < B; b += nwarps) {
+            const int* args = corner_arg + (static_cast<long>(c) * B + b) * kEnc;
+            bwd_tower<kPartnerF, false>(
+                obs + static_cast<long>(b) * kObs, base, kCornerPartners, kPartnerF,
+                dcat + static_cast<long>(b) * kCat + (3 + c) * kEnc, args[lane], args[lane + 32], x, h, gh,
+                smem + OFF_W1, smem + OFF_B1, smem + OFF_G, smem + OFF_BE, smem + OFF_W2, smem + OFF_B2, corner,
+                lane);
+        }
+        __syncthreads();
     }
 }
 
@@ -806,7 +876,8 @@ std::vector<at::Tensor> drive_encoder_forward(
     at::Tensor ego_w2, at::Tensor ego_b2, at::Tensor partner_w1, at::Tensor partner_b1,
     at::Tensor partner_ln_g, at::Tensor partner_ln_b, at::Tensor partner_w2, at::Tensor partner_b2,
     at::Tensor road_w1, at::Tensor road_b1, at::Tensor road_ln_g, at::Tensor road_ln_b, at::Tensor road_w2,
-    at::Tensor road_b2, at::Tensor shared_w, at::Tensor shared_b, bool /*save*/) {
+    at::Tensor road_b2, at::Tensor corner_w1, at::Tensor corner_b1, at::Tensor corner_ln_g, at::Tensor corner_ln_b,
+    at::Tensor corner_w2, at::Tensor corner_b2, at::Tensor shared_w, at::Tensor shared_b, bool /*save*/) {
     c10::cuda::CUDAGuard guard(obs.device());
     obs = obs.contiguous();
     TORCH_CHECK(obs.is_cuda() && obs.dtype() == at::kFloat && obs.dim() == 2, "obs must be CUDA float32 [B, obs]");
@@ -830,6 +901,12 @@ std::vector<at::Tensor> drive_encoder_forward(
     check_weight(road_ln_b, {kEnc}, "road_ln_b");
     check_weight(road_w2, {kEnc, kEnc}, "road_w2");
     check_weight(road_b2, {kEnc}, "road_b2");
+    check_weight(corner_w1, {kCornerViews, kEnc, kPartnerF}, "corner_w1");
+    check_weight(corner_b1, {kCornerViews, kEnc}, "corner_b1");
+    check_weight(corner_ln_g, {kCornerViews, kEnc}, "corner_ln_g");
+    check_weight(corner_ln_b, {kCornerViews, kEnc}, "corner_ln_b");
+    check_weight(corner_w2, {kCornerViews, kEnc, kEnc}, "corner_w2");
+    check_weight(corner_b2, {kCornerViews, kEnc}, "corner_b2");
     check_weight(shared_w, {kHidden, kCat}, "shared_w");
     check_weight(shared_b, {kHidden}, "shared_b");
 
@@ -851,6 +928,8 @@ std::vector<at::Tensor> drive_encoder_forward(
         partner_ln_b.data_ptr<float>(), partner_w2.data_ptr<float>(), partner_b2.data_ptr<float>(),
         road_w1.data_ptr<float>(), road_b1.data_ptr<float>(), road_ln_g.data_ptr<float>(),
         road_ln_b.data_ptr<float>(), road_w2.data_ptr<float>(), road_b2.data_ptr<float>(),
+        corner_w1.data_ptr<float>(), corner_b1.data_ptr<float>(), corner_ln_g.data_ptr<float>(),
+        corner_ln_b.data_ptr<float>(), corner_w2.data_ptr<float>(), corner_b2.data_ptr<float>(),
         shared_T.data_ptr<float>(), shared_b.data_ptr<float>(), cat.data_ptr<float>(), out.data_ptr<float>());
     C10_CUDA_CHECK(cudaGetLastError());
     return {out};
@@ -860,8 +939,9 @@ std::vector<at::Tensor> drive_encoder_backward(
     at::Tensor grad, at::Tensor obs, at::Tensor ego_w1, at::Tensor ego_b1, at::Tensor ego_ln_g, at::Tensor ego_ln_b,
     at::Tensor ego_w2, at::Tensor ego_b2, at::Tensor partner_w1, at::Tensor partner_b1, at::Tensor partner_ln_g,
     at::Tensor partner_ln_b, at::Tensor partner_w2, at::Tensor partner_b2, at::Tensor road_w1, at::Tensor road_b1,
-    at::Tensor road_ln_g, at::Tensor road_ln_b, at::Tensor road_w2, at::Tensor road_b2, at::Tensor shared_w,
-    at::Tensor shared_b) {
+    at::Tensor road_ln_g, at::Tensor road_ln_b, at::Tensor road_w2, at::Tensor road_b2, at::Tensor corner_w1,
+    at::Tensor corner_b1, at::Tensor corner_ln_g, at::Tensor corner_ln_b, at::Tensor corner_w2, at::Tensor corner_b2,
+    at::Tensor shared_w, at::Tensor shared_b) {
     c10::cuda::CUDAGuard guard(grad.device());
     grad = grad.contiguous();
     obs = obs.contiguous();
@@ -888,12 +968,19 @@ std::vector<at::Tensor> drive_encoder_backward(
     auto road_dlnb = at::zeros({nwarps, kEnc}, opt);
     auto road_dw2 = at::zeros({nwarps, kEnc, kEnc}, opt);
     auto road_db2 = at::zeros({nwarps, kEnc}, opt);
+    auto corner_dw1 = at::zeros({kCornerViews, nwarps, kPartnerF, kEnc}, opt);
+    auto corner_db1 = at::zeros({kCornerViews, nwarps, kEnc}, opt);
+    auto corner_dlng = at::zeros({kCornerViews, nwarps, kEnc}, opt);
+    auto corner_dlnb = at::zeros({kCornerViews, nwarps, kEnc}, opt);
+    auto corner_dw2 = at::zeros({kCornerViews, nwarps, kEnc, kEnc}, opt);
+    auto corner_db2 = at::zeros({kCornerViews, nwarps, kEnc}, opt);
     auto gelu_out = at::empty({B, kCat}, opt);
     auto gpre_out = at::empty({B, kHidden}, opt);
     auto cat = at::empty({B, kCat}, opt);
     auto dcat = at::empty({B, kCat}, opt);
     auto road_arg = at::empty({B, kEnc}, opt.dtype(at::kInt));
     auto part_arg = at::empty({B, kEnc}, opt.dtype(at::kInt));
+    auto corner_arg = at::empty({kCornerViews, B, kEnc}, opt.dtype(at::kInt));
     auto shared_T = transpose_shared(shared_w, stream);
 
     static bool once = false;
@@ -909,15 +996,19 @@ std::vector<at::Tensor> drive_encoder_backward(
         partner_ln_b.data_ptr<float>(), partner_w2.data_ptr<float>(), partner_b2.data_ptr<float>(),
         road_w1.data_ptr<float>(), road_b1.data_ptr<float>(), road_ln_g.data_ptr<float>(),
         road_ln_b.data_ptr<float>(), road_w2.data_ptr<float>(), road_b2.data_ptr<float>(),
+        corner_w1.data_ptr<float>(), corner_b1.data_ptr<float>(), corner_ln_g.data_ptr<float>(),
+        corner_ln_b.data_ptr<float>(), corner_w2.data_ptr<float>(), corner_b2.data_ptr<float>(),
         shared_T.data_ptr<float>(), shared_b.data_ptr<float>(), cat.data_ptr<float>(), dcat.data_ptr<float>(),
-        road_arg.data_ptr<int>(), part_arg.data_ptr<int>(), gelu_out.data_ptr<float>(),
-        gpre_out.data_ptr<float>(), ego_dw1.data_ptr<float>(), ego_db1.data_ptr<float>(),
-        ego_dlng.data_ptr<float>(), ego_dlnb.data_ptr<float>(), ego_dw2.data_ptr<float>(),
-        ego_db2.data_ptr<float>(), part_dw1.data_ptr<float>(), part_db1.data_ptr<float>(),
-        part_dlng.data_ptr<float>(), part_dlnb.data_ptr<float>(), part_dw2.data_ptr<float>(),
-        part_db2.data_ptr<float>(), road_dw1.data_ptr<float>(), road_db1.data_ptr<float>(),
-        road_dlng.data_ptr<float>(), road_dlnb.data_ptr<float>(), road_dw2.data_ptr<float>(),
-        road_db2.data_ptr<float>());
+        road_arg.data_ptr<int>(), part_arg.data_ptr<int>(), corner_arg.data_ptr<int>(),
+        gelu_out.data_ptr<float>(), gpre_out.data_ptr<float>(), ego_dw1.data_ptr<float>(),
+        ego_db1.data_ptr<float>(), ego_dlng.data_ptr<float>(), ego_dlnb.data_ptr<float>(),
+        ego_dw2.data_ptr<float>(), ego_db2.data_ptr<float>(), part_dw1.data_ptr<float>(),
+        part_db1.data_ptr<float>(), part_dlng.data_ptr<float>(), part_dlnb.data_ptr<float>(),
+        part_dw2.data_ptr<float>(), part_db2.data_ptr<float>(), road_dw1.data_ptr<float>(),
+        road_db1.data_ptr<float>(), road_dlng.data_ptr<float>(), road_dlnb.data_ptr<float>(),
+        road_dw2.data_ptr<float>(), road_db2.data_ptr<float>(), corner_dw1.data_ptr<float>(),
+        corner_db1.data_ptr<float>(), corner_dlng.data_ptr<float>(), corner_dlnb.data_ptr<float>(),
+        corner_dw2.data_ptr<float>(), corner_db2.data_ptr<float>());
     C10_CUDA_CHECK(cudaGetLastError());
 
     auto rd = [&](const at::Tensor& src, int K, int OUT) {
@@ -940,6 +1031,15 @@ std::vector<at::Tensor> drive_encoder_backward(
     auto part_dw2_r = rd(part_dw2, kEnc, kEnc);
     auto road_dw1_r = rd(road_dw1, kRoadIn, kEnc);
     auto road_dw2_r = rd(road_dw2, kEnc, kEnc);
+    std::vector<at::Tensor> c_dw1_r, c_db1_r, c_dlng_r, c_dlnb_r, c_dw2_r, c_db2_r;
+    for (int c = 0; c < kCornerViews; ++c) {
+        c_dw1_r.push_back(rd(corner_dw1[c], kPartnerF, kEnc));
+        c_db1_r.push_back(rv(corner_db1[c]));
+        c_dlng_r.push_back(rv(corner_dlng[c]));
+        c_dlnb_r.push_back(rv(corner_dlnb[c]));
+        c_dw2_r.push_back(rd(corner_dw2[c], kEnc, kEnc));
+        c_db2_r.push_back(rv(corner_db2[c]));
+    }
     // Shared projection is a dense GEMM. Keep it in fp32 so it matches LayerNorm's exact path.
     bool tf32 = at::globalContext().allowTF32CuBLAS();
     at::globalContext().setAllowTF32CuBLAS(false);
@@ -950,7 +1050,8 @@ std::vector<at::Tensor> drive_encoder_backward(
     return {ego_dw1_r,     rv(ego_db1),   rv(ego_dlng),   rv(ego_dlnb),   ego_dw2_r,     rv(ego_db2),
             part_dw1_r,    rv(part_db1),  rv(part_dlng),  rv(part_dlnb),  part_dw2_r,    rv(part_db2),
             road_dw1_r,    rv(road_db1),  rv(road_dlng),  rv(road_dlnb),  road_dw2_r,    rv(road_db2),
-            shared_dw_r,   shared_db};
+            at::stack(c_dw1_r, 0), at::stack(c_db1_r, 0), at::stack(c_dlng_r, 0), at::stack(c_dlnb_r, 0),
+            at::stack(c_dw2_r, 0), at::stack(c_db2_r, 0), shared_dw_r, shared_db};
 }
 
 TORCH_LIBRARY_FRAGMENT(pufferlib, m) {
@@ -958,12 +1059,14 @@ TORCH_LIBRARY_FRAGMENT(pufferlib, m) {
         "drive_encoder_forward(Tensor obs, Tensor ego_w1, Tensor ego_b1, Tensor ego_ln_g, Tensor ego_ln_b, "
         "Tensor ego_w2, Tensor ego_b2, Tensor partner_w1, Tensor partner_b1, Tensor partner_ln_g, Tensor partner_ln_b, "
         "Tensor partner_w2, Tensor partner_b2, Tensor road_w1, Tensor road_b1, Tensor road_ln_g, Tensor road_ln_b, "
-        "Tensor road_w2, Tensor road_b2, Tensor shared_w, Tensor shared_b, bool save) -> Tensor[]");
+        "Tensor road_w2, Tensor road_b2, Tensor corner_w1, Tensor corner_b1, Tensor corner_ln_g, Tensor corner_ln_b, "
+        "Tensor corner_w2, Tensor corner_b2, Tensor shared_w, Tensor shared_b, bool save) -> Tensor[]");
     m.def(
         "drive_encoder_backward(Tensor grad, Tensor obs, Tensor ego_w1, Tensor ego_b1, Tensor ego_ln_g, Tensor ego_ln_b, "
         "Tensor ego_w2, Tensor ego_b2, Tensor partner_w1, Tensor partner_b1, Tensor partner_ln_g, Tensor partner_ln_b, "
         "Tensor partner_w2, Tensor partner_b2, Tensor road_w1, Tensor road_b1, Tensor road_ln_g, Tensor road_ln_b, "
-        "Tensor road_w2, Tensor road_b2, Tensor shared_w, Tensor shared_b) -> Tensor[]");
+        "Tensor road_w2, Tensor road_b2, Tensor corner_w1, Tensor corner_b1, Tensor corner_ln_g, Tensor corner_ln_b, "
+        "Tensor corner_w2, Tensor corner_b2, Tensor shared_w, Tensor shared_b) -> Tensor[]");
 }
 
 namespace pufferlib {

@@ -69,9 +69,10 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model) {
     int action_size, logit_sizes[2];
     int action_dim;
     if (dynamics_model == CLASSIC) {
-        action_size = NUM_ACCEL_BINS * NUM_STEER_BINS; // Joint action space
-        logit_sizes[0] = NUM_ACCEL_BINS * NUM_STEER_BINS;
-        action_dim = 1;
+        logit_sizes[0] = NUM_ACCEL_BINS;
+        logit_sizes[1] = NUM_STEER_BINS;
+        action_size = NUM_ACCEL_BINS + NUM_STEER_BINS;
+        action_dim = 2;
     } else {                 // JERK
         action_size = 4 * 3; // Joint action space (4 longitudinal × 3 lateral = 12)
         logit_sizes[0] = 4 * 3;
@@ -162,9 +163,11 @@ void forward(DriveNet *net, float *observations, int *actions) {
     memset(net->obs_road, 0, net->num_agents * max_road_obs * road_feat_onehot * sizeof(float));
 
     for (int b = 0; b < net->num_agents; b++) {
-        int b_offset = b * (ego_dim + max_partners * partner_features + max_road_obs * road_features);
+        int corner_obs = CORNER_VIEWS * CORNER_PARTNERS * PARTNER_FEATURES;
+        int b_offset =
+            b * (ego_dim + max_partners * partner_features + corner_obs + max_road_obs * road_features);
         int partner_offset = b_offset + ego_dim;
-        int road_offset = b_offset + ego_dim + max_partners * partner_features;
+        int road_offset = partner_offset + max_partners * partner_features + corner_obs;
 
         // Process self observation
         for (int i = 0; i < ego_dim; i++) {

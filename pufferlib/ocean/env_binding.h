@@ -520,6 +520,26 @@ static PyObject *vec_reset(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_set_episode_length(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_episode_length requires 2 arguments");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int length = (int)PyLong_AsLong(PyTuple_GetItem(args, 1));
+    if (length <= 0) {
+        PyErr_SetString(PyExc_ValueError, "episode_length must be > 0");
+        return NULL;
+    }
+    for (int i = 0; i < vec->num_envs; i++) {
+        vec->envs[i]->episode_length = length;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyObject *vec_step(PyObject *self, PyObject *arg) {
     int num_args = PyTuple_Size(arg);
     if (num_args != 1) {
@@ -1081,14 +1101,15 @@ static PyObject *vec_collect_expert_data(PyObject *self, PyObject *args) {
     for (int i = 0; i < vec->num_envs; i++) {
         Env *env = vec->envs[i];
         int num_agents = env->active_agent_count;
-        int discrete_action_dim = (env->dynamics_model == DELTA_LOCAL) ? 3 : 1;
+        int discrete_action_dim =
+            (env->dynamics_model == DELTA_LOCAL) ? 3 : (env->dynamics_model == CLASSIC) ? 2 : 1;
 
         int ego_dim;
         if (env->dynamics_model == JERK)
             ego_dim = EGO_FEATURES_JERK;
         else 
             ego_dim = EGO_FEATURES;
-        int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+        int max_obs = DRIVE_MAX_OBS(ego_dim);
 
         float *env_actions_discrete =
             (float *)malloc(trajectory_length * num_agents * discrete_action_dim * sizeof(float));
@@ -1163,6 +1184,7 @@ static PyMethodDef methods[] = {
     {"vec_init", (PyCFunction)vec_init, METH_VARARGS | METH_KEYWORDS, "Initialize a vector of environments"},
     {"vec_reset", vec_reset, METH_VARARGS, "Reset the vector of environments"},
     {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
+    {"vec_set_episode_length", vec_set_episode_length, METH_VARARGS, "Set episode_length on a vector of environments"},
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
@@ -1213,6 +1235,8 @@ PyMODINIT_FUNC PyInit_binding(void) {
 
     PyModule_AddIntConstant(m, "ROAD_FEATURES", ROAD_FEATURES);
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);
+    PyModule_AddIntConstant(m, "CORNER_VIEWS", CORNER_VIEWS);
+    PyModule_AddIntConstant(m, "CORNER_PARTNERS", CORNER_PARTNERS);
     PyModule_AddIntConstant(m, "EGO_FEATURES", EGO_FEATURES); // Default
     PyModule_AddIntConstant(m, "EGO_FEATURES_JERK", EGO_FEATURES_JERK);
 

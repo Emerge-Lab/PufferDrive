@@ -22,6 +22,7 @@ class RenderView(IntEnum):
     BEV_AGENT_OBS = 1  # Orthographic top-down, only show what the selected agent can observe
     AGENT_PERSP = 2  # Third-person perspective following selected agent
     SENSOR_NOISE = 3  # Agent view, including perception noise
+    FOLLOW_AGENT = 4  # Zoomed orthographic view locked to one agent
 
 
 class RegMode(IntEnum):
@@ -84,6 +85,9 @@ class Drive(pufferlib.PufferEnv):
         obs_partner_noise_speed=0.0,
         obs_partner_noise_pos=0.0,
         async_resets=True,
+        spawn_agents=0,
+        goal_distance_min=5.0,
+        goal_distance_max=50.0,
     ):
         # env
         self.dt = dt
@@ -117,6 +121,9 @@ class Drive(pufferlib.PufferEnv):
         self.obs_partner_noise_pos = obs_partner_noise_pos
         self._dynamics_model_flag = DYNAMICS_MODEL_MAP[dynamics_model]
         self.async_resets = bool(async_resets)
+        self.spawn_agents = int(spawn_agents)
+        self.goal_distance_min = float(goal_distance_min)
+        self.goal_distance_max = float(goal_distance_max)
 
         # Observation space calculation
         self.ego_features = binding.EGO_FEATURES_JERK if dynamics_model == "jerk" else binding.EGO_FEATURES
@@ -127,10 +134,13 @@ class Drive(pufferlib.PufferEnv):
         self.max_partner_objects = binding.MAX_AGENTS - 1
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
+        self.corner_views = binding.CORNER_VIEWS
+        self.corner_partners = binding.CORNER_PARTNERS
 
         self.num_obs = (
             self.ego_features
             + self.max_partner_objects * self.partner_features
+            + self.corner_views * self.corner_partners * self.partner_features
             + self.max_road_objects * self.road_features
         )
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
@@ -195,11 +205,9 @@ class Drive(pufferlib.PufferEnv):
 
         if action_type == "discrete":
             if dynamics_model == "classic":
-                # Joint action space (assume dependence)
-                self.joint_action_space_size = binding.NUM_ACCEL_BINS * binding.NUM_STEER_BINS
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([self.joint_action_space_size])
-                # Multi discrete (assume independence)
-                # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
+                self.single_action_space = gymnasium.spaces.MultiDiscrete(
+                    [binding.NUM_ACCEL_BINS, binding.NUM_STEER_BINS]
+                )
             elif dynamics_model == "delta_local":
                 self.single_action_space = gymnasium.spaces.MultiDiscrete(
                     [binding.NUM_DX_BINS, binding.NUM_DY_BINS, binding.NUM_YAW_BINS]
@@ -245,6 +253,9 @@ class Drive(pufferlib.PufferEnv):
             goal_behavior=self.goal_behavior,
             goal_target_distance=self.goal_target_distance,
             max_controlled_agents=self.max_controlled_agents,
+            spawn_agents=self.spawn_agents,
+            goal_distance_min=self.goal_distance_min,
+            goal_distance_max=self.goal_distance_max,
         )
 
         self.num_agents = agent_offsets[-1]
@@ -296,6 +307,9 @@ class Drive(pufferlib.PufferEnv):
                 fix_reward=self.fix_rewards,
                 async_resets=self.async_resets,
                 dynamics_model=self._dynamics_model_flag,
+                spawn_agents=self.spawn_agents,
+                goal_distance_min=self.goal_distance_min,
+                goal_distance_max=self.goal_distance_max,
             )
             self.env_ids.append(env_id)
 
@@ -344,6 +358,9 @@ class Drive(pufferlib.PufferEnv):
             goal_speed=self.goal_speed,
             map_dir=self.map_dir,
             max_controlled_agents=self.max_controlled_agents,
+            spawn_agents=self.spawn_agents,
+            goal_distance_min=self.goal_distance_min,
+            goal_distance_max=self.goal_distance_max,
         )
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
@@ -392,6 +409,9 @@ class Drive(pufferlib.PufferEnv):
                 obs_partner_noise_pos=self.obs_partner_noise_pos,
                 obs_partner_noise_speed=self.obs_partner_noise_speed,
                 async_resets=int(self.async_resets),
+                spawn_agents=self.spawn_agents,
+                goal_distance_min=self.goal_distance_min,
+                goal_distance_max=self.goal_distance_max,
             )
             self.env_ids.append(env_id)
         self.c_envs = binding.vectorize(*self.env_ids)
@@ -400,6 +420,14 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_reset(self.c_envs, resample_seed)
         self.truncations[:] = 1
         self.terminals[:] = 1
+
+    def set_episode_length(self, length: int) -> None:
+        """Change the cap on the live simulators. The current episode keeps going."""
+        length = int(length)
+        if length <= 0:
+            raise ValueError("episode_length must be > 0")
+        self.episode_length = length
+        binding.vec_set_episode_length(self.c_envs, length)
 
     def step(self, actions, per_env_logs=False):
         self.terminals[:] = 0
@@ -510,25 +538,38 @@ class Drive(pufferlib.PufferEnv):
 
             if self.dynamics_model == "delta_local":
                 output_sizes = [binding.NUM_DX_BINS, binding.NUM_DY_BINS, binding.NUM_YAW_BINS]
+            elif self.dynamics_model == "classic":
+                output_sizes = [binding.NUM_ACCEL_BINS, binding.NUM_STEER_BINS]
             else:
-                output_sizes = [self.joint_action_space_size]
+                output_sizes = [self.single_action_space.nvec[0]]
 
             if self.anchor_cpt_path is None:
                 self.anchor_cpt_path = f"models/bc_{self.dynamics_model}_{self.num_maps}.pt"
 
-            bc_anchor, metrics = load_bc_policy(
-                checkpoint_path=self.anchor_cpt_path,
-                obs_dim=self.num_obs,
-                input_size=128,
-                max_partner_objects=self.max_partner_objects,
-                partner_features=self.partner_features,
-                max_road_objects=self.max_road_objects,
-                road_features=self.road_features,
-                ego_dim=self.ego_features,
-                hidden_size=512,
-                output_sizes=output_sizes,
-                device=device,
-            )
+            try:
+                bc_anchor, metrics = load_bc_policy(
+                    checkpoint_path=self.anchor_cpt_path,
+                    obs_dim=self.num_obs,
+                    input_size=128,
+                    max_partner_objects=self.max_partner_objects,
+                    partner_features=self.partner_features,
+                    max_road_objects=self.max_road_objects,
+                    road_features=self.road_features,
+                    ego_dim=self.ego_features,
+                    hidden_size=512,
+                    output_sizes=output_sizes,
+                    device=device,
+                )
+            except (RuntimeError, FileNotFoundError) as exc:
+                # The checked-in anchor is a delta-local policy. At lambda 0 the
+                # KL term is zero, so a head mismatch should not block training.
+                if self.dynamics_model == "classic" and float(self.lambda_value) == 0.0:
+                    print(
+                        "lambda is 0.0 and the saved anchor does not match the "
+                        f"accel/steer heads, so KL regularization is off. ({exc})"
+                    )
+                    return None, data
+                raise
 
             # Open-loop checkpoint metrics
             if metrics:
@@ -549,7 +590,9 @@ class Drive(pufferlib.PufferEnv):
 
         if self.dynamics_model == "delta_local":
             discrete_action_dim = 3
-        else:  # Classic dynamics model
+        elif self.dynamics_model == "classic":
+            discrete_action_dim = 2
+        else:
             discrete_action_dim = 1
 
         expert_actions_discrete = np.full(
@@ -562,9 +605,8 @@ class Drive(pufferlib.PufferEnv):
         if np.all(expert_actions_discrete == -1):
             raise ValueError("No valid human demonstrations could be collected. Please check the data format.")
 
-        if self.dynamics_model == "delta_local":
-            # Any dimension being -1 means the timestep is invalid
-            invalid_action_mask = expert_actions_discrete[:, :, 0] == -1.0
+        if discrete_action_dim > 1:
+            invalid_action_mask = np.any(expert_actions_discrete == -1.0, axis=-1)
         else:
             invalid_action_mask = (expert_actions_discrete == -1.0).squeeze(-1)
 
@@ -648,7 +690,11 @@ class Drive(pufferlib.PufferEnv):
 
 
 def infer_human_actions(obj):
-    """Infer expert actions using inverse bicycle model and delta-local displacements.
+    """Infer expert actions with the simulator bicycle and delta-local displacements.
+
+    Acceleration and steering are the clipped inverse of utils.dynamics,
+    on the same wheelbase as bicycle_integrate (0.6 * length, at least 1 m).
+    The command is limited to ±16 m/s² and ±0.70 rad.
 
     Returns:
         (expert_acceleration, expert_steering,
@@ -657,6 +703,8 @@ def infer_human_actions(obj):
         -1.0 is the placeholder for invalid timesteps (accel/steering).
         0.0 is used for invalid delta timesteps.
     """
+    from utils.dynamics import LIMITS, inverse_action, simulator_wheelbase
+
     trajectory_length = 91
 
     expert_acceleration = []
@@ -679,9 +727,8 @@ def infer_human_actions(obj):
             [0.0] * trajectory_length,
         )
 
-    dt = 0.1
     vehicle_length = obj.get("length", 4.5)
-    wheelbase = 1.0 * vehicle_length
+    wheelbase = simulator_wheelbase(vehicle_length)
 
     for t in range(trajectory_length):
         # Check validity for both current and next timestep
@@ -714,28 +761,22 @@ def infer_human_actions(obj):
         heading_t = headings[t]
         heading_t1 = headings[t + 1]
 
-        speed_t = math.sqrt(vel_t.get("x", 0.0) ** 2 + vel_t.get("y", 0.0) ** 2)
-        speed_t1 = math.sqrt(vel_t1.get("x", 0.0) ** 2 + vel_t1.get("y", 0.0) ** 2)
-
-        # Classic inverse bicycle model (accel + steering)
-        acceleration = (speed_t1 - speed_t) / dt
-
         heading_diff = heading_t1 - heading_t
         while heading_diff > math.pi:
             heading_diff -= 2 * math.pi
         while heading_diff < -math.pi:
             heading_diff += 2 * math.pi
 
-        yaw_rate = heading_diff / dt
-
-        steering = 0.0
-        if speed_t > 0.1:
-            tan_steering = (yaw_rate * wheelbase) / speed_t
-            tan_steering = max(-10.0, min(10.0, tan_steering))
-            steering = math.atan(tan_steering)
-
-        acceleration = max(-20.0, min(20.0, acceleration))
-        steering = max(-4.0, min(4.0, steering))
+        acceleration, steering = inverse_action(
+            float(heading_t),
+            float(vel_t.get("x", 0.0)),
+            float(vel_t.get("y", 0.0)),
+            float(heading_t1),
+            float(vel_t1.get("x", 0.0)),
+            float(vel_t1.get("y", 0.0)),
+            wheelbase,
+            LIMITS,
+        )
 
         expert_acceleration.append(acceleration)
         expert_steering.append(steering)

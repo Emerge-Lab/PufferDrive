@@ -217,11 +217,21 @@ def _worker_process(
 
     semaphores = np.ndarray(num_workers, dtype=np.uint8, buffer=shm["semaphores"])
     notify = np.ndarray(num_workers, dtype=bool, buffer=shm["notify"])
+    episode_length = None
+    if "episode_length" in shm:
+        episode_length = np.ndarray(1, dtype=np.int32, buffer=shm["episode_length"])
+    applied_episode_length = 0
     start = time.time()
     while True:
         if notify[worker_idx]:
             envs.notify()
             notify[worker_idx] = False
+
+        if episode_length is not None:
+            target = int(episode_length[0])
+            if target > 0 and target != applied_episode_length:
+                _set_env_episode_length(envs, target)
+                applied_episode_length = target
 
         sem = semaphores[worker_idx]
         if sem >= MAIN:
@@ -245,6 +255,15 @@ def _worker_process(
             send_pipe.send(infos)
         else:
             semaphores[worker_idx] = MAIN
+
+
+def _set_env_episode_length(envs, length: int) -> None:
+    if hasattr(envs, "set_episode_length"):
+        envs.set_episode_length(length)
+        return
+    for env in getattr(envs, "envs", ()):
+        if hasattr(env, "set_episode_length"):
+            env.set_episode_length(length)
 
 
 class Multiprocessing:
@@ -347,7 +366,12 @@ class Multiprocessing:
             masks=RawArray("b", num_agents),
             semaphores=RawArray("c", num_workers),
             notify=RawArray("b", num_workers),
+            # 0 leaves the length from env init. A positive value is copied
+            # onto the workers before the next reset or step.
+            episode_length=RawArray("i", 1),
         )
+        self.episode_length_buf = np.ndarray(1, dtype=np.int32, buffer=self.shm["episode_length"])
+        self.episode_length_buf[0] = 0
         shape = (num_workers, agents_per_worker)
         self.obs_batch_shape = (self.agents_per_batch, *obs_shape)
         self.atn_batch_shape = (self.workers_per_batch, agents_per_worker, *atn_shape)
@@ -529,6 +553,14 @@ class Multiprocessing:
             start = i * self.envs_per_worker
             end = (i + 1) * self.envs_per_worker
             self.send_pipes[i].send(seed + i)
+
+    def set_episode_length(self, length: int) -> None:
+        length = int(length)
+        if length <= 0:
+            raise ValueError("episode_length must be > 0")
+        self.episode_length_buf[0] = length
+        if hasattr(self.driver_env, "set_episode_length"):
+            self.driver_env.set_episode_length(length)
 
     def notify(self):
         self.buf["notify"][:] = True

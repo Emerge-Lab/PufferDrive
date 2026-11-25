@@ -849,6 +849,17 @@ class Evaluator:
         eval_config["env"]["lambda_value"] = configs["env"]["lambda_value"]
         eval_config["env"]["obs_partner_noise_speed"] = 0.0
         eval_config["env"]["obs_partner_noise_pos"] = 0.0
+        # Stage 1 stays on logged Waymo agents. The live env dict is mutated
+        # at the switch, so restore the stage-1 goal task until then.
+        if int(self.configs.get("curriculum_stage", 1)) >= 2:
+            self._apply_stage2_eval(eval_config)
+        else:
+            base_env = self.configs.get("curriculum_base_env")
+            if base_env:
+                for key in ("goal_behavior", "goal_radius", "goal_speed", "spawn_agents"):
+                    if key in base_env:
+                        eval_config["env"][key] = base_env[key]
+            eval_config["env"]["spawn_agents"] = 0
 
         self.hr_eval_config = copy.deepcopy(eval_config)
         self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
@@ -858,6 +869,22 @@ class Evaluator:
         self.render_select_mode = self.configs["eval"]["render_select_mode"]
         self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
         self.render_hr_rollout = self.configs["eval"]["render_human_replay_eval"]
+
+    def _apply_stage2_eval(self, eval_config):
+        """Carla towns, spawned cars, and one fixed episode length."""
+        spec = eval_config["eval"]
+        env = eval_config["env"]
+        env["map_dir"] = spec["stage2_map_dir"]
+        env["num_maps"] = int(spec["stage2_num_maps"])
+        env["num_agents"] = int(spec["stage2_num_agents"])
+        env["spawn_agents"] = int(spec["stage2_spawn_agents"])
+        env["episode_length"] = int(spec["stage2_episode_length"])
+        env["termination_mode"] = int(spec["stage2_termination_mode"])
+        env["goal_behavior"] = int(spec["stage2_goal_behavior"])
+        env["goal_radius"] = float(spec["stage2_goal_radius"])
+        env["goal_speed"] = float(spec["stage2_goal_speed"])
+        env["goal_distance_min"] = float(spec["stage2_goal_distance_min"])
+        env["goal_distance_max"] = float(spec["stage2_goal_distance_max"])
 
     def select_render_env(self, env_logs):
         """Select which environment to render based on per-env rollout statistics.
@@ -892,7 +919,7 @@ class Evaluator:
         from pufferlib.ocean.drive.drive import RenderView
 
         if view_mode is None:
-            view_mode = RenderView.FULL_SIM_STATE
+            view_mode = RenderView.FOLLOW_AGENT if mode == "self_play" else RenderView.FULL_SIM_STATE
 
         env = self.hr_env if mode == "human_replay" else self.sp_env
         render_eval = self.render_sp_rollout if mode == "self_play" else self.render_hr_rollout

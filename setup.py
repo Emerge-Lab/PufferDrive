@@ -284,6 +284,7 @@ if not NO_TRAIN:
     if shutil.which("nvcc"):
         extension = CUDAExtension
         torch_sources.append("pufferlib/extensions/cuda/pufferlib.cu")
+        torch_sources.append("pufferlib/extensions/cuda/drive_encoder.cu")
     else:
         extension = CppExtension
 

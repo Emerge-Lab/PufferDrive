@@ -11,25 +11,30 @@ from pufferlib.ocean.torch import Drive
 
 def _env():
     ego, partners, roads, partner_f, road_f = 12, 31, 128, 7, 7
-    obs = ego + partners * partner_f + roads * road_f
+    corners, corner_n = 4, 16
+    obs = ego + partners * partner_f + corners * corner_n * partner_f + roads * road_f
 
     class Env:
         single_observation_space = Box(low=-1, high=1, shape=(obs,), dtype=np.float32)
-        single_action_space = MultiDiscrete([51, 51, 127])
+        single_action_space = MultiDiscrete([257, 257])
         max_partner_objects = partners
         partner_features = partner_f
         max_road_objects = roads
         road_features = road_f
         ego_features = ego
+        corner_views = corners
+        corner_partners = corner_n
 
     return Env()
 
 
-def _obs(batch, ego=12, partners=31, roads=128, seed=0):
+def _obs(batch, ego=12, partners=31, roads=128, corners=4, corner_n=16, seed=0):
     g = torch.Generator(device="cpu")
     g.manual_seed(seed)
-    obs = torch.randn(batch, ego + partners * 7 + roads * 7, generator=g)
-    road = obs[:, ego + partners * 7 :].view(batch, roads, 7)
+    width = ego + partners * 7 + corners * corner_n * 7 + roads * 7
+    obs = torch.randn(batch, width, generator=g)
+    road_at = ego + partners * 7 + corners * corner_n * 7
+    road = obs[:, road_at:].view(batch, roads, 7)
     road[:, :, 6] = torch.randint(0, 7, (batch, roads), generator=g).float()
     return obs
 

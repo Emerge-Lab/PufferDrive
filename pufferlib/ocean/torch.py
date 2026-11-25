@@ -23,6 +23,8 @@ class Drive(nn.Module):
         self.road_features = env.road_features
         self.road_features_after_onehot = env.road_features + 6  # 6 is the number of one-hot encoded categories
         self.ego_dim = env.ego_features
+        self.corner_views = int(getattr(env, "corner_views", 0))
+        self.corner_partners = int(getattr(env, "corner_partners", 0))
 
         self.ego_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),
@@ -45,9 +47,21 @@ class Drive(nn.Module):
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
 
+        # One encoder per corner camera. Each max-pools its own 16 partners
+        # into the same shared embedding as the center view.
+        self.corner_encoders = nn.ModuleList(
+            nn.Sequential(
+                pufferlib.pytorch.layer_init(nn.Linear(self.partner_features, input_size)),
+                nn.LayerNorm(input_size),
+                pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
+            )
+            for _ in range(self.corner_views)
+        )
         self.shared_embedding = nn.Sequential(
             nn.GELU(),
-            pufferlib.pytorch.layer_init(nn.Linear(3 * input_size, hidden_size)),
+            pufferlib.pytorch.layer_init(
+                nn.Linear((3 + self.corner_views) * input_size, hidden_size)
+            ),
         )
         self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
 
@@ -82,10 +96,12 @@ class Drive(nn.Module):
     def encode_observations_pytorch(self, observations, state=None):
         ego_dim = self.ego_dim
         partner_dim = self.max_partner_objects * self.partner_features
+        corner_dim = self.corner_views * self.corner_partners * self.partner_features
         road_dim = self.max_road_objects * self.road_features
         ego_obs = observations[:, :ego_dim]
         partner_obs = observations[:, ego_dim : ego_dim + partner_dim]
-        road_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + road_dim]
+        corner_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + corner_dim]
+        road_obs = observations[:, ego_dim + partner_dim + corner_dim : ego_dim + partner_dim + corner_dim + road_dim]
 
         partner_objects = partner_obs.view(-1, self.max_partner_objects, self.partner_features)
 
@@ -97,12 +113,16 @@ class Drive(nn.Module):
         ego_features = self.ego_encoder(ego_obs)
         partner_features, _ = self.partner_encoder(partner_objects).max(dim=1)
         road_features, _ = self.road_encoder(road_objects).max(dim=1)
+        pools = [ego_features, road_features, partner_features]
+        if self.corner_views:
+            corner_objects = corner_obs.view(
+                -1, self.corner_views, self.corner_partners, self.partner_features
+            )
+            for view, encoder in enumerate(self.corner_encoders):
+                pooled, _ = encoder(corner_objects[:, view]).max(dim=1)
+                pools.append(pooled)
 
-        concat_features = torch.cat([ego_features, road_features, partner_features], dim=1)
-
-        # Pass through shared embedding
-        embedding = F.relu(self.shared_embedding(concat_features))
-        # embedding = self.shared_embedding(concat_features)
+        embedding = F.relu(self.shared_embedding(torch.cat(pools, dim=1)))
         return embedding
 
     def decode_actions(self, flat_hidden):

@@ -82,6 +82,18 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int goal_behavior = unpack(kwargs, "goal_behavior");
     float goal_target_distance = unpack(kwargs, "goal_target_distance");
     int max_controlled_agents = unpack(kwargs, "max_controlled_agents");
+    int spawn_agents = 0;
+    float goal_distance_min = 5.0f;
+    float goal_distance_max = 50.0f;
+    if (kwargs && PyDict_GetItemString(kwargs, "spawn_agents")) {
+        spawn_agents = (int)unpack(kwargs, "spawn_agents");
+    }
+    if (kwargs && PyDict_GetItemString(kwargs, "goal_distance_min")) {
+        goal_distance_min = (float)unpack(kwargs, "goal_distance_min");
+    }
+    if (kwargs && PyDict_GetItemString(kwargs, "goal_distance_max")) {
+        goal_distance_max = (float)unpack(kwargs, "goal_distance_max");
+    }
 
     // Deterministic map sampling
     int seed = unpack(kwargs, "seed");
@@ -117,11 +129,45 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->goal_behavior = goal_behavior;
         env->goal_target_distance = goal_target_distance;
         env->max_controlled_agents = max_controlled_agents;
+        env->spawn_agents = spawn_agents;
+        env->goal_distance_min = goal_distance_min;
+        env->goal_distance_max = goal_distance_max;
+        if (spawn_agents > 0) {
+            env->num_agents = spawn_agents;
+        }
         snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", map_dir, map_id);
         env->entities = load_map_binary(map_file, env);
+        if (env->entities == NULL) {
+            free(env);
+            Py_DECREF(agent_offsets);
+            Py_DECREF(map_ids);
+            PyErr_SetString(PyExc_FileNotFoundError, map_file);
+            return NULL;
+        }
+        if (spawn_agents > 0) {
+            install_spawn_fleet(env);
+        }
 
         // Count the number of controllable agents in map
         set_active_agents(env);
+        if (spawn_agents > 0 && env->active_agent_count != spawn_agents) {
+            int got = env->active_agent_count;
+            for (int j = 0; j < env->num_entities; j++) {
+                free_entity(&env->entities[j]);
+            }
+            free(env->entities);
+            free(env->active_agent_indices);
+            free(env->static_agent_indices);
+            free(env->expert_static_agent_indices);
+            free(env->tracks_to_predict_indices);
+            free(env);
+            Py_DECREF(agent_offsets);
+            Py_DECREF(map_ids);
+            char error_msg[256];
+            sprintf(error_msg, "Spawned %d agents but the map produced %d", spawn_agents, got);
+            PyErr_SetString(PyExc_ValueError, error_msg);
+            return NULL;
+        }
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
@@ -278,6 +324,18 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
     env->goal_speed = (float)unpack(kwargs, "goal_speed");
     env->render_mode = (int)unpack(kwargs, "render_mode");
+    env->spawn_agents = 0;
+    env->goal_distance_min = 5.0f;
+    env->goal_distance_max = 50.0f;
+    if (kwargs && PyDict_GetItemString(kwargs, "spawn_agents")) {
+        env->spawn_agents = (int)unpack(kwargs, "spawn_agents");
+    }
+    if (kwargs && PyDict_GetItemString(kwargs, "goal_distance_min")) {
+        env->goal_distance_min = (float)unpack(kwargs, "goal_distance_min");
+    }
+    if (kwargs && PyDict_GetItemString(kwargs, "goal_distance_max")) {
+        env->goal_distance_max = (float)unpack(kwargs, "goal_distance_max");
+    }
     char *map_dir = unpack_str(kwargs, "map_dir");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
@@ -305,6 +363,7 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "collisions_per_agent", log->collisions_per_agent);
     assign_to_dict(dict, "route_progress", log->route_progress);
     assign_to_dict(dict, "displacement_error_avg", log->displacement_error_avg);
+    assign_to_dict(dict, "failures_per_mile", log->failures_per_mile);
     //   assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     //  assign_to_dict(dict, "perc_other", log->perc_other);
     //  assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);
