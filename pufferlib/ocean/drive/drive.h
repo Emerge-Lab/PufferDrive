@@ -265,6 +265,16 @@ struct Log {
     float displacement_samples;
     float n;
     float failures_per_mile;
+    // Cruise metrics. Steps are summed over the episode, then pooled.
+    float speeding_steps;
+    float cruise_steps;
+    float ff_steps;
+    float ff_gauss;
+    float safe_cruising_score;
+    // Sums of per-agent rates. vec_log divides by n; my_log divides by cruise_agents.
+    float speeding_rate;
+    float free_flow_efficiency;
+    float cruise_agents;
 };
 
 typedef struct Entity Entity;
@@ -338,6 +348,8 @@ struct Entity {
     int lane_node;
     float distance_m;
     float failure_steps;
+    // Private cruise setpoint in m/s. Not copied into partner observations.
+    float cruise_target;
 };
 
 void free_entity(Entity *entity) {
@@ -511,7 +523,6 @@ struct Drive {
     int fix_lambdas;
     float lambda_value;
     float goal_radius;
-    float goal_speed;
     int logs_capacity;
     int goal_behavior;
     float goal_target_distance;
@@ -539,6 +550,12 @@ struct Drive {
     int spawn_agents;
     float goal_distance_min;
     float goal_distance_max;
+    // Stage 2 cruise task. Weight 0 leaves the goal reward unchanged.
+    float target_speed;
+    float speed_reward_weight;
+    float speed_reward_sigma;
+    float accel_penalty;
+    int terminate_on_failure;
     int lane_n;
     int lane_polys;
     float *lane_x;
@@ -598,6 +615,26 @@ void add_log(Drive *env) {
         float miles = e->distance_m * METER_TO_MILE;
         if (miles > 1.0e-3f) {
             env->log.failures_per_mile += e->failure_steps / miles;
+        }
+
+        env->log.speeding_steps += env->logs[i].speeding_steps;
+        env->log.cruise_steps += env->logs[i].cruise_steps;
+        env->log.ff_steps += env->logs[i].ff_steps;
+        env->log.ff_gauss += env->logs[i].ff_gauss;
+        float cruise_n = env->logs[i].cruise_steps;
+        if (cruise_n > 0.0f) {
+            float speeding_i = env->logs[i].speeding_steps / cruise_n;
+            // Blocked for the whole episode: no free-flow step, score the match as 1.
+            float freeflow_i =
+                env->logs[i].ff_steps > 0.0f ? env->logs[i].ff_gauss / env->logs[i].ff_steps : 1.0f;
+            int incident_free = env->logs[i].collision_rate == 0.0f && env->logs[i].offroad_rate == 0.0f;
+            float safe_i = incident_free ? (1.0f - speeding_i) * freeflow_i : 0.0f;
+            if (safe_i < 0.0f)
+                safe_i = 0.0f;
+            env->log.speeding_rate += speeding_i;
+            env->log.free_flow_efficiency += freeflow_i;
+            env->log.safe_cruising_score += safe_i;
+            env->log.cruise_agents += 1.0f;
         }
 
         env->log.active_agent_count += env->active_agent_count;
@@ -1866,6 +1903,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float vx = agent->vx;
         float vy = agent->vy;
         bicycle_integrate(&x, &y, &heading, &vx, &vy, agent->length, acceleration, steering, env->dt);
+        agent->a_long = acceleration;
         agent->x = x;
         agent->y = y;
         agent->heading = heading;
@@ -3021,6 +3059,11 @@ void sample_new_goal(Drive *env, int agent_idx) {
     agent->goals_sampled_this_episode += 1;
 }
 
+// One cruise setpoint, in m/s, shared by every agent.
+static float shared_cruise_target(Drive *env) {
+    return env->target_speed;
+}
+
 void c_reset(Drive *env) {
     env->timestep = env->init_steps;
     if (env->spawn_agents > 0)
@@ -3038,6 +3081,7 @@ void c_reset(Drive *env) {
         env->entities[agent_idx].current_goal_reached = 0;
         env->entities[agent_idx].stopped = 0;
         env->entities[agent_idx].removed = 0;
+        env->entities[agent_idx].cruise_target = shared_cruise_target(env);
 
         if (env->goal_behavior == GOAL_GENERATE_NEW) {
             env->entities[agent_idx].goal_position_x = env->entities[agent_idx].init_goal_x;
@@ -3149,6 +3193,78 @@ static void override_action_with_expert(Drive *env, int action_idx, int agent_id
     }
 }
 
+// Closest vehicle ahead in a ±15° cone. Gap is bumper-to-bumper along the ego heading.
+// Returns 0 when the lane ahead is empty. v_lead is that vehicle's speed along the same axis.
+static int lead_vehicle(Drive *env, int agent_idx, float *gap_out, float *v_lead_out) {
+    Entity *ego = &env->entities[agent_idx];
+    const float cone = 15.0f * (float)M_PI / 180.0f;
+    int counts[2] = {env->active_agent_count, env->static_agent_count};
+    int *lists[2] = {env->active_agent_indices, env->static_agent_indices};
+    float best_gap = 1.0e30f;
+    float best_v = 0.0f;
+    int found = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        for (int j = 0; j < counts[pass]; j++) {
+            int index = lists[pass][j];
+            if (index == agent_idx)
+                continue;
+            Entity *other = &env->entities[index];
+            if (other->removed || other->type != VEHICLE || other->x == INVALID_POSITION)
+                continue;
+            float dx = other->x - ego->x;
+            float dy = other->y - ego->y;
+            float fwd = dx * ego->heading_x + dy * ego->heading_y;
+            if (fwd <= 0.0f)
+                continue;
+            float left = -dx * ego->heading_y + dy * ego->heading_x;
+            if (fabsf(atan2f(left, fwd)) > cone)
+                continue;
+            float gap = fwd - 0.5f * ego->length - 0.5f * other->length;
+            if (gap < 0.0f)
+                gap = 0.0f;
+            if (gap < best_gap) {
+                best_gap = gap;
+                best_v = other->vx * ego->heading_x + other->vy * ego->heading_y;
+                found = 1;
+            }
+        }
+    }
+    if (!found)
+        return 0;
+    *gap_out = best_gap;
+    *v_lead_out = best_v;
+    return 1;
+}
+
+// 2-second rule: free flow when the bumper gap clears d0 + 2*v and the lead is not closing inside 3 s.
+static int free_flow_step(Drive *env, int agent_idx, float signed_speed) {
+    float gap = 0.0f;
+    float v_lead = 0.0f;
+    if (!lead_vehicle(env, agent_idx, &gap, &v_lead))
+        return 1;
+    int gap_ok = gap > (2.5f + 2.0f * signed_speed);
+    float closing = signed_speed - v_lead;
+    float ttc = gap / fmaxf(closing, 1.0e-6f);
+    int closing_ok = (signed_speed <= v_lead) || (ttc > 3.0f);
+    return gap_ok && closing_ok;
+}
+
+static void record_cruise_metrics(Drive *env, int log_idx, int agent_idx, float signed_speed) {
+    Log *lg = &env->logs[log_idx];
+    Entity *agent = &env->entities[agent_idx];
+    float v_tgt = agent->cruise_target;
+    lg->cruise_steps += 1.0f;
+    float eps = fmaxf(1.0f, 0.1f * v_tgt);
+    if (signed_speed > v_tgt + eps)
+        lg->speeding_steps += 1.0f;
+    if (!free_flow_step(env, agent_idx, signed_speed))
+        return;
+    float sigma = env->speed_reward_sigma > 0.0f ? env->speed_reward_sigma : 2.5f;
+    float dv = signed_speed - v_tgt;
+    lg->ff_steps += 1.0f;
+    lg->ff_gauss += expf(-(dv * dv) / (2.0f * sigma * sigma));
+}
+
 static void move_agent_with_controller(Drive *env, int action_idx, int agent_idx) {
     Entity *agent = &env->entities[agent_idx];
 
@@ -3221,6 +3337,19 @@ void c_step(Drive *env) {
         }
     }
 
+    // Speed is the post-dynamics value. Collision handling below can zero it.
+    for (int i = 0; i < env->active_agent_count; i++) {
+        if (env->terminals[i])
+            continue;
+        int agent_idx = env->active_agent_indices[i];
+        Entity *agent = &env->entities[agent_idx];
+        if (agent->x == INVALID_POSITION)
+            continue;
+        float along = agent->vx * agent->heading_x + agent->vy * agent->heading_y;
+        float spd = sqrtf(agent->vx * agent->vx + agent->vy * agent->vy);
+        record_cruise_metrics(env, i, agent_idx, copysignf(spd, along));
+    }
+
     // Compute rewards
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
@@ -3237,6 +3366,9 @@ void c_step(Drive *env) {
         int collision_state = env->entities[agent_idx].collision_state;
         int offroad_state = env->entities[agent_idx].offroad_state;
 
+        // Charge on every overlapping step, as in the ezmuwiyj Waymo run.
+        // Stage 2 still stops after one charge because terminate_on_failure
+        // removes the car before the next step.
         if (collision_state == 1 && !agent_is_done) {
             float r_collision = env->entities[agent_idx].reward_collision_cond;
             env->rewards[i] += r_collision;
@@ -3256,6 +3388,31 @@ void c_step(Drive *env) {
         if ((collision_state || offroad_state) && !agent_is_done) {
             env->entities[agent_idx].failure_before_goal = 1;
             env->entities[agent_idx].failure_steps += 1.0f;
+            // End this agent. A later cruise return must not pay for the crash.
+            if (env->terminate_on_failure) {
+                env->terminals[i] = 1;
+                env->entities[agent_idx].removed = 1;
+                env->entities[agent_idx].stopped = 1;
+                env->entities[agent_idx].vx = 0.0f;
+                env->entities[agent_idx].vy = 0.0f;
+            }
+        } else if (!agent_is_done && env->speed_reward_weight > 0.0f && env->speed_reward_sigma > 0.0f) {
+            float along = env->entities[agent_idx].vx * env->entities[agent_idx].heading_x +
+                          env->entities[agent_idx].vy * env->entities[agent_idx].heading_y;
+            float spd = sqrtf(env->entities[agent_idx].vx * env->entities[agent_idx].vx +
+                              env->entities[agent_idx].vy * env->entities[agent_idx].vy);
+            float v = copysignf(spd, along);
+            float dv = v - env->entities[agent_idx].cruise_target;
+            float sig2 = env->speed_reward_sigma * env->speed_reward_sigma;
+            float r_speed = env->speed_reward_weight * expf(-(dv * dv) / (2.0f * sig2));
+            env->rewards[i] += r_speed;
+            env->logs[i].episode_return += r_speed;
+        }
+        if (!agent_is_done && env->accel_penalty > 0.0f && env->dynamics_model == CLASSIC) {
+            float a = env->entities[agent_idx].a_long;
+            float r_acc = -env->accel_penalty * a * a;
+            env->rewards[i] += r_acc;
+            env->logs[i].episode_return += r_acc;
         }
         if (!agent_is_done) {
             float step_speed = sqrtf(env->entities[agent_idx].vx * env->entities[agent_idx].vx +
@@ -3271,11 +3428,12 @@ void c_step(Drive *env) {
         float current_speed = sqrtf(env->entities[agent_idx].vx * env->entities[agent_idx].vx +
                                     env->entities[agent_idx].vy * env->entities[agent_idx].vy);
 
-        // Reward agent if it is within X meters of goal and speed is below threshold
+        // Arrival is the radius. Stage 2 pays once, samples a new point, and
+        // does not end the episode.
         bool within_distance = distance_to_goal < env->goal_radius;
-        bool within_speed = current_speed <= env->goal_speed;
 
-        if (within_distance && within_speed && !env->entities[agent_idx].current_goal_reached) {
+        if (within_distance && !env->entities[agent_idx].current_goal_reached &&
+            !env->terminals[i]) {
             float r_goal = env->entities[agent_idx].reward_goal_cond;
             env->rewards[i] += r_goal;
             env->logs[i].episode_return += r_goal;
@@ -3291,7 +3449,12 @@ void c_step(Drive *env) {
                 }
                 if (!assigned)
                     sample_new_goal(env, agent_idx);
-                env->entities[agent_idx].current_goal_reached = 0;
+                float new_dist =
+                    relative_distance_2d(env->entities[agent_idx].x, env->entities[agent_idx].y,
+                                         env->entities[agent_idx].goal_position_x,
+                                         env->entities[agent_idx].goal_position_y);
+                if (new_dist >= env->goal_radius)
+                    env->entities[agent_idx].current_goal_reached = 0;
             }
         }
 
@@ -3353,7 +3516,6 @@ void c_step(Drive *env) {
         }
         add_log(env);
         if (env->async_resets) {
-            // printf("[async_resets=1] Episode done at t=%d, resetting\n", env->timestep);
             c_reset(env);
         }
         return;

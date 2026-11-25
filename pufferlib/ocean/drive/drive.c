@@ -63,7 +63,6 @@ int demo(const char *map_name, const char *policy_name, int show_grid, int obs_o
         .goal_radius = conf.goal_radius,
         .goal_behavior = conf.goal_behavior,
         .goal_target_distance = conf.goal_target_distance,
-        .goal_speed = conf.goal_speed,
         .dt = conf.dt,
         .episode_length = conf.episode_length,
         .termination_mode = conf.termination_mode,

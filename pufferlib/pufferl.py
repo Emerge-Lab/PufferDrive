@@ -854,7 +854,10 @@ class PuffeRL:
             "epoch": int(dist_sum(self.epoch, device)),
             "learning_rate": self.optimizer.param_groups[0]["lr"],
             "ent_coef": ent_coef,
-            **{f"environment/{k}": v for k, v in self.stats.items()},
+            **{
+                (f"metrics/{k}" if k in ("speeding_rate", "free_flow_efficiency", "safe_cruising_score") else f"environment/{k}"): v
+                for k, v in self.stats.items()
+            },
             **{f"losses/{k}": v for k, v in self.losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
             "data/anchor_entropy": self.data.get("data/anchor_entropy", 0),

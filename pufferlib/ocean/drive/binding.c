@@ -288,7 +288,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     OVERRIDE_INT(goal_behavior);
     OVERRIDE_FLOAT(goal_target_distance);
     OVERRIDE_FLOAT(goal_radius);
-    OVERRIDE_FLOAT(goal_speed);
     OVERRIDE_INT(max_controlled_agents);
     OVERRIDE_INT(fix_rewards);
     OVERRIDE_INT(fix_lambdas);
@@ -322,7 +321,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
-    env->goal_speed = (float)unpack(kwargs, "goal_speed");
     env->render_mode = (int)unpack(kwargs, "render_mode");
     env->spawn_agents = 0;
     env->goal_distance_min = 5.0f;
@@ -335,6 +333,26 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     }
     if (kwargs && PyDict_GetItemString(kwargs, "goal_distance_max")) {
         env->goal_distance_max = (float)unpack(kwargs, "goal_distance_max");
+    }
+    env->target_speed = 0.0f;
+    env->speed_reward_weight = 0.0f;
+    env->speed_reward_sigma = 2.5f;
+    env->accel_penalty = 0.0f;
+    env->terminate_on_failure = 0;
+    if (kwargs && PyDict_GetItemString(kwargs, "target_speed")) {
+        env->target_speed = (float)unpack(kwargs, "target_speed");
+    }
+    if (kwargs && PyDict_GetItemString(kwargs, "speed_reward_weight")) {
+        env->speed_reward_weight = (float)unpack(kwargs, "speed_reward_weight");
+    }
+    if (kwargs && PyDict_GetItemString(kwargs, "speed_reward_sigma")) {
+        env->speed_reward_sigma = (float)unpack(kwargs, "speed_reward_sigma");
+    }
+    if (kwargs && PyDict_GetItemString(kwargs, "accel_penalty")) {
+        env->accel_penalty = (float)unpack(kwargs, "accel_penalty");
+    }
+    if (kwargs && PyDict_GetItemString(kwargs, "terminate_on_failure")) {
+        env->terminate_on_failure = (int)unpack(kwargs, "terminate_on_failure");
     }
     char *map_dir = unpack_str(kwargs, "map_dir");
     int map_id = unpack(kwargs, "map_id");
@@ -364,6 +382,17 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "route_progress", log->route_progress);
     assign_to_dict(dict, "displacement_error_avg", log->displacement_error_avg);
     assign_to_dict(dict, "failures_per_mile", log->failures_per_mile);
+    float speeding_rate = 0.0f;
+    float free_flow = 1.0f;
+    float safe = 0.0f;
+    if (log->cruise_agents > 0.0f) {
+        speeding_rate = log->speeding_rate / log->cruise_agents;
+        free_flow = log->free_flow_efficiency / log->cruise_agents;
+        safe = log->safe_cruising_score / log->cruise_agents;
+    }
+    assign_to_dict(dict, "speeding_rate", speeding_rate);
+    assign_to_dict(dict, "free_flow_efficiency", free_flow);
+    assign_to_dict(dict, "safe_cruising_score", safe);
     //   assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     //  assign_to_dict(dict, "perc_other", log->perc_other);
     //  assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);

@@ -18,7 +18,6 @@ typedef struct {
     float reward_offroad_collision;
     float reward_goal;
     float goal_radius;
-    float goal_speed;
     int collision_behavior;
     int offroad_behavior;
     int spawn_immunity_timer;
@@ -83,8 +82,6 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->reward_goal = atof(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
-    } else if (MATCH("env", "goal_speed")) {
-        env_config->goal_speed = atof(value);
     } else if (MATCH("env", "collision_behavior")) {
         env_config->collision_behavior = atoi(value);
     } else if (MATCH("env", "offroad_behavior")) {

@@ -856,7 +856,7 @@ class Evaluator:
         else:
             base_env = self.configs.get("curriculum_base_env")
             if base_env:
-                for key in ("goal_behavior", "goal_radius", "goal_speed", "spawn_agents"):
+                for key in ("goal_behavior", "goal_radius", "spawn_agents"):
                     if key in base_env:
                         eval_config["env"][key] = base_env[key]
             eval_config["env"]["spawn_agents"] = 0
@@ -882,7 +882,6 @@ class Evaluator:
         env["termination_mode"] = int(spec["stage2_termination_mode"])
         env["goal_behavior"] = int(spec["stage2_goal_behavior"])
         env["goal_radius"] = float(spec["stage2_goal_radius"])
-        env["goal_speed"] = float(spec["stage2_goal_speed"])
         env["goal_distance_min"] = float(spec["stage2_goal_distance_min"])
         env["goal_distance_max"] = float(spec["stage2_goal_distance_max"])
 

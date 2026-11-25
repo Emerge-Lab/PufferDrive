@@ -53,7 +53,6 @@ class Drive(pufferlib.PufferEnv):
         goal_behavior=0,
         goal_target_distance=10.0,
         goal_radius=2.0,
-        goal_speed=20.0,
         collision_behavior=0,
         offroad_behavior=0,
         dt=0.1,
@@ -88,6 +87,11 @@ class Drive(pufferlib.PufferEnv):
         spawn_agents=0,
         goal_distance_min=5.0,
         goal_distance_max=50.0,
+        target_speed=0.0,
+        speed_reward_weight=0.0,
+        speed_reward_sigma=2.5,
+        accel_penalty=0.0,
+        terminate_on_failure=0,
     ):
         # env
         self.dt = dt
@@ -98,7 +102,6 @@ class Drive(pufferlib.PufferEnv):
         self.reward_offroad_collision = reward_offroad_collision
         self.reward_goal = reward_goal
         self.goal_radius = goal_radius
-        self.goal_speed = goal_speed
         self.goal_behavior = goal_behavior
         self.goal_target_distance = goal_target_distance
         self.collision_behavior = collision_behavior
@@ -124,6 +127,11 @@ class Drive(pufferlib.PufferEnv):
         self.spawn_agents = int(spawn_agents)
         self.goal_distance_min = float(goal_distance_min)
         self.goal_distance_max = float(goal_distance_max)
+        self.target_speed = float(target_speed)
+        self.speed_reward_weight = float(speed_reward_weight)
+        self.speed_reward_sigma = float(speed_reward_sigma)
+        self.accel_penalty = float(accel_penalty)
+        self.terminate_on_failure = int(terminate_on_failure)
 
         # Observation space calculation
         self.ego_features = binding.EGO_FEATURES_JERK if dynamics_model == "jerk" else binding.EGO_FEATURES
@@ -282,7 +290,6 @@ class Drive(pufferlib.PufferEnv):
                 obs_partner_noise_pos=self.obs_partner_noise_pos,
                 obs_partner_noise_speed=self.obs_partner_noise_speed,
                 goal_radius=goal_radius,
-                goal_speed=goal_speed,
                 goal_behavior=self.goal_behavior,
                 goal_target_distance=self.goal_target_distance,
                 collision_behavior=self.collision_behavior,
@@ -310,6 +317,11 @@ class Drive(pufferlib.PufferEnv):
                 spawn_agents=self.spawn_agents,
                 goal_distance_min=self.goal_distance_min,
                 goal_distance_max=self.goal_distance_max,
+                target_speed=self.target_speed,
+                speed_reward_weight=self.speed_reward_weight,
+                speed_reward_sigma=self.speed_reward_sigma,
+                accel_penalty=self.accel_penalty,
+                terminate_on_failure=self.terminate_on_failure,
             )
             self.env_ids.append(env_id)
 
@@ -355,7 +367,6 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             goal_behavior=self.goal_behavior,
             goal_target_distance=self.goal_target_distance,
-            goal_speed=self.goal_speed,
             map_dir=self.map_dir,
             max_controlled_agents=self.max_controlled_agents,
             spawn_agents=self.spawn_agents,
@@ -384,7 +395,6 @@ class Drive(pufferlib.PufferEnv):
                 goal_radius=self.goal_radius,
                 goal_behavior=self.goal_behavior,
                 goal_target_distance=self.goal_target_distance,
-                goal_speed=self.goal_speed,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 dt=self.dt,
@@ -412,6 +422,11 @@ class Drive(pufferlib.PufferEnv):
                 spawn_agents=self.spawn_agents,
                 goal_distance_min=self.goal_distance_min,
                 goal_distance_max=self.goal_distance_max,
+                target_speed=self.target_speed,
+                speed_reward_weight=self.speed_reward_weight,
+                speed_reward_sigma=self.speed_reward_sigma,
+                accel_penalty=self.accel_penalty,
+                terminate_on_failure=self.terminate_on_failure,
             )
             self.env_ids.append(env_id)
         self.c_envs = binding.vectorize(*self.env_ids)
@@ -534,7 +549,18 @@ class Drive(pufferlib.PufferEnv):
         data = {}
 
         if self.reg_mode == RegMode.KL_ANCHOR:
-            from examples.train_bc_policy import BCPolicy, load_bc_policy
+            try:
+                from examples.train_bc_policy import BCPolicy, load_bc_policy
+            except ImportError as exc:
+                # lambda 0 does not use the anchor. A missing BC module should
+                # not block the default classic Waymo run.
+                if self.dynamics_model == "classic" and float(self.lambda_value) == 0.0:
+                    print(
+                        "lambda is 0.0 and the BC anchor module is unavailable, "
+                        f"so KL regularization is off. ({exc})"
+                    )
+                    return None, data
+                raise
 
             if self.dynamics_model == "delta_local":
                 output_sizes = [binding.NUM_DX_BINS, binding.NUM_DY_BINS, binding.NUM_YAW_BINS]
